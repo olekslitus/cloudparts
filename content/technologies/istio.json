@@ -1,0 +1,116 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Istio",
+  "concepts": ["service-mesh"],
+  "provider": "oss",
+  "vendor": "Cloud Native Computing Foundation",
+  "license": "Apache 2.0",
+  "website": "https://istio.io/",
+  "repo": "https://github.com/istio/istio",
+  "summary": "The Kubernetes service mesh started by Google, IBM and Lyft: mutual TLS, traffic routing and telemetry between services, through Envoy sidecars or the sidecar-less ambient mode.",
+  "intro": [
+    "Istio has one control plane, `istiod`, and a choice of two data planes. `istiod` watches Kubernetes for services and endpoints, turns Istio’s routing and security resources into proxy configuration, and streams it to every proxy over Envoy’s xDS APIs. It is also a certificate authority: each workload gets an X.509 certificate for its service identity, issued through a certificate signing request and rotated automatically, so proxies can authenticate each other with mutual TLS. A permissive mode accepts both plain text and mTLS while you migrate; strict mode then refuses anything else.",
+    "In sidecar mode, a mutating admission webhook adds an Envoy proxy container to every pod, and all of the pod’s traffic passes through it. That gives full Layer 7 features everywhere: retries, timeouts, circuit breaking, percentage-based traffic splits for canary releases, and per-request metrics and traces. The cost is a proxy per pod, and pods must restart to pick up a new proxy version. Ambient mode, generally available since Istio 1.24 (November 2024), splits the work in two. A ztunnel, a small Rust proxy running once per node as a DaemonSet, handles Layer 4: it carries traffic between nodes in mTLS tunnels (HBONE, HTTP CONNECT over HTTP/2) and enforces simple policies. Where you need Layer 7, you deploy waypoint proxies, Envoy deployments that usually serve a whole namespace and scale independently of the apps.",
+    "Istio is free under Apache 2.0 and a CNCF graduated project. Routes can be written with Istio’s own resources (VirtualService, DestinationRule) or with the Kubernetes Gateway API, which the project intends to make the default. Google’s Cloud Service Mesh accepts Istio APIs, and Azure offers an Istio add-on for AKS, though that add-on doesn’t support ambient mode yet."
+  ],
+  "strengths": [
+    "Mutual TLS between services with automatic certificate issuance and rotation, plus a permissive mode for gradual migration",
+    "Rich traffic control: weighted splits, retries, timeouts, fault injection and circuit breaking without changing application code",
+    "Two data planes: sidecars for full per-pod control, or ambient mode, which the project says can cut the mesh’s resource overhead by more than 90% in some cases",
+    "Widely adopted and well integrated: Prometheus metrics, ready-made Grafana dashboards, OpenTelemetry tracing, and managed versions on GKE and AKS"
+  ],
+  "limits": [
+    "Many moving parts and resource types to learn; debugging means understanding Envoy configuration as well as Kubernetes",
+    "Sidecar mode adds a proxy’s CPU and memory to every pod and requires pod restarts on each Istio upgrade",
+    "Built around Kubernetes: each release supports only a range of Kubernetes versions (1.28 to 1.31 for 1.24), so mesh and cluster upgrades have to be planned together",
+    "Ambient mode is newer: some managed offerings, such as the AKS add-on, support only sidecars"
+  ],
+  "worksWith": [
+    { "id": "envoy", "how": "programs, as sidecars and waypoints," },
+    { "id": "kubernetes", "how": "meshes the pods and services of" },
+    { "id": "prometheus", "how": "exposes mesh metrics for scraping by" },
+    { "id": "grafana", "how": "ships ready-made mesh dashboards for" },
+    { "id": "opentelemetry", "how": "can send traces, over OTLP, through" }
+  ],
+  "snippet": {
+    "lang": "yaml",
+    "title": "Require mTLS mesh-wide and send 10% of traffic to a new version",
+    "source": [
+      "apiVersion: security.istio.io/v1",
+      "kind: PeerAuthentication",
+      "metadata: { name: default, namespace: istio-system }",
+      "spec:",
+      "  mtls: { mode: STRICT }        # refuse plain-text traffic between workloads",
+      "---",
+      "apiVersion: networking.istio.io/v1",
+      "kind: DestinationRule",
+      "metadata: { name: reviews }",
+      "spec:",
+      "  host: reviews",
+      "  subsets:",
+      "    - { name: v1, labels: { version: v1 } }",
+      "    - { name: v2, labels: { version: v2 } }",
+      "---",
+      "apiVersion: networking.istio.io/v1",
+      "kind: VirtualService",
+      "metadata: { name: reviews }",
+      "spec:",
+      "  hosts: [reviews]",
+      "  http:",
+      "    - retries: { attempts: 3, perTryTimeout: 2s }",
+      "      route:",
+      "        - { destination: { host: reviews, subset: v1 }, weight: 90 }",
+      "        - { destination: { host: reviews, subset: v2 }, weight: 10 }"
+    ]
+  },
+  "history": {
+    "story": [
+      "As companies split applications into microservices, every team had to solve service discovery, load balancing, retries, monitoring and security again, often with libraries that differed by language. Standardising on one RPC library such as gRPC was costly and left out older applications that couldn’t be changed. Lyft had built Envoy for this and ran it for over a year in front of more than 100 services, while Google and IBM had used the proxy-per-service pattern internally for years.",
+      "On May 24, 2017, Google, IBM and Lyft announced Istio 0.1: a control plane that injects Envoy next to every service on Kubernetes and gives operators traffic control, telemetry and mutual TLS without changing application code. Version 1.0 followed in July 2018. The control plane itself began as separate microservices (Pilot, Galley, Citadel and Mixer), which most users installed and ran as one unit anyway, so Istio 1.5 merged them into a single binary, `istiod`, in March 2020.",
+      "Users kept reporting that sidecars were expensive and disruptive: a proxy in every pod, applications broken by injection, and restarts with every upgrade. In September 2022 the project announced ambient mesh, joined the CNCF as an incubating project that month, and graduated in July 2023. Ambient mode became generally available in November 2024 with Istio 1.24."
+    ],
+    "choices": [
+      { "choice": "Proxies injected next to apps instead of a library in each", "why": "A proxy works with any language and with brownfield apps that can’t be changed, and it gives operators one place to apply routing, security and telemetry. Lyft’s production experience with Envoy showed it could carry the load." },
+      { "choice": "One `istiod` binary instead of control-plane microservices", "why": "Splitting Pilot, Galley, Citadel and Mixer brought the costs of microservices without the benefits, since one team ran them all. Merging them in 1.5 made Istio simpler to install, upgrade and debug." },
+      { "choice": "Split Layer 4 from Layer 7 in ambient mode", "why": "Most users wanted mTLS, authorization and telemetry first. A shared per-node proxy gives that cheaply, and Layer 7 waypoints are added only where routing or rich policy is needed, so a mesh can be adopted one namespace at a time." },
+      { "choice": "Write ztunnel in Rust instead of reusing Envoy", "why": "Ambient’s node proxy first ran on Envoy, but its narrow job of tunnelling many workloads’ connections fit Envoy poorly. Prototypes in Go and Rust followed, and the team chose Rust for speed, safety and a small footprint." }
+    ],
+    "timeline": [
+      { "year": "2017", "text": "Google, IBM and Lyft announce Istio 0.1 in May" },
+      { "year": "2018", "text": "Istio 1.0, ready for production, in July" },
+      { "year": "2020", "text": "Istio 1.5 merges the control plane into `istiod`" },
+      { "year": "2022", "text": "Ambient mesh announced; Istio joins the CNCF as an incubating project in September" },
+      { "year": "2023", "text": "Graduates from the CNCF in July; Rust-based ztunnel introduced" },
+      { "year": "2024", "text": "Ambient mode becomes generally available in Istio 1.24 in November" }
+    ],
+    "sources": [
+      { "label": "Istio: Introducing Istio, the 0.1 announcement (May 2017)", "url": "https://istio.io/latest/news/releases/0.x/announcing-0.1/" },
+      { "label": "Istio: Announcing Istio 1.0 (Jul 2018)", "url": "https://istio.io/latest/news/releases/1.0.x/announcing-1.0/" },
+      { "label": "Istio blog: Introducing istiod, simplifying the control plane (Mar 2020)", "url": "https://istio.io/latest/blog/2020/istiod/" },
+      { "label": "CNCF blog: Istio sails into the Cloud Native Computing Foundation (Sep 2022)", "url": "https://www.cncf.io/blog/2022/09/28/istio-sails-into-the-cloud-native-computing-foundation/" },
+      { "label": "CNCF: Cloud Native Computing Foundation reaffirms Istio maturity with project graduation (Jul 2023)", "url": "https://www.cncf.io/announcements/2023/07/12/cloud-native-computing-foundation-reaffirms-istio-maturity-with-project-graduation/" },
+      { "label": "Istio blog: Introducing Rust-based ztunnel for Istio ambient service mesh (Feb 2023)", "url": "https://istio.io/latest/blog/2023/rust-based-ztunnel/" },
+      { "label": "Istio blog: Istio’s ambient mode reaches general availability in v1.24 (Nov 2024)", "url": "https://istio.io/latest/blog/2024/ambient-reaches-ga/" }
+    ]
+  },
+  "sources": [
+    { "label": "Istio docs: Security concepts (certificates, CSRs, permissive mode)", "url": "https://istio.io/latest/docs/concepts/security/" },
+    { "label": "Istio docs: Traffic management concepts", "url": "https://istio.io/latest/docs/concepts/traffic-management/" },
+    { "label": "Istio docs: Installing the sidecar (mutating admission webhook)", "url": "https://istio.io/latest/docs/setup/additional-setup/sidecar-injection/" },
+    { "label": "Istio docs: Ambient mode overview (ztunnel, Envoy-based waypoints)", "url": "https://istio.io/latest/docs/ambient/overview/" },
+    { "label": "Istio docs: Ambient data plane (ztunnel DaemonSet, waypoints)", "url": "https://istio.io/latest/docs/ambient/architecture/data-plane/" },
+    { "label": "Istio docs: HBONE", "url": "https://istio.io/latest/docs/ambient/architecture/hbone/" },
+    { "label": "Istio blog: Ambient mode reaches general availability in v1.24 (overhead savings, Nov 2024)", "url": "https://istio.io/latest/blog/2024/ambient-reaches-ga/" },
+    { "label": "Istio: Announcing Istio 1.24 (Kubernetes 1.28 to 1.31, Nov 2024)", "url": "https://istio.io/latest/news/releases/1.24.x/announcing-1.24/" },
+    { "label": "Istio blog: Introducing Rust-based ztunnel (Feb 2023)", "url": "https://istio.io/latest/blog/2023/rust-based-ztunnel/" },
+    { "label": "Istio docs: Kubernetes Gateway API", "url": "https://istio.io/latest/docs/tasks/traffic-management/ingress/gateway-api/" },
+    { "label": "Istio docs: Prometheus integration", "url": "https://istio.io/latest/docs/ops/integrations/prometheus/" },
+    { "label": "Istio docs: Grafana integration (preconfigured dashboards)", "url": "https://istio.io/latest/docs/ops/integrations/grafana/" },
+    { "label": "Istio docs: Distributed tracing with OpenTelemetry", "url": "https://istio.io/latest/docs/tasks/observability/distributed-tracing/opentelemetry/" },
+    { "label": "CNCF: Istio graduation announcement (Jul 2023)", "url": "https://www.cncf.io/announcements/2023/07/12/cloud-native-computing-foundation-reaffirms-istio-maturity-with-project-graduation/" },
+    { "label": "Microsoft Learn: Istio-based service mesh add-on for AKS (no ambient mode yet)", "url": "https://learn.microsoft.com/en-us/azure/aks/istio-about" },
+    { "label": "Google Cloud: Cloud Service Mesh overview", "url": "https://cloud.google.com/service-mesh/docs/overview" },
+    { "label": "Istio 1.31.1 release on GitHub (Sep 2026)", "url": "https://github.com/istio/istio/releases/tag/1.31.1" }
+  ],
+  "checked": "2026-10-06"
+}

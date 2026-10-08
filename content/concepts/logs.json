@@ -1,0 +1,171 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Logs",
+  "category": "observe",
+  "order": 20,
+  "summary": "Timestamped records of what a program did, written as it runs and shipped somewhere you can search them.",
+  "howItWorks": "A log is a stream of events, each a line with a timestamp, a severity level and a message, such as `2026-10-06T09:14:03Z ERROR payment declined order=9124`. The program writes them as things happen. In containers and on platforms such as Kubernetes, Lambda or Cloud Run, the convention is to write to stdout and stderr and let the platform capture the stream; Kubernetes keeps each container’s output in files on the node and rotates them at 10 MiB by default. An agent such as Fluent Bit, Vector or the OpenTelemetry Collector reads those streams, adds metadata (pod, host, service), filters out what you don’t want and ships the rest to a central store: CloudWatch Logs, Cloud Logging, Azure Monitor Logs, Loki, Elasticsearch, OpenSearch or a ClickHouse-based stack such as ClickStack. There you search every machine at once. Levels decide how much detail you keep: most services log INFO and above in production and turn DEBUG on only while chasing a bug. The bill follows volume. Hosted stores charge per GB ingested (CloudWatch Logs’ pricing examples and Cloud Logging’s price list both use $0.50 per GB, Cloud Logging after a free 50 GiB per project each month) plus storage, so retention periods, dropping noisy lines and sampling repetitive ones matter as much as what you log.",
+  "analogy": "A ship’s logbook. The crew writes down each event with the time as it happens. Nobody reads it while the sea is calm, but after a storm it’s the first thing everyone opens.",
+  "useWhen": [
+    "Knowing exactly what happened to one request, job or user, with the details",
+    "Errors and their context: the inputs, the IDs and the branch the code took",
+    "Audit trails: who changed what, and when",
+    "Questions you couldn’t predict a metric for in advance"
+  ],
+  "avoidWhen": [
+    "Counting things over time; a metric is far cheaper than counting log lines",
+    "Following one request across many services by hand; put a trace or correlation ID in every line",
+    "Passwords, tokens, card numbers and personal data; mask them before they leave the process",
+    "DEBUG on everything in production; volume, and the bill, grow with traffic"
+  ],
+  "example": "A checkout service writes about 200 log lines a second at INFO, around 1.5 KB each. That’s roughly 26 GB a day, close to 780 GB a month, or about $390 a month to ingest at $0.50 per GB before storage. After an incident someone leaves DEBUG on and the volume jumps, say, tenfold. A filter in the node’s Fluent Bit that drops DEBUG in production, and a 30-day retention period on the log group (CloudWatch keeps logs forever unless you set one), bring the bill back down.",
+  "providers": {
+    "aws": "CloudWatch Logs (Logs Insights for queries, Live Tail)",
+    "gcp": "Cloud Logging (Log Router and log buckets)",
+    "azure": "Azure Monitor Logs (Log Analytics workspaces, queried with KQL)",
+    "oss": "Stores: Grafana Loki, Elasticsearch, OpenSearch, ClickStack; agents: Fluent Bit, Fluentd, Vector, Logstash, OpenTelemetry Collector; hosted: Datadog, Better Stack"
+  },
+  "snippet": {
+    "lang": "bash",
+    "source": [
+      "# the container writes to stdout; the platform keeps the stream",
+      "kubectl logs deployment/api --since=10m --follow",
+      "",
+      "# the same lines after an agent shipped them to CloudWatch Logs",
+      "aws logs tail /ecs/api --since 10m --follow --filter-pattern '{ $.level = \"error\" }'",
+      "",
+      "# keep 30 days instead of forever",
+      "aws logs put-retention-policy --log-group-name /ecs/api --retention-in-days 30"
+    ]
+  },
+  "related": ["structured-logging", "metrics", "traces", "observability"],
+  "diagram": {
+    "caption": "Two services write DEBUG (pink), INFO (blue) and ERROR (orange) lines. The node’s log agent drops DEBUG, ships the rest to the log store, and also sends errors to an alert.",
+    "h": 280,
+    "nodes": [
+      {
+        "id": "api",
+        "x": 95,
+        "y": 80,
+        "label": "API service",
+        "sub": "stdout",
+        "emit": {
+          "every": 380,
+          "jitter": 0.4,
+          "types": ["debug", "debug", "info", "info", "info", "error"],
+          "colorByType": { "debug": 3, "info": 0, "error": 1 }
+        },
+        "out": ["agent"]
+      },
+      {
+        "id": "wk",
+        "x": 95,
+        "y": 200,
+        "label": "Worker",
+        "sub": "stdout",
+        "emit": {
+          "every": 600,
+          "jitter": 0.4,
+          "types": ["debug", "debug", "info", "info", "error"],
+          "colorByType": { "debug": 3, "info": 0, "error": 1 }
+        },
+        "out": ["agent"]
+      },
+      {
+        "id": "agent",
+        "x": 320,
+        "y": 140,
+        "label": "Log agent",
+        "sub": "Fluent Bit, Vector, OTel",
+        "mode": "gate",
+        "allowTypes": ["info", "error"],
+        "denyText": "DEBUG dropped",
+        "route": "type",
+        "rules": { "info": ["store"], "error": ["store", "alert"] },
+        "out": ["store", "alert"]
+      },
+      { "id": "store", "x": 570, "y": 85, "label": "Log store", "sub": "indexed, 30-day retention", "mode": "sink" },
+      { "id": "alert", "x": 570, "y": 205, "label": "Error alert", "sub": "too many errors?", "mode": "sink" }
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Log levels",
+      "intro": "Syslog’s eight severities and the six ranges in OpenTelemetry’s log data model, side by side. Most logging libraries use names close to the left column.",
+      "corner": "Level",
+      "columns": ["Syslog severity (RFC 5424)", "OpenTelemetry SeverityNumber", "Use it for"],
+      "rows": [
+        { "label": "TRACE", "values": ["none", "1 to 4", "Step-by-step detail; off almost everywhere"] },
+        { "label": "DEBUG", "values": ["7 Debug", "5 to 8", "Detail for developers; off in production unless you’re chasing a bug"] },
+        { "label": "INFO", "values": ["6 Informational, 5 Notice", "9 to 12", "Normal events worth keeping: started, order placed, job finished"] },
+        { "label": "WARN", "values": ["4 Warning", "13 to 16", "Something odd the code handled: a retry, a fallback, a slow call"] },
+        { "label": "ERROR", "values": ["3 Error", "17 to 20", "A request or job failed"] },
+        { "label": "FATAL", "values": ["2 Critical, 1 Alert, 0 Emergency", "21 to 24", "The process or system can’t go on"] }
+      ],
+      "notes": ["Rows line up by meaning; the two scales don’t map one to one. In syslog a lower number is more severe, in OpenTelemetry a higher one."]
+    }
+  ],
+  "history": {
+    "story": [
+      "Programs have always printed what they were doing, but on early Unix each daemon kept its own files in its own format. In the 1980s Eric Allman, while building Sendmail at Berkeley, wrote syslog: a program sends a short message tagged with a facility (which part of the system is talking) and a severity, and a syslog daemon writes it locally or relays it to a central host. It became the standard on nearly every Unix-like system and network device. It was only written down in 2001, when RFC 3164 described the BSD syslog protocol as it had been observed in the wild; RFC 5424 replaced it in 2009 with a stricter format, structured data fields and a required TLS transport.",
+      "Cloud platforms changed where logs live. When servers come and go, files on their disks go with them. Heroku’s Twelve-Factor App, presented by Adam Wiggins around 2011, stated the new rule: an app never manages log files; each process writes an unbuffered event stream to stdout, and the platform collects, routes and archives it. Agents grew up to do that routing, among them Logstash, Fluentd and, from 2014, Fluent Bit, a lightweight sibling of Fluentd built at Treasure Data for small devices. AWS added CloudWatch Logs the same year. In 2018 Grafana Labs introduced Loki, which borrowed Prometheus’ labels to make storing logs cheap.",
+      "The latest shift is a shared model. OpenTelemetry declared its log data model stable in 2022, so a log record has the same fields (timestamp, severity, body, attributes, and the trace and span IDs of the request it belongs to) whatever language or agent produced it."
+    ],
+    "choices": [
+      {
+        "choice": "A severity on every message",
+        "why": "Syslog tagged each message with one of eight severities, from Emergency to Debug. One setting could then decide what to keep and where to send it, without changing the program."
+      },
+      {
+        "choice": "Write to stdout and let the platform route it",
+        "why": "If the app doesn’t know or care where its logs go, the same code works on a laptop, where you watch the stream in a terminal, and in production, where it’s collated and sent to an indexing system."
+      },
+      {
+        "choice": "Index labels, not the text",
+        "why": "Loki indexes only a small set of labels per log stream and keeps the lines themselves compressed in object storage. Its authors chose this so that logs would be cheap enough that nobody is asked to log less, and so that the same labels as Prometheus metrics lead from an alert to the right logs."
+      }
+    ],
+    "timeline": [
+      { "year": "2001", "text": "RFC 3164 documents the BSD syslog protocol as observed" },
+      { "year": "2009", "text": "RFC 5424 standardises syslog and obsoletes RFC 3164" },
+      { "year": "2011", "text": "The Twelve-Factor App: treat logs as event streams" },
+      { "year": "2014", "text": "Fluent Bit begins at Treasure Data; CloudWatch Logs launches in July" },
+      { "year": "2018", "text": "Grafana Labs introduces Loki" },
+      { "year": "2022", "text": "OpenTelemetry declares its log data model stable" }
+    ],
+    "sources": [
+      { "label": "Internet Hall of Fame: Eric Allman (created syslog)", "url": "https://www.internethalloffame.org/inductees/eric-allman" },
+      { "label": "Wikipedia: Syslog (developed in the 1980s by Eric Allman as part of Sendmail)", "url": "https://en.wikipedia.org/wiki/Syslog" },
+      { "label": "RFC 3164: The BSD syslog Protocol (Informational, August 2001)", "url": "https://www.rfc-editor.org/rfc/rfc3164.html" },
+      { "label": "RFC 5424: The Syslog Protocol (Standards Track, March 2009)", "url": "https://www.rfc-editor.org/rfc/rfc5424.html" },
+      { "label": "The Twelve-Factor App: XI. Logs", "url": "https://12factor.net/logs" },
+      { "label": "Wikipedia: Twelve-Factor App methodology (Adam Wiggins, circa 2011)", "url": "https://en.wikipedia.org/wiki/Twelve-Factor_App_methodology" },
+      { "label": "Fluent Bit manual: What is Fluent Bit? (history, 2014)", "url": "https://docs.fluentbit.io/manual/about/what-is-fluent-bit" },
+      { "label": "AWS News Blog: Store and monitor OS and application log files with Amazon CloudWatch (July 2014)", "url": "https://aws.amazon.com/blogs/aws/cloudwatch-log-service/" },
+      { "label": "Grafana Labs blog: Loki, Prometheus-inspired open source logging for cloud natives (Dec 2018)", "url": "https://grafana.com/blog/2018/12/12/loki-prometheus-inspired-open-source-logging-for-cloud-natives/" },
+      { "label": "OpenTelemetry specification PR #2387: Declare Log Data Model Stable (merged March 2022)", "url": "https://github.com/open-telemetry/opentelemetry-specification/pull/2387" }
+    ]
+  },
+  "sources": [
+    { "label": "Kubernetes docs: Logging architecture (stdout, node agents, 10 MiB rotation)", "url": "https://kubernetes.io/docs/concepts/cluster-administration/logging/" },
+    { "label": "Fluent Bit manual: What is Fluent Bit?", "url": "https://docs.fluentbit.io/manual/about/what-is-fluent-bit" },
+    { "label": "Vector on GitHub: a high-performance observability data pipeline", "url": "https://github.com/vectordotdev/vector" },
+    { "label": "OpenTelemetry docs: Collector", "url": "https://opentelemetry.io/docs/collector/" },
+    { "label": "OpenTelemetry specification: Logs data model (severity numbers, trace context fields)", "url": "https://opentelemetry.io/docs/specs/otel/logs/data-model/" },
+    { "label": "RFC 5424: The Syslog Protocol, severity values", "url": "https://www.rfc-editor.org/rfc/rfc5424.html" },
+    { "label": "AWS docs: Working with log groups and log streams (retention is indefinite by default)", "url": "https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/Working-with-log-groups-and-streams.html" },
+    { "label": "Amazon CloudWatch pricing (log ingestion examples at $0.50 per GB, Live Tail)", "url": "https://aws.amazon.com/cloudwatch/pricing/" },
+    { "label": "AWS docs: Filter pattern syntax for CloudWatch Logs (JSON filters)", "url": "https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/FilterAndPatternSyntax.html" },
+    { "label": "AWS CLI reference: aws logs tail", "url": "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/logs/tail.html" },
+    { "label": "AWS CLI reference: aws logs put-retention-policy", "url": "https://awscli.amazonaws.com/v2/documentation/api/latest/reference/logs/put-retention-policy.html" },
+    { "label": "Kubernetes docs: kubectl logs", "url": "https://kubernetes.io/docs/reference/kubectl/generated/kubectl_logs/" },
+    { "label": "Google Cloud: Observability pricing (Cloud Logging $0.50/GiB, first 50 GiB per project free)", "url": "https://cloud.google.com/stackdriver/pricing" },
+    { "label": "Google Cloud docs: Configure log buckets (30-day default retention)", "url": "https://cloud.google.com/logging/docs/buckets" },
+    { "label": "Google Cloud docs: Routing and storage overview (Log Router, _Required and _Default sinks)", "url": "https://cloud.google.com/logging/docs/routing/overview" },
+    { "label": "Microsoft Learn: Azure Monitor Logs overview (Log Analytics workspaces, KQL)", "url": "https://learn.microsoft.com/en-us/azure/azure-monitor/logs/data-platform-logs" },
+    { "label": "Grafana Loki docs: Overview (indexes labels, not log contents)", "url": "https://grafana.com/docs/loki/latest/get-started/overview/" },
+    { "label": "ClickHouse docs: ClickStack architecture", "url": "https://clickhouse.com/docs/clickstack/architecture" },
+    { "label": "OWASP Logging Cheat Sheet (data to exclude, log injection)", "url": "https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html" }
+  ]
+}

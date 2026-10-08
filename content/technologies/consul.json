@@ -1,0 +1,169 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "HashiCorp Consul",
+  "concepts": ["service-mesh", "dns", "coordination"],
+  "provider": "vendor",
+  "vendor": "HashiCorp, an IBM company",
+  "license": "Business Source License 1.1 since 1.17 (source-available, not OSI open source); MPL 2.0 before the August 2023 change",
+  "website": "https://www.hashicorp.com/en/products/consul",
+  "repo": "https://github.com/hashicorp/consul",
+  "summary": "A service registry with health checks and a DNS interface, plus a service mesh that configures Envoy proxies for mTLS between services.",
+  "intro": [
+    "Consul is one binary that runs as an agent in one of two roles. Three or five server agents per datacenter hold the state: the service catalog, health check results, the key/value store and mesh configuration. They elect a leader and replicate every change with Raft, so a write counts only once a majority of servers has stored it. Client agents run on every machine, register the services there, run their health checks (an HTTP endpoint, a TCP port, a script) and forward requests to the servers. All agents in a datacenter also join a gossip pool built on HashiCorp’s Serf library, which spreads membership and detects failed nodes without the servers polling every machine. Apps find each other by asking an agent: a DNS query for `payments.service.consul` on port 8600 returns only instances that pass their checks, and the HTTP API returns the same data in more detail.",
+    "On top of the catalog sits the service mesh, first released as Connect in Consul 1.2 in 2018. The servers run a certificate authority (built in, or backed by Vault) and issue each service a certificate. Envoy sidecars, configured by Consul over Envoy’s xDS API, use those certificates for mutual TLS and enforce intentions, rules such as “`web` may call `payments`”. On Kubernetes and ECS, Consul dataplanes can replace the client agents, with a single gRPC connection to the servers instead of gossip. Consul moved from MPL 2.0 to the Business Source License with version 1.17 in 2023. HashiCorp’s hosted version, HCP Consul Dedicated, reached end of life on November 12, 2025, and Consul 2.0 (May 2026) switched to IBM’s versioning and support lifecycle."
+  ],
+  "strengths": [
+    "One catalog and mesh across VMs, bare metal, Kubernetes, Amazon ECS, Lambda and Nomad, not just one Kubernetes cluster",
+    "The DNS interface lets existing apps find healthy instances without code changes or a client library",
+    "Health checks run on the agent next to each service, and failed instances drop out of DNS and API answers",
+    "mTLS and intentions with a built-in CA or Vault, plus L7 traffic splitting for canary and blue-green releases",
+    "Several datacenters can be joined with WAN federation or cluster peering, each keeping its own catalog"
+  ],
+  "limits": [
+    "Business Source License since 1.17: free to use in production, but not OSI open source, and not allowed in a competing hosted or embedded product",
+    "Real operational work: a Raft quorum of servers, an agent or dataplane on every node, gossip encryption keys, ACL tokens and TLS; if a quorum of servers is lost, writes stop and recovery is manual",
+    "Edition split: Community edition’s mesh covers a single cluster, multi-tenancy (admin partitions, namespaces), read replicas, automated backups and audit logging need Enterprise, and an Enterprise Standard licence doesn’t cover the mesh at all",
+    "HCP Consul Dedicated, the managed version, ended on November 12, 2025; HashiCorp’s migration path is self-managed Consul Enterprise, not Community edition",
+    "The KV store is basic (values up to 512 KB) and feature complete: good for configuration, locks and leader election, not as a database"
+  ],
+  "worksWith": [
+    { "id": "kubernetes", "how": "injects Envoy sidecars into pods on" },
+    { "id": "vault", "how": "can use as its mesh certificate authority" },
+    { "id": "terraform", "how": "feeds service changes, via CTS, to" }
+  ],
+  "snippet": {
+    "lang": "hcl",
+    "title": "Register a service with a health check and an Envoy sidecar",
+    "source": [
+      "# web.hcl",
+      "service {",
+      "  name = \"web\"",
+      "  port = 8080",
+      "  check {",
+      "    http     = \"http://localhost:8080/health\"",
+      "    interval = \"10s\" # fail it and web drops out of DNS answers",
+      "  }",
+      "  connect {",
+      "    sidecar_service {",
+      "      proxy {",
+      "        upstreams = [{",
+      "          destination_name = \"payments\"",
+      "          local_bind_port  = 9191 # web calls localhost:9191; Envoy adds mTLS",
+      "        }]",
+      "      }",
+      "    }",
+      "  }",
+      "}",
+      "",
+      "# consul services register web.hcl",
+      "# consul connect envoy -sidecar-for web",
+      "# consul intention create -allow web payments",
+      "# dig @127.0.0.1 -p 8600 web.service.consul   # healthy instances only"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Community edition, Enterprise and HCP",
+      "intro": "Community edition is free under the BUSL. Enterprise comes in two licences, and the cheaper one leaves out the service mesh.",
+      "corner": "Feature",
+      "columns": ["Community", "Enterprise Standard", "Enterprise Premium"],
+      "rows": [
+        { "label": "Service discovery, DNS, KV store", "values": ["Yes", "Yes", "Yes"] },
+        { "label": "Service mesh", "values": ["Single cluster only", "No", "Yes"] },
+        { "label": "API, ingress and terminating gateways", "values": ["Yes", "No", "Yes"] },
+        { "label": "Several runtimes in one deployment", "values": ["No", "Yes", "Yes"] },
+        { "label": "Admin partitions and namespaces", "values": ["No", "Yes", "Yes"] },
+        { "label": "Read replicas, redundancy zones, automated backups", "values": ["No", "Yes", "Yes"] },
+        { "label": "Audit logging, OIDC login, FIPS 140-3 builds", "values": ["No", "Yes", "Yes"] },
+        { "label": "Locality-aware routing, fault injection, per-service rate limits", "values": ["No", "No", "Yes"] }
+      ],
+      "notes": [
+        "HCP Consul Dedicated, the version HashiCorp ran for you, reached end of life on November 12, 2025. Its clusters can be migrated only to self-managed Consul Enterprise.",
+        "From 2.0, Consul follows IBM’s Version-Modification-Fix lifecycle: 2.0.x is planned to be supported until April 30, 2028. 1.21 was the last LTS release."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Alternatives",
+      "intro": "Other ways to get discovery or a mesh, depending on where your services run.",
+      "items": [
+        { "name": "Istio", "tag": "CNCF graduated", "text": "A Kubernetes-first mesh with Envoy sidecars or a sidecar-less ambient mode. Also the base of the AKS add-on and Cloud Service Mesh on GKE." },
+        { "name": "Linkerd", "tag": "CNCF graduated", "text": "A Kubernetes mesh with small Rust proxies and fewer knobs. The project ships edge releases; stable builds come from vendors such as Buoyant." },
+        { "name": "Cloud registries", "tag": "managed", "text": "AWS Cloud Map and Google Service Directory keep a registry with DNS and API lookups as a managed service, so there are no servers to run. Cloud Map can also health-check instances." },
+        { "name": "Kubernetes Service DNS", "tag": "built in", "text": "If everything runs in one cluster, Services already get stable DNS names backed by healthy pods, with no extra system to operate." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "By 2014 more teams were splitting applications into services on many machines, and every service had to find a database, a queue or another service, know which copies were healthy, and pick up settings such as a maintenance-mode flag. Existing answers covered parts of this. DNS worked everywhere but knew nothing about health and was cached unpredictably; ZooKeeper offered a consistent registry, but every app needed a client library for it.",
+      "HashiCorp co-founder Armon Dadgar announced Consul on April 17, 2014, as one tool for service discovery, health checking and key/value configuration, answering lookups over both DNS and HTTP and spanning several datacenters. The announcement argued that “distributed messaging, leader election, security, data storage are not components anyone should build from scratch”, so Consul reused HashiCorp’s Serf library, released the year before, for gossip, and Raft, a consensus algorithm from Stanford, for leader election.",
+      "Consul 1.2 added Connect in June 2018, turning the registry into a service mesh with certificates, intentions and sidecar proxies, and Envoy became the proxy Consul configures. In 2023 HashiCorp moved Consul to the Business Source License from version 1.17. IBM completed its purchase of HashiCorp in February 2025, HCP Consul Dedicated shut down that November, and Consul 2.0 arrived in May 2026."
+    ],
+    "choices": [
+      { "choice": "Gossip for membership, Raft only on the servers", "why": "Only the three to five servers take part in Raft, so thousands of client agents don’t slow down consensus. Membership and failure detection travel by gossip, which the announcement chose because it is lightweight and performant." },
+      { "choice": "Health checks run by an agent on every node", "why": "The agent next to each service runs its checks and reports the result, so failure detection is spread across the cluster instead of a central poller, and DNS answers can leave out unhealthy instances." },
+      { "choice": "DNS as the default way to discover services", "why": "Almost every program can already resolve a name. Answering `name.service.consul` lets existing apps use the catalog without code changes; the HTTP API is there for apps that want more." },
+      { "choice": "Each datacenter keeps its own catalog", "why": "Catalogs aren’t replicated between datacenters by default. A request for another datacenter’s services is forwarded to that datacenter’s servers, so nothing has to keep one global copy in sync, but while a datacenter is unreachable its services are too." }
+    ],
+    "timeline": [
+      { "year": "2013", "text": "HashiCorp releases Serf, the gossip library Consul builds on" },
+      { "year": "2014", "text": "Consul 0.1 released in April" },
+      { "year": "2017", "text": "Consul 1.0 in October" },
+      { "year": "2018", "text": "Consul 1.2 adds Connect, its service mesh, in June" },
+      { "year": "2023", "text": "Moves to the Business Source License with version 1.17" },
+      { "year": "2025", "text": "IBM completes its HashiCorp acquisition; HCP Consul Dedicated ends in November" },
+      { "year": "2026", "text": "Consul 2.0 in May, on IBM’s versioning and support lifecycle" }
+    ],
+    "sources": [
+      { "label": "HashiCorp blog: Consul announcement (Armon Dadgar, Apr 2014)", "url": "https://www.hashicorp.com/en/blog/consul-announcement" },
+      { "label": "Airbnb Tech Blog: SmartStack, service discovery in the cloud (on DNS and ZooKeeper, Oct 2013)", "url": "https://medium.com/airbnb-engineering/smartstack-service-discovery-in-the-cloud-4b8a080de619", "archive": "https://web.archive.org/web/20240215060111/https://medium.com/airbnb-engineering/smartstack-service-discovery-in-the-cloud-4b8a080de619" },
+      { "label": "GitHub: hashicorp/serf v0.1.0 tag (Oct 2013)", "url": "https://github.com/hashicorp/serf/releases/tag/v0.1.0" },
+      { "label": "GitHub: hashicorp/consul v0.1.0 tag (Apr 2014)", "url": "https://github.com/hashicorp/consul/releases/tag/v0.1.0" },
+      { "label": "Consul CHANGELOG (0.1.0, 1.0.0 and 1.2.0 entries)", "url": "https://github.com/hashicorp/consul/blob/main/CHANGELOG.md" },
+      { "label": "HashiCorp blog: Consul 1.2, service mesh (Jun 2018)", "url": "https://www.hashicorp.com/en/blog/consul-1-2-service-mesh" },
+      { "label": "HashiCorp blog: HashiCorp adopts Business Source License (Aug 2023)", "url": "https://www.hashicorp.com/en/blog/hashicorp-adopts-business-source-license", "archive": "https://web.archive.org/web/20250304013523/https://www.hashicorp.com/en/blog/hashicorp-adopts-business-source-license" },
+      { "label": "IBM newsroom: IBM completes acquisition of HashiCorp (Feb 2025)", "url": "https://newsroom.ibm.com/2025-02-27-ibm-completes-acquisition-of-hashicorp,-creates-comprehensive,-end-to-end-hybrid-cloud-platform" },
+      { "label": "Consul docs: HCP Consul Dedicated (end of life November 12, 2025)", "url": "https://developer.hashicorp.com/consul/docs/hcp" },
+      { "label": "Consul docs: Consul 2.0.x release notes", "url": "https://developer.hashicorp.com/consul/docs/release-notes/consul/v2_0_x" }
+    ]
+  },
+  "sources": [
+    { "label": "Consul docs: What is Consul?", "url": "https://developer.hashicorp.com/consul/docs/intro" },
+    { "label": "Consul docs: Control plane architecture (servers, clients, gossip, datacenters)", "url": "https://developer.hashicorp.com/consul/docs/architecture/control-plane" },
+    { "label": "Consul docs: Consensus (Raft)", "url": "https://developer.hashicorp.com/consul/docs/concept/consensus" },
+    { "label": "Consul docs: Gossip (Serf)", "url": "https://developer.hashicorp.com/consul/docs/concept/gossip" },
+    { "label": "Consul docs: Consul DNS overview", "url": "https://developer.hashicorp.com/consul/docs/discover/dns" },
+    { "label": "Consul docs: Consul DNS reference (`<name>.service.consul`)", "url": "https://developer.hashicorp.com/consul/docs/reference/dns" },
+    { "label": "Consul docs: Ports (DNS on 8600)", "url": "https://developer.hashicorp.com/consul/docs/reference/architecture/ports" },
+    { "label": "Consul docs: Health checks on VMs", "url": "https://developer.hashicorp.com/consul/docs/register/health-check/vm" },
+    { "label": "Consul docs: Key/value store overview (512 KB limit, feature complete)", "url": "https://developer.hashicorp.com/consul/docs/automate/kv" },
+    { "label": "Consul docs: Connect workloads to the service mesh", "url": "https://developer.hashicorp.com/consul/docs/connect" },
+    { "label": "Consul docs: Envoy proxy configuration reference (xDS)", "url": "https://developer.hashicorp.com/consul/docs/reference/proxy/envoy" },
+    { "label": "Consul docs: Sidecar proxies (`sidecar_service`, upstreams)", "url": "https://developer.hashicorp.com/consul/docs/connect/proxy/sidecar" },
+    { "label": "Consul docs: Certificate authority for the service mesh (built-in, Vault)", "url": "https://developer.hashicorp.com/consul/docs/secure-mesh/certificate" },
+    { "label": "Consul docs: Service intentions", "url": "https://developer.hashicorp.com/consul/docs/secure-mesh/intention" },
+    { "label": "Consul docs: Create and manage intentions", "url": "https://developer.hashicorp.com/consul/docs/secure-mesh/intention/create" },
+    { "label": "Consul docs: Consul dataplane", "url": "https://developer.hashicorp.com/consul/docs/architecture/control-plane/dataplane" },
+    { "label": "Consul docs: Deploy a Consul server on Kubernetes", "url": "https://developer.hashicorp.com/consul/docs/deploy/server/k8s" },
+    { "label": "Consul docs: Consul on Nomad", "url": "https://developer.hashicorp.com/consul/docs/nomad" },
+    { "label": "Consul docs: Consul-Terraform-Sync architecture", "url": "https://developer.hashicorp.com/consul/docs/architecture/cts" },
+    { "label": "Consul docs: Editions and tool binaries", "url": "https://developer.hashicorp.com/consul/docs/fundamentals/editions" },
+    { "label": "Consul docs: Consul Enterprise (features by licence)", "url": "https://developer.hashicorp.com/consul/docs/enterprise" },
+    { "label": "Consul docs: HCP Consul Dedicated (end of life November 12, 2025)", "url": "https://developer.hashicorp.com/consul/docs/hcp" },
+    { "label": "Consul docs: Consul 2.0.x release notes (IBM versioning, support dates)", "url": "https://developer.hashicorp.com/consul/docs/release-notes/consul/v2_0_x" },
+    { "label": "GitHub: hashicorp/consul v2.0.0 release (May 2026)", "url": "https://github.com/hashicorp/consul/releases/tag/v2.0.0" },
+    { "label": "GitHub: hashicorp/consul LICENSE (BUSL 1.1 for Consul 1.17.0 and later)", "url": "https://github.com/hashicorp/consul/blob/main/LICENSE" },
+    { "label": "HashiCorp blog: HashiCorp adopts Business Source License (Aug 2023)", "url": "https://www.hashicorp.com/en/blog/hashicorp-adopts-business-source-license", "archive": "https://web.archive.org/web/20250304013523/https://www.hashicorp.com/en/blog/hashicorp-adopts-business-source-license" },
+    { "label": "IBM newsroom: IBM completes acquisition of HashiCorp (Feb 2025)", "url": "https://newsroom.ibm.com/2025-02-27-ibm-completes-acquisition-of-hashicorp,-creates-comprehensive,-end-to-end-hybrid-cloud-platform" },
+    { "label": "CNCF: Istio (graduated July 2023)", "url": "https://www.cncf.io/projects/istio/" },
+    { "label": "Istio docs: What is Istio?", "url": "https://istio.io/latest/docs/overview/what-is-istio/" },
+    { "label": "CNCF: Linkerd (graduated July 2021)", "url": "https://www.cncf.io/projects/linkerd/" },
+    { "label": "Linkerd: Releases and versions", "url": "https://linkerd.io/releases/" },
+    { "label": "AWS Cloud Map docs: What is AWS Cloud Map?", "url": "https://docs.aws.amazon.com/cloud-map/latest/dg/what-is-cloud-map.html" },
+    { "label": "Google Cloud docs: Service Directory overview", "url": "https://cloud.google.com/service-directory/docs/overview" },
+    { "label": "Kubernetes docs: DNS for Services and Pods", "url": "https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/" }
+  ],
+  "checked": "2026-10-05"
+}

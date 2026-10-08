@@ -1,0 +1,175 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Remote access",
+  "category": "security",
+  "order": 40,
+  "summary": "How people, scripts and AI agents reach private servers and databases without a public IP or a shared VPN.",
+  "howItWorks": "Private servers and databases sit in subnets with no public IP. Rather than putting a person on the whole network with a VPN, an access service stands in front. The caller (an engineer, a CI job, an AI agent) signs in with single sign-on, the service checks that this identity may reach this one host or database right now, and then proxies a single connection to it, often through a local port on the caller’s machine. A connector or agent inside the private network usually dials out to the service, so no inbound firewall rule is needed. Credentials can be issued for the session and expire with it, and each session is logged or recorded.",
+  "analogy": "A front desk instead of a master key. You show your badge, the desk lets you into the one room you booked, the visit goes in the log, and your temporary pass stops working when you leave.",
+  "useWhen": [
+    "Engineers need a shell on servers or a SQL prompt on databases in private subnets",
+    "Replacing a shared bastion host whose SSH key has been copied to every laptop",
+    "Contractors, CI jobs or AI agents need time-limited access to one system, not the whole network",
+    "Auditors ask who connected to production, when, and what they did there"
+  ],
+  "avoidWhen": [
+    "Service-to-service traffic inside your system: that belongs on private networking and load balancers",
+    "Bulk data copies and replication, where every byte would squeeze through the proxy",
+    "Giving servers a public IP and opening port 22 to the internet “just for now”"
+  ],
+  "example": "An on-call engineer signs in with SSO and MFA and asks for the `orders-db` target. The access service creates a database user that expires in one hour, opens a tunnel to a local port, and logs the session. The database has no public IP, and its firewall only accepts the connector. A laptop presenting an expired token is refused before any packet reaches the subnet.",
+  "providers": {
+    "aws": "Systems Manager Session Manager, EC2 Instance Connect Endpoint, Verified Access",
+    "gcp": "Identity-Aware Proxy (TCP forwarding), OS Login",
+    "azure": "Azure Bastion, Microsoft Entra Private Access",
+    "oss": "OpenSSH ProxyJump, HashiCorp Boundary (BUSL), Teleport (AGPL source; Community Edition binaries limited to small companies)"
+  },
+  "snippet": {
+    "lang": "bash",
+    "source": [
+      "# 1. Classic jump host: hop through one hardened bastion (OpenSSH 7.3+)",
+      "ssh -J ops@bastion.example.com admin@10.0.2.15",
+      "",
+      "# 2. AWS: no bastion, no inbound port; the SSM Agent on the instance dials out",
+      "aws ssm start-session --target i-0abc1234def567890 \\",
+      "    --document-name AWS-StartPortForwardingSessionToRemoteHost \\",
+      "    --parameters '{\"host\":[\"orders-db.internal\"],\"portNumber\":[\"5432\"],\"localPortNumber\":[\"15432\"]}'",
+      "psql \"host=localhost port=15432 dbname=orders user=analyst\"",
+      "",
+      "# 3. Google Cloud: IAP checks your identity, then tunnels to a VM with no external IP",
+      "gcloud compute ssh app-1 --zone=europe-west1-b --tunnel-through-iap"
+    ]
+  },
+  "related": ["iam", "authentication", "vpc", "secrets"],
+  "diagram": {
+    "caption": "An engineer and a CI job or AI agent sign in and get one proxied session each to a private host or database. A stolen laptop with an expired token is refused at the proxy. Every session is written to the audit log.",
+    "h": 290,
+    "zones": [
+      { "x": 470, "y": 18, "w": 270, "h": 200, "label": "Private subnet, no public IPs" }
+    ],
+    "nodes": [
+      {
+        "id": "eng",
+        "x": 105,
+        "y": 55,
+        "label": "Engineer",
+        "sub": "SSO + MFA",
+        "emit": { "every": 1500, "jitter": 0.3, "req": true, "color": 0, "type": "ok" },
+        "out": ["proxy"]
+      },
+      {
+        "id": "agent",
+        "x": 105,
+        "y": 140,
+        "label": "CI job / AI agent",
+        "sub": "workload identity",
+        "emit": { "every": 1900, "jitter": 0.3, "req": true, "color": 1, "type": "ok" },
+        "out": ["proxy"],
+        "concept": "cicd"
+      },
+      {
+        "id": "thief",
+        "x": 105,
+        "y": 225,
+        "label": "Stolen laptop",
+        "sub": "expired token",
+        "emit": { "every": 2600, "jitter": 0.3, "req": true, "color": 3, "type": "no" },
+        "out": ["proxy"]
+      },
+      {
+        "id": "proxy",
+        "x": 330,
+        "y": 140,
+        "label": "Access proxy",
+        "sub": "who, which target, now?",
+        "mode": "gate",
+        "allowTypes": ["ok"],
+        "denyText": "denied",
+        "out": ["host", "db"],
+        "emit": { "every": 2400, "to": ["log"], "color": 2 },
+        "concept": "iam"
+      },
+      {
+        "id": "host",
+        "x": 605,
+        "y": 75,
+        "label": "Private server",
+        "sub": "10.0.2.15:22",
+        "mode": "reply",
+        "delay": 70,
+        "concept": "vm"
+      },
+      {
+        "id": "db",
+        "x": 605,
+        "y": 170,
+        "label": "Database",
+        "sub": "10.0.3.12:5432",
+        "mode": "reply",
+        "delay": 90,
+        "concept": "relational"
+      },
+      {
+        "id": "log",
+        "x": 605,
+        "y": 255,
+        "label": "Audit log",
+        "sub": "sessions + recordings",
+        "mode": "sink",
+        "concept": "observability"
+      }
+    ]
+  },
+  "history": {
+    "story": [
+      "Early firewalls let almost nothing in from the internet, so administrators picked a few machines to be the way through. Marcus Ranum’s paper “Thinking About Firewalls” named them bastion hosts, after the fortified corners of a medieval castle: systems that get extra hardening and regular audits. For decades the pattern stayed the same. Engineers connected to a bastion or jump box, or joined a VPN, and from there could reach whatever the network allowed.",
+      "In 2014 Google described BeyondCorp, its move away from a privileged internal network: because once the perimeter was breached, an attacker had relatively easy access to everything inside. Google put its corporate applications behind an access proxy that checks the user and the device on every request, and later extended that proxy beyond the web to protocols such as SSH. In 2020 NIST’s zero trust architecture (SP 800-207) turned the idea into guidance: no implicit trust from network location, and authentication and authorization before each session.",
+      "The clouds then built the same idea into their consoles. AWS Systems Manager Session Manager (2018) gave shells without inbound ports, bastions or SSH keys, Google’s Identity-Aware Proxy carried TCP connections inside HTTPS and checked IAM before forwarding them, and Azure Bastion and EC2 Instance Connect Endpoint reached machines without public IPs. Tools like HashiCorp Boundary and Teleport added per-session credentials and session recording, and are now being pitched as the gate for AI agents that need infrastructure access."
+    ],
+    "choices": [
+      { "choice": "One hardened entry point instead of exposing every server", "why": "Defending one well-watched machine is easier than defending dozens. The bastion host got extra security attention, audits and modified software so the servers behind it didn’t have to face the internet." },
+      { "choice": "Decide per request from user and device, not from the network", "why": "A VPN or flat internal network trusts anyone who gets inside. BeyondCorp and zero trust check each request’s identity and device, so a stolen VPN login no longer opens everything." },
+      { "choice": "Connectors that dial out instead of ports that listen", "why": "An agent or worker inside the private network opens an outbound connection to the access service, so the network needs no inbound firewall rule and the hosts need no public IP." },
+      { "choice": "Credentials issued for the session, not shared keys", "why": "A shared SSH key or database password outlives the people who know it. Credentials tied to an identity and a session expire on their own and show up in the audit log under a name." }
+    ],
+    "timeline": [
+      { "year": "2014", "text": "Google’s BeyondCorp paper drops the privileged corporate network" },
+      { "year": "2016", "text": "OpenSSH 7.3 adds `ProxyJump` (`ssh -J`) for hopping through bastions" },
+      { "year": "2018", "text": "AWS Session Manager: shell access without inbound ports, bastions or SSH keys" },
+      { "year": "2020", "text": "NIST publishes SP 800-207 Zero Trust Architecture; HashiCorp announces Boundary" },
+      { "year": "2023", "text": "EC2 Instance Connect Endpoint reaches instances without public IPs" },
+      { "year": "2026", "text": "Access tools add controls for AI agents reaching infrastructure" }
+    ],
+    "sources": [
+      { "label": "Marcus J. Ranum: Thinking About Firewalls (bastion host definition)", "url": "http://www.vtcif.telstra.com.au/pub/docs/security/ThinkingFirewalls/ThinkingFirewalls.html", "archive": "https://web.archive.org/web/20200105033819/http://www.vtcif.telstra.com.au/pub/docs/security/ThinkingFirewalls/ThinkingFirewalls.html" },
+      { "label": "Wikipedia: Bastion host", "url": "https://en.wikipedia.org/wiki/Bastion_host" },
+      { "label": "BeyondCorp: A new approach to enterprise security (Ward and Beyer, 2014)", "url": "https://research.google/pubs/beyondcorp-a-new-approach-to-enterprise-security/" },
+      { "label": "BeyondCorp: The access proxy (2016)", "url": "https://research.google/pubs/beyondcorp-the-access-proxy/" },
+      { "label": "NIST SP 800-207: Zero Trust Architecture (Aug 2020)", "url": "https://csrc.nist.gov/pubs/sp/800/207/final" },
+      { "label": "OpenSSH 7.3 release notes (Aug 2016)", "url": "https://www.openssh.com/txt/release-7.3" },
+      { "label": "AWS What’s New: Introducing Session Manager (Sep 2018)", "url": "https://aws.amazon.com/about-aws/whats-new/2018/09/introducing-aws-systems-manager-session-manager/" },
+      { "label": "AWS What’s New: EC2 Instance Connect Endpoint (Jun 2023)", "url": "https://aws.amazon.com/about-aws/whats-new/2023/06/amazon-ec2-instance-connect-ssh-rdp-public-ip-address/" },
+      { "label": "HashiCorp blog: Announcing HashiCorp Boundary (Oct 2020)", "url": "https://www.hashicorp.com/en/blog/hashicorp-boundary" },
+      { "label": "HashiCorp blog: Secure AI agents with HashiCorp Boundary (Sep 2026)", "url": "https://www.hashicorp.com/en/blog/secure-ai-agents-with-hashicorp-boundary" }
+    ]
+  },
+  "sources": [
+    { "label": "AWS docs: AWS Systems Manager Session Manager", "url": "https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager.html" },
+    { "label": "AWS docs: Session Manager prerequisites (outbound HTTPS to ssmmessages)", "url": "https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-prerequisites.html" },
+    { "label": "AWS docs: Start a session (port forwarding to a remote host)", "url": "https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-sessions-start.html" },
+    { "label": "AWS docs: Connect using EC2 Instance Connect Endpoint", "url": "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/connect-using-eice.html" },
+    { "label": "AWS docs: What is AWS Verified Access?", "url": "https://docs.aws.amazon.com/verified-access/latest/ug/what-is-verified-access.html" },
+    { "label": "Google Cloud docs: Using IAP for TCP forwarding", "url": "https://cloud.google.com/iap/docs/using-tcp-forwarding" },
+    { "label": "Google Cloud docs: About OS Login", "url": "https://cloud.google.com/compute/docs/oslogin" },
+    { "label": "Microsoft Learn: What is Azure Bastion?", "url": "https://learn.microsoft.com/en-us/azure/bastion/bastion-overview" },
+    { "label": "Microsoft Learn: Microsoft Entra Private Access", "url": "https://learn.microsoft.com/en-us/entra/global-secure-access/concept-private-access" },
+    { "label": "Boundary docs: What is Boundary?", "url": "https://developer.hashicorp.com/boundary/docs/what-is-boundary" },
+    { "label": "Boundary docs: Credential management (brokering and injection)", "url": "https://developer.hashicorp.com/boundary/docs/concepts/credential-management" },
+    { "label": "Boundary docs: Session recording", "url": "https://developer.hashicorp.com/boundary/docs/session-recording" },
+    { "label": "GitHub: hashicorp/boundary LICENSE (BUSL 1.1)", "url": "https://github.com/hashicorp/boundary/blob/main/LICENSE" },
+    { "label": "GitHub: gravitational/teleport README (licensing)", "url": "https://github.com/gravitational/teleport" },
+    { "label": "GitHub: Teleport Community Edition license (under 100 employees and $10M revenue)", "url": "https://github.com/gravitational/teleport/blob/master/build.assets/LICENSE-community" },
+    { "label": "OpenSSH 7.3 release notes: ProxyJump and -J", "url": "https://www.openssh.com/txt/release-7.3" },
+    { "label": "NIST SP 800-207: Zero Trust Architecture", "url": "https://csrc.nist.gov/pubs/sp/800/207/final" }
+  ]
+}

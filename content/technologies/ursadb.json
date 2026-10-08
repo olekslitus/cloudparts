@@ -1,0 +1,118 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "UrsaDB",
+  "concepts": ["search"],
+  "provider": "oss",
+  "vendor": "CERT Polska (NASK PIB)",
+  "license": "BSD-3-Clause (mquery, its web front end, is AGPL-3.0)",
+  "website": "https://cert-polska.github.io/ursadb/",
+  "repo": "https://github.com/CERT-Polska/ursadb",
+  "summary": "CERT Polska’s byte-trigram index for malware collections: it narrows a YARA hunt over terabytes of files down to a few candidates.",
+  "intro": [
+    "UrsaDB is a server written in C++ that indexes files by their raw bytes. `ursadb_new` creates a database file, the `ursadb` daemon listens on TCP port 9281, and clients such as `ursacli` send commands in its own query language and get JSON back. Indexing reads every file and records, for each three-byte sequence, which files contain it (`gram3`). Three optional index types trade disk for precision: `text4` packs four ASCII characters into three bytes, `wide8` does the same for UTF-16 text, and `hash4` hashes four-byte sequences into three bytes. Files are grouped into datasets, written in small batches and later compacted into bigger ones; a dataset can be tagged or dropped, but single files can’t be removed.",
+    "A query such as `select \"Exception\" & {4D 5A}` intersects the file lists of every trigram in its strings and returns the files that probably match: never a false negative, sometimes a false positive. It was built for mquery, CERT Polska’s web interface for malware analysts. An analyst pastes a YARA rule, mquery turns its strings into an UrsaDB query, then runs YARA only on the candidates, so the answer is the same as scanning the whole collection. Both are free to self-host, usually with mquery’s `docker compose` setup; CERT Polska says its production server indexed 19 million files (9 TB) over one weekend."
+  ],
+  "strengths": [
+    "Turns a YARA hunt over a whole sample collection into a few index lookups plus YARA on the candidates, and because the index never misses a file, mquery’s results match plain YARA",
+    "Works on raw bytes: hex patterns, wildcards (`{61 ?? 63}`), alternatives, UTF-16 strings (`w\"abc\"`) and `min 2 of (...)` map onto YARA’s string features",
+    "Index types let you pay for precision: on CERT Polska’s 617 GB test set, `text4` and `wide8` together cost under 3.5% of the data and cut false positives for text",
+    "Permissive BSD licence, written and run in production by a national CERT"
+  ],
+  "limits": [
+    "Large on disk: on CERT Polska’s test set the `gram3` index alone took 68% of the collection’s size and `hash4` another 73%; the docs say to plan for 70% to 140%",
+    "Append-mostly: single files can’t be deleted from a dataset, so mistakes mean dropping and reindexing whole datasets, and an indexing job is one transaction that restarts from scratch after a crash",
+    "Only a simple subset of YARA is accelerated: counts, offsets (`at`) and other conditions are left to YARA, and strings shorter than three bytes give the index nothing to filter on",
+    "A slow-moving project: the last feature release, 1.5.2, came in October 2024, and the only change since is a January 2026 maintenance commit (1.5.3, newer base image) with no published GitHub release; mquery sees more activity"
+  ],
+  "worksWith": [],
+  "snippet": {
+    "lang": "bash",
+    "title": "Create a database, index a sample directory and query it",
+    "source": [
+      "mkdir -p /opt/ursadb",
+      "ursadb_new /opt/ursadb/db.ursa",
+      "ursadb /opt/ursadb/db.ursa &          # listens on tcp://localhost:9281",
+      "",
+      "# all four index types: more disk, fewer false positives",
+      "ursacli -c 'index \"/mnt/samples\" with [gram3, text4, wide8, hash4];'",
+      "",
+      "# files that may contain the ASCII string AND the byte sequence 4D 5A 90 00",
+      "ursacli -c 'select \"Exception\" & {4D 5A 90 00};'",
+      "",
+      "# at least 2 of 3 strings, one of them UTF-16",
+      "ursacli -c 'select min 2 of (\"cmd.exe\", w\"powershell\", {E8 ?? ?? ?? ?? 5D});'"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Index types and what they cost",
+      "intro": "Every dataset holds one or more indexes over the same files. CERT Polska measured sizes on vx-underground malware packs: 3.28 million files, 617 GB, after dropping files over 5 MB.",
+      "corner": "Index",
+      "columns": ["What it keys on", "Answers", "Size vs data"],
+      "rows": [
+        { "label": "`gram3`", "values": ["Every three-byte sequence", "Any byte pattern; always needed", "68.23% (421 GiB)"] },
+        { "label": "`text4`", "values": ["Four ASCII characters packed into three bytes", "ASCII text only", "2.75% (17 GiB)"] },
+        { "label": "`wide8`", "values": ["ASCII interleaved with zero bytes (UTF-16)", "UTF-16 text only", "0.64% (4 GiB)"] },
+        { "label": "`hash4`", "values": ["A three-byte hash of each four-byte sequence (with collisions)", "Any byte pattern, fewer false positives", "72.93% (450 GiB)"] }
+      ],
+      "notes": [
+        "The docs suggest `[gram3, text4, wide8, hash4]` by default and dropping `hash4` to save disk. Querying needs roughly 8 bytes of RAM per file in the largest dataset."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Other trigram indexes",
+      "intro": "UrsaDB applies an old trick to binaries. The same idea, an index from trigrams to the files or rows that contain them, shows up elsewhere.",
+      "items": [
+        { "name": "Google codesearch (`cindex`, `csearch`)", "tag": "BSD-3-Clause", "text": "Russ Cox’s single-machine version of how Google Code Search ran regular expressions over source code. Text only; the index was about 20% of the source size." },
+        { "name": "Zoekt", "tag": "Apache 2.0", "text": "Trigram-based code search with ranking by code signals such as symbol matches, maintained by Sourcegraph." },
+        { "name": "pg_trgm", "tag": "PostgreSQL License", "text": "Trigram GIN and GiST indexes on text columns inside PostgreSQL, for `LIKE`, regex and similarity searches." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Malware analysts describe families of malicious files as YARA rules: strings and byte patterns plus conditions. To find every sample in a collection that matches a new rule, YARA has to read every file, which takes a long time once a collection holds millions of samples. At CERT Polska, Jarosław Jedynak wrote UrsaDB as an n-gram database to make that hunt fast, and Michał Leszczyński extended it. The “initial public release” landed on GitHub on 21 May 2018, next to mquery, the web front end that uses it.",
+      "The approach is the one behind Google Code Search: keep, for each trigram, the list of files that contain it; turn a query into trigrams; intersect the lists; then run the real matcher only on what remains. UrsaDB applies it to raw bytes rather than source code, and adds packed index types to squeeze four-character precision out of three-byte keys. Version 1.0 came in January 2019, dataset tags and result iterators in 1.3 (2020), and a query optimiser in 1.5.2 (2024). The project was co-financed by the European Union’s Connecting Europe Facility."
+    ],
+    "choices": [
+      { "choice": "Trigrams of bytes, not words", "why": "Executables and memory dumps have no words to split on. Three-byte sequences work on any file and give a fixed key space of about 16.8 million possible trigrams." },
+      { "choice": "A pre-filter, not the final answer", "why": "The index may return files that don’t really match but never misses one that does. mquery then rechecks every candidate with YARA itself, so results stay exact while most files are never read." },
+      { "choice": "Four characters packed into three bytes", "why": "Longer n-grams are more selective but need a much bigger key space. `text4`, `wide8` and `hash4` pack or hash four bytes into three, getting “some of the benefits of 4grams using only 3grams under the hood”." },
+      { "choice": "Immutable datasets merged by compaction", "why": "The indexer can only hold a batch of files in memory, so it writes small datasets and merges them later. Datasets are easy to tag and drop as a unit; deleting one file from inside them was never implemented." }
+    ],
+    "timeline": [
+      { "year": "2018", "text": "UrsaDB and mquery published on GitHub in May" },
+      { "year": "2019", "text": "Version 1.0 released in January" },
+      { "year": "2020", "text": "1.3 adds dataset taints and on-disk result iterators" },
+      { "year": "2022", "text": "1.5 adds alternatives and better wildcards to queries" },
+      { "year": "2024", "text": "1.5.2 adds a query optimiser, more than halving query time in tests" },
+      { "year": "2026", "text": "1.5.3 maintenance commit moves to a supported base image" }
+    ],
+    "sources": [
+      { "label": "CERT-Polska/ursadb on GitHub: “initial public release” commit (May 2018)", "url": "https://github.com/CERT-Polska/ursadb/commit/6eaaa279790ac18dfca38eac1ecba64e8c268e2b" },
+      { "label": "CERT-Polska/ursadb README (authors, CERT.PL, Connecting Europe Facility funding)", "url": "https://github.com/CERT-Polska/ursadb/blob/master/README.md" },
+      { "label": "UrsaDB release v1.0 (January 2019)", "url": "https://github.com/CERT-Polska/ursadb/releases/tag/v1.0" },
+      { "label": "UrsaDB release v1.3.0 (taints, iterators, April 2020)", "url": "https://github.com/CERT-Polska/ursadb/releases/tag/v1.3.0" },
+      { "label": "UrsaDB release v1.5.0 (alternatives, wildcards, August 2022)", "url": "https://github.com/CERT-Polska/ursadb/releases/tag/v1.5.0" },
+      { "label": "UrsaDB release v1.5.2 (query optimisations, October 2024)", "url": "https://github.com/CERT-Polska/ursadb/releases/tag/v1.5.2" }
+    ]
+  },
+  "sources": [
+    { "label": "UrsaDB docs: Index types (gram3, text4, wide8, hash4; disk usage on vx-underground packs)", "url": "https://github.com/CERT-Polska/ursadb/blob/master/docs/indextypes.md" },
+    { "label": "UrsaDB docs: Limits (disk, RAM, indexing 19M files / 9 TB over a weekend)", "url": "https://github.com/CERT-Polska/ursadb/blob/master/docs/limits.md" },
+    { "label": "UrsaDB docs: Datasets (compaction, tags, no single-file removal)", "url": "https://github.com/CERT-Polska/ursadb/blob/master/docs/datasets.md" },
+    { "label": "UrsaDB docs: Indexing (single transaction, port 9281)", "url": "https://github.com/CERT-Polska/ursadb/blob/master/docs/indexing.md" },
+    { "label": "UrsaDB docs: Query syntax (select, wildcards, alternatives, min of, wide strings)", "url": "https://github.com/CERT-Polska/ursadb/blob/master/docs/syntax.md" },
+    { "label": "UrsaDB LICENSE (BSD 3-Clause, NASK PIB)", "url": "https://github.com/CERT-Polska/ursadb/blob/master/LICENSE" },
+    { "label": "UrsaDB commit “Release v1.5.3” (maintenance, January 2026)", "url": "https://github.com/CERT-Polska/ursadb/commit/9dce7ddbc002560016732fe7474906936313b802" },
+    { "label": "UrsaDB releases on GitHub (latest published: v1.5.2)", "url": "https://github.com/CERT-Polska/ursadb/releases" },
+    { "label": "CERT-Polska/mquery on GitHub (AGPL-3.0, docker compose quickstart)", "url": "https://github.com/CERT-Polska/mquery" },
+    { "label": "mquery docs: Yara support (pre-filtering, recheck with YARA, accelerated subset)", "url": "https://github.com/CERT-Polska/mquery/blob/master/docs/yara.md" },
+    { "label": "Russ Cox: Regular expression matching with a trigram index (January 2012)", "url": "https://swtch.com/~rsc/regexp/regexp4.html" },
+    { "label": "google/codesearch on GitHub", "url": "https://github.com/google/codesearch" },
+    { "label": "sourcegraph/zoekt on GitHub: fast trigram based code search", "url": "https://github.com/sourcegraph/zoekt" }
+  ],
+  "checked": "2026-10-06"
+}

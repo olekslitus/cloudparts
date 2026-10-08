@@ -1,0 +1,111 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Apache ZooKeeper",
+  "concepts": ["coordination"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://zookeeper.apache.org/",
+  "repo": "https://github.com/apache/zookeeper",
+  "summary": "The coordination service from Yahoo that a generation of Hadoop-era systems use for leader election, membership and configuration.",
+  "intro": [
+    "ZooKeeper is a Java server that runs as an ensemble of usually three or five machines. Its data is a tree of small nodes called znodes, named like file paths (`/app/config`), each holding a little data: kilobytes, with a cap just under 1 MB. The whole tree is kept in memory, backed by a transaction log and snapshots on disk. A client connects to any one server. Reads are answered from that server’s copy, which makes them fast but possibly a little behind, so a client that needs the latest value calls `sync` first. Writes are forwarded to the leader, which orders them and broadcasts them to the followers with its own protocol, Zab; a write commits once a majority has it. ZooKeeper does best when reads outnumber writes about ten to one.",
+    "There is deliberately no lock API. Instead ZooKeeper offers building blocks. Ephemeral znodes are deleted when the session that created them ends, so a crashed client’s entries vanish. Sequential znodes get a rising counter appended to their name. Watches send a client one notification when a znode or its children change, and since version 3.6 a persistent, recursive watch can follow a whole subtree. From these, clients build locks, leader elections, barriers and queues: for a lock, each client creates an ephemeral sequential child, the lowest number holds the lock, and every other client watches only the one just ahead of it. Apache Curator packages these recipes for Java.",
+    "HBase requires it, HDFS uses it for automatic NameNode failover, and Solr, Druid, NiFi and Fluss rely on it for coordination, such as electing leaders. Kafka was its best-known user until Kafka 4.0 (March 2025) replaced it with its own Raft quorum. The current release is 3.9.6 and the stable line is 3.8."
+  ],
+  "strengths": [
+    "Proven for well over a decade underneath HBase, HDFS, Solr, Druid and, for most of its life, Kafka",
+    "Any server answers reads from memory, so read-heavy coordination stays fast",
+    "Ephemeral and sequential znodes make locks, elections and membership lists simple, ordered and free of thundering herds",
+    "Apache Curator provides tested recipes such as leader latches, locks and service discovery"
+  ],
+  "limits": [
+    "Reads can be stale unless you call `sync`; only writes are linearizable",
+    "A standard watch fires once and must be set again, so a client can miss changes that happen in between",
+    "A JVM service with its own wire protocol (Jute): heap and disk tuning to do, and first-class clients mainly for Java and C",
+    "Losing ground as systems build Raft in: Kafka removed it in 4.0, Druid 38 moved segment discovery off it, and Fluss plans to drop it"
+  ],
+  "worksWith": [
+    { "id": "hbase", "how": "is a required dependency of" },
+    { "id": "hadoop", "how": "drives automatic NameNode failover in" },
+    { "id": "kafka", "how": "held cluster metadata, until 4.0, for" },
+    { "id": "druid", "how": "elects Coordinator and Overlord leaders for" },
+    { "id": "nifi", "how": "can elect the cluster coordinator for" },
+    { "id": "fluss", "how": "elects the active CoordinatorServer for" },
+    { "id": "patroni", "how": "can hold the leader key for" },
+    { "id": "vitess", "how": "can hold the topology and locks of" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Persistent, ephemeral and sequential znodes, and a watch, in the CLI",
+    "source": [
+      "bin/zkCli.sh -server zk1:2181,zk2:2181,zk3:2181",
+      "",
+      "create /workers",
+      "# ephemeral: deleted automatically when this session ends",
+      "create -e /workers/worker-7 10.0.3.7",
+      "",
+      "# sequential: ZooKeeper appends a rising counter, the basis of fair locks",
+      "create /locks",
+      "create -s -e /locks/job- worker-7        # Created /locks/job-0000000003",
+      "",
+      "# be notified once when the list of workers changes",
+      "ls -w /workers"
+    ]
+  },
+  "history": {
+    "story": [
+      "In the late 2000s Yahoo ran many distributed systems that each needed the same things: a leader, a list of live servers, shared configuration. Its web crawler’s Fetching Service and the Yahoo! Message Broker, a publish-subscribe system with thousands of topics, are two examples. Google had answered the same need with Chubby, a lock service. Patrick Hunt, Mahadev Konar, Flavio Junqueira and Benjamin Reed took a different route: a “coordination kernel” of simple, wait-free data objects with watches and strict ordering, from which applications build whatever primitives they need.",
+      "ZooKeeper moved to the Apache Software Foundation in 2008 as part of the Hadoop project, and its authors described it at USENIX ATC in 2010, the year it became a top-level Apache project. It became the default coordination layer for the Hadoop ecosystem and beyond: HBase, HDFS failover, Kafka, Solr and Druid. Apache Curator, which packages the common recipes, graduated to a top-level project in 2013.",
+      "Newer coordination stores built on Raft, etcd and Consul, offered alternatives, and some systems began to build consensus in. In 2019 Kafka’s KIP-500 proposed replacing ZooKeeper with a metadata quorum inside Kafka, and Kafka 4.0 shipped without ZooKeeper in March 2025, with thanks to the ZooKeeper community. ZooKeeper itself remains maintained, with 3.9 as its current line."
+    ],
+    "choices": [
+      { "choice": "No locks on the server, only wait-free objects", "why": "Blocking primitives let slow or faulty clients hurt fast ones, and make the server depend on other clients’ responses and failures. Exposing simple objects let each application build exactly the primitive it needed." },
+      { "choice": "Reads served locally, writes ordered by one leader", "why": "Coordination workloads are mostly reads; Yahoo’s crawler saw between 10 and 100 reads per write. Answering reads from each server’s memory scales them, while Zab gives every write a single global order." },
+      { "choice": "Ephemeral and sequential znodes", "why": "Tying a znode to a session turns a client crash into a node disappearing, which is failure detection for free. Sequence numbers give every contender a place in line, so a lock can pass to the next client without waking all of them." },
+      { "choice": "Watches like cache invalidations", "why": "A client can cache, say, the current leader and be told once when it changes, instead of polling, the same idea distributed file systems use to keep caches fresh." }
+    ],
+    "timeline": [
+      { "year": "2008", "text": "Comes to the Apache Software Foundation, under the Hadoop project" },
+      { "year": "2010", "text": "USENIX ATC paper; becomes a top-level Apache project" },
+      { "year": "2013", "text": "Apache Curator, the recipe library, graduates to a top-level project" },
+      { "year": "2019", "text": "Kafka’s KIP-500 proposes replacing ZooKeeper with a built-in quorum" },
+      { "year": "2025", "text": "Kafka 4.0 ships without ZooKeeper" }
+    ],
+    "sources": [
+      { "label": "Hunt, Konar, Junqueira, Reed: ZooKeeper, wait-free coordination for Internet-scale systems (USENIX ATC 2010)", "url": "https://www.usenix.org/conference/usenix-atc-10/zookeeper-wait-free-coordination-internet-scale-systems" },
+      { "label": "The ZooKeeper paper, full text (PDF)", "url": "https://www.usenix.org/events/atc10/tech/full_papers/Hunt.pdf" },
+      { "label": "ASF Milestones: ZooKeeper arrives in 2008, top-level in 2010; Curator graduates in 2013", "url": "https://apache.org/press/highlights" },
+      { "label": "Apache Hadoop news: ZooKeeper graduates from a Hadoop subproject", "url": "https://hadoop.apache.org/news/2011-01-xx-zookeeper.html" },
+      { "label": "Apache Incubator: Curator project status (graduated September 2013)", "url": "https://incubator.apache.org/projects/curator.html" },
+      { "label": "KIP-500: Replace ZooKeeper with a self-managed metadata quorum", "url": "https://cwiki.apache.org/confluence/display/KAFKA/KIP-500%3A+Replace+ZooKeeper+with+a+Self-Managed+Metadata+Quorum" },
+      { "label": "Apache JIRA KAFKA-9119: KIP-500 (opened October 2019)", "url": "https://issues.apache.org/jira/browse/KAFKA-9119" },
+      { "label": "Apache Kafka 4.0.0 release announcement (Mar 2025)", "url": "https://kafka.apache.org/blog/2025/03/18/apache-kafka-4.0.0-release-announcement/" },
+      { "label": "Apache ZooKeeper releases (3.9 current, 3.8 stable)", "url": "https://zookeeper.apache.org/releases.html" }
+    ]
+  },
+  "sources": [
+    { "label": "ZooKeeper docs: Overview (in-memory tree, local reads, leader and followers, 10:1 reads)", "url": "https://zookeeper.apache.org/doc/current/zookeeperOver.html" },
+    { "label": "ZooKeeper docs: Programmer’s guide (znode types, data under 1 MB, watches, persistent recursive watches, sync)", "url": "https://zookeeper.apache.org/doc/current/zookeeperProgrammers.html" },
+    { "label": "ZooKeeper docs: Administrator’s guide (ensembles, odd sizes, jute.maxbuffer)", "url": "https://zookeeper.apache.org/doc/current/zookeeperAdmin.html" },
+    { "label": "ZooKeeper docs: Internals (atomic broadcast, consistency guarantees)", "url": "https://zookeeper.apache.org/doc/current/zookeeperInternals.html" },
+    { "label": "ZooKeeper docs: Recipes (locks without herd effect, leader election)", "url": "https://zookeeper.apache.org/doc/current/recipes.html" },
+    { "label": "ZooKeeper docs: CLI (create -e, create -s, ls -w)", "url": "https://zookeeper.apache.org/doc/current/zookeeperCLI.html" },
+    { "label": "Hunt et al.: ZooKeeper paper (USENIX ATC 2010, PDF): Zab, wait-free design, Yahoo applications", "url": "https://www.usenix.org/events/atc10/tech/full_papers/Hunt.pdf" },
+    { "label": "Apache ZooKeeper releases (3.9.6 current, 3.8.7 stable)", "url": "https://zookeeper.apache.org/releases.html" },
+    { "label": "Apache Curator: client library and recipes for ZooKeeper", "url": "https://curator.apache.org/" },
+    { "label": "etcd docs: Why etcd (ZooKeeper’s Jute protocol and language bindings, from etcd’s perspective)", "url": "https://etcd.io/docs/v3.7/learning/why/" },
+    { "label": "Apache HBase reference guide: ZooKeeper (a distributed HBase depends on it)", "url": "https://hbase.apache.org/book.html" },
+    { "label": "Apache Hadoop docs: HDFS high availability with QJM (ZooKeeper and ZKFC for automatic failover)", "url": "https://hadoop.apache.org/docs/stable/hadoop-project-dist/hadoop-hdfs/HDFSHighAvailabilityWithQJM.html" },
+    { "label": "Apache Solr reference guide: ZooKeeper ensemble configuration", "url": "https://solr.apache.org/guide/solr/latest/deployment-guide/zookeeper-ensemble.html" },
+    { "label": "Apache Druid docs: ZooKeeper (Coordinator and Overlord leader election, service discovery)", "url": "https://github.com/apache/druid/blob/master/docs/design/zookeeper.md" },
+    { "label": "Apache Druid 38.0.0 release notes (ZooKeeper changes)", "url": "https://github.com/apache/druid/releases/tag/druid-38.0.0" },
+    { "label": "NiFi docs: Administration guide (ZooKeeper and Kubernetes clustering)", "url": "https://nifi.apache.org/nifi-docs/administration-guide.html" },
+    { "label": "Fluss docs: Architecture (CoordinatorServer elected through ZooKeeper)", "url": "https://fluss.apache.org/docs/concepts/architecture/" },
+    { "label": "Fluss roadmap (ZooKeeper removal)", "url": "https://fluss.apache.org/roadmap/" },
+    { "label": "Apache Kafka 4.0.0 release announcement (Mar 2025)", "url": "https://kafka.apache.org/blog/2025/03/18/apache-kafka-4.0.0-release-announcement/" },
+    { "label": "Patroni on GitHub: a template for PostgreSQL HA with ZooKeeper, etcd or Consul", "url": "https://github.com/patroni/patroni" },
+    { "label": "Vitess docs: Topology service (etcd, ZooKeeper or Consul)", "url": "https://vitess.io/docs/24.0/reference/features/topology-service/" }
+  ],
+  "checked": "2026-10-06"
+}

@@ -1,0 +1,159 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Patroni",
+  "concepts": ["relational"],
+  "provider": "oss",
+  "vendor": "Patroni community (started at Zalando)",
+  "license": "MIT",
+  "website": "https://patroni.readthedocs.io/",
+  "repo": "https://github.com/patroni/patroni",
+  "summary": "A Python agent beside each Postgres server that elects one primary through etcd, Consul, ZooKeeper or Kubernetes, and fails over when it dies.",
+  "intro": [
+    "Patroni runs as one agent process next to every PostgreSQL server in a cluster, usually three. The agents never vote among themselves. They share a distributed configuration store (DCS): etcd, Consul, ZooKeeper, or the Kubernetes API itself. Every `loop_wait` seconds (10 by default) each agent runs an HA cycle. The primary renews a leader key in the DCS that carries a lease (`ttl`, 30 seconds by default), and the replicas stream WAL from whoever holds it. If the primary stops renewing, the lease expires and a leader race starts: each healthy replica checks that it is the best candidate (not further behind than `maximum_lag_on_failover`, no other member holding more WAL), then tries to create the key atomically. The one that succeeds promotes its Postgres to primary; the others follow it. A primary that can no longer update the key demotes itself to read-only, so two primaries never accept writes at once.",
+    "Patroni also manages Postgres itself: it bootstraps the first node, clones replicas, rejoins a failed primary as a replica with `pg_rewind`, and keeps cluster-wide settings in the DCS, edited with `patronictl edit-config`. Each agent serves a REST API on port 8008, where `GET /primary` returns 200 only on the current leader, so HAProxy, Envoy or a cloud load balancer can send clients to the right node; on Kubernetes, Patroni labels the leader pod instead. It is free and MIT-licensed, supports PostgreSQL 9.3 to 18, and sits inside Zalando’s Spilo images and Postgres Operator. Datadog’s 2025 move off cloud-managed Postgres runs it on Kubernetes with ZooKeeper as the DCS and WAL-G for backups."
+  ],
+  "strengths": [
+    "Split-brain defences in layers: a leased leader key, self-demotion when the lease can’t be renewed, an optional Linux watchdog that resets a stuck node, and a failsafe mode for DCS outages",
+    "Runs anywhere: VMs, bare metal, or Kubernetes, where the API server can hold the leader key so no separate etcd is needed",
+    "Manages the whole cluster life cycle: bootstrap, new replicas, switchover, rejoining old primaries, and configuration pushed to every node",
+    "Asynchronous, synchronous or quorum-commit replication, with `maximum_lag_on_failover` and `failover_priority` to control who may be promoted",
+    "Plain MIT licence and wide use: most Postgres operators for Kubernetes other than CloudNativePG build on Patroni or a similar tool"
+  ],
+  "limits": [
+    "Outside Kubernetes you must run and monitor a DCS cluster too; if it loses quorum, Patroni demotes the primary to read-only unless `failsafe_mode` is on and every replica can be reached",
+    "Asynchronous replication is the default, so a failover can lose up to `maximum_lag_on_failover` bytes plus the writes of the last `ttl` seconds; synchronous modes avoid that at the cost of write latency",
+    "It doesn’t route or pool connections: you add HAProxy, Envoy, a Kubernetes Service or a load balancer that checks the REST API, plus PgBouncer if needed",
+    "No backups of its own; pair it with WAL-G, pgBackRest or Barman for archives and point-in-time recovery",
+    "You own upgrades and testing of Postgres, Patroni and the DCS together; Patroni 4.0 renamed `master` to `primary` in the API, labels and DCS, a breaking change for scripts"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "elects a primary and fails over for" },
+    { "id": "kubernetes", "how": "can keep its leader key in the API of" },
+    { "id": "consul", "how": "can keep its leader key in" },
+    { "id": "wal-g", "how": "can archive WAL and build replicas with" }
+  ],
+  "snippet": {
+    "lang": "yaml",
+    "title": "patroni.yml for the first of three nodes; the others change only name and addresses",
+    "source": [
+      "scope: orders            # cluster name; DCS keys live under /service/orders/",
+      "name: pg-1",
+      "",
+      "restapi:",
+      "  listen: 0.0.0.0:8008",
+      "  connect_address: 10.0.1.11:8008   # load balancers poll GET /primary here",
+      "",
+      "etcd3:",
+      "  hosts: 10.0.0.5:2379,10.0.0.6:2379,10.0.0.7:2379",
+      "",
+      "bootstrap:",
+      "  dcs:                   # written to the DCS once; later: patronictl edit-config",
+      "    ttl: 30              # leader lease in seconds",
+      "    loop_wait: 10",
+      "    retry_timeout: 10",
+      "    maximum_lag_on_failover: 1048576   # replicas over 1 MB behind are not promoted",
+      "    synchronous_mode: false",
+      "    postgresql:",
+      "      use_pg_rewind: true",
+      "      parameters:",
+      "        archive_mode: \"on\"",
+      "        archive_command: \"wal-g wal-push %p\"",
+      "  initdb:",
+      "  - encoding: UTF8",
+      "  - data-checksums",
+      "",
+      "postgresql:",
+      "  listen: 0.0.0.0:5432",
+      "  connect_address: 10.0.1.11:5432",
+      "  data_dir: /var/lib/postgresql/18/main",
+      "  bin_dir: /usr/lib/postgresql/18/bin",
+      "  authentication:",
+      "    superuser:   { username: postgres, password: change-me }",
+      "    replication: { username: replicator, password: change-me }",
+      "",
+      "watchdog:",
+      "  mode: automatic        # use /dev/watchdog if present",
+      "",
+      "# patroni /etc/patroni.yml        start the agent on each node",
+      "# patronictl -c /etc/patroni.yml list",
+      "# patronictl -c /etc/patroni.yml switchover --candidate pg-2"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Patroni or another way to fail over Postgres?",
+      "intro": "All of these promote a streaming replica when the primary dies. They differ in who makes the decision and what else you have to run.",
+      "corner": "",
+      "columns": ["Patroni", "repmgr", "pg_auto_failover", "CloudNativePG", "RDS Multi-AZ"],
+      "rows": [
+        { "label": "Who decides", "values": ["Each node’s agent, by racing for a leader key in a DCS", "The nodes, by talking to each other", "A central monitor that instructs a keeper on each node", "The operator, keeping cluster state in the Kubernetes API", "AWS"] },
+        { "label": "Extra pieces", "values": ["A DCS (three or more etcd, Consul or ZooKeeper nodes) unless on Kubernetes; a proxy or load balancer", "None beyond the Postgres nodes", "One monitor node", "A Kubernetes cluster", "None"] },
+        { "label": "Runs on", "values": ["VMs, bare metal, Kubernetes", "VMs, bare metal", "VMs, bare metal", "Kubernetes only", "AWS only"] },
+        { "label": "Licence", "values": ["MIT", "GPL v3 (from EDB)", "PostgreSQL License (from Microsoft)", "Apache 2.0", "Proprietary, paid per instance"] }
+      ],
+      "notes": [
+        "pg_auto_failover keeps replication running if the monitor fails, but can’t react to another failure until it is back.",
+        "RDS Multi-AZ (single standby) keeps a synchronous standby in another zone that can’t serve reads; AWS says failovers typically take 60 to 120 seconds."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "PostgreSQL has had built-in streaming replication since 2010, but nothing in it decides when a replica should take over. In January 2015 Compose, which ran Postgres as a service, described Governor: a small Python program on each node that used etcd as the “repository of truth”. Whichever node set a `leader` key, with a 30-second time-to-live, was the primary and had to keep refreshing it; when the key vanished, the others raced to set it.",
+      "Zalando’s database team forked Governor in mid-2015 as Patroni, added more stores and much more automation, and presented it at FOSDEM PGDay in January 2016. Version 1.0 followed in July 2016 with cluster-wide configuration kept in the DCS. Compose later deprecated Governor and moved to Patroni itself.",
+      "Patroni became the usual way to run highly available Postgres outside managed services, and the base of Zalando’s Spilo images and Kubernetes operator. The project now lives in its own GitHub organisation, with Zalando credited in the licence and in its old name."
+    ],
+    "choices": [
+      { "choice": "An external store as the single source of truth", "why": "Tools such as repmgr let the nodes talk among themselves. Patroni only acts on what the DCS says, which costs an extra cluster but makes split-brain less likely, because the DCS has its own quorum." },
+      { "choice": "A leader key with a lease instead of a vote", "why": "Governor’s idea, kept by Patroni: holding the key is what makes a node primary, and a node that can’t renew it demotes itself before the lease runs out." },
+      { "choice": "A template that manages Postgres, not just failover", "why": "Bootstrapping, cloning replicas, rewinding a failed primary and pushing configuration all follow from the same state in the DCS, so the project calls itself a template for HA solutions." },
+      { "choice": "Pluggable stores, including Kubernetes", "why": "Different teams already ran etcd, Consul or ZooKeeper; on Kubernetes, keeping the leader key in Endpoints or ConfigMaps means no extra etcd deployment." }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "Compose describes Governor in January; Zalando forks it as Patroni in July" },
+      { "year": "2016", "text": "FOSDEM PGDay talk; version 1.0 adds dynamic cluster-wide configuration" },
+      { "year": "2020", "text": "2.0 adds etcd v3 support and an experimental built-in Raft store" },
+      { "year": "2023", "text": "3.0 adds Citus support and DCS failsafe mode; Raft deprecated" },
+      { "year": "2024", "text": "4.0 adds quorum-based failover and drops the term “master”" },
+      { "year": "2025", "text": "4.1 released in September" }
+    ],
+    "sources": [
+      { "label": "PostgreSQL 9.0 release announcement (built-in streaming replication, 2010)", "url": "https://www.postgresql.org/about/news/postgresql-90-final-release-available-now-1235/" },
+      { "label": "PostgreSQL docs: Failover (Postgres doesn’t detect a failed primary itself)", "url": "https://www.postgresql.org/docs/current/warm-standby-failover.html" },
+      { "label": "Compose: High Availability for PostgreSQL, Batteries Not Included (Jan 2015)", "url": "https://www.compose.com/articles/high-availability-for-postgresql-batteries-not-included/", "archive": "https://web.archive.org/web/20170709100703/https://www.compose.com/articles/high-availability-for-postgresql-batteries-not-included/" },
+      { "label": "compose/governor on GitHub (deprecated in favour of Patroni)", "url": "https://github.com/compose/governor" },
+      { "label": "Zalando Engineering: Zalando’s Patroni, a template for high availability PostgreSQL (Feb 2016)", "url": "https://engineering.zalando.com/posts/2016/02/zalandos-patroni-a-template-for-high-availability-postgresql.html" },
+      { "label": "Patroni release notes (1.0, 2.0, 3.0, 4.0, 4.1)", "url": "https://patroni.readthedocs.io/en/latest/releases.html" },
+      { "label": "Patroni README (formerly Zalando’s Patroni, fork of Governor)", "url": "https://github.com/patroni/patroni/blob/master/README.rst" },
+      { "label": "Patroni LICENSE (MIT; Compose, Zalando SE, Patroni contributors)", "url": "https://github.com/patroni/patroni/blob/master/LICENSE" }
+    ]
+  },
+  "sources": [
+    { "label": "Patroni documentation", "url": "https://patroni.readthedocs.io/en/latest/" },
+    { "label": "Patroni on GitHub (supported DCSs, PostgreSQL 9.3 to 18)", "url": "https://github.com/patroni/patroni" },
+    { "label": "Patroni LICENSE (MIT)", "url": "https://github.com/patroni/patroni/blob/master/LICENSE" },
+    { "label": "Patroni docs: FAQ (DCS versus repmgr, `ttl`, `loop_wait`, losing the DCS)", "url": "https://patroni.readthedocs.io/en/latest/faq.html" },
+    { "label": "Patroni docs: HA loop diagram (leader race, “Am I the healthiest node?”)", "url": "https://github.com/patroni/patroni/blob/master/docs/ha_loop_diagram.dot" },
+    { "label": "Patroni docs: Replication modes (data loss bound, synchronous and quorum modes)", "url": "https://patroni.readthedocs.io/en/latest/replication_modes.html" },
+    { "label": "Patroni docs: YAML configuration (`failover_priority`, `nofailover`)", "url": "https://patroni.readthedocs.io/en/latest/yaml_configuration.html" },
+    { "label": "Patroni docs: DCS failsafe mode", "url": "https://patroni.readthedocs.io/en/latest/dcs_failsafe_mode.html" },
+    { "label": "Patroni docs: Watchdog support", "url": "https://patroni.readthedocs.io/en/latest/watchdog.html" },
+    { "label": "Patroni docs: Using Patroni with Kubernetes", "url": "https://patroni.readthedocs.io/en/latest/kubernetes.html" },
+    { "label": "Patroni docs: REST API (health-check endpoints)", "url": "https://patroni.readthedocs.io/en/latest/rest_api.html" },
+    { "label": "Patroni docs: Replica imaging and bootstrap (custom methods, WAL-E, pgBackRest, Barman)", "url": "https://patroni.readthedocs.io/en/latest/replica_bootstrap.html" },
+    { "label": "Patroni docs: patronictl", "url": "https://patroni.readthedocs.io/en/latest/patronictl.html" },
+    { "label": "Patroni sample configuration postgres0.yml", "url": "https://github.com/patroni/patroni/blob/master/postgres0.yml" },
+    { "label": "Zalando Spilo: Postgres and Patroni in one image", "url": "https://github.com/zalando/spilo" },
+    { "label": "Zalando Spilo: environment (WAL-G backups)", "url": "https://github.com/zalando/spilo/blob/master/ENVIRONMENT.rst" },
+    { "label": "Zalando Postgres Operator on GitHub (powered by Patroni; WAL-G via Spilo)", "url": "https://github.com/zalando/postgres-operator" },
+    { "label": "PGConf NYC 2025: How (and why) Datadog is moving from cloud-managed to self-managed Postgres (slides, PDF)", "url": "https://postgresql.us/events/pgconfus2025/sessions/session/2064/slides/204/" },
+    { "label": "CloudNativePG FAQ (other operators use Patroni; why CloudNativePG doesn’t)", "url": "https://cloudnative-pg.io/docs/devel/faq" },
+    { "label": "repmgr: Replication Manager for PostgreSQL clusters (GPL v3, EDB)", "url": "https://www.repmgr.org/" },
+    { "label": "pg_auto_failover docs: Architecture basics (monitor and keepers)", "url": "https://pg-auto-failover.readthedocs.io/en/main/architecture.html" },
+    { "label": "pg_auto_failover LICENSE (PostgreSQL License)", "url": "https://github.com/hapostgres/pg_auto_failover/blob/main/LICENSE" },
+    { "label": "Amazon RDS: Multi-AZ DB instance deployments", "url": "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZSingleStandby.html" },
+    { "label": "Amazon RDS: Failing over a Multi-AZ DB instance (60 to 120 seconds)", "url": "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZ.Failover.html" }
+  ],
+  "checked": "2026-10-06"
+}

@@ -1,0 +1,106 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Apache Thrift",
+  "concepts": ["rpc"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://thrift.apache.org/",
+  "repo": "https://github.com/apache/thrift",
+  "summary": "Facebook’s 2007 RPC framework: define types and services in one IDL file, generate clients and servers for over 20 languages, and pick the wire protocol and transport separately.",
+  "intro": [
+    "You write structs, exceptions and services in a `.thrift` file, and the `thrift` compiler generates code for each language you need: data classes, a client stub and a processor that dispatches calls to your handler. Every field carries a number, and that number, not the name, goes on the wire. A reader that meets a field number it doesn’t know uses the type tag to skip it, so old and new versions of a service can talk during a staged rollout. A method takes arguments and returns one result or throws a declared exception; `oneway` methods send and don’t wait. There are no streaming methods in the IDL.",
+    "The runtime is a stack of swappable layers. A transport moves bytes (a socket, HTTP, a file, a memory buffer), optionally wrapped in a framed transport that prefixes each message with its length, which non-blocking servers need. A protocol turns values into bytes: binary writes big-endian integers and length-prefixed strings; compact uses variable-length zigzag integers and packs a small field-number delta and the type into one byte; JSON is human-readable. A server ties a transport, a protocol and the generated processor together, with thread-pool and non-blocking variants among others. Client and server must be configured with the same protocol and transport.",
+    "Thrift is an Apache top-level project, free under Apache 2.0, and still versioned 0.x after almost two decades (0.25.0 in September 2026). It sits inside much of the Hadoop world: the Hive Metastore and HiveServer2 speak Thrift, Impala uses it for client and internal calls, HBase runs a Thrift gateway for non-Java clients, and Parquet encodes its file metadata with Thrift. Meta keeps its own diverged fork, fbthrift."
+  ],
+  "strengths": [
+    "One IDL generates code for more than 20 languages, from C++, Java, Go and Python to Erlang, OCaml, Delphi and Smalltalk",
+    "Protocol and transport are chosen independently: compact binary over a socket for speed, JSON over HTTP for debugging or browsers",
+    "Numbered fields with skip-unknown semantics make adding or removing fields safe across versions",
+    "Mature and embedded in widely used systems (Hive, Impala, HBase, Parquet), so it is well tested in production"
+  ],
+  "limits": [
+    "No streaming methods, and no deadline that travels with each call as gRPC’s does",
+    "Language libraries differ in features and minimum versions, tracked in a matrix the project itself says may not be correct in all cases; it has never reached 1.0",
+    "Client and server must be set up with the same protocol and transport (binary, compact or JSON; framed or not): HBase’s guide, for one, notes that a framed server needs a matching client setting"
+  ],
+  "worksWith": [
+    { "id": "hive", "how": "carries Metastore and HiveServer2 calls for" },
+    { "id": "impala", "how": "carries client and internal calls for" },
+    { "id": "hbase", "how": "gives non-Java clients a gateway API to" },
+    { "id": "parquet", "how": "encodes the file metadata of" },
+    { "id": "cassandra", "how": "was the client API, until 4.0, of" },
+    { "id": "zeppelin", "how": "links interpreter processes to the server in" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Define a service in Thrift IDL and generate Python and Java code",
+    "source": [
+      "cat > cache.thrift <<'EOF'",
+      "namespace py cache",
+      "namespace java com.example.cache",
+      "",
+      "struct Item {",
+      "  1: required string key,",
+      "  2: optional binary value,",
+      "  3: optional i64 expires_at   // added later: old readers skip field 3",
+      "}",
+      "",
+      "exception NotFound { 1: string key }",
+      "",
+      "service Cache {",
+      "  Item get(1: string key) throws (1: NotFound nf),",
+      "  void put(1: Item item),",
+      "  oneway void touch(1: string key)   // fire and forget",
+      "}",
+      "EOF",
+      "",
+      "thrift --gen py --gen java cache.thrift   # writes gen-py/ and gen-java/"
+    ]
+  },
+  "history": {
+    "story": [
+      "As Facebook grew, its search, ad selection and event logging had outgrown its LAMP stack. Engineers wrote back-end services in whatever language fit best, mostly C++, Java and Python, while the website was PHP, so they needed a fast, reliable way to call across languages. The authors found that existing options were too limited, too inflexible about data types, or too slow; their paper dismissed SOAP for its XML parsing overhead and CORBA as heavyweight, and noted that Google’s Protocol Buffers were closed-source. Thrift succeeded Pillar, a similar system Adam D’Angelo had started at Caltech and continued at Facebook.",
+      "Mark Slee, Aditya Agarwal and Marc Kwiatkowski described Thrift in an April 2007 paper, and Facebook open-sourced it that month with five target languages: C++, Java, Python, Ruby and PHP. It already carried Facebook’s search service and structured logging. Thrift entered the Apache Incubator in May 2008 and became a top-level Apache project in October 2010.",
+      "Hadoop-era projects adopted it widely: Cassandra’s older client API, HBase’s gateway, Hive’s servers and Parquet’s metadata all used Thrift. In 2015 Google open-sourced gRPC, built on Protocol Buffers and HTTP/2, which now covers much of the same ground, and Cassandra removed its Thrift interface in 4.0. Thrift lives on inside the systems that built on it."
+    ],
+    "choices": [
+      { "choice": "Static code generation instead of a dynamic system", "why": "Generating code ahead of time produces validated code that runs without run-time type introspection, and the developer describes a whole service in one short file." },
+      { "choice": "Separate transport and protocol layers", "why": "The paper argued that whether a service uses XML or binary is immaterial to the application, and the same data should flow over sockets, memory or files. Splitting the layers let Facebook add framing, buffering or a new encoding without touching generated code." },
+      { "choice": "Numbered fields and self-delimiting data", "why": "Facebook needed staged rollouts and old log files to keep working. A field identifier plus a type tag lets a reader skip anything it doesn’t recognise, and argument lists are structs too, so method signatures can evolve safely." },
+      { "choice": "Simplicity first, compactness later", "why": "The first binary protocol deliberately skipped tricks like 7-bit variable-length integers to keep the code clear. The compact protocol, with varints and field-number deltas, was added later when size mattered." }
+    ],
+    "timeline": [
+      { "year": "2007", "text": "Facebook publishes the Thrift paper and open-sources it in April" },
+      { "year": "2008", "text": "Enters the Apache Incubator in May" },
+      { "year": "2010", "text": "Becomes a top-level Apache project in October" },
+      { "year": "2021", "text": "Cassandra 4.0 removes its deprecated Thrift interface" },
+      { "year": "2026", "text": "Thrift 0.25.0 released in September" }
+    ],
+    "sources": [
+      { "label": "Slee, Agarwal and Kwiatkowski: Thrift, scalable cross-language services implementation (Facebook, April 2007)", "url": "https://thrift.apache.org/static/files/thrift-20070401.pdf" },
+      { "label": "Apache Thrift: About (open-sourced April 2007, Incubator May 2008, TLP October 2010)", "url": "https://thrift.apache.org/about" },
+      { "label": "Apache Cassandra 4.0 NEWS.txt (Thrift interface removed)", "url": "https://github.com/apache/cassandra/blob/cassandra-4.0/NEWS.txt" },
+      { "label": "Thrift compact protocol specification", "url": "https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md" },
+      { "label": "Apache Thrift v0.25.0 release on GitHub (Sep 2026)", "url": "https://github.com/apache/thrift/releases/tag/v0.25.0" },
+      { "label": "Google Developers Blog: Introducing gRPC (February 2015)", "url": "https://developers.googleblog.com/introducing-grpc-a-new-open-source-http2-rpc-framework/" }
+    ]
+  },
+  "sources": [
+    { "label": "Apache Thrift docs: Concepts (transport, protocol, processor, server)", "url": "https://thrift.apache.org/docs/concepts" },
+    { "label": "Apache Thrift docs: Interface Definition Language (fields, requiredness, `oneway`)", "url": "https://thrift.apache.org/docs/idl" },
+    { "label": "Thrift binary protocol specification", "url": "https://github.com/apache/thrift/blob/master/doc/specs/thrift-binary-protocol.md" },
+    { "label": "Thrift compact protocol specification (zigzag varints, field id deltas)", "url": "https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md" },
+    { "label": "Apache Thrift: Language support (LANGUAGES.md)", "url": "https://github.com/apache/thrift/blob/master/LANGUAGES.md" },
+    { "label": "Slee, Agarwal and Kwiatkowski: Thrift paper (framed transport, non-blocking server, April 2007)", "url": "https://thrift.apache.org/static/files/thrift-20070401.pdf" },
+    { "label": "Apache Thrift v0.25.0 release on GitHub (Sep 2026)", "url": "https://github.com/apache/thrift/releases/tag/v0.25.0" },
+    { "label": "Hive wiki: HiveServer2 overview (Thrift service, TBinaryProtocol)", "url": "https://cwiki.apache.org/confluence/display/Hive/HiveServer2+Overview" },
+    { "label": "Impala docs: Ports used by Impala (HiveServer2 protocol, internal Thrift)", "url": "https://impala.apache.org/docs/build/html/topics/impala_ports.html" },
+    { "label": "Apache HBase Reference Guide: Thrift API and Thrift gateway", "url": "https://hbase.apache.org/book.html" },
+    { "label": "Apache Parquet docs: File format (Thrift metadata)", "url": "https://parquet.apache.org/docs/file-format/" },
+    { "label": "Zeppelin docs: Writing a new interpreter (separate JVM, Thrift)", "url": "https://zeppelin.apache.org/docs/latest/development/writing_zeppelin_interpreter.html" },
+    { "label": "Apache Cassandra 4.0 NEWS.txt (Thrift interface removed)", "url": "https://github.com/apache/cassandra/blob/cassandra-4.0/NEWS.txt" },
+    { "label": "facebook/fbthrift on GitHub (Facebook’s branch of Apache Thrift)", "url": "https://github.com/facebook/fbthrift" }
+  ],
+  "checked": "2026-10-06"
+}

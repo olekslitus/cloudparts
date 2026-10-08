@@ -1,0 +1,104 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Velero",
+  "concepts": ["backup", "orchestration"],
+  "provider": "oss",
+  "vendor": "Cloud Native Computing Foundation",
+  "license": "Apache 2.0",
+  "website": "https://velero.io/",
+  "repo": "https://github.com/velero-io/velero",
+  "summary": "Backs up a Kubernetes cluster’s objects and persistent volumes to object storage, and restores them into the same cluster or a new one.",
+  "intro": [
+    "Velero runs inside a Kubernetes cluster as a server deployment, driven by a `velero` command-line tool. Every backup, schedule and restore is itself a Kubernetes custom resource that Velero’s controllers act on. A backup asks the Kubernetes API, not etcd, for the objects you picked by namespace, resource type or label, and uploads them as a tarball to object storage: Amazon S3 or an S3-compatible store such as MinIO, Google Cloud Storage, or Azure Blob Storage. Working through the API is what lets it run on managed Kubernetes services, where you usually can’t reach etcd at all.",
+    "Persistent volumes are copied one of three ways: a cloud disk snapshot (such as EBS) through a provider plugin; a CSI snapshot, which the CSI snapshot data mover can then copy off the storage system into the backup location; or file-system backup, where a node agent reads files from the running pod’s volume and uploads them with Kopia. Velero treats the bucket as the source of truth, so a fresh cluster pointed at it sees every backup and can restore from it, with namespaces renamed if you like. That makes it the usual tool for moving workloads between clusters as well as for disaster recovery."
+  ],
+  "strengths": [
+    "Works through the Kubernetes API, so you back up exactly the namespaces or labels you choose, even on managed clusters without etcd access",
+    "Captures configuration and volume data together, with pre- and post-backup hooks to make a database flush to disk first",
+    "Restores into another cluster, with namespace remapping, so one tool covers disaster recovery and migration",
+    "Plugins for AWS, Google Cloud, Azure and S3-compatible stores, plus any CSI driver that supports volume snapshots"
+  ],
+  "limits": [
+    "Backups aren’t atomic: objects created or edited during a backup can be missed, and file-system backup reads live files, so it’s less consistent than a snapshot",
+    "File-system backup needs node-agent pods running as root, privileged in some environments, and doesn’t support hostPath volumes",
+    "Not a database tool: for point-in-time recovery you still archive the database’s own log, for example with WAL-G or pgBackRest",
+    "restic is being retired: since 1.17 it can only restore old backups, and from 1.19 it can’t restore them either"
+  ],
+  "worksWith": [
+    { "id": "kubernetes", "how": "backs up objects and volumes of" },
+    { "id": "s3", "how": "stores backups in" },
+    { "id": "gcs", "how": "stores backups in" },
+    { "id": "azure-blob", "how": "stores backups in" },
+    { "id": "minio", "how": "can store backups in" },
+    { "id": "ebs", "how": "snapshots persistent volumes on" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Install with the AWS plugin, back up a namespace nightly, restore it under a new name",
+    "source": [
+      "velero install \\",
+      "  --provider aws \\",
+      "  --plugins velero/velero-plugin-for-aws:v1.14.0 \\",
+      "  --bucket cluster-backups \\",
+      "  --backup-location-config region=eu-west-1 \\",
+      "  --snapshot-location-config region=eu-west-1 \\",
+      "  --secret-file ./credentials-velero",
+      "",
+      "# back up the shop namespace at 03:00 every night, keep each backup 30 days",
+      "velero schedule create shop-nightly --schedule=\"0 3 * * *\" \\",
+      "  --include-namespaces shop --ttl 720h0m0s",
+      "",
+      "# restore the latest backup from that schedule into a new namespace",
+      "velero restore create --from-schedule shop-nightly \\",
+      "  --namespace-mappings shop:shop-restored"
+    ]
+  },
+  "history": {
+    "story": [
+      "Kubernetes keeps all of a cluster’s state in etcd, and as Heptio’s customers moved Kubernetes into production they tried to recover clusters from copies of etcd, “with varied success”, as the company put it. Heptio, founded by Joe Beda and Craig McLuckie, released Ark on August 3, 2017, alongside the diagnostics tool Sonobuoy: it backed up cluster objects and snapshotted volumes so a whole cluster could be put back as it was.",
+      "VMware announced in November 2018 that it would buy Heptio and closed the deal on December 12. In February 2019, with version 0.11, Ark was renamed Velero; 1.0 followed in May. Velero 1.2 moved the AWS, Azure and Google Cloud plugins out of the main code, and 1.10 (2022) added Kopia for file-system backup beside restic, which is now being retired.",
+      "After Broadcom bought VMware, it contributed Velero to the Cloud Native Computing Foundation. Its acceptance as a Sandbox project was announced at KubeCon Europe 2026 in Amsterdam, and the code now lives in the velero-io GitHub organisation, with maintainers from Broadcom, Red Hat and Microsoft."
+    ],
+    "choices": [
+      { "choice": "Back up through the Kubernetes API, not etcd", "why": "Going through the API lets a backup pick namespaces, types or labels, works on managed clusters that hide etcd, and includes resources from aggregated API servers that live in a separate etcd." },
+      { "choice": "Object storage is the source of truth", "why": "Velero syncs any backup it finds in the bucket into the cluster. A brand-new cluster pointed at the same bucket can restore everything, which is what makes migration work." },
+      { "choice": "Plugins outside the core", "why": "Keeping every provider in-tree didn’t scale as more storage vendors wanted support, so from 1.2 object-store and volume-snapshot plugins, even the original AWS, Azure and Google Cloud ones, install separately." },
+      { "choice": "Every operation is a Kubernetes resource", "why": "Backups, schedules and restores are custom resources handled by controllers, so they can be created, watched and audited like anything else in the cluster." }
+    ],
+    "timeline": [
+      { "year": "2017", "text": "Heptio releases Ark on August 3" },
+      { "year": "2018", "text": "VMware completes its acquisition of Heptio in December" },
+      { "year": "2019", "text": "Renamed Velero in 0.11 (February); 1.0 in May; moves to VMware’s Tanzu GitHub organisation" },
+      { "year": "2022", "text": "Velero 1.10 adds Kopia for file-system backup" },
+      { "year": "2024", "text": "Velero 1.14 merges the CSI plugin into the main project" },
+      { "year": "2026", "text": "Accepted into the CNCF Sandbox; Velero 1.18 adds concurrent backups" }
+    ],
+    "sources": [
+      { "label": "TechCrunch: Heptio launches two new open source projects, Ark and Sonobuoy (Aug 3, 2017)", "url": "https://techcrunch.com/2017/08/03/heptio-launches-two-new-open-source-projects-that-make-using-kubernetes-easier/" },
+      { "label": "VMware Tanzu blog: VMware completes Heptio acquisition (Dec 12, 2018)", "url": "https://blogs.vmware.com/tanzu/?p=1397" },
+      { "label": "Velero blog: Velero is an open source tool to back up and migrate Kubernetes clusters (0.11, Feb 2019)", "url": "https://velero.io/blog/Velero-is-an-Open-Source-Tool-to-Back-up-and-Migrate-Kubernetes-Clusters/" },
+      { "label": "Velero blog: Velero 1.0 has arrived (May 2019)", "url": "https://velero.io/blog/velero-1.0-has-arrived/" },
+      { "label": "Velero blog: Announcing a new GitHub home for Velero, plugins move out of tree in 1.2 (Oct 2019)", "url": "https://velero.io/blog/announcing-gh-move/" },
+      { "label": "Velero v1.10.0 release on GitHub: Kopia integration (Nov 2022)", "url": "https://github.com/velero-io/velero/releases/tag/v1.10.0" },
+      { "label": "Velero v1.14.0 release on GitHub (Jun 2024)", "url": "https://github.com/velero-io/velero/releases/tag/v1.14.0" },
+      { "label": "Velero docs: CSI support (CSI plugin merged into Velero from 1.14)", "url": "https://velero.io/docs/v1.18/csi/" },
+      { "label": "Velero blog: Velero joins the CNCF Sandbox (Jul 2026)", "url": "https://velero.io/blog/Velero-Joins-CNCF-Sandbox/" },
+      { "label": "Velero blog: Velero 1.18, concurrent backups and cache volumes (Mar 2026)", "url": "https://velero.io/blog/Velero-1.18/" },
+      { "label": "Velero docs: How Velero works (object storage sync)", "url": "https://velero.io/docs/v1.18/how-velero-works/" }
+    ]
+  },
+  "sources": [
+    { "label": "Velero docs: How Velero works (custom resources, backup and restore workflow, atomicity, TTL, object storage sync)", "url": "https://velero.io/docs/v1.18/how-velero-works/" },
+    { "label": "Velero blog: why Velero uses the Kubernetes API instead of etcd (Feb 2019)", "url": "https://velero.io/blog/Velero-is-an-Open-Source-Tool-to-Back-up-and-Migrate-Kubernetes-Clusters/" },
+    { "label": "Velero docs: Supported providers (AWS, Google Cloud, Azure, S3-compatible such as MinIO)", "url": "https://velero.io/docs/v1.18/supported-providers/" },
+    { "label": "Velero docs: CSI snapshot data movement", "url": "https://velero.io/docs/v1.18/csi-snapshot-data-movement/" },
+    { "label": "Velero docs: File system backup (Kopia, privileges, hostPath, restic deprecation)", "url": "https://velero.io/docs/v1.18/file-system-backup/" },
+    { "label": "Velero docs: Restore reference (`--namespace-mappings`)", "url": "https://velero.io/docs/v1.18/restore-reference/" },
+    { "label": "Velero docs: Cluster migration", "url": "https://velero.io/docs/v1.18/migration-case/" },
+    { "label": "Velero source: `velero restore create --from-schedule`", "url": "https://github.com/velero-io/velero/blob/main/pkg/cmd/cli/restore/create.go" },
+    { "label": "velero-plugin-for-aws README: install flags and version compatibility (v1.14 for Velero 1.18)", "url": "https://github.com/vmware-tanzu/velero-plugin-for-aws" },
+    { "label": "Velero blog: Velero joins the CNCF Sandbox, maintainers and affiliations (Jul 2026)", "url": "https://velero.io/blog/Velero-Joins-CNCF-Sandbox/" },
+    { "label": "velero-io/velero on GitHub: LICENSE (Apache 2.0)", "url": "https://github.com/velero-io/velero/blob/main/LICENSE" }
+  ],
+  "checked": "2026-10-06"
+}

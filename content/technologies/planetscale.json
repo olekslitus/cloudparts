@@ -1,0 +1,159 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "PlanetScale",
+  "concepts": ["relational"],
+  "provider": "vendor",
+  "vendor": "PlanetScale, Inc.",
+  "license": "Proprietary (built on Vitess, Apache 2.0; the `pscale` CLI is Apache 2.0)",
+  "website": "https://planetscale.com/",
+  "summary": "Managed MySQL on Vitess and managed Postgres, with schema changes shipped through branches and deploy requests.",
+  "intro": [
+    "PlanetScale runs databases for you on AWS and Google Cloud, in three flavours. Vitess databases speak the MySQL protocol: your app connects to VTGate proxies, which work out which MySQL 8 instances hold the rows and send the query there. Each MySQL instance is paired with a `vttablet` process. Tables can be split across many such shards by a sharding key that Vitess calls a vindex, while the app still sees one database. Postgres databases are plain Postgres run by PlanetScale’s own operator, with PgBouncer for connection pooling and extensions such as pgvector, PostGIS and TimescaleDB. Neki, in platform preview since September 2026, puts Postgres shards behind routers that speak the Postgres wire protocol. A highly available cluster is a primary and two replicas across three availability zones, on network-attached disks (Amazon EBS or Google Persistent Disk) that can grow automatically, or on Metal: local NVMe drives that you size up front.",
+    "Schema changes follow a code-review workflow. A branch is an isolated copy of the database. On Vitess you change the schema on a development branch, open a deploy request, and PlanetScale applies it online by building a ghost table with the new schema, keeping it in sync, then swapping it in; for 30 minutes you can revert without losing writes made in between. There has been no free plan since April 2024. Pricing is by resources: a monthly price per cluster size, prorated to the millisecond, plus storage, backups and egress. In AWS us-east-1 a single-node Postgres starts at $5 a month, a highly available Postgres cluster at $15, a Vitess cluster at $39 and Metal at $50. Enterprise customers can run it single-tenant or inside their own AWS or GCP account."
+  ],
+  "strengths": [
+    "Horizontal sharding for MySQL from Vitess, the system YouTube built and Slack, GitHub and Square adopted, behind one connection string",
+    "Schema changes go through reviewed deploy requests, run online without locking tables, and can be undone for 30 minutes",
+    "Metal’s local NVMe drives give unlimited IOPS with storage included in the cluster price; Postgres on Metal starts at $50 a month",
+    "Plain resource pricing with a public price list, 12 AWS and 7 GCP regions, and an option to run in your own cloud account"
+  ],
+  "limits": [
+    "No free tier since the Hobby plan was retired on 8 April 2024, and new accounts are capped at `PS-160` and `M-320` sizes until they have paid a $100 invoice",
+    "Vitess isn’t all of MySQL: no stored procedures, triggers or events, no `LOCK TABLES` or `LOAD DATA INFILE`, InnoDB only, every table needs a unique key, and no binlog replication to outside databases",
+    "Postgres branching lags Vitess: new branches start empty or from a backup, there are no deploy requests, and schema changes are copied to production by hand",
+    "Metal storage doesn’t grow on its own: the database turns read-only when 6 GB is left, and on GCP Metal starts at $559 a month",
+    "Network-attached storage is billed per instance, so a highly available Vitess cluster pays $1.50 per GB a month beyond the 10 GB included"
+  ],
+  "worksWith": [
+    { "id": "mysql", "how": "runs sharded Vitess clusters of" },
+    { "id": "postgresql", "how": "runs managed clusters of" },
+    { "id": "ebs", "how": "keeps non-Metal data on AWS in" },
+    { "id": "aws-vpc", "how": "connects over PrivateLink to" },
+    { "id": "timescaledb", "how": "offers as a Postgres extension" },
+    { "id": "terraform", "how": "can be provisioned with" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Ship a schema change through a branch and a deploy request",
+    "source": [
+      "# a Vitess (MySQL-compatible) database in Frankfurt; deploy requests need safe migrations",
+      "pscale database create shop --engine mysql --region eu-central --cluster-size PS_10 --wait",
+      "pscale branch safe-migrations enable shop main",
+      "",
+      "# change the schema on an isolated development branch, not on production",
+      "pscale branch create shop add-order-notes --from main --wait",
+      "pscale shell shop add-order-notes",
+      "#   mysql> ALTER TABLE orders ADD COLUMN notes VARCHAR(500) NULL;",
+      "",
+      "# open a deploy request, review the diff, then apply it online",
+      "pscale deploy-request create shop add-order-notes --into main --notes 'Add order notes'",
+      "pscale deploy-request diff shop 1",
+      "pscale deploy-request deploy shop 1",
+      "",
+      "# changed your mind? revert within 30 minutes without losing new writes",
+      "pscale deploy-request revert shop 1"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Vitess, Postgres or Neki?",
+      "intro": "One account can hold all three. Prices are monthly list prices in AWS us-east-1 from PlanetScale’s pricing page, checked 2026-10-06; other regions differ.",
+      "corner": "",
+      "columns": ["Vitess", "Postgres", "Neki"],
+      "rows": [
+        { "label": "What runs", "values": ["MySQL 8 behind VTGate proxies", "One Postgres cluster with PgBouncer", "Postgres shards behind Neki routers"] },
+        { "label": "Status", "values": ["Generally available since 2021", "Generally available since September 2025", "Platform preview since September 2026"] },
+        { "label": "Horizontal sharding", "values": ["Yes: you pick a sharding key (vindex) per table", "No: scale up, or move to Neki", "Yes: you pick the shard key in a JSON data topology"] },
+        { "label": "Schema changes", "values": ["Deploy requests, applied online, 30-minute revert", "Plain DDL on each branch; no deploy requests", "Built-in online workflows"] },
+        { "label": "Smallest production cluster", "values": ["`PS-10` with two replicas: $39", "`PS-5` single node: $5; with two replicas: $15", "`PS-10` arm64 shard with two replicas: $30, plus routers from $6"] },
+        { "label": "Development branches", "values": ["About 1,440 hours a month included, then about $0.014 an hour", "$5 a month each", "Billed as a new branch"] },
+        { "label": "Network-attached storage", "values": ["10 GB included, then $0.50 per GB per instance", "10 GB included, then $0.125 per GB per instance", "10 GB per instance included; rate varies by region"] },
+        { "label": "Metal from", "values": ["$609 (`M-160`, 110 GiB)", "$50 (`M-10` arm64, 10 GiB)", "$589 (`M-160` arm64, 118 GiB per shard)"] }
+      ],
+      "notes": [
+        "A highly available cluster has three instances, so storage beyond the included 10 GB costs three times the per-instance rate.",
+        "Postgres includes 100 GB of egress a month per production branch; beyond that public egress costs $0.06 per GB in us-east-1, and backups beyond twice the disk size cost $0.023 per GB a month."
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Network-attached storage or Metal?",
+      "intro": "Both run a primary and two replicas across three availability zones. The difference is where each instance keeps its data.",
+      "corner": "",
+      "columns": ["Network-attached", "Metal"],
+      "rows": [
+        { "label": "Where data lives", "values": ["Amazon EBS (gp3) or Google Persistent Disk", "NVMe drives attached to the server"] },
+        { "label": "I/O", "values": ["On AWS 3,000 IOPS and 125 MiB/s included; more is billed", "Unlimited IOPS, no extra charge"] },
+        { "label": "Growing", "values": ["Storage can autoscale", "Pick a drive size up front, resize to a bigger drive; read-only at 6 GB free"] },
+        { "label": "Storage price", "values": ["Billed per GB on top of the cluster", "Included in the cluster price"] },
+        { "label": "Fits", "values": ["Small or unpredictable data sizes", "I/O-heavy or latency-sensitive workloads, large EBS bills"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In 2010 YouTube’s MySQL primary was running out of room. Read replicas bought time, then writes outgrew one server, so the app itself learned which shard held each row. Vitess moved that routing out of the application into a proxy that sits between the app and MySQL. It has been part of YouTube’s database infrastructure since 2011, grew to tens of thousands of MySQL nodes, and was adopted by Slack, Square and GitHub. It joined the CNCF in 2018 and graduated in November 2019.",
+      "Vitess’s co-creators and maintainers founded PlanetScale in 2018. The cloud product launched in beta in May 2021 as “the database for developers”, promising schema changes as easy as deploying code, and became generally available that November with a $50 million Series C.",
+      "In March 2024 CEO Sam Lambert chose profitability: the company laid off staff, mainly in sales and marketing, and retired the free Hobby plan. Since then PlanetScale has moved down the stack and across engines, with local NVMe Metal clusters in 2025, managed Postgres the same year, and Neki, sharded Postgres built from scratch rather than forked from Vitess, in 2026."
+    ],
+    "choices": [
+      { "choice": "Build on Vitess instead of a new engine", "why": "The founders had already scaled MySQL at YouTube with Vitess, and sharding behind a proxy keeps real MySQL underneath while the app sees one database." },
+      { "choice": "Branches and deploy requests for schema changes", "why": "Developers wanted a SQL database without being held back by managing its schema. Treating a schema change like code (a branch, a reviewed diff, a deploy, an undo) aims to make it feel as easy as deploying code." },
+      { "choice": "Online migrations through a ghost table", "why": "Copying data into a new table in the background and swapping it in avoids locking the live table, and keeping the old table in sync for 30 minutes makes a revert possible." },
+      { "choice": "Local NVMe drives instead of network storage", "why": "Every read and write on a network-attached volume crosses the network, and high IOPS cost extra. Local drives give lower latency and unlimited IOPS, at the price of choosing a drive size up front." }
+    ],
+    "timeline": [
+      { "year": "2010", "text": "YouTube creates Vitess to scale its MySQL databases" },
+      { "year": "2018", "text": "Vitess co-creators found PlanetScale; Vitess joins the CNCF" },
+      { "year": "2019", "text": "Vitess graduates from the CNCF" },
+      { "year": "2021", "text": "PlanetScale’s cloud database enters beta in May, generally available in November" },
+      { "year": "2024", "text": "Layoffs and the end of the free Hobby plan (8 April)" },
+      { "year": "2025", "text": "Metal (local NVMe) in March; PlanetScale for Postgres in September" },
+      { "year": "2026", "text": "Neki, sharded Postgres, enters platform preview" }
+    ],
+    "sources": [
+      { "label": "Vitess docs: History", "url": "https://vitess.io/docs/24.0/overview/history/" },
+      { "label": "CNCF: Cloud Native Computing Foundation announces Vitess graduation (Nov 2019)", "url": "https://www.cncf.io/announcements/2019/11/05/cloud-native-computing-foundation-announces-vitess-graduation/" },
+      { "label": "PlanetScale: About (founded in 2018 by the co-creators of Vitess)", "url": "https://planetscale.com/about" },
+      { "label": "PlanetScale blog: Announcing PlanetScale, the database for developers (May 2021)", "url": "https://planetscale.com/blog/announcing-planetscale-the-database-for-developers" },
+      { "label": "PlanetScale blog: PlanetScale is GA (Nov 2021)", "url": "https://planetscale.com/blog/ga" },
+      { "label": "PlanetScale blog: PlanetScale forever (Mar 2024)", "url": "https://planetscale.com/blog/planetscale-forever" },
+      { "label": "PlanetScale blog: Announcing PlanetScale Metal (Mar 2025)", "url": "https://planetscale.com/blog/announcing-metal" },
+      { "label": "PlanetScale blog: PlanetScale for Postgres is now GA (Sep 2025)", "url": "https://planetscale.com/blog/planetscale-for-postgres-is-generally-available" },
+      { "label": "PlanetScale blog: Introducing Neki (Sep 2026)", "url": "https://planetscale.com/blog/introducing-neki" }
+    ]
+  },
+  "sources": [
+    { "label": "PlanetScale: Pricing", "url": "https://planetscale.com/pricing" },
+    { "label": "PlanetScale: Pricing catalog, AWS us-east-1 (pricing.md)", "url": "https://planetscale.com/pricing.md" },
+    { "label": "PlanetScale: Pricing catalog, GCP us-central1", "url": "https://planetscale.com/pricing.md?region=gcp-us-central1" },
+    { "label": "PlanetScale docs: Plans (Base plan, storage, branches, size caps, no free plan)", "url": "https://planetscale.com/docs/planetscale-plans" },
+    { "label": "PlanetScale docs: Postgres pricing (storage, backups, egress)", "url": "https://planetscale.com/docs/postgres/pricing" },
+    { "label": "PlanetScale docs: Selecting a region", "url": "https://planetscale.com/docs/plans/regions" },
+    { "label": "PlanetScale docs: PlanetScale Metal", "url": "https://planetscale.com/docs/metal" },
+    { "label": "PlanetScale blog: $50 PlanetScale Metal is GA for Postgres (Dec 2025)", "url": "https://planetscale.com/blog/50-dollar-planetscale-metal-is-ga-for-postgres" },
+    { "label": "PlanetScale docs: Branching (Vitess)", "url": "https://planetscale.com/docs/vitess/schema-changes/branching" },
+    { "label": "PlanetScale docs: Deploy requests", "url": "https://planetscale.com/docs/vitess/schema-changes/deploy-requests" },
+    { "label": "PlanetScale docs: Safe migrations (ghost tables, schema revert)", "url": "https://planetscale.com/docs/vitess/schema-changes/safe-migrations" },
+    { "label": "PlanetScale docs: Branching (Postgres)", "url": "https://planetscale.com/docs/postgres/branching" },
+    { "label": "PlanetScale docs: MySQL compatibility", "url": "https://planetscale.com/docs/vitess/mysql-compatibility" },
+    { "label": "PlanetScale docs: Foreign key constraints", "url": "https://planetscale.com/docs/vitess/foreign-key-constraints" },
+    { "label": "PlanetScale docs: Sharding with PlanetScale", "url": "https://planetscale.com/docs/vitess/sharding" },
+    { "label": "PlanetScale docs: Postgres extensions", "url": "https://planetscale.com/docs/postgres/extensions" },
+    { "label": "PlanetScale docs: TimescaleDB extension", "url": "https://planetscale.com/docs/postgres/extensions/timescaledb" },
+    { "label": "PlanetScale docs: Private connections via AWS PrivateLink", "url": "https://planetscale.com/docs/vitess/connecting/private-connections" },
+    { "label": "PlanetScale docs: Terraform provider", "url": "https://planetscale.com/docs/terraform" },
+    { "label": "PlanetScale docs: CLI `database` command", "url": "https://planetscale.com/docs/cli/database" },
+    { "label": "PlanetScale docs: CLI `branch` command", "url": "https://planetscale.com/docs/cli/branch" },
+    { "label": "PlanetScale docs: CLI `deploy-request` command", "url": "https://planetscale.com/docs/cli/deploy-request" },
+    { "label": "PlanetScale docs: CLI `shell` command", "url": "https://planetscale.com/docs/cli/shell" },
+    { "label": "PlanetScale blog: Introducing Neki (Sep 2026)", "url": "https://planetscale.com/blog/introducing-neki" },
+    { "label": "Vitess docs: VTGate", "url": "https://vitess.io/docs/24.0/concepts/vtgate/" },
+    { "label": "Vitess docs: Tablet", "url": "https://vitess.io/docs/24.0/concepts/tablet/" },
+    { "label": "Vitess on GitHub (Apache 2.0)", "url": "https://github.com/vitessio/vitess" },
+    { "label": "PlanetScale CLI on GitHub (Apache 2.0)", "url": "https://github.com/planetscale/cli" },
+    { "label": "CNCF: Vitess graduation (adopters: GitHub, Slack, Square, YouTube)", "url": "https://www.cncf.io/announcements/2019/11/05/cloud-native-computing-foundation-announces-vitess-graduation/" }
+  ],
+  "checked": "2026-10-06"
+}

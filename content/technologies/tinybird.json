@@ -1,0 +1,162 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Tinybird",
+  "concepts": ["olap"],
+  "provider": "vendor",
+  "vendor": "Tinybird",
+  "license": "Proprietary (TypeScript SDK MIT-licensed)",
+  "website": "https://www.tinybird.co/",
+  "summary": "A hosted ClickHouse platform that turns SQL queries into authenticated REST API endpoints, for analytics inside your product.",
+  "intro": [
+    "In Tinybird you define Data Sources, which are ClickHouse tables, and Pipes, which are chains of SQL queries called nodes. A Pipe marked `TYPE ENDPOINT` becomes an HTTP API at `https://api.tinybird.co/v0/pipes/<name>.json` (or `.csv`, `.parquet` and others), with typed query parameters filled in by a template language and access controlled by static tokens or short-lived JWTs that a browser can use per tenant. Data comes in through the Events API (JSON over HTTP), the Kafka connector, S3 and GCS connectors, a DynamoDB connector that follows table changes, and table functions that copy from PostgreSQL, MySQL, Iceberg or URLs on a schedule. Streaming writes pass through a batching service before they reach ClickHouse, all data is stored in S3 or GCS, and each ClickHouse replica keeps a local SSD cache; replicas share the stored data through zero-copy replication, which Tinybird keeps alive in its own ClickHouse fork. Materialized views pre-aggregate on every insert, and BI tools can connect through a read-only ClickHouse HTTP interface.",
+    "The current product is Tinybird Forward, launched in March 2025. A project is a folder of plain-text datafiles (or TypeScript or Python SDK code) that you build against Tinybird Local, a Docker container, or a cloud branch, then deploy; the deployment works out the migrations and backfills a schema change needs. The older Tinybird Classic is being retired: Free and Developer workspaces had to move to Forward by 15 September 2026, and those left are scheduled for automatic migration. Tinybird runs in AWS and Google Cloud regions. Free gives 0.25 vCPU, 1,000 requests a day and 10 GB. Developer plans cost $25 to $799 a month for 0.25 to 8 vCPUs on shared infrastructure, with 25 GB included and then $0.058 per GB; use above the plan’s vCPUs is billed at $0.0002 per vCPU-second. SaaS (shared, up to 32 vCPUs, 12-month commitment) and Enterprise (a dedicated ClickHouse cluster) are priced by sales (list prices, checked 6 October 2026)."
+  ],
+  "strengths": [
+    "From a SQL query to a parameterised, token-protected HTTP API without writing a backend; JWTs let browsers query per tenant",
+    "ClickHouse performance without running clusters, Keeper or storage tiering yourself",
+    "Projects are files in Git: Tinybird Local in Docker for development and CI, cloud branches for previews, and deployments that plan backfills for schema changes",
+    "Managed ingestion from Kafka, S3, GCS and DynamoDB, plus sinks back to S3, GCS and Kafka",
+    "A free plan with no time limit, and self-service plans you can resize at any time"
+  ],
+  "limits": [
+    "Proprietary and hosted only, in AWS and Google Cloud regions; self-managed regions are in beta and meant for development only",
+    "Endpoints, tokens and datafiles are Tinybird-specific: the SQL is ClickHouse SQL, but leaving means rebuilding the API and ingestion layers",
+    "Shared plans cap compute: requests beyond the burst limit get HTTP 429, extra vCPU time is billed per second, and queries stop after 10 to 30 seconds depending on the plan",
+    "It runs Tinybird’s ClickHouse fork, so upstream features arrive on Tinybird’s schedule, and the ClickHouse interface is read-only",
+    "Table functions only reach databases exposed to the internet with publicly signed certificates"
+  ],
+  "worksWith": [
+    { "id": "clickhouse", "how": "runs a managed fork of" },
+    { "id": "kafka", "how": "consumes topics from and can sink to" },
+    { "id": "s3", "how": "stores data in and ingests files from" },
+    { "id": "gcs", "how": "stores data in and ingests files from" },
+    { "id": "dynamodb", "how": "mirrors tables, via DynamoDB Streams, from" },
+    { "id": "postgresql", "how": "can copy tables, via a table function, from" },
+    { "id": "mysql", "how": "can copy tables, via a table function, from" },
+    { "id": "iceberg", "how": "can read tables, via a table function, in" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Build a Data Source and an Endpoint in Tinybird Local, call it, then deploy",
+    "source": [
+      "curl https://tinybird.co | sh          # installs the tb CLI",
+      "tb init --type cli --dev-mode local --folder .",
+      "tb local start --daemon                # Tinybird Local: a Docker container on :7181",
+      "",
+      "mkdir -p datasources endpoints",
+      "cat > datasources/page_views.datasource <<'EOF'",
+      "SCHEMA >",
+      "    `timestamp` DateTime `json:$.timestamp`,",
+      "    `pathname` String `json:$.pathname`,",
+      "    `session_id` String `json:$.session_id`",
+      "",
+      "ENGINE \"MergeTree\"",
+      "ENGINE_SORTING_KEY \"pathname, timestamp\"",
+      "EOF",
+      "",
+      "cat > endpoints/top_pages.pipe <<'EOF'",
+      "TOKEN dashboard READ",
+      "",
+      "NODE aggregated",
+      "SQL >",
+      "    %",
+      "    SELECT pathname, count() AS views",
+      "    FROM page_views",
+      "    WHERE timestamp >= {{DateTime(start_date)}}",
+      "    GROUP BY pathname",
+      "    ORDER BY views DESC",
+      "    LIMIT {{Int32(limit, 10)}}",
+      "",
+      "TYPE ENDPOINT",
+      "EOF",
+      "",
+      "tb build                               # creates the table and the endpoint locally",
+      "TOKEN=<admin token from: tb token ls>",
+      "",
+      "curl -X POST \"http://localhost:7181/v0/events?name=page_views\" \\",
+      "  -H \"Authorization: Bearer $TOKEN\" \\",
+      "  -d '{\"timestamp\":\"2026-10-06 10:00:00\",\"pathname\":\"/pricing\",\"session_id\":\"s1\"}'",
+      "",
+      "curl -H \"Authorization: Bearer $TOKEN\" \\",
+      "  \"http://localhost:7181/v0/pipes/top_pages.json?start_date=2026-10-06%2000:00:00\"",
+      "",
+      "tb --cloud deploy                      # same files, deployed to Tinybird Cloud"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Plans",
+      "intro": "List prices from tinybird.co/pricing and the plan docs, checked on 6 October 2026. Every plan includes unlimited seats, pipes and endpoints.",
+      "columns": ["Free", "Developer", "SaaS", "Enterprise"],
+      "rows": [
+        { "label": "Price", "values": ["$0", "$25 to $799 a month (0.25 to 8 vCPUs)", "Custom, 12-month commitment", "Custom"] },
+        { "label": "Infrastructure", "values": ["Shared", "Shared", "Shared, up to 32 vCPUs", "Your own ClickHouse cluster"] },
+        { "label": "Included storage", "values": ["10 GB", "25 GB, then $0.058 per GB", "From 500 GB, then $0.058 per GB", "Bottomless, $0.058 per GB"] },
+        { "label": "Over the plan’s vCPUs", "values": ["Hard limit, HTTP 429 past 3× burst", "$0.0002 per vCPU-second", "$0.0002 per vCPU-second", "Not applicable"] },
+        { "label": "Requests", "values": ["1,000 a day", "Unlimited", "Unlimited", "Unlimited"] },
+        { "label": "Query time limit", "values": ["10 s", "20 s", "20 s", "30 s"] }
+      ],
+      "notes": [
+        "Egress through sinks costs $0.01 per GB within the same cloud and region and $0.10 per GB across clouds or regions. Large backfills and some copy jobs run on on-demand CPUs, billed in credits per core-minute by region.",
+        "Before January 2025, Tinybird billed by data processed; it now bills by vCPU."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Tinybird’s founders say it began with their own problem: their companies had plenty of data, but it sat in a cloud data warehouse behind gatekeepers, and the developers building products couldn’t reach it quickly. They set out to turn data at any scale into a real-time, secure REST API, and built the service on ClickHouse. By September 2019 the Madrid team was demoing “Tinybird Analytics” at South Summit, showing sub-second queries over billions of rows.",
+      "In April 2022 co-founder Jorge Sancha announced a $37 million Series A from CRV, Singular and Crane, and in June 2024 a $30 million Series B led by Balderton Capital. In January 2025 pricing moved from data processed to vCPUs. In March 2025 Tinybird launched Forward, rebuilt around projects as files, local development and deployments, after large customers said schema changes and promotion between environments had become painful. Classic was retired for Free and Developer workspaces in 2026."
+    ],
+    "choices": [
+      { "choice": "Publish queries as HTTP endpoints, not database connections", "why": "The users were application developers. An endpoint with typed parameters and scoped tokens, later JWTs, can be called from a backend or a browser without writing an API service in front of the database." },
+      { "choice": "Build on ClickHouse, then keep a fork", "why": "ClickHouse gave the speed. Tinybird relies on zero-copy replication over S3 and GCS, which upstream ClickHouse said it would remove, so in 2025 it explained why it maintains its own fork with that feature and its own release process." },
+      { "choice": "Serverless plans instead of picking cluster sizes", "why": "Sancha wrote in 2022 that users wanted fast, reliable queries and not to choose CPU cores and memory per use case, so Tinybird sells plan sizes on shared infrastructure and handles the ClickHouse tuning." },
+      { "choice": "Projects as code with planned deployments", "why": "In Classic a schema change could mean creating a new Data Source, copying data and switching consumers by hand. Forward analyses the dependency graph and plans the backfills and table swaps itself." }
+    ],
+    "timeline": [
+      { "year": "2019", "text": "Demos Tinybird Analytics at South Summit Madrid in September" },
+      { "year": "2022", "text": "Raises a $37 million Series A" },
+      { "year": "2024", "text": "Raises a $30 million Series B led by Balderton Capital" },
+      { "year": "2025", "text": "Moves to vCPU-based pricing; launches Tinybird Forward in March" },
+      { "year": "2026", "text": "Retires Classic for Free and Developer workspaces in September" }
+    ],
+    "sources": [
+      { "label": "Tinybird: About", "url": "https://www.tinybird.co/about" },
+      { "label": "Tinybird blog: Tinybird at South Summit Madrid 2019 (September 2019)", "url": "https://www.tinybird.co/blog/south-summit-madrid-2019" },
+      { "label": "Jorge Sancha (Tinybird): The realtime data stack, what’s next for Tinybird (Series A, April 2022)", "url": "https://www.tinybird.co/blog/tinybird-series-a-whats-next" },
+      { "label": "Jorge Sancha (Tinybird): $30M to lead the shift to real-time data (Series B, June 2024)", "url": "https://www.tinybird.co/blog/announcing-tinybird-series-b" },
+      { "label": "Tinybird blog: A guide to Tinybird’s new pricing model (January 2025)", "url": "https://www.tinybird.co/blog/new-pricing-model-jan-2025" },
+      { "label": "Jorge Sancha (Tinybird): Forward, evolving Tinybird for the AI-native developer (March 2025)", "url": "https://www.tinybird.co/blog/announcing-tinybird-forward" },
+      { "label": "Tinybird blog: Why we maintain a ClickHouse fork at Tinybird (September 2025)", "url": "https://www.tinybird.co/blog/why-we-maintain-a-clickhouse-fork-at-tinybird" },
+      { "label": "Tinybird blog: We’re sunsetting Tinybird Classic for Free and Developer workspaces (July 2026)", "url": "https://www.tinybird.co/blog/tinybird-classic-deprecation" }
+    ]
+  },
+  "sources": [
+    { "label": "Tinybird docs: Core concepts (Data Sources, Pipes, Endpoints, tokens, deployments)", "url": "https://www.tinybird.co/docs/forward/core-concepts" },
+    { "label": "Tinybird docs: API Endpoints (response formats, query parameters)", "url": "https://www.tinybird.co/docs/forward/core-concepts/api-endpoints" },
+    { "label": "Tinybird docs: Get data into Tinybird (Events API, Kafka, S3, GCS, DynamoDB, table functions)", "url": "https://www.tinybird.co/docs/forward/ingest-data" },
+    { "label": "Tinybird docs: Kafka connector", "url": "https://www.tinybird.co/docs/forward/ingest-data/connectors/kafka" },
+    { "label": "Tinybird docs: DynamoDB connector (PITR export plus DynamoDB Streams)", "url": "https://www.tinybird.co/docs/forward/ingest-data/connectors/dynamodb" },
+    { "label": "Tinybird docs: Table functions (Iceberg, MySQL, PostgreSQL, URL; public endpoints only)", "url": "https://www.tinybird.co/docs/forward/ingest-data/table-functions" },
+    { "label": "Tinybird docs: Storage architecture (S3 or GCS, SSD cache, zero-copy replication, Gatherer)", "url": "https://www.tinybird.co/docs/forward/core-concepts/storage-architecture" },
+    { "label": "Tinybird docs: Materialized views", "url": "https://www.tinybird.co/docs/forward/core-concepts/materialized-views" },
+    { "label": "Tinybird docs: ClickHouse interface (read-only, AWS and GCP regions)", "url": "https://www.tinybird.co/docs/forward/query-data/clickhouse-interface" },
+    { "label": "Tinybird docs: Tinybird Local", "url": "https://www.tinybird.co/docs/forward/core-concepts/tinybird-local" },
+    { "label": "Tinybird docs: Local development (tb build, tb --cloud deploy)", "url": "https://www.tinybird.co/docs/forward/development-workflow/local-development" },
+    { "label": "Tinybird docs: tb init", "url": "https://www.tinybird.co/docs/forward/dev-reference/commands/tb-init" },
+    { "label": "Tinybird docs: tb token", "url": "https://www.tinybird.co/docs/forward/dev-reference/commands/tb-token" },
+    { "label": "Tinybird docs: Datasource files", "url": "https://www.tinybird.co/docs/forward/dev-reference/datafiles/datasource-files" },
+    { "label": "Tinybird docs: Self-managed regions (beta)", "url": "https://www.tinybird.co/docs/forward/core-concepts/self-managed" },
+    { "label": "Tinybird docs: Sinks", "url": "https://www.tinybird.co/docs/forward/core-concepts/sinks" },
+    { "label": "Tinybird: Pricing", "url": "https://www.tinybird.co/pricing" },
+    { "label": "Tinybird docs: Pricing plans (on-demand CPUs)", "url": "https://www.tinybird.co/docs/forward/pricing" },
+    { "label": "Tinybird docs: Free plan", "url": "https://www.tinybird.co/docs/forward/pricing/free" },
+    { "label": "Tinybird docs: Developer plan", "url": "https://www.tinybird.co/docs/forward/pricing/developer" },
+    { "label": "Tinybird docs: SaaS plan", "url": "https://www.tinybird.co/docs/forward/pricing/saas" },
+    { "label": "Tinybird docs: Limits (query execution time, Events API)", "url": "https://www.tinybird.co/docs/forward/pricing/limits" },
+    { "label": "Tinybird blog: We’re sunsetting Tinybird Classic for Free and Developer workspaces (July 2026)", "url": "https://www.tinybird.co/blog/tinybird-classic-deprecation" },
+    { "label": "Tinybird TypeScript SDK on GitHub (MIT)", "url": "https://github.com/tinybirdco/tinybird-sdk-typescript" }
+  ],
+  "checked": "2026-10-06"
+}

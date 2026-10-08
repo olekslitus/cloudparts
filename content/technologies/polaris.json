@@ -1,0 +1,168 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Apache Polaris",
+  "concepts": ["lakehouse", "table-formats"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0 (since the first public release in July 2024)",
+  "website": "https://polaris.apache.org/",
+  "repo": "https://github.com/apache/polaris",
+  "summary": "An open-source Iceberg REST catalog: one server that every engine asks where a table’s current metadata is, with role-based access control and short-lived storage credentials per table.",
+  "intro": [
+    "Polaris is a Java 21 server (built on Quarkus) that implements the Apache Iceberg REST catalog protocol on port 8181, plus its own management API. An engine such as Spark, Flink, Trino, Snowflake or PyIceberg asks it to create, load or commit a table; Polaris keeps the pointer to each table’s current metadata file and swaps it atomically on commit. The data and Iceberg metadata stay in your S3, Azure or Google Cloud Storage bucket. Polaris’s own state (catalogs, nested namespaces, tables, views, principals, roles, grants and policies) lives in a metastore: PostgreSQL through JDBC for production, MongoDB as an experimental option, or memory, the default, which loses everything on restart. Access works in layers: privileges such as `TABLE_READ_DATA` are granted to catalog roles, catalog roles to principal roles, and principal roles to principals (users or services that log in with OAuth client credentials). When a principal loads a table, Polaris can vend credentials: it calls AWS STS `AssumeRole` with a session policy scoped to that table’s location, or issues an Azure user delegation SAS or a downscoped Google token, so the engine never holds broad bucket keys. One server can host several isolated tenants, called realms, each with its own catalogs.",
+    "A catalog can also be external, mirroring tables another catalog owns as read-only, and federation can forward requests to another Iceberg REST catalog such as AWS Glue, or to Hive Metastore or BigQuery Metastore in a custom build. Generic tables register Delta Lake or CSV tables by location (in beta), and policies record compaction, snapshot expiry and orphan-file rules, but Polaris doesn’t run them: Spark, Trino or a tool such as Floe has to read and apply them. Snowflake built Polaris, open-sourced it in July 2024 and donated it to the Apache Software Foundation, where it graduated to a top-level project in February 2026. It is free to run yourself. Snowflake sells it as Snowflake Open Catalog, which no longer accepts new customers, and has built it into Snowflake Horizon Catalog; Dremio’s built-in catalog is also based on it."
+  ],
+  "strengths": [
+    "Implements the Iceberg REST protocol, so one catalog serves Spark, Flink, Trino, Snowflake, Dremio, PyIceberg and any other REST client",
+    "Access control in one place for every engine, enforced by handing out short-lived storage credentials scoped to the tables a principal may read or write",
+    "Vendor-neutral governance: an Apache top-level project since February 2026, with developers from Snowflake, Dremio and others, under Apache 2.0",
+    "Several catalogs and isolated realms on one server, federation with Glue, Hive Metastore and BigQuery Metastore, and Open Policy Agent for external authorization"
+  ],
+  "limits": [
+    "It doesn’t maintain tables: compaction, snapshot expiry and orphan-file cleanup still need Spark, Trino or another tool, even when a policy describes them",
+    "Defaults are for development: the in-memory metastore loses data on restart and random signing keys break multi-replica setups; production needs PostgreSQL, fixed keys and realm settings",
+    "Its permissions hold only if each table’s files sit in their own directory that mirrors the namespace tree, and only for engines that use the credentials it vends rather than their own bucket keys",
+    "Support beyond Iceberg is thin: generic tables for Delta Lake and CSV are in beta, the MongoDB metastore is experimental, and Hive and BigQuery federation need a custom build",
+    "Snowflake Open Catalog, the hosted version, is closed to new customers; Snowflake now points them to Horizon Catalog"
+  ],
+  "worksWith": [
+    { "id": "iceberg", "how": "tracks and commits tables in" },
+    { "id": "spark", "how": "serves Iceberg tables to" },
+    { "id": "trino", "how": "serves Iceberg tables to" },
+    { "id": "flink", "how": "serves Iceberg tables to" },
+    { "id": "snowflake", "how": "is built into Horizon Catalog by" },
+    { "id": "dremio", "how": "is the base of the built-in catalog of" },
+    { "id": "s3", "how": "vends scoped STS credentials for" },
+    { "id": "azure-blob", "how": "vends user delegation SAS tokens for" },
+    { "id": "gcs", "how": "vends downscoped tokens for" },
+    { "id": "postgresql", "how": "keeps catalogs, grants and policies in" },
+    { "id": "kubernetes", "how": "is deployed with a Helm chart on" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Create a catalog, give a read-only role to an analyst, and query it from Spark",
+    "source": [
+      "pip install apache-polaris                 # the Polaris CLI",
+      "export CLIENT_ID=root CLIENT_SECRET=s3cr3t  # admin credentials for the server on localhost:8181",
+      "",
+      "polaris catalogs create --storage-type s3 \\",
+      "  --default-base-location s3://acme-lake/warehouse \\",
+      "  --role-arn arn:aws:iam::123456789012:role/polaris-lake-access \\",
+      "  lake",
+      "",
+      "# privilege -> catalog role -> principal role -> principal",
+      "polaris principals create analyst        # prints the analyst's clientId and clientSecret",
+      "polaris principal-roles create analysts",
+      "polaris principal-roles grant --principal analyst analysts",
+      "polaris catalog-roles create --catalog lake sales_reader",
+      "polaris catalog-roles grant --catalog lake --principal-role analysts sales_reader",
+      "polaris privileges namespace grant --namespace sales --catalog lake \\",
+      "  --catalog-role sales_reader TABLE_READ_DATA",
+      "",
+      "# the analyst connects with their own credentials; Polaris vends short-lived S3 keys",
+      "spark-sql \\",
+      "  --packages org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.10.0,org.apache.iceberg:iceberg-aws-bundle:1.10.0 \\",
+      "  --conf spark.sql.catalog.polaris=org.apache.iceberg.spark.SparkCatalog \\",
+      "  --conf spark.sql.catalog.polaris.catalog-impl=org.apache.iceberg.rest.RESTCatalog \\",
+      "  --conf spark.sql.catalog.polaris.uri=http://localhost:8181/api/catalog \\",
+      "  --conf spark.sql.catalog.polaris.warehouse=lake \\",
+      "  --conf spark.sql.catalog.polaris.credential=\"$ANALYST_ID:$ANALYST_SECRET\" \\",
+      "  --conf spark.sql.catalog.polaris.scope=PRINCIPAL_ROLE:ALL \\",
+      "  --conf spark.sql.catalog.polaris.header.X-Iceberg-Access-Delegation=vended-credentials \\",
+      "  --conf spark.sql.catalog.polaris.client.region=eu-west-1 \\",
+      "  -e \"SELECT count(*) FROM polaris.sales.orders\""
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Ways to get a Polaris catalog",
+      "intro": "The open-source server and the commercial catalogs built on it, checked 2026-10-06.",
+      "corner": "",
+      "columns": ["Apache Polaris", "Snowflake Open Catalog", "Snowflake Horizon Catalog", "Dremio Open Catalog"],
+      "rows": [
+        { "label": "Who runs it", "values": ["You: binary, Docker image or Helm chart", "Snowflake, as a separate Open Catalog account", "Snowflake, inside every Snowflake account", "Dremio (now part of SAP), inside Dremio"] },
+        { "label": "What it is", "values": ["The Apache project itself", "A managed service for Apache Polaris", "Snowflake’s catalog, with Polaris built in and an Iceberg REST endpoint", "Dremio’s built-in lakehouse catalog, based on Polaris"] },
+        { "label": "Access control", "values": ["Polaris roles and privileges, or an external policy engine such as OPA", "Polaris roles, managed in a web UI", "Existing Snowflake users, roles and policies", "Dremio’s own"] },
+        { "label": "Availability", "values": ["Open to all; 1.8.0 in September 2026", "Existing customers only; new customers can’t sign up", "All commercial Snowflake regions", "Dremio Cloud and Enterprise"] },
+        { "label": "Price", "values": ["Free; you pay for the servers and PostgreSQL", "Billing added at general availability in October 2024, free until 30 April 2025", "Part of Snowflake", "Part of Dremio"] }
+      ],
+      "notes": [
+        "Snowflake’s managed service was called Polaris Catalog during its preview from July 2024 and renamed Snowflake Open Catalog at general availability."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Other Iceberg REST catalogs",
+      "intro": "Any of these can sit where Polaris sits: engines speak the same REST protocol to all of them.",
+      "items": [
+        { "name": "AWS Glue Iceberg REST endpoint", "tag": "AWS service", "text": "The Glue Data Catalog answers the Iceberg REST protocol at `https://glue.<region>.amazonaws.com/iceberg`, for Iceberg tables in S3 and S3 Tables. Nothing to run, but the endpoint is regional and serves one AWS account’s Data Catalog." },
+        { "name": "Lakekeeper", "tag": "Apache 2.0, Rust", "text": "An Iceberg REST catalog written in Rust, with access control and credential vending; a commercial Lakekeeper+ edition comes from Vakamo." },
+        { "name": "Unity Catalog OSS", "tag": "Apache 2.0, LF AI & Data", "text": "The open-source Unity Catalog, a sandbox project at the LF AI & Data Foundation. It registers Delta Lake tables, and Iceberg and Hudi through UniForm, answers the Iceberg REST and Hive metastore APIs, and also catalogs files, functions and AI models." },
+        { "name": "Project Nessie", "tag": "Apache 2.0", "text": "A catalog with Git-like branches and multi-table commits, created by Dremio’s founders. Dremio said in 2024 it would bring Nessie’s features into Polaris." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "By 2024 Iceberg had become the table format most engines could read and write, but each engine still had to agree on a catalog, the service that says which metadata file is a table’s current version. The Iceberg community had written an open REST protocol for catalogs, yet most implementations were tied to one vendor or covered only part of the protocol. Snowflake argued that these limits recreated the lock-in open table formats were meant to remove.",
+      "At its June 2024 Summit, Snowflake announced Polaris Catalog: a full implementation of the Iceberg REST protocol with its own role-based security, designed to run on Snowflake’s infrastructure or your own. It published the code under Apache 2.0 on 30 July 2024, opened a hosted preview the same day, and Dremio said it would fold the ideas of its Nessie catalog into the project. In August 2024 Polaris entered the Apache Incubator, with a core team drawn mostly from Snowflake and Dremio; the proposal admitted that diversifying beyond those two companies was its main risk.",
+      "The first Apache release, 0.9.0-incubating, came in February 2025 and 1.0 in July 2025. Polaris graduated to a top-level Apache project in February 2026, and by then both Snowflake’s and Dremio’s own catalogs were built on it."
+    ],
+    "choices": [
+      { "choice": "The whole Iceberg REST protocol, not a subset", "why": "The proposal set out to be a full, production-ready reference implementation: if something is in the spec, it should work in Polaris, so any REST-compatible engine can use it without vendor-specific gaps." },
+      { "choice": "Security designed into the catalog", "why": "The REST protocol said little about authorization. Polaris added a role-based model and credential vending so access rules are enforced the same way whichever engine reads the table." },
+      { "choice": "Multi-tenant from the start", "why": "Snowflake wanted to host it as a service, so one deployment serves many catalogs and users, with realms keeping tenants apart in the same database." },
+      { "choice": "Donate it to the ASF", "why": "A catalog meant to be vendor-neutral needed governance no single company controls. Snowflake granted the code and donated its “POLARIS CATALOG” trademark application to the foundation." }
+    ],
+    "timeline": [
+      { "year": "2024", "text": "Snowflake announces Polaris Catalog in June; open source and hosted preview on 30 July" },
+      { "year": "2024", "text": "Enters the Apache Incubator in August; Snowflake Open Catalog GA in October" },
+      { "year": "2025", "text": "First Apache release, 0.9.0-incubating, in February" },
+      { "year": "2025", "text": "Polaris 1.0.0-incubating in July" },
+      { "year": "2026", "text": "Graduates to a top-level Apache project in February" }
+    ],
+    "sources": [
+      { "label": "Snowflake blog: Introducing Polaris Catalog (June 2024)", "url": "https://www.snowflake.com/en/blog/introducing-polaris-catalog/", "archive": "https://web.archive.org/web/20250101165219/https://www.snowflake.com/en/blog/introducing-polaris-catalog/" },
+      { "label": "Snowflake blog: Polaris Catalog is now open source (July 2024; Nessie contributions)", "url": "https://www.snowflake.com/en/blog/polaris-catalog-open-source/", "archive": "https://web.archive.org/web/20250101165247/https://www.snowflake.com/en/blog/polaris-catalog-open-source/" },
+      { "label": "Apache Incubator: Polaris proposal (2024)", "url": "https://cwiki.apache.org/confluence/display/INCUBATOR/PolarisProposal" },
+      { "label": "Apache Incubator: Polaris incubation status (entered 2024-08-09, graduated 2026-02-15)", "url": "https://incubator.apache.org/projects/polaris.html" },
+      { "label": "Snowflake Open Catalog release notes (preview 30 July 2024, GA 18 October 2024)", "url": "https://other-docs.snowflake.com/en/opencatalog/release-notes" },
+      { "label": "GitHub: Apache Polaris releases (0.9.0-incubating February 2025, 1.0.0-incubating July 2025)", "url": "https://github.com/apache/polaris/releases" },
+      { "label": "Polaris blog: Apache Polaris graduates to top-level project (19 February 2026)", "url": "https://polaris.apache.org/blog/2026/02/19/apache-polaris-graduates-to-top-level-project/" }
+    ]
+  },
+  "sources": [
+    { "label": "Polaris 1.8.0 docs: overview (catalogs, internal and external, storage, credential vending, RBAC)", "url": "https://polaris.apache.org/releases/1.8.0/" },
+    { "label": "Polaris docs: Entities (catalogs, namespaces, tables, views, policies, principals, roles)", "url": "https://polaris.apache.org/releases/1.8.0/entities/" },
+    { "label": "Polaris docs: Role-based access control (privileges, catalog roles, principal roles)", "url": "https://polaris.apache.org/releases/1.8.0/managing-security/access-control/" },
+    { "label": "Polaris docs: Open Policy Agent as external policy decision point", "url": "https://polaris.apache.org/releases/1.8.0/managing-security/external-pdp/opa/" },
+    { "label": "Polaris docs: Vended credentials reference (STS AssumeRole, user delegation SAS, downscoped GCS tokens)", "url": "https://polaris.apache.org/releases/1.8.0/vended-credentials/" },
+    { "label": "Polaris docs: Metastores (in-memory, PostgreSQL via JDBC, MongoDB experimental)", "url": "https://polaris.apache.org/releases/1.8.0/metastores/" },
+    { "label": "Polaris docs: Realm (multi-tenancy)", "url": "https://polaris.apache.org/releases/1.8.0/realm/" },
+    { "label": "Polaris docs: Generic tables (Delta, CSV; beta)", "url": "https://polaris.apache.org/releases/1.8.0/generic-table/" },
+    { "label": "Polaris docs: Policy (compaction, snapshot expiry, orphan file removal; inheritance)", "url": "https://polaris.apache.org/releases/1.8.0/policy/" },
+    { "label": "Polaris docs: Iceberg REST federation (Glue and other REST catalogs; disabled by default)", "url": "https://polaris.apache.org/releases/1.8.0/federation/iceberg-rest-federation/" },
+    { "label": "Polaris docs: Hive Metastore federation (optional build extension)", "url": "https://polaris.apache.org/releases/1.8.0/federation/hive-metastore-federation/" },
+    { "label": "Polaris docs: BigQuery Metastore federation (optional build extension)", "url": "https://polaris.apache.org/releases/1.8.0/federation/bigquery-metastore-federation/" },
+    { "label": "Polaris docs: Binary distribution (Java 21, ports 8181 and 8182)", "url": "https://polaris.apache.org/releases/1.8.0/getting-started/binary-distribution/" },
+    { "label": "Polaris docs: Configuring Polaris for production (OAuth2 keys, PostgreSQL, realms)", "url": "https://polaris.apache.org/releases/1.8.0/configuration/configuring-polaris-for-production/" },
+    { "label": "Polaris docs: Helm chart", "url": "https://polaris.apache.org/releases/1.8.0/helm-chart/" },
+    { "label": "Polaris docs: Command line interface (catalogs, roles, privileges; CLIENT_ID and CLIENT_SECRET)", "url": "https://polaris.apache.org/releases/1.8.0/command-line-interface/" },
+    { "label": "Polaris docs: Creating an S3 catalog", "url": "https://polaris.apache.org/releases/1.8.0/getting-started/creating-a-catalog/s3/catalog-aws/" },
+    { "label": "Polaris docs: Using Polaris (principals, grants, Spark configuration)", "url": "https://polaris.apache.org/releases/1.8.0/getting-started/using-polaris/" },
+    { "label": "Polaris blog: Floe and Apache Polaris (Polaris does not execute maintenance; February 2026)", "url": "https://polaris.apache.org/blog/2026/02/04/floe-and-apache-polaris-policy-driven-table-maintenance-for-apache-iceberg/" },
+    { "label": "GitHub: apache/polaris (Apache 2.0)", "url": "https://github.com/apache/polaris" },
+    { "label": "GitHub: Apache Polaris 1.8.0 release (September 2026)", "url": "https://github.com/apache/polaris/releases/tag/apache-polaris-1.8.0" },
+    { "label": "Snowflake docs: Snowflake Open Catalog overview (managed Polaris; closed to new customers)", "url": "https://other-docs.snowflake.com/en/opencatalog/overview" },
+    { "label": "Snowflake Open Catalog release notes (GA, billing, free until 30 April 2025)", "url": "https://other-docs.snowflake.com/en/opencatalog/release-notes" },
+    { "label": "Snowflake docs: Access Iceberg tables through Snowflake Horizon Catalog (Polaris integrated)", "url": "https://docs.snowflake.com/en/user-guide/tables-iceberg-access-using-external-query-engine-snowflake-horizon" },
+    { "label": "Dremio docs: Open Catalog (built on Apache Polaris)", "url": "https://docs.dremio.com/current/data-sources/open-catalog/" },
+    { "label": "AWS Glue docs: Connecting through the Glue Iceberg REST endpoint", "url": "https://docs.aws.amazon.com/glue/latest/dg/connect-glu-iceberg-rest.html" },
+    { "label": "Lakekeeper docs (Rust, Apache License, Lakekeeper+ by Vakamo)", "url": "https://docs.lakekeeper.io/" },
+    { "label": "GitHub: lakekeeper/lakekeeper (access control, credential vending)", "url": "https://github.com/lakekeeper/lakekeeper" },
+    { "label": "GitHub: Unity Catalog README (Apache 2.0, LF AI & Data sandbox, Iceberg REST API)", "url": "https://github.com/unitycatalog/unitycatalog" },
+    { "label": "GitHub: Project Nessie README", "url": "https://github.com/projectnessie/nessie" }
+  ],
+  "checked": "2026-10-06"
+}

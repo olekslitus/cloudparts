@@ -1,0 +1,148 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Message queues",
+  "category": "messaging",
+  "order": 10,
+  "summary": "A to-do list between services: each job is done once, by one worker.",
+  "howItWorks": "Producers drop messages into the queue and move on. Workers pull a message, process it and delete it when done. If a worker crashes mid-job, the message reappears after a visibility timeout and another worker retries it. The queue absorbs bursts so a slow system downstream isn’t overwhelmed, and you go faster by adding workers.",
+  "analogy": "The ticket rail in a restaurant kitchen. Waiters clip orders up, cooks take the next one, and each order is cooked exactly once.",
+  "useWhen": [
+    "Background jobs: emails, reports, image processing",
+    "Smoothing bursts so a database or API sees a steady rate",
+    "Retrying flaky work, with a dead-letter queue for messages that keep failing"
+  ],
+  "avoidWhen": [
+    "Several systems each need every message; use pub/sub or a stream",
+    "You may want to replay old messages; once deleted they’re gone"
+  ],
+  "example": "A checkout service enqueues “send receipt” jobs. During a flash sale 5,000 arrive in one minute. Two workers drain them over the next few minutes, and the email provider never sees more than its rate limit.",
+  "providers": {
+    "aws": "SQS",
+    "gcp": "Cloud Tasks, Pub/Sub pull subscriptions",
+    "azure": "Service Bus queues, Storage queues",
+    "oss": "RabbitMQ, Redis + BullMQ, Celery; on Postgres: pgmq, PgQueuer, PgQue"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "import boto3",
+      "sqs = boto3.client(\"sqs\")",
+      "URL = \"https://sqs.us-east-1.amazonaws.com/123456789012/receipts\"",
+      "",
+      "sqs.send_message(QueueUrl=URL, MessageBody='{\"order_id\": 4812}')",
+      "",
+      "# worker loop: receive, process, then delete",
+      "resp = sqs.receive_message(QueueUrl=URL, WaitTimeSeconds=20)",
+      "for msg in resp.get(\"Messages\", []):",
+      "    send_receipt(msg[\"Body\"])",
+      "    sqs.delete_message(QueueUrl=URL, ReceiptHandle=msg[\"ReceiptHandle\"])"
+    ]
+  },
+  "related": ["stream","pubsub","serverless","workflow"],
+  "diagram": {
+    "caption": "Checkout bursts faster than two workers can keep up, so jobs pile up in the queue. Each worker takes the next job only when it’s free, and every job is handled once.",
+    "h": 270,
+    "nodes": [
+      {
+        "id": "p1",
+        "x": 100,
+        "y": 80,
+        "label": "Checkout",
+        "sub": "producer",
+        "emit": {"color":0,"jitter":0.5,"phases":[[3200,240],[5200,1200]]},
+        "out": ["q"]
+      },
+      {
+        "id": "p2",
+        "x": 100,
+        "y": 195,
+        "label": "Returns",
+        "sub": "producer",
+        "emit": {"every":1500,"jitter":0.5,"color":1},
+        "out": ["q"]
+      },
+      {
+        "id": "q",
+        "x": 370,
+        "y": 140,
+        "kind": "queue",
+        "cap": 9,
+        "label": "Job queue",
+        "sub": "receipts · visibility 30 s",
+        "gap": 100,
+        "out": ["w1","w2"]
+      },
+      {
+        "id": "w1",
+        "x": 640,
+        "y": 80,
+        "kind": "pool",
+        "label": "Worker 1",
+        "sub": "sends email",
+        "max": 1,
+        "work": 1150,
+        "mode": "sink"
+      },
+      {
+        "id": "w2",
+        "x": 640,
+        "y": 200,
+        "kind": "pool",
+        "label": "Worker 2",
+        "sub": "sends email",
+        "max": 1,
+        "work": 1150,
+        "mode": "sink"
+      }
+    ]
+  },
+  "history": {
+    "story": [
+      "Message queues are almost as old as networked computing. IBM announced its Queued Telecommunications Access Method (QTAM) for System/360 mainframes in 1965, and banks and airlines pushed the idea further, because a lost, corrupted or duplicated transaction meant lost money or a lost seat. The point, as IBM’s Andy Stanford-Clark puts it, was to let systems work without being in “strict synchronous lockstep”: the sender drops a message and carries on, and the receiver picks it up when it’s ready.",
+      "IBM’s MQSeries, introduced in 1993, made the queue a product that connected applications across different machines, and, according to IBM, is still used by 98 of the top 100 global banks. Microsoft followed with MSMQ in 1997, and Java’s JMS API (1998) let Java programs use existing products such as MQSeries. Those products were proprietary and didn’t talk to each other, so in 2003 John O’Hara at JPMorgan began designing the open AMQP protocol, which RabbitMQ implemented as open source in 2007.",
+      "Cloud providers then turned the queue into a utility. Amazon SQS, in beta from 2004 and generally available in 2006, had no broker to run and charged per request; Google, Microsoft and others followed. The idea keeps returning: Kafka, built as a log, made queue-style consumption production-ready in 2026."
+    ],
+    "choices": [
+      { "choice": "Store and forward instead of direct calls", "why": "The queue holds the message, so sender and receiver don’t need to be up, or equally fast, at the same time. Bursts pile up in the queue instead of overwhelming the receiver." },
+      { "choice": "Each message goes to one consumer", "why": "Competing workers share the load, so throughput grows by adding workers, and each job is done once rather than by everyone." },
+      { "choice": "Delete only after acknowledgement", "why": "A message is removed only when a consumer confirms it, so a crash mid-job means redelivery rather than loss. The trade-off is that a consumer can see a message twice and must be idempotent." },
+      { "choice": "No history after delivery", "why": "Queues were built to move work, not store it, which keeps them simple. Replaying old messages needs a stream instead." }
+    ],
+    "timeline": [
+      { "year": "1965", "text": "IBM announces QTAM for System/360 mainframes" },
+      { "year": "1993", "text": "IBM introduces MQSeries" },
+      { "year": "1998", "text": "JMS gives Java a standard API for messaging products" },
+      { "year": "2003", "text": "JPMorgan begins designing the open AMQP protocol" },
+      { "year": "2006", "text": "Amazon SQS becomes generally available after a 2004 beta" },
+      { "year": "2007", "text": "RabbitMQ, an open-source AMQP broker, is released" },
+      { "year": "2026", "text": "Kafka 4.2 makes queue-style share groups production-ready" }
+    ],
+    "sources": [
+      { "label": "RedMonk: Why message queues endure, a history (Dec 2024)", "url": "https://redmonk.com/kholterhoff/2024/12/12/why-message-queues-endure-a-history/" },
+      { "label": "IBM Community: Why IBM MQ? (Brian Wilson, May 2023)", "url": "https://community.ibm.com/community/user/integration/blogs/brian-wilson/2023/05/09/why-ibm-mq" },
+      { "label": "Oracle: Java Message Service tutorial, overview", "url": "https://docs.oracle.com/javaee/1.3/jms/tutorial/1_3_1-fcs/doc/overview.html" },
+      { "label": "RabbitMQ blog: Native AMQP 1.0, with AMQP’s history (Aug 2024)", "url": "https://www.rabbitmq.com/blog/2024/08/05/native-amqp" },
+      { "label": "LShift and CohesiveFT: Launch of RabbitMQ open source enterprise messaging (press release, Feb 2007)", "url": "https://www.rabbitmq.com/resources/RabbitMQ_PressRelease_080207.pdf" },
+      { "label": "AWS What’s New: Introducing the Amazon Simple Queue Service (Nov 2004)", "url": "https://aws.amazon.com/about-aws/whats-new/2004/11/03/introducing-the-amazon-simple-queue-service" },
+      { "label": "AWS What’s New: Amazon SQS now generally available (Jul 2006)", "url": "https://aws.amazon.com/about-aws/whats-new/2006/07/11/amazon-simple-queue-service-amazon-sqs-now-generally-available/" },
+      { "label": "Apache Kafka 4.2.0 release announcement (Feb 2026)", "url": "https://kafka.apache.org/blog/2026/02/17/apache-kafka-4.2.0-release-announcement/" },
+      { "label": "Wikipedia: Microsoft Message Queuing", "url": "https://en.wikipedia.org/wiki/Microsoft_Message_Queuing" }
+    ]
+  },
+  "sources": [
+    { "label": "AWS docs: Amazon SQS visibility timeout", "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html" },
+    { "label": "AWS docs: Amazon SQS dead-letter queues", "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html" },
+    { "label": "AWS docs: Amazon SQS short and long polling", "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-short-and-long-polling.html" },
+    { "label": "Boto3 docs: Amazon SQS guide", "url": "https://boto3.amazonaws.com/v1/documentation/api/latest/guide/sqs.html" },
+    { "label": "Google Cloud docs: Cloud Tasks overview", "url": "https://cloud.google.com/tasks/docs/dual-overview" },
+    { "label": "Google Cloud docs: Pub/Sub pull subscriptions", "url": "https://cloud.google.com/pubsub/docs/pull" },
+    { "label": "Microsoft Learn: Service Bus queues, topics and subscriptions", "url": "https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-queues-topics-subscriptions" },
+    { "label": "Microsoft Learn: Introduction to Azure Queue Storage", "url": "https://learn.microsoft.com/en-us/azure/storage/queues/storage-queues-introduction" },
+    { "label": "RabbitMQ docs: Queues", "url": "https://www.rabbitmq.com/docs/queues" },
+    { "label": "BullMQ docs", "url": "https://docs.bullmq.io/" },
+    { "label": "Celery docs: Introduction to Celery", "url": "https://docs.celeryq.dev/en/stable/getting-started/introduction.html" },
+    { "label": "pgmq README", "url": "https://github.com/pgmq/pgmq/blob/main/README.md" },
+    { "label": "PgQueuer README", "url": "https://github.com/janbjorge/pgqueuer/blob/main/README.md" },
+    { "label": "PgQue README", "url": "https://github.com/NikolayS/pgque/blob/main/README.md" }
+  ]
+}

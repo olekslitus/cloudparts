@@ -1,0 +1,149 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "MQTT",
+  "concepts": ["iot", "pubsub"],
+  "provider": "oss",
+  "vendor": "OASIS (open standard)",
+  "license": "Open standard, free to implement: OASIS Non-Assertion IPR mode; 3.1.1 is also ISO/IEC 20922",
+  "website": "https://mqtt.org/",
+  "summary": "The small publish/subscribe protocol most IoT devices use to talk to a broker, standardised by OASIS and ISO.",
+  "intro": [
+    "MQTT is a wire protocol, not a product. A client opens one long-lived connection to a broker (TCP on port 1883, TLS on 8883, or WebSockets) and exchanges small binary packets: `CONNECT`, `PUBLISH`, `SUBSCRIBE`, `PINGREQ` and their acknowledgements, with a fixed header as small as two bytes. Messages are addressed to topics, slash-separated strings such as `plant/pump-7/status`, and subscriptions can use wildcards: `+` matches one level, `#` everything below. The broker keeps state for each client: its subscriptions, messages in flight at QoS 1 or 2, messages queued for it while it is offline if it has a persistent session, the retained (last) message on each topic, and the will it registered when it connected. The payload is opaque bytes; JSON, Protobuf or anything else is up to the application.",
+    "Two versions are in use. 3.1.1, an OASIS Standard since October 2014 and ISO/IEC 20922 since 2016, is supported by every broker in the table below, and Azure IoT Hub supports only that version. 5.0, an OASIS Standard since March 2019, keeps the same model and adds reason codes on every acknowledgement, session and message expiry, shared subscriptions, topic aliases, request/response properties, user properties and flow control. MQTT-SN is a separate variant for sensor networks without TCP/IP, such as Zigbee: it replaces topic names with short IDs, lets devices sleep, and reaches an ordinary broker through a gateway. The specifications are free to implement under the Non-Assertion mode of the OASIS IPR policy, and there is nothing to buy: you run an open-source broker, pay for a commercial one, or use a cloud service."
+  ],
+  "strengths": [
+    "Tiny packets and one connection per device suit cellular, satellite and battery-powered hardware",
+    "Tools for unreliable networks are in the protocol: three QoS levels, persistent sessions, retained messages, last wills and keep-alives",
+    "Devices dial out to the broker, so the cloud can send commands to devices behind NAT and home firewalls",
+    "An open standard with many brokers and client libraries (Eclipse Paho and others), so devices aren’t tied to one vendor’s cloud"
+  ],
+  "limits": [
+    "No history: the broker delivers to current subscribers and persistent-session queues and keeps only one retained message per topic; replay needs a stream such as Kafka",
+    "Cloud brokers implement subsets: AWS IoT Core, IoT Hub, Event Grid and RabbitMQ have no QoS 2, and IoT Hub doesn’t store retained messages, so code written against Mosquitto may not port",
+    "No payload format or topic naming rules; every project invents its own conventions",
+    "Security comes from outside the protocol: 3.1.1 only carries a username and password, so TLS, certificates and per-topic permissions depend on the broker"
+  ],
+  "worksWith": [
+    { "id": "kafka", "how": "is bridged by Kafka Connect connectors into" },
+    { "id": "rabbitmq", "how": "is served by a built-in plugin of" },
+    { "id": "telegraf", "how": "is consumed by an input plugin of" },
+    { "id": "redpanda-connect", "how": "is read by an input of" },
+    { "id": "zenoh", "how": "is bridged, through a plugin, into" },
+    { "id": "quix-streams", "how": "is read and written by connectors in" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Retained messages and a last will with Mosquitto’s command-line clients",
+    "source": [
+      "# a local broker: the default config in the 2.1 image allows anonymous clients on 1883",
+      "docker run -d --name mqtt -p 1883:1883 eclipse-mosquitto:2.1-alpine",
+      "",
+      "# a \"device\" stays connected, listening for commands, with a last will registered",
+      "mosquitto_sub -h localhost -V mqttv5 -i pump-7 -t plant/pump-7/cmd -q 1 \\",
+      "  --will-topic plant/pump-7/status --will-payload offline --will-qos 1 --will-retain &",
+      "DEVICE=$!",
+      "mosquitto_pub -h localhost -V mqttv5 -t plant/pump-7/status -m online -q 1 -r",
+      "",
+      "# a dashboard that subscribes later still gets the retained value at once",
+      "mosquitto_sub -h localhost -V mqttv5 -t 'plant/+/status' -v &",
+      "# plant/pump-7/status online",
+      "",
+      "# the device dies without sending DISCONNECT, so the broker publishes its will",
+      "kill -9 $DEVICE",
+      "# plant/pump-7/status offline"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Brokers and how much of MQTT they support",
+      "intro": "Every broker below speaks MQTT, but managed services leave parts out. QoS 2 and retained messages are the usual gaps.",
+      "corner": "Broker",
+      "columns": ["MQTT versions", "QoS 2", "Retained messages", "Licence or model"],
+      "rows": [
+        { "label": "Eclipse Mosquitto", "values": ["5.0, 3.1.1, 3.1", "Yes", "Yes", "Open source, EPL/EDL"] },
+        { "label": "EMQX", "values": ["5.0 and 3.x", "Yes", "Yes", "Business Source License 1.1 from 5.9; one production node free"] },
+        { "label": "HiveMQ", "values": ["5 and 3.x", "Yes", "Yes", "Community Edition Apache 2.0; Enterprise platform commercial"] },
+        { "label": "RabbitMQ (MQTT plugin)", "values": ["5.0, 3.1.1, 3.1", "No: downgraded to 1 for 3.x clients, refused for 5.0", "Yes, kept per node; not sent to wildcard subscriptions", "Open source, MPL 2.0"] },
+        { "label": "AWS IoT Core", "values": ["5 and 3.1.1, with documented differences", "No", "Yes; only exact-topic subscriptions receive them", "Managed AWS service"] },
+        { "label": "Azure IoT Hub", "values": ["3.1.1 only, with fixed topics", "No: publishing at QoS 2 closes the connection", "Not stored; passed to the backend with a flag", "Managed Azure service"] },
+        { "label": "Azure Event Grid MQTT broker", "values": ["5 and 3.1.1", "No", "Yes, generally available since April 2026", "Managed Azure service"] }
+      ],
+      "notes": [
+        "From each broker’s own documentation, checked 2026-10-06. Mosquitto supports QoS 2 by default (`max_qos` defaults to 2); EMQX and HiveMQ describe themselves as fully compliant with MQTT 5 and 3.x."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "What MQTT 5.0 added",
+      "intro": "MQTT 5.0 kept the packets, topics and QoS levels of 3.1.1. These are the additions large deployments use most.",
+      "items": [
+        { "name": "Session and message expiry", "text": "The old Clean Session flag became Clean Start plus a Session Expiry Interval, so a client says how long the broker should keep its session after it disconnects. Each message can also carry its own expiry." },
+        { "name": "Reason codes", "text": "Every acknowledgement carries a reason code, and the broker can send `DISCONNECT` with a reason, so a client finds out why something failed instead of just being cut off." },
+        { "name": "Shared subscriptions", "text": "Several clients can share one subscription and split its messages between them, which turns a topic into a load-balanced work queue for backend consumers." },
+        { "name": "Topic aliases", "text": "A long topic name can be replaced by a small integer after the first message, saving bytes on every publish over a slow link." },
+        { "name": "Request/response and user properties", "text": "Response Topic and Correlation Data properties formalise request/response, and user properties add key/value headers to messages, much like HTTP headers." },
+        { "name": "Flow control and limits", "text": "Client and broker each say how many unacknowledged QoS 1 and 2 messages they accept and the largest packet they take, so a small device isn’t overwhelmed." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In 1999 Andy Stanford-Clark of IBM and Arlen Nipper of Arcom needed to connect oil pipeline equipment over satellite, where bandwidth was expensive and devices ran on batteries. They designed a protocol that kept packets and battery drain to a minimum and named it after IBM’s MQSeries products: MQ Telemetry Transport. Today the name is no longer treated as an acronym, and despite it, MQTT isn’t a message queue.",
+      "For about ten years IBM used MQTT mostly inside its own products. In 2010 it published MQTT 3.1 royalty-free, and in 2011 it contributed client code to the Eclipse Foundation’s new Paho project, which gave developers open-source clients in several languages. OASIS took over the specification and approved 3.1.1 as a standard on 29 October 2014, with 65 votes in favour and none against. In 2016 ISO and IEC adopted it as ISO/IEC 20922.",
+      "MQTT 5.0 became an OASIS Standard in March 2019, adding what large deployments had been working around: reason codes, expiry, shared subscriptions and user properties. By then MQTT was the device protocol of AWS IoT, Azure IoT Hub and Google’s Cloud IoT Core. Work continues in the OASIS committee on MQTT-SN 2.0, led by HiveMQ engineers."
+    ],
+    "choices": [
+      { "choice": "A broker in the middle", "why": "Devices only need to know one address and never each other. Publishers and subscribers are decoupled, so a new backend service can subscribe without touching the devices." },
+      { "choice": "Tiny binary headers", "why": "Its first users paid for satellite bandwidth, so the fixed header can be as small as two bytes and protocol exchanges are kept to a minimum." },
+      { "choice": "Three delivery levels, chosen per message", "why": "A sensor reading that will be replaced in a second doesn’t need acknowledging, while a billing event must not be lost or doubled. The spec offers at most once, at least once and exactly once, and the sender picks." },
+      { "choice": "A last will for silent failures", "why": "Remote devices fail without warning. Keep-alives let the broker notice a dead connection, and the will message tells everyone else about the abnormal disconnection." }
+    ],
+    "timeline": [
+      { "year": "1999", "text": "Stanford-Clark and Nipper design MQTT for pipelines over satellite" },
+      { "year": "2010", "text": "IBM publishes MQTT 3.1 royalty-free" },
+      { "year": "2011", "text": "IBM contributes MQTT client code to Eclipse Paho" },
+      { "year": "2014", "text": "OASIS approves MQTT 3.1.1 as a standard on 29 October" },
+      { "year": "2016", "text": "ISO and IEC publish 3.1.1 as ISO/IEC 20922" },
+      { "year": "2019", "text": "MQTT 5.0 becomes an OASIS Standard on 7 March" }
+    ],
+    "sources": [
+      { "label": "MQTT.org FAQ: who invented MQTT (1999)", "url": "https://mqtt.org/faq/" },
+      { "label": "HiveMQ: MQTT Essentials part 1 (pipelines over satellite, MQSeries name, 3.1 royalty-free in 2010, Paho in 2011)", "url": "https://www.hivemq.com/blog/mqtt-essentials-part-1-introducing-mqtt/" },
+      { "label": "OASIS: MQTT Version 3.1.1 becomes an OASIS Standard (Oct 2014)", "url": "https://www.oasis-open.org/news/announcements/mqtt-version-3-1-1-becomes-an-oasis-standard/" },
+      { "label": "OASIS press release: MQTT approved by ISO/IEC JTC1 as ISO/IEC 20922 (July 2016)", "url": "https://www.oasis-open.org/news/pr/oasis-mqtt-internet-of-things-standard-now-approved-by-iso-iec-jtc1" },
+      { "label": "OASIS: MQTT Version 5.0 specification (OASIS Standard, 7 March 2019)", "url": "https://docs.oasis-open.org/mqtt/mqtt/v5.0/mqtt-v5.0.html" },
+      { "label": "HiveMQ: MQTT-SN, a smart choice for IIoT (MQTT-SN 2.0 work at OASIS)", "url": "https://www.hivemq.com/blog/mqtt-sn-smart-choice-for-iiot/" }
+    ]
+  },
+  "sources": [
+    { "label": "OASIS: MQTT Version 3.1.1 specification (QoS levels, fixed header, Will Message, keep-alive, WebSocket transport)", "url": "https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/mqtt-v3.1.1.html" },
+    { "label": "OASIS: MQTT Version 5.0 specification (Appendix C, summary of new features)", "url": "https://docs.oasis-open.org/mqtt/mqtt/v5.0/mqtt-v5.0.html" },
+    { "label": "OASIS MQTT Technical Committee", "url": "https://www.oasis-open.org/committees/mqtt/" },
+    { "label": "OASIS MQTT TC: IPR policy (Non-Assertion Mode)", "url": "https://www.oasis-open.org/committees/mqtt/ipr.php" },
+    { "label": "OASIS press release: MQTT approved by ISO/IEC JTC1 as ISO/IEC 20922 (July 2016)", "url": "https://www.oasis-open.org/news/pr/oasis-mqtt-internet-of-things-standard-now-approved-by-iso-iec-jtc1" },
+    { "label": "MQTT.org: MQTT specifications (5.0, 3.1.1, MQTT-SN 1.2)", "url": "https://mqtt.org/mqtt-specification/" },
+    { "label": "MQTT.org FAQ: ports 1883 and 8883, security", "url": "https://mqtt.org/faq/" },
+    { "label": "HiveMQ: MQTT-SN, a smart choice for IIoT (topic IDs, sleeping devices, gateways)", "url": "https://www.hivemq.com/blog/mqtt-sn-smart-choice-for-iiot/" },
+    { "label": "AWS News Blog: AWS IoT launch (bidirectional messaging through NAT and firewalls)", "url": "https://aws.amazon.com/blogs/aws/aws-iot-cloud-services-for-connected-devices/" },
+    { "label": "Eclipse Mosquitto (MQTT 5.0, 3.1.1 and 3.1; EPL/EDL)", "url": "https://mosquitto.org/" },
+    { "label": "Mosquitto docs: mosquitto.conf (max_qos defaults to 2)", "url": "https://mosquitto.org/man/mosquitto-conf-5.html" },
+    { "label": "Mosquitto docs: mosquitto_sub (will options, protocol version)", "url": "https://mosquitto.org/man/mosquitto_sub-1.html" },
+    { "label": "Mosquitto Docker image README for 2.1 (default config allows anonymous access on 1883)", "url": "https://github.com/eclipse-mosquitto/mosquitto/blob/master/docker/2.1-alpine/README.md" },
+    { "label": "EMQX docs: introduction (fully compliant with MQTT 5.0 and 3.x)", "url": "https://docs.emqx.com/en/emqx/latest/" },
+    { "label": "EMQX LICENSE (Business Source License 1.1 for 5.9.0 and later)", "url": "https://github.com/emqx/emqx/blob/master/LICENSE" },
+    { "label": "HiveMQ Community Edition repository (MQTT 3.x and 5, Apache 2.0)", "url": "https://github.com/hivemq/hivemq-community-edition" },
+    { "label": "RabbitMQ docs: MQTT plugin (versions, QoS 2, retained message limits)", "url": "https://www.rabbitmq.com/docs/mqtt" },
+    { "label": "AWS docs: MQTT in AWS IoT Core (differences from MQTT specifications)", "url": "https://docs.aws.amazon.com/iot/latest/developerguide/mqtt.html" },
+    { "label": "Microsoft Learn: Communicate with an IoT hub using MQTT", "url": "https://learn.microsoft.com/en-us/azure/iot/iot-mqtt-connect-to-iot-hub" },
+    { "label": "Microsoft Learn: Overview of the MQTT broker feature in Azure Event Grid", "url": "https://learn.microsoft.com/en-us/azure/event-grid/mqtt-overview" },
+    { "label": "Microsoft Learn: What’s new in Azure Event Grid (MQTT Retain GA, April 2026)", "url": "https://learn.microsoft.com/en-us/azure/event-grid/whats-new" },
+    { "label": "Eclipse Paho MQTT Python client", "url": "https://github.com/eclipse-paho/paho.mqtt.python" },
+    { "label": "Confluent docs: MQTT Source connector for Kafka Connect (commercial licence)", "url": "https://docs.confluent.io/kafka-connectors/mqtt/current/mqtt-source-connector/overview.html" },
+    { "label": "Telegraf: MQTT Consumer input plugin", "url": "https://github.com/influxdata/telegraf/blob/master/plugins/inputs/mqtt_consumer/README.md" },
+    { "label": "Redpanda Connect docs: mqtt input", "url": "https://docs.redpanda.com/redpanda-connect/components/inputs/mqtt/" },
+    { "label": "Eclipse Zenoh: MQTT plugin and zenoh-bridge-mqtt", "url": "https://github.com/eclipse-zenoh/zenoh-plugin-mqtt" },
+    { "label": "Quix Streams docs: Sources (MQTT source)", "url": "https://quix.io/docs/quix-streams/connectors/sources/index.html" }
+  ],
+  "checked": "2026-10-06"
+}

@@ -1,0 +1,100 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Delta Lake",
+  "concepts": ["table-formats", "lakehouse"],
+  "provider": "oss",
+  "vendor": "Linux Foundation (created by Databricks)",
+  "license": "Apache 2.0",
+  "website": "https://delta.io/",
+  "repo": "https://github.com/delta-io/delta",
+  "summary": "An open table format built around a transaction log that lives in the table’s own folder; the default on Databricks.",
+  "intro": [
+    "A Delta table is a folder of Parquet files plus a `_delta_log` directory. Each commit adds the next numbered JSON file to the log, listing which data files were added and removed. Every so often the log is summarised into a Parquet checkpoint, so readers don’t have to replay thousands of JSON files. Writers use optimistic concurrency: two writers race to create the same log entry, one wins, and the other checks for conflicts and retries.",
+    "Because the log sits next to the data, the folder is the table: any engine that can read the log can read it, with or without a catalog. Delta Lake was created at Databricks and is now a Linux Foundation project. UniForm (Universal Format) also writes Iceberg metadata, and Hudi metadata in preview, for the same data files, so Iceberg clients can read a Delta table without a copy. Those clients can only read; writes still go through Delta."
+  ],
+  "strengths": [
+    "Deep Spark integration: MERGE, streaming reads and writes on one table, and a change data feed",
+    "No catalog needed to read a table; the log in the folder is the source of truth",
+    "Deletion vectors (delete rows without rewriting files) and liquid clustering for layout",
+    "UniForm lets Iceberg readers query the same files"
+  ],
+  "limits": [
+    "Support outside Spark and Databricks is uneven: Athena, for example, reads Delta tables but can’t write them or time travel",
+    "Concurrent writers from several clusters on S3 need a DynamoDB-backed log store, because S3 alone can’t guarantee only one writer creates a log entry",
+    "UniForm is read-only for Iceberg clients and can’t be used together with deletion vectors",
+    "Frequent small commits grow the log and the file count; OPTIMIZE and VACUUM need to run regularly"
+  ],
+  "worksWith": [
+    { "id": "parquet", "how": "stores data as" },
+    { "id": "s3", "how": "commonly keeps tables in" },
+    { "id": "iceberg", "how": "can expose tables (UniForm) to readers of" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "A Delta table with UniForm on, then history and time travel (Spark SQL)",
+    "source": [
+      "CREATE TABLE sales.orders (order_id BIGINT, amount DECIMAL(10,2), ts TIMESTAMP)",
+      "USING DELTA",
+      "TBLPROPERTIES (",
+      "  'delta.enableIcebergCompatV2' = 'true',",
+      "  'delta.universalFormat.enabledFormats' = 'iceberg'",
+      ");",
+      "",
+      "DESCRIBE HISTORY sales.orders;",
+      "SELECT count(*) FROM sales.orders VERSION AS OF 3;",
+      "",
+      "OPTIMIZE sales.orders;",
+      "VACUUM sales.orders RETAIN 168 HOURS;"
+    ]
+  },
+  "history": {
+    "story": [
+      "Databricks’ customers kept their tables in cloud object stores like S3 as folders of Parquet files. That was cheap, but object stores are key-value stores with no multi-object transactions. An update that touched many files let readers see partial results, a crashed job left a table corrupted, and listing millions of objects was slow. In the first years of Databricks’ cloud service (2014–2016), around half of its support escalations came from data corruption, consistency or performance problems of this kind.",
+      "A Databricks team including Michael Armbrust, Tathagata Das and Reynold Xin built Delta as an ACID storage layer over object stores and started offering it to customers in October 2017. Databricks open-sourced it under Apache 2.0 on 24 April 2019, when Viacom, Edmunds, Riot Games and McGraw Hill already used it, and moved it to the Linux Foundation that October. A 2020 VLDB paper described the design, and in 2022 Databricks committed to open-sourcing all of Delta’s features with Delta Lake 2.0.",
+      "The same paper argued that Delta enabled a “lakehouse”: warehouse features directly on cheap object storage. Iceberg grew into a strong rival, and the two moved toward each other: UniForm (2023) writes Iceberg metadata for Delta tables, and in June 2024 Databricks agreed to acquire Tabular, the company founded by Iceberg’s creators."
+    ],
+    "choices": [
+      { "choice": "The transaction log lives in the table’s folder", "why": "The list of files in each version is kept as a write-ahead log stored in the object store itself, with the data in Parquet, so any engine that already reads Parquet can learn to read a Delta table." },
+      { "choice": "Commit by creating the next numbered log file", "why": "Only one writer may create `000004.json`. Azure and Google Cloud Storage can do an atomic put-if-absent and HDFS an atomic rename, but S3 could do neither, so Databricks used a separate coordination service for S3 log writes." },
+      { "choice": "Checkpoints that compact the log into Parquet", "why": "Replaying thousands of small JSON records is slow on high-latency object stores. A Parquet checkpoint lets readers load table state and file statistics quickly, even across billions of partitions." },
+      { "choice": "One table for streaming and batch", "why": "Streaming jobs write small files at low latency and later coalesce them in a transaction, and readers can tail new commits, so a Delta table can act as a message bus as well as a batch table." }
+    ],
+    "timeline": [
+      { "year": "2017", "text": "Databricks launches Delta for its customers in October" },
+      { "year": "2019", "text": "Open-sourced in April; moves to the Linux Foundation in October" },
+      { "year": "2022", "text": "Delta Lake 2.0; Databricks commits to open-sourcing all Delta features" },
+      { "year": "2023", "text": "Delta Lake 3.0 introduces UniForm for Iceberg and Hudi readers" },
+      { "year": "2024", "text": "Databricks agrees to acquire Tabular, founded by Iceberg’s creators" },
+      { "year": "2025", "text": "Delta Lake 4.0 adds `variant`, row tracking and catalog-managed tables (preview)" },
+      { "year": "2026", "text": "Delta Lake 4.1 makes catalog-managed tables production-ready" }
+    ],
+    "sources": [
+      { "label": "Delta Lake: High-Performance ACID Table Storage over Cloud Object Stores (VLDB 2020)", "url": "https://www.vldb.org/pvldb/vol13/p3411-armbrust.pdf" },
+      { "label": "Databricks blog: Introducing Databricks Delta (25 October 2017)", "url": "https://www.databricks.com/blog/2017/10/25/databricks-delta-a-unified-management-system-for-real-time-big-data.html" },
+      { "label": "Databricks: Databricks open sources Delta Lake (24 April 2019)", "url": "https://www.databricks.com/company/newsroom/press-releases/databricks-open-sources-delta-lake-for-data-lake-reliability" },
+      { "label": "Linux Foundation: Delta Lake project turns to the Linux Foundation (October 2019)", "url": "https://www.linuxfoundation.org/press/press-release/the-delta-lake-project-turns-to-linux-foundation-to-become-the-open-standard-for-data-lakes" },
+      { "label": "Delta Lake blog: Delta 2.0, the foundation of your data lakehouse is open (August 2022)", "url": "https://delta.io/blog/2022-08-02-delta-2-0-the-foundation-of-your-data-lake-is-open/" },
+      { "label": "Delta Lake 3.0 and UniForm announcement (June 2023)", "url": "https://www.prnewswire.com/news-releases/announcing-delta-lake-3-0-new-universal-format-offers-automatic-compatibility-for-apache-iceberg-and-apache-hudi-301865107.html" },
+      { "label": "Databricks agrees to acquire Tabular (June 2024)", "url": "https://www.databricks.com/company/newsroom/press-releases/databricks-agrees-acquire-tabular-company-founded-original-creators" },
+      { "label": "GitHub: Delta Lake 4.0.0 release notes (June 2025)", "url": "https://github.com/delta-io/delta/releases/tag/v4.0.0" },
+      { "label": "Delta Lake blog: Delta Lake 4.1.0 released (March 2026)", "url": "https://delta.io/blog/2026-03-01-delta-lake-4-1-0-released/" }
+    ]
+  },
+  "sources": [
+    { "label": "Delta transaction log protocol (_delta_log, JSON commits, Parquet checkpoints)", "url": "https://github.com/delta-io/delta/blob/master/PROTOCOL.md" },
+    { "label": "Delta Lake docs: Concurrency control (optimistic concurrency)", "url": "https://docs.delta.io/concurrency-control/" },
+    { "label": "Delta Lake docs: Universal Format (UniForm), requirements and limitations", "url": "https://docs.delta.io/delta-uniform/" },
+    { "label": "Delta Lake docs: Storage configuration (S3 multi-cluster writes with DynamoDB)", "url": "https://docs.delta.io/delta-storage/" },
+    { "label": "Delta Lake docs: Table deletes, updates and merges", "url": "https://docs.delta.io/delta-update/" },
+    { "label": "Delta Lake docs: Table streaming reads and writes", "url": "https://docs.delta.io/delta-streaming/" },
+    { "label": "Delta Lake docs: Change data feed", "url": "https://docs.delta.io/delta-change-data-feed/" },
+    { "label": "Delta Lake docs: Deletion vectors", "url": "https://docs.delta.io/delta-deletion-vectors/" },
+    { "label": "Delta Lake docs: Liquid clustering", "url": "https://docs.delta.io/delta-clustering/" },
+    { "label": "Delta Lake docs: Optimizations (OPTIMIZE)", "url": "https://docs.delta.io/optimizations-oss/" },
+    { "label": "Delta Lake docs: Table utility commands (VACUUM, DESCRIBE HISTORY)", "url": "https://docs.delta.io/delta-utility/" },
+    { "label": "Delta Lake docs: Table batch reads and writes (time travel)", "url": "https://docs.delta.io/delta-batch/" },
+    { "label": "Linux Foundation: Delta Lake project turns to the Linux Foundation (October 2019)", "url": "https://www.linuxfoundation.org/press/press-release/the-delta-lake-project-turns-to-linux-foundation-to-become-the-open-standard-for-data-lakes" },
+    { "label": "Athena docs: Query Delta Lake tables (read only, no time travel)", "url": "https://docs.aws.amazon.com/athena/latest/ug/delta-lake-tables.html" }
+  ],
+  "checked": "2026-10-05"
+}

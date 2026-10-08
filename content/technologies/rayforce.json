@@ -1,0 +1,116 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Rayforce",
+  "concepts": ["query-engines", "graph"],
+  "provider": "oss",
+  "vendor": "Anton Kundenko, with Lynx Trading Technologies",
+  "license": "MIT",
+  "website": "https://rayforcedb.com/",
+  "repo": "https://github.com/RayforceDB/rayforce",
+  "summary": "A small embeddable engine in pure C that runs columnar analytics, graph traversals and recursive Datalog queries in one optimised plan.",
+  "intro": [
+    "Rayforce is a C library, plus a REPL binary, that you link into a program. You describe a query as a lazy graph of operations, either through the C API, through Rayfall (its own Lisp-like query language) or through Python bindings: scans, filters, joins, group-bys, window functions and graph steps such as expanding neighbours or finding shortest paths. Nothing runs until you execute it. A multi-pass optimiser first rewrites the whole plan, pushing filters and column choices down and passing selections sideways between joins and graph expansions. Element-wise parts are then compiled to bytecode and run over 1,024-row chunks that stay in the CPU’s L1 cache, spread across a thread pool. Graph edges are stored next to the tables as compressed sparse rows (CSR), indexed both forwards and backwards, so one query can aggregate columns and then walk relationships without handing data to a second system. Everything goes through its own memory allocator instead of `malloc`, and there are no external dependencies.",
+    "Tables live in memory or on disk as one file per column (splayed tables) or split into date partitions, the layouts kdb+ uses, memory-mapped and backed by a write-ahead log. It reads CSV in parallel and imports Parquet, has an IPC client and server built in, and an add-on speaks q’s IPC wire format. Rayforce is MIT licensed, written mainly by Anton Kundenko and co-developed with and sponsored by Lynx Trading Technologies. There’s no paid edition; a managed Rayforce Cloud is announced with no launch date. The current release is v2.11.0, from October 2026."
+  ],
+  "strengths": [
+    "Tiny and self-contained: pure C, one public header, zero dependencies, its own allocator",
+    "Relational operators, graph algorithms (BFS, Dijkstra, PageRank, Louvain, worst-case-optimal joins), recursive Datalog and HNSW vector search share one optimiser",
+    "kdb+-style on-disk tables: column files, date partitions, memory mapping and a transaction log",
+    "MIT licensed, with bindings for Python, Rust and WebAssembly"
+  ],
+  "limits": [
+    "No SQL: queries are written in Rayfall, the C API or Python, so BI tools and SQL clients can’t connect",
+    "Young and fast-moving: the reworked v2 line was first tagged in June 2026 and has had ten more minor releases since, with one author writing most commits",
+    "Parquet support covers local files only; there’s no reading straight from object storage",
+    "Prebuilt binaries only for Linux x86-64 and macOS arm64; elsewhere you build from source on a POSIX system",
+    "A small community, and the production users it names are listed by the project itself"
+  ],
+  "worksWith": [
+    { "id": "parquet", "how": "reads and imports" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "A group-by and a recursive graph query in one Rayfall script",
+    "source": [
+      "brew install rayforcedb/tap/rayforce",
+      "",
+      "cat > flows.rfl <<'EOF'",
+      "; columnar: total quantity per symbol",
+      "(set t (table [Symbol Side Qty]",
+      "  (list [AAPL GOOG MSFT AAPL GOOG] [Buy Sell Buy Sell Buy] [100 200 150 300 250])))",
+      "(show (select {from: t by: Symbol Qty: (sum Qty)}))",
+      "",
+      "; graph: every account that money from account 1 can reach",
+      "(set db (datoms))",
+      "(set db (assert-fact db 1 'pays 2))",
+      "(set db (assert-fact db 2 'pays 3))",
+      "(set db (assert-fact db 3 'pays 4))",
+      "(rule (reaches ?a ?b) (?a :pays ?b))",
+      "(rule (reaches ?a ?c) (?a :pays ?b) (reaches ?b ?c))",
+      "(show (query db (find ?b) (where (reaches 1 ?b))))",
+      "EOF",
+      "",
+      "rayforce flows.rfl"
+    ]
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "One engine, four kinds of query",
+      "intro": "Each of these builds into the same lazy plan, so the optimiser sees the whole workload at once.",
+      "items": [
+        { "name": "Columnar analytics", "tag": "select, joins, windows", "text": "Vectorised filters, radix-partitioned hash joins, group-bys, window functions, pivots and as-of joins over typed column vectors." },
+        { "name": "Graph algorithms", "tag": "CSR storage", "text": "BFS, DFS, Dijkstra, A*, PageRank, Louvain communities, betweenness and Leapfrog TrieJoin over edges stored as forward and reverse CSR arrays." },
+        { "name": "Datalog", "tag": "recursive rules", "text": "Facts stored as entity, attribute, value triples; recursive rules give reachability and transitive closure, evaluated to a fixpoint." },
+        { "name": "Vector search", "tag": "HNSW", "text": "An HNSW index with cosine, L2 and inner-product metrics; a `where` filter is pushed into the search so rejected candidates don’t use up result slots." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Analytics stacks often split work between a columnar engine for tables and a separate library or service for graphs, each with its own data model, language and memory layout. Joining them means serialising data between processes, and no optimiser ever sees the whole pipeline. Rayforce was built on the bet that one engine, with one optimiser, one execution model and one allocator, could do both faster than the seam between two.",
+      "Anton Kundenko started Rayforce in February 2023 as a columnar database in pure C, with a Lisp-like language instead of SQL, aimed at financial and time-series data. Its vocabulary of splayed and partitioned tables and a q-style transaction log echoes kdb+ and its q language. Lynx, a trading technology firm, co-develops and sponsors it. Python, Rust and WebAssembly bindings followed in 2025. In April 2026 a large rework, the v2 line, rebuilt the aggregation engine and storage; the project now describes itself as columnar analytics and graph traversal in one pipeline. Its first tagged release, v2.1.0, came in June 2026, and the same month an add-on let it talk to q clients and servers. PeachQ, an open implementation of the q language, runs on it."
+    ],
+    "choices": [
+      { "choice": "Pure C with no dependencies and its own allocator", "why": "A buddy allocator with slab caches and per-thread heaps avoids `malloc` contention, and a library with no third-party code can be linked into anything with a C FFI." },
+      { "choice": "Graph traversals as operators in the same plan as joins", "why": "Moving data between a table engine and a graph library costs serialisation on every step and hides the full query from the optimiser." },
+      { "choice": "A small Lisp-like language instead of SQL", "why": "Rayfall keeps the syntax small, and its `select`, `update` and `pivot` forms map directly onto the engine’s operation graph." }
+    ],
+    "timeline": [
+      { "year": "2023", "text": "Anton Kundenko starts Rayforce in February; MIT licensed from March" },
+      { "year": "2025", "text": "Rust, Python and WebAssembly bindings" },
+      { "year": "2026", "text": "April: the v2 rework; June: first tagged release, v2.1.0" },
+      { "year": "2026", "text": "June: an add-on speaks q’s IPC wire format" },
+      { "year": "2026", "text": "October: v2.11.0" }
+    ],
+    "sources": [
+      { "label": "Rayforce: About (why it exists, design principles, author)", "url": "https://rayforcedb.com/about/" },
+      { "label": "Rayforce README at the pre-v2 tag (columnar vector database, Rayfall)", "url": "https://github.com/RayforceDB/rayforce/tree/pre-v2-rollup" },
+      { "label": "Rayforce LICENSE commit: MIT (Mar 2023)", "url": "https://github.com/RayforceDB/rayforce/commit/03af3dff382da02b222ed479922bebd30f27b772" },
+      { "label": "Rayforce v2.1.0 release notes (first v2 release, q-style transaction log, Jun 2026)", "url": "https://github.com/RayforceDB/rayforce/releases/tag/v2.1.0" },
+      { "label": "rayforce-q: q IPC wire-format client and server", "url": "https://github.com/RayforceDB/rayforce-q" },
+      { "label": "PeachQ: an open implementation of q built on Rayforce", "url": "https://peachq.org/" }
+    ]
+  },
+  "sources": [
+    { "label": "Rayforce README (pipeline, features, install, Lynx partnership, MIT)", "url": "https://github.com/RayforceDB/rayforce" },
+    { "label": "Rayforce home page (production users, Rayforce Cloud, IPC)", "url": "https://rayforcedb.com/" },
+    { "label": "Rayforce v2.11.0 release (Oct 2026)", "url": "https://github.com/RayforceDB/rayforce/releases/tag/v2.11.0" },
+    { "label": "Rayforce releases", "url": "https://github.com/RayforceDB/rayforce/releases" },
+    { "label": "Rayforce docs: Quick start (build, REPL, scripts, platforms)", "url": "https://rayforcedb.com/docs/getting-started/quick-start/" },
+    { "label": "Rayforce docs: Graph storage (CSR, double-indexed relationships)", "url": "https://rayforcedb.com/docs/graph/storage/" },
+    { "label": "Rayforce docs: Graph queries tutorial (Datalog, recursive rules)", "url": "https://rayforcedb.com/docs/tutorials/graph/" },
+    { "label": "Rayforce docs: .parquet namespace (local Parquet input)", "url": "https://rayforcedb.com/docs/namespaces/parquet/" },
+    { "label": "Rayforce docs: Storage guide", "url": "https://rayforcedb.com/docs/guides/storage/" },
+    { "label": "Rayforce docs: IPC guide", "url": "https://rayforcedb.com/docs/guides/ipc/" },
+    { "label": "Rayforce example: datalog.rfl", "url": "https://github.com/RayforceDB/rayforce/blob/master/examples/rfl/datalog.rfl" },
+    { "label": "Rayforce example scripts (as-of joins, windows, pivots, partitioned tables)", "url": "https://github.com/RayforceDB/rayforce/tree/master/examples/rfl" },
+    { "label": "Rayforce contributors on GitHub", "url": "https://github.com/RayforceDB/rayforce/graphs/contributors" },
+    { "label": "rayforce-py: Python bindings", "url": "https://github.com/RayforceDB/rayforce-py" },
+    { "label": "rayforce-rs: Rust bindings", "url": "https://github.com/RayforceDB/rayforce-rs" },
+    { "label": "rayforce-wasm: WebAssembly bindings", "url": "https://github.com/RayforceDB/rayforce-wasm" },
+    { "label": "KX docs: Splayed tables (one file per column, partitioned tables)", "url": "https://code.kx.com/q/kb/splayed-tables/" },
+    { "label": "KX docs: Partitioned tables", "url": "https://code.kx.com/q/kb/partition/" }
+  ],
+  "checked": "2026-10-06"
+}

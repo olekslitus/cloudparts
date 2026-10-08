@@ -1,0 +1,146 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Key-value stores",
+  "category": "data",
+  "order": 20,
+  "summary": "Put a value under a key and get it back by that key, fast, at almost any scale.",
+  "howItWorks": "A key-value store keeps a map from keys to values and offers little more than three operations: put a value under a key, get it back, and delete it. The database never looks inside the value, which can be a string, a serialized object or an image. That keeps every operation a lookup: microseconds for in-memory stores such as Valkey, Redis and MemoryDB, single-digit milliseconds for DynamoDB on disk. To scale out, the key is hashed to pick a partition, so data and traffic spread across many servers and the cluster grows by adding more. The price is that the key is the only way in. You can’t search on what’s inside a value, and there are no joins, so you choose keys around the questions you’ll ask. Many stores add a little on top: Redis and Valkey offer lists, sets, sorted sets and atomic counters as values, DynamoDB sorts items within a partition and can index other attributes, and etcd adds transactions and watches on keys.",
+  "analogy": "A wall of numbered lockers. Give the number and you have the bag in seconds; ask for every bag with a red scarf inside and someone has to open every locker.",
+  "useWhen": [
+    "Sessions, shopping carts, feature flags and rate-limit counters",
+    "Lookups by ID at huge scale, with steady low latency",
+    "Configuration and coordination data a cluster must agree on, like Kubernetes state in etcd"
+  ],
+  "avoidWhen": [
+    "Finding records by what’s inside them; use a document database or add a search index",
+    "Reporting, ad-hoc questions and joins"
+  ],
+  "example": "A web shop keeps each shopper’s session and cart in Valkey under `session:<id>`, set to expire after 30 minutes. Every page view is one `GET`, so any of the shop’s servers can handle the next click. Finding every cart that holds a given product, though, would mean reading every key.",
+  "providers": {
+    "aws": "DynamoDB; ElastiCache and MemoryDB for Valkey or Redis OSS",
+    "gcp": "Memorystore for Valkey or Redis; Bigtable for durable lookups by row key",
+    "azure": "Azure Managed Redis; Azure Cosmos DB for Table",
+    "oss": "Valkey (BSD), Redis (AGPLv3 option since 8.0), etcd, FoundationDB, TiKV; embedded in your program: RocksDB"
+  },
+  "snippet": {
+    "lang": "bash",
+    "source": [
+      "# valkey-cli (redis-cli works the same)",
+      "SET session:9f3a '{\"user\":42,\"cart\":[\"sku-17\"]}' EX 1800   # expires in 30 minutes",
+      "GET session:9f3a",
+      "",
+      "# an atomic counter per user per minute, for rate limiting",
+      "INCR rate:42:0930",
+      "EXPIRE rate:42:0930 60"
+    ]
+  },
+  "related": ["document","wide-column","cache","relational","coordination"],
+  "diagram": {
+    "caption": "Each request’s key is hashed to one partition, so the same key (same color) always lands on the same partition, and load spreads across all three.",
+    "h": 270,
+    "nodes": [
+      {
+        "id": "app",
+        "x": 100,
+        "y": 135,
+        "label": "App",
+        "sub": "get/put by key",
+        "emit": {"every":360,"jitter":0.3,"req":true,"colorByKey":3},
+        "out": ["router"]
+      },
+      {
+        "id": "router",
+        "x": 330,
+        "y": 135,
+        "label": "Request router",
+        "sub": "hash(key)",
+        "route": "hash",
+        "out": ["s1","s2","s3"]
+      },
+      {
+        "id": "s1",
+        "x": 600,
+        "y": 55,
+        "label": "Partition A",
+        "sub": "a third of the keys",
+        "mode": "reply",
+        "delay": 40
+      },
+      {
+        "id": "s2",
+        "x": 600,
+        "y": 135,
+        "label": "Partition B",
+        "sub": "a third of the keys",
+        "mode": "reply",
+        "delay": 40
+      },
+      {
+        "id": "s3",
+        "x": 600,
+        "y": 215,
+        "label": "Partition C",
+        "sub": "a third of the keys",
+        "mode": "reply",
+        "delay": 40
+      }
+    ]
+  },
+  "history": {
+    "story": [
+      "Storing values under keys is one of the oldest ideas in data storage. Ken Thompson’s `dbm` library, released with Seventh Edition Unix in 1979, kept key-value pairs in files, and Berkeley DB, first released in 1991, offered the same model as a library that programs could embed. But data shared by many users mostly lived in relational databases.",
+      "Web-scale services broke that habit. In 2007 Amazon described Dynamo, a key-value store for services like the shopping cart that only looked data up by primary key and had to keep accepting writes even when disks failed or networks broke. In 2009 Salvatore Sanfilippo released Redis, a server that kept everything in memory and let values be lists, sets and counters as well as strings. In 2012 AWS turned the Dynamo lessons into DynamoDB, a managed service.",
+      "Key-value stores also became the foundation under other systems. Kubernetes keeps all of its cluster state in etcd, and FoundationDB, which Apple open-sourced in 2018, adds ACID transactions across keys. In 2024, after Redis moved to source-available licences, the Linux Foundation forked it as Valkey, which AWS and Google Cloud now run as managed services."
+    ],
+    "choices": [
+      { "choice": "The value is opaque", "why": "If the database never parses values, every operation is a lookup by key. That keeps latency low and predictable, and a value can be anything from a counter to an image." },
+      { "choice": "Hash keys to spread data across machines", "why": "Dynamo used consistent hashing so a cluster could grow one node at a time, moving only a small share of the data. Hash partitioning is still how these stores scale." },
+      { "choice": "Availability before immediate consistency", "why": "A customer should always be able to add to a cart, even during failures. Dynamo never rejected a write because of a failure and reconciled diverging copies later, the trade-off now called eventual consistency." },
+      { "choice": "Keep everything in memory", "why": "Redis held the whole dataset in RAM so every operation was fast, and wrote it to disk only for durability. Memory limits the size, but it made data structures like sorted sets cheap to offer." }
+    ],
+    "timeline": [
+      { "year": "1979", "text": "Ken Thompson’s `dbm` key-value library ships with AT&T Unix" },
+      { "year": "1991", "text": "First general release of Berkeley DB" },
+      { "year": "2007", "text": "Amazon publishes the Dynamo paper" },
+      { "year": "2009", "text": "Redis is released as open source" },
+      { "year": "2012", "text": "AWS launches DynamoDB as a managed service" },
+      { "year": "2018", "text": "Apple open-sources FoundationDB" },
+      { "year": "2024", "text": "Redis changes licence; the Linux Foundation forks Valkey" }
+    ],
+    "sources": [
+      { "label": "Seventh Edition Unix manual: dbm(3X) (1979), via TUHS", "url": "https://www.tuhs.org/cgi-bin/utree.pl?file=V7/usr/man/man3/dbm.3x" },
+      { "label": "Wikipedia: DBM (computing), on Ken Thompson’s original dbm", "url": "https://en.wikipedia.org/wiki/DBM_(computing)" },
+      { "label": "Olson, Bostic and Seltzer: Berkeley DB (USENIX 1999), on the 1991 first release", "url": "https://www.usenix.org/legacy/event/usenix99/full_papers/olson/olson.pdf" },
+      { "label": "Werner Vogels: Amazon’s Dynamo, with the full SOSP paper (Oct 2007)", "url": "https://www.allthingsdistributed.com/2007/10/amazons_dynamo.html" },
+      { "label": "Redis FAQ: why Redis keeps data in memory", "url": "https://redis.io/docs/latest/develop/get-started/faq/" },
+      { "label": "Hacker News: Redis (Feb 2009)", "url": "https://news.ycombinator.com/item?id=494649" },
+      { "label": "Werner Vogels: Amazon DynamoDB (Jan 2012)", "url": "https://www.allthingsdistributed.com/2012/01/amazon-dynamodb.html" },
+      { "label": "FoundationDB blog: FoundationDB is open source (Apr 2018)", "url": "https://www.foundationdb.org/blog/foundationdb-is-open-source/" },
+      { "label": "Redis blog: Redis adopts dual source-available licensing (Mar 2024)", "url": "https://redis.io/blog/redis-adopts-dual-source-available-licensing/" },
+      { "label": "Linux Foundation: Launches open source Valkey community (Mar 2024)", "url": "https://www.linuxfoundation.org/press/linux-foundation-launches-open-source-valkey-community" },
+      { "label": "AWS What’s New: Announcing Amazon ElastiCache for Valkey (Oct 2024)", "url": "https://aws.amazon.com/about-aws/whats-new/2024/10/amazon-elasticache-valkey/" }
+    ]
+  },
+  "sources": [
+    { "label": "DB-Engines: Key-value stores", "url": "https://db-engines.com/en/article/Key-value+Stores" },
+    { "label": "DynamoDB Developer Guide: What is Amazon DynamoDB? (key-value and document models, single-digit millisecond performance)", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Introduction.html" },
+    { "label": "DynamoDB Developer Guide: Partitions and data distribution", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.Partitions.html" },
+    { "label": "DynamoDB Developer Guide: Improving data access with secondary indexes", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/SecondaryIndexes.html" },
+    { "label": "Amazon MemoryDB FAQs (microsecond read latency)", "url": "https://aws.amazon.com/memorydb/faqs/" },
+    { "label": "Redis docs: Data types", "url": "https://redis.io/docs/latest/develop/data-types/" },
+    { "label": "Valkey docs: SET (EX seconds)", "url": "https://valkey.io/commands/set/" },
+    { "label": "Valkey docs: INCR (atomic counters)", "url": "https://valkey.io/commands/incr/" },
+    { "label": "etcd docs: API (transactions and watches)", "url": "https://etcd.io/docs/v3.6/learning/api/" },
+    { "label": "Kubernetes docs: Cluster components (etcd holds all API server data)", "url": "https://kubernetes.io/docs/concepts/overview/components/" },
+    { "label": "ElastiCache User Guide: What is Amazon ElastiCache? (Valkey, Memcached, Redis OSS)", "url": "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/WhatIs.html" },
+    { "label": "Google Cloud: Memorystore for Valkey overview", "url": "https://cloud.google.com/memorystore/docs/valkey/product-overview" },
+    { "label": "Google Cloud: Bigtable overview (a sorted key-value map)", "url": "https://cloud.google.com/bigtable/docs/overview" },
+    { "label": "Microsoft Learn: What is Azure Managed Redis?", "url": "https://learn.microsoft.com/en-us/azure/redis/overview" },
+    { "label": "Microsoft Learn: Azure Cosmos DB for Table", "url": "https://learn.microsoft.com/en-us/azure/cosmos-db/table/introduction" },
+    { "label": "Valkey on GitHub: COPYING (BSD-3-Clause)", "url": "https://github.com/valkey-io/valkey/blob/unstable/COPYING" },
+    { "label": "Redis blog: Redis is now available under the AGPLv3 open source license (May 2025)", "url": "https://redis.io/blog/agplv3/" },
+    { "label": "apple/foundationdb on GitHub: ordered key-value store with ACID transactions", "url": "https://github.com/apple/foundationdb" },
+    { "label": "tikv/tikv on GitHub: distributed transactional key-value database", "url": "https://github.com/tikv/tikv" },
+    { "label": "facebook/rocksdb on GitHub: embeddable persistent key-value store", "url": "https://github.com/facebook/rocksdb" }
+  ]
+}

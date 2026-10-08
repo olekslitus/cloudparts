@@ -1,0 +1,143 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Apache Hive",
+  "concepts": ["query-engines", "warehouse", "data-lake"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://hive.apache.org/",
+  "repo": "https://github.com/apache/hive",
+  "summary": "The first SQL engine for Hadoop, and the source of the Hive Metastore, the table catalog that Trino, Spark, Impala and Flink still read.",
+  "intro": [
+    "Hive turns SQL (HiveQL) into distributed jobs over files. A table is a directory in HDFS or an object store, and each partition is a subdirectory such as `ds=2026-10-05`. The Hive Metastore (HMS) is a Thrift service, port 9083 by default, that keeps each table’s schema, location, partitions, file format and statistics in a relational database such as PostgreSQL or MySQL. Clients connect to HiveServer2 over JDBC or ODBC, for example with `beeline`; it plans each query with Apache Calcite and runs it as a DAG of Apache Tez tasks in YARN containers. MapReduce, the original engine, has been deprecated since Hive 2.0, and Hive on Spark was removed from the main branch before Hive 4. LLAP, added in Hive 2.0, keeps long-lived daemons that cache column data and run short queries directly.",
+    "Tables can be plain files (ORC, Parquet, Avro, text), Hive ACID tables, which support INSERT, UPDATE, DELETE and MERGE on ORC files and need compaction, or Iceberg tables created with `STORED BY ICEBERG`. Hive is free under Apache 2.0. The current line is 4.2 (4.2.0 in November 2025, 4.2.1 in August 2026), which requires JDK 21; the 1.x, 2.x and 3.x lines were declared end of life in 2024. Since 4.1 the Metastore also ships as a standalone binary and Docker image, with a REST catalog server. Amazon EMR still ships Hive 3.1.3, and Cloudera Data Warehouse sells Hive as one of its two Virtual Warehouse engines, next to Impala."
+  ],
+  "strengths": [
+    "The Hive Metastore is the most widely supported table catalog: Trino, Spark, Impala, Flink and Iceberg’s HiveCatalog all use it, and AWS Glue implements its API",
+    "Batch SQL over petabytes of data on YARN; the project describes it as a distributed, fault-tolerant warehouse",
+    "Familiar SQL over JDBC and ODBC through HiveServer2, with Kerberos authentication, fine-grained access control and audit logging",
+    "Hive 4 reads and writes Iceberg tables, including UPDATE, DELETE, MERGE, time travel and compaction"
+  ],
+  "limits": [
+    "Built for batch, not interactive dashboards: queries run as Tez DAGs in YARN containers, and LLAP daemons exist precisely so short queries can skip that",
+    "A Hadoop stack to run: HiveServer2, the Metastore and its database, YARN and Tez; the embedded Derby metastore loses everything when the container stops",
+    "Engines have come and gone: MapReduce deprecated since 2.0 (its removal is still an open ticket), Hive on Spark removed before 4.0; on Iceberg tables, DML works only on Tez",
+    "Hive ACID tables are ORC-only and depend on background compaction; upgrading to 3.0 required a major compaction of every changed partition",
+    "Old lines are end of life: 3.x since October 2024, yet Amazon EMR 7.14 still ships Hive 3.1.3, and Hive 4.2 needs JDK 21"
+  ],
+  "worksWith": [
+    { "id": "hadoop", "how": "runs Tez jobs, on YARN, over HDFS in" },
+    { "id": "orc", "how": "stores ACID tables as" },
+    { "id": "iceberg", "how": "catalogs, reads and writes tables in" },
+    { "id": "s3", "how": "keeps table files in" },
+    { "id": "trino", "how": "serves table metadata, via HMS, to" },
+    { "id": "spark", "how": "serves table metadata, via HMS, to" },
+    { "id": "impala", "how": "shares its Metastore and tables with" },
+    { "id": "flink", "how": "serves table metadata, via HMS, to" },
+    { "id": "presto", "how": "serves table metadata, via HMS, to" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "A partitioned ORC table and an Iceberg table in Hive 4",
+    "source": [
+      "-- docker run -d -p 10000:10000 --env SERVICE_NAME=hiveserver2 --name hive4 apache/hive:4.2.1",
+      "-- docker exec -it hive4 beeline -u 'jdbc:hive2://localhost:10000/'",
+      "",
+      "-- classic Hive table: one HDFS directory per day, files in ORC",
+      "CREATE TABLE page_views (user_id BIGINT, url STRING, ms INT)",
+      "PARTITIONED BY (ds STRING)",
+      "STORED AS ORC;",
+      "",
+      "INSERT INTO page_views PARTITION (ds = '2026-10-05')",
+      "VALUES (42, '/pricing', 180), (7, '/docs', 95);",
+      "",
+      "-- the same data as an Iceberg table with a hidden daily partition",
+      "CREATE TABLE page_views_ice (user_id BIGINT, url STRING, ms INT, ts TIMESTAMP)",
+      "PARTITIONED BY SPEC (day(ts))",
+      "STORED BY ICEBERG;",
+      "",
+      "INSERT INTO page_views_ice",
+      "SELECT user_id, url, ms, CAST(ds AS TIMESTAMP) FROM page_views;",
+      "",
+      "DELETE FROM page_views_ice WHERE user_id = 42;"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Execution engines over time",
+      "intro": "Hive has changed how it runs queries three times. The SQL stayed the same; what runs underneath did not.",
+      "corner": "Engine",
+      "columns": ["Added", "Status in Hive 4"],
+      "rows": [
+        { "label": "MapReduce", "values": ["The original engine (2008)", "Deprecated since Hive 2.0; a ticket to remove it has been open since January 2024"] },
+        { "label": "Tez", "values": ["Hive 0.13 (April 2014)", "The engine to use: the project asks all users to move workloads to Tez, and Iceberg DML needs it"] },
+        { "label": "Spark", "values": ["Hive 1.1 (March 2015)", "Removed from the main branch in April 2022, before Hive 4.0"] },
+        { "label": "LLAP daemons", "values": ["Hive 2.0 (February 2016)", "Long-lived daemons that cache columns and run small queries; heavy work still goes to YARN containers"] }
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "The Metastore’s afterlife",
+      "intro": "Many teams that never run a HiveQL query still run a Hive Metastore, because it is the catalog the rest of the ecosystem learned to speak.",
+      "items": [
+        { "name": "Trino and Presto", "tag": "Hive connector", "text": "Trino’s Hive connector uses only Hive’s data and metadata, not HiveQL or its runtime. It needs a Hive Metastore over Thrift (port 9083) or a compatible service such as AWS Glue." },
+        { "name": "Apache Spark", "tag": "enableHiveSupport()", "text": "Spark bundles a Hive 2.3.10 metastore client and can talk to Metastore versions 2.0 through 4.1, so `CREATE TABLE ... USING hive` lands in the same catalog Hive uses." },
+        { "name": "Apache Iceberg", "tag": "HiveCatalog", "text": "Iceberg can use the Metastore as its catalog (HiveCatalog), next to options such as AWS Glue, JDBC and REST catalogs. The integration supports Hive 2.3.10, 3.1.3 or later." },
+        { "name": "Apache Flink and Impala", "tag": "shared catalog", "text": "Flink’s HiveCatalog stores Flink table definitions in the Metastore; Flink’s docs call it the only persistent catalog Flink provides out of the box. Impala shares the same Metastore database as Hive." },
+        { "name": "Standalone Metastore", "tag": "Hive 4.1+", "text": "Since Hive 4.1 the Metastore ships on its own as a binary and a Docker image, with a REST catalog server backed by it, so you can run the catalog without HiveServer2." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "By 2008 Facebook was collecting far more data than traditional warehouses could store affordably, so it stored it in Hadoop on commodity hardware. But MapReduce is very low level: every question became a custom program, hard to maintain and reuse.",
+      "Facebook’s Data Infrastructure team, including Ashish Thusoo, Joydeep Sen Sarma, Namit Jain and Zheng Shao, built Hive: a SQL-like language compiled into MapReduce jobs, tables mapped to HDFS directories, and a system catalog, the Metastore, holding schemas and statistics. In June 2008 they offered it to Apache as a Hadoop contrib project. Their VLDB 2009 paper reported several thousand tables and more than 700 TB in Facebook’s Hive warehouse, used by over 100 people for reporting and ad-hoc analysis. Hive became a top-level Apache project in September 2010.",
+      "Hive made SQL the normal way to query Hadoop. Its batch latency also spawned faster engines over the same tables: Cloudera’s Impala (2012) uses the Metastore, and Facebook built Presto (2013) because Hive on MapReduce was too slow for interactive queries. Hive itself moved to Tez in 2014, and today its Metastore outlives much of the rest of the stack."
+    ],
+    "choices": [
+      { "choice": "SQL compiled to MapReduce", "why": "Writing Java MapReduce programs for every report did not scale to a company of analysts. A declarative language let the system plan the jobs, and custom map and reduce scripts could still be plugged in." },
+      { "choice": "Tables are directories, partitions are subdirectories", "why": "Data already sat in HDFS. Mapping a table to a directory and a partition such as `ds=20090101` to a subdirectory meant no loading step, and the compiler could prune partitions a query didn’t need." },
+      { "choice": "A separate Metastore for schemas and statistics", "why": "Files in HDFS carry no schema. Keeping table definitions, partitions and serialization formats in a catalog let the compiler find and parse data, and later let other engines share the same tables." },
+      { "choice": "Pluggable SerDes for file formats", "why": "Facebook had data in many formats. Custom serializer and deserializer classes in Java let Hive read any of them without converting the files first." }
+    ],
+    "timeline": [
+      { "year": "2008", "text": "Facebook contributes Hive to Hadoop as a contrib project" },
+      { "year": "2009", "text": "VLDB paper describes Hive at Facebook: 700+ TB, 100+ users" },
+      { "year": "2010", "text": "Becomes a top-level Apache project in September" },
+      { "year": "2014", "text": "Hive 0.13 adds Apache Tez as its execution engine" },
+      { "year": "2016", "text": "Hive 2.0 adds LLAP and deprecates MapReduce" },
+      { "year": "2024", "text": "Hive 4.0.0 ships; the 1.x, 2.x and 3.x lines reach end of life" },
+      { "year": "2025", "text": "Hive 4.1 ships a standalone Metastore; 4.2 requires JDK 21" }
+    ],
+    "sources": [
+      { "label": "Thusoo et al.: Hive, a warehousing solution over a Map-Reduce framework (VLDB 2009)", "url": "https://www.vldb.org/pvldb/vol2/vldb09-938.pdf" },
+      { "label": "Apache JIRA: HADOOP-3601, Hive as a contrib project (June 2008)", "url": "https://issues.apache.org/jira/browse/HADOOP-3601" },
+      { "label": "ASF board minutes, September 22, 2010: Establish the Apache Hive project", "url": "https://www.apache.org/foundation/records/minutes/2010/board_minutes_2010_09_22.txt" },
+      { "label": "Apache JIRA: HIVE-4660, Let there be Tez (fixed in 0.13.0)", "url": "https://issues.apache.org/jira/browse/HIVE-4660" },
+      { "label": "Apache Hive downloads and news (release dates, EOL announcements)", "url": "https://hive.apache.org/general/downloads/" },
+      { "label": "Kornacker et al.: Impala, a modern, open-source SQL engine for Hadoop (CIDR 2015)", "url": "https://www.cidrdb.org/cidr2015/Papers/CIDR15_Paper28.pdf" },
+      { "label": "Engineering at Meta: Presto, interacting with petabytes of data at Facebook (Nov 2013)", "url": "https://engineering.fb.com/2013/11/06/core-infra/presto-interacting-with-petabytes-of-data-at-facebook/" }
+    ]
+  },
+  "sources": [
+    { "label": "Apache Hive home page (HiveServer2, Hive Metastore)", "url": "https://hive.apache.org/" },
+    { "label": "Apache Hive downloads and news (4.2.1, 4.2.0 with JDK 21, 4.1.0 standalone Metastore and REST catalog, EOL of 1.x to 3.x, move to Tez)", "url": "https://hive.apache.org/general/downloads/" },
+    { "label": "Hive quickstart with Docker (HiveServer2, standalone Metastore, Derby loses data)", "url": "https://hive.apache.org/development/quickstart/" },
+    { "label": "Hive wiki: LLAP (added in Hive 2.0, long-lived daemons)", "url": "https://cwiki.apache.org/confluence/display/Hive/LLAP" },
+    { "label": "Hive wiki: Hive Transactions (ORC only, compaction, upgrade to 3.0)", "url": "https://cwiki.apache.org/confluence/display/Hive/Hive+Transactions" },
+    { "label": "Apache JIRA: HIVE-12300, deprecate MR in Hive 2.0", "url": "https://issues.apache.org/jira/browse/HIVE-12300" },
+    { "label": "Apache JIRA: HIVE-28027, Remove MR from Hive (open)", "url": "https://issues.apache.org/jira/browse/HIVE-28027" },
+    { "label": "Apache JIRA: HIVE-7292, Hive on Spark (fixed in 1.1.0)", "url": "https://issues.apache.org/jira/browse/HIVE-7292" },
+    { "label": "Apache JIRA: HIVE-26134, Remove Hive on Spark from the main branch (April 2022)", "url": "https://issues.apache.org/jira/browse/HIVE-26134" },
+    { "label": "Apache Iceberg docs: Hive (STORED BY ICEBERG, DML only on Tez, HiveCatalog versions)", "url": "https://iceberg.apache.org/docs/latest/hive/" },
+    { "label": "Trino docs: Hive connector (requires a Hive metastore or AWS Glue, port 9083)", "url": "https://trino.io/docs/current/connector/hive.html" },
+    { "label": "Spark docs: Hive tables (built-in Hive 2.3.10 client, metastore versions 2.0 to 4.1)", "url": "https://spark.apache.org/docs/latest/sql-data-sources-hive-tables.html" },
+    { "label": "Flink docs: Hive Catalog", "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/connectors/table/hive/hive_catalog/" },
+    { "label": "Impala docs: REFRESH (shares the metastore database with Hive)", "url": "https://impala.apache.org/docs/build/html/topics/impala_refresh.html" },
+    { "label": "Amazon EMR docs: Apache Hive (emr-7.14.0 ships Hive 3.1.3)", "url": "https://docs.aws.amazon.com/emr/latest/ReleaseGuide/emr-hive.html" },
+    { "label": "Cloudera docs: Cloudera Data Warehouse service architecture (Hive and Impala Virtual Warehouses)", "url": "https://docs.cloudera.com/data-warehouse/cloud/overview/topics/dw-service-architecture.html" },
+    { "label": "ASF board minutes, March 18, 2026 (Hive report: 4.3.0 planning)", "url": "https://www.apache.org/foundation/records/minutes/2026/board_minutes_2026_03_18.txt" }
+  ],
+  "checked": "2026-10-06"
+}

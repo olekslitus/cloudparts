@@ -1,0 +1,116 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Klutch",
+  "concepts": ["orchestration", "relational"],
+  "parent": { "id": "kubernetes", "as": "extension" },
+  "provider": "oss",
+  "vendor": "Klutch authors (sponsored by anynines)",
+  "license": "Apache 2.0",
+  "website": "https://klutch.io/",
+  "repo": "https://github.com/anynines/klutchio",
+  "summary": "A young open-source control plane, built on Crossplane, that lets many application clusters order databases from one central Kubernetes cluster.",
+  "intro": [
+    "Klutch splits the work between two kinds of Kubernetes cluster. Application clusters run the apps and no databases. One control plane cluster runs Crossplane, the providers that talk to the real backends, and Klutch’s own binding service. A developer in an app cluster runs the `klutch-bind` CLI once: it signs in through OpenID Connect (Dex or Keycloak, for example) and installs a small agent called the konnector. The konnector creates the chosen custom resource definitions in the app cluster, such as `PostgresqlInstance`, `ServiceBinding`, `Backup` and `Restore`, and keeps copying objects and their status between the two clusters. Apply a `PostgresqlInstance` with `kubectl` and the control plane provisions the database wherever its backend lives; apply a `ServiceBinding` and the credentials appear as a Secret in the app cluster. The cross-cluster binding comes from kube-bind (now kbind), and every service is a Crossplane composite resource, so platform teams can add their own.",
+    "The interface borrows its service instance and service binding ideas from the Open Service Broker API, and adds backup and restore as resources of their own. Out of the box, the APIs target anynines’ own products: a9s Data Services (VM-based PostgreSQL, MariaDB, MongoDB, search, messaging and others, reached through a service broker) and a8s PostgreSQL, which runs on Kubernetes. Klutch is Apache 2.0, maintained by a small group of contributors and sponsored by anynines, a German cloud automation company that sells support and data services around it. It is young: version 1.0 came out in August 2024, the repository had 19 contributors by October 2026, and it isn’t part of any foundation."
+  ],
+  "strengths": [
+    "Operators and databases stay in one place: app clusters get only CRDs and a lightweight konnector, so there is no operator sprawl to patch on every cluster",
+    "Developers keep a Kubernetes-native workflow (`kubectl apply`, GitOps) while the platform team controls plans, backends and policy centrally",
+    "Backup and restore are first-class resources, not left to each backend",
+    "Built on Crossplane, so any backend with a Crossplane provider or composition can be exposed; a control plane mode can also run the konnector centrally to keep app clusters even lighter"
+  ],
+  "limits": [
+    "Young and mostly maintained by one sponsor: a small contributor base and breaking changes between minor versions (1.3, 1.4 and 1.5 all had some)",
+    "The ready-made APIs mostly target anynines’ own a8s and a9s services; for anything else you write the Crossplane compositions yourself",
+    "It orchestrates databases rather than running them: failover and backups come from whatever backend sits underneath",
+    "More moving parts than a single operator: Crossplane and its providers, an OIDC provider, the binding backend and a konnector per app cluster"
+  ],
+  "worksWith": [
+    { "id": "kubernetes", "how": "connects many app clusters of" },
+    { "id": "postgresql", "how": "provisions, through anynines backends," }
+  ],
+  "snippet": {
+    "lang": "yaml",
+    "title": "In an app cluster: order a PostgreSQL instance, get its credentials, and take a backup",
+    "source": [
+      "# once per app cluster: bind to the control plane with the klutch-bind CLI (OIDC login, installs the konnector)",
+      "apiVersion: anynines.com/v1",
+      "kind: PostgresqlInstance",
+      "metadata:",
+      "  name: orders-db",
+      "  namespace: default",
+      "spec:",
+      "  service: \"a9s-postgresql14\"",
+      "  plan: \"postgresql-single-small\"",
+      "  expose: \"Internal\"           # default is LoadBalancer",
+      "  compositionRef:",
+      "    name: a8s-postgresql",
+      "---",
+      "apiVersion: anynines.com/v1",
+      "kind: ServiceBinding           # credentials arrive as a Secret",
+      "metadata:",
+      "  name: orders-db",
+      "  namespace: default",
+      "spec:",
+      "  instanceRef: orders-db",
+      "  serviceInstanceType: postgresql",
+      "  compositionRef:",
+      "    name: a8s-servicebinding",
+      "---",
+      "apiVersion: anynines.com/v1",
+      "kind: Backup",
+      "metadata:",
+      "  name: orders-db-before-migration",
+      "  namespace: default",
+      "spec:",
+      "  instanceRef: orders-db",
+      "  serviceInstanceType: postgresql"
+    ]
+  },
+  "history": {
+    "story": [
+      "anynines builds automation for data services, including its VM-based a9s Data Services, which applications request from a service broker through the Open Service Broker API. Klutch is aimed at organisations with hundreds or thousands of Kubernetes clusters. For them the usual answer, an operator per database installed on every cluster where it’s needed, leads to sprawl: more software to monitor, patch and keep within budget.",
+      "anynines’ answer was to keep the data services in one place and project only their APIs into each app cluster. It combined two existing projects: Crossplane, which turns cloud and infrastructure automation into Kubernetes resources, and kube-bind, which shares a cluster’s APIs with other clusters without installing the provider’s controllers there. The result went public as Klutch in August 2024, with version 1.0 on August 30, shipping APIs for a9s Data Services, a8s PostgreSQL and AWS S3 buckets.",
+      "Releases since then have renamed the two roles to app cluster and control plane cluster (1.3, January 2025), added TLS and more a9s services (1.4, December 2025; 1.5, May 2026), and added a mode that runs the konnector on the control plane (1.5.1, June 2026)."
+    ],
+    "choices": [
+      { "choice": "A central control plane instead of operators everywhere", "why": "Installing an operator on every cluster makes monitoring, patching and cost control harder as cluster counts grow; one control plane serves them all." },
+      { "choice": "Build on Crossplane", "why": "Crossplane already connects Kubernetes to many automation backends, so Klutch adds the multi-cluster layer and data service life cycle rather than writing provider code for each backend." },
+      { "choice": "Borrow kube-bind for cross-cluster APIs", "why": "kube-bind installs only CRDs and one vendor-neutral agent in the consumer cluster, which lets developers use a service without running its controllers." },
+      { "choice": "Service broker style abstractions", "why": "Service instances and bindings, familiar from the Open Service Broker API, give every data service the same shape; backup and restore were added because the broker model left them out." }
+    ],
+    "timeline": [
+      { "year": "2024", "text": "Klutch open-sourced in August; version 1.0 on August 30" },
+      { "year": "2025", "text": "1.3 in January renames clusters to app and control plane; 1.4 in December" },
+      { "year": "2026", "text": "1.5 in May; 1.5.1 in June adds konnector control plane mode" }
+    ],
+    "sources": [
+      { "label": "Klutch README (user stories: operator sprawl, Open Service Broker API)", "url": "https://github.com/anynines/klutchio" },
+      { "label": "Klutch CHANGELOG (1.0.0 to 1.5.1)", "url": "https://github.com/anynines/klutchio/blob/main/CHANGELOG.md" },
+      { "label": "Klutch v1.0.0 release on GitHub (Aug 30, 2024)", "url": "https://github.com/anynines/klutchio/releases/tag/v1.0.0" },
+      { "label": "Klutch docs: Overview (built on Crossplane, OSBAPI-inspired abstractions)", "url": "https://klutch.io/docs/" },
+      { "label": "Klutch: About us (created at anynines)", "url": "https://klutch.io/about-us/" },
+      { "label": "klutch-bind README (cross-cluster API binding)", "url": "https://github.com/anynines/klutchio/blob/main/bind/README.md" },
+      { "label": "kbind (formerly kube-bind) README", "url": "https://github.com/kbind-dev/kbind" },
+      { "label": "provider-anynines README (VM-based data service instances)", "url": "https://github.com/anynines/klutchio/blob/main/provider-anynines/README.md" }
+    ]
+  },
+  "sources": [
+    { "label": "Klutch docs: Overview (app clusters, control plane, Crossplane, backup and restore)", "url": "https://klutch.io/docs/" },
+    { "label": "Klutch docs: Architecture", "url": "https://klutch.io/docs/architecture/" },
+    { "label": "Klutch docs: Architecture deep dive (klutch-bind, konnector, OIDC, Proxy Claims)", "url": "https://klutch.io/docs/architecture/architecture-deep-dive/" },
+    { "label": "Klutch docs: Control plane mode deep dive", "url": "https://klutch.io/docs/architecture/architecture-deep-dive/control-plane-mode/" },
+    { "label": "Klutch docs: Integrating data services (Crossplane XRDs and compositions)", "url": "https://klutch.io/docs/integrating-ds-in-klutch/" },
+    { "label": "Klutch FAQ (comparison with Crossplane)", "url": "https://klutch.io/resources/faq/" },
+    { "label": "Klutch: Commercial support and sponsorship (sponsored by anynines)", "url": "https://klutch.io/commercial/" },
+    { "label": "Klutch: Imprint (anynines GmbH, Germany)", "url": "https://klutch.io/imprint/" },
+    { "label": "Klutch README and repository (Apache 2.0)", "url": "https://github.com/anynines/klutchio" },
+    { "label": "Klutch contributors on GitHub", "url": "https://github.com/anynines/klutchio/graphs/contributors" },
+    { "label": "Klutch CHANGELOG (breaking changes in 1.3, 1.4, 1.5)", "url": "https://github.com/anynines/klutchio/blob/main/CHANGELOG.md" },
+    { "label": "Klutch Crossplane API README (a8s and a9s services)", "url": "https://github.com/anynines/klutchio/blob/main/crossplane-api/README.md" },
+    { "label": "Klutch example manifests: a8s PostgreSQL, ServiceBinding and Backup claims", "url": "https://github.com/anynines/klutchio/tree/main/crossplane-api/examples/a8s" },
+    { "label": "Klutch source: konnector (derived from kube-bind)", "url": "https://github.com/anynines/klutchio/blob/main/bind/cmd/konnector/main.go" },
+    { "label": "kbind (formerly kube-bind) README", "url": "https://github.com/kbind-dev/kbind" }
+  ],
+  "checked": "2026-10-06"
+}

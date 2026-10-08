@@ -1,0 +1,69 @@
+{
+  "$schema": "../../.astro/collections/architectures.schema.json",
+  "title": "Background jobs with a queue",
+  "order": 60,
+  "summary": "The API drops slow work onto SQS and returns at once; a pool of Fargate workers drains the queue at a steady pace.",
+  "intro": "Some work is too slow to do while a user waits: resizing a video, generating a PDF, calling a flaky partner API. The API puts a message describing the job on a queue and responds right away. Workers pull jobs when they have capacity, so a sudden burst piles up in the queue instead of overwhelming anything, and a crashed worker’s job simply becomes visible again for another worker.",
+  "fits": "Any app with slow or bursty side work",
+  "diagram": {
+    "caption": "Uploads arrive in bursts. The API enqueues a job for each and moves on. The queue only hands a job to a worker that has room, so the backlog grows during a burst and drains steadily after it. Results land in S3.",
+    "w": 820,
+    "h": 300,
+    "nodes": [
+      {
+        "id": "users", "x": 85, "y": 100, "label": "Uploads", "sub": "user files",
+        "emit": { "phases": [[2600, 1100], [1800, 160], [3000, 1100]], "jitter": 0.3, "cycle": true }, "out": ["api"]
+      },
+      { "id": "api", "x": 250, "y": 100, "label": "Upload API", "sub": "AWS Lambda", "tech": "lambda", "out": ["queue"] },
+      { "id": "queue", "x": 445, "y": 100, "label": "Amazon SQS", "sub": "jobs queue", "tech": "sqs", "kind": "queue", "cap": 8, "gap": 120, "out": ["workers"] },
+      {
+        "id": "workers", "x": 650, "y": 100, "label": "Workers", "sub": "AWS Fargate", "tech": "fargate",
+        "kind": "pool", "min": 1, "max": 3, "work": 1100, "idle": 5000, "cold": 900, "out": ["s3"]
+      },
+      { "id": "s3", "x": 650, "y": 235, "label": "Amazon S3", "sub": "thumbnails", "tech": "s3", "mode": "reply", "delay": 60 }
+    ]
+  },
+  "steps": [
+    {
+      "title": "The API enqueues and returns",
+      "text": "For each upload, the API sends a small message such as `{\"job\": \"thumbnail\", \"key\": \"uploads/123.jpg\"}` to SQS and replies `202 Accepted`. The user isn’t kept waiting for the processing.",
+      "nodes": ["users", "api", "queue"]
+    },
+    {
+      "title": "Workers pull when they’re free",
+      "text": "Each worker long-polls the queue, takes a job, and the message becomes invisible to others for the visibility timeout. During a burst the queue absorbs the excess instead of the workers.",
+      "nodes": ["queue", "workers"]
+    },
+    {
+      "title": "Success deletes the message",
+      "text": "When the thumbnail is written to S3, the worker deletes the message. If the worker crashes first, the message reappears after the timeout and another worker retries it.",
+      "nodes": ["workers", "s3"]
+    },
+    {
+      "title": "Scale on queue depth",
+      "text": "An autoscaling rule watches how many messages are waiting and adds workers when the backlog grows, then removes them when it’s empty.",
+      "nodes": ["workers"]
+    }
+  ],
+  "good": [
+    "Users get fast responses regardless of how slow the job is",
+    "Bursts are smoothed out: workers run at a steady rate instead of falling over",
+    "Retries come for free, and a dead-letter queue catches jobs that keep failing",
+    "API and workers scale and deploy independently"
+  ],
+  "watch": [
+    "Standard SQS queues can deliver a message more than once; make jobs idempotent",
+    "Set the visibility timeout longer than your slowest job, or jobs run twice",
+    "Users need a way to learn the job finished: polling, a webhook or a notification",
+    "A growing backlog is a silent failure; alert on the age of the oldest message"
+  ],
+  "swaps": [
+    { "text": "Short jobs (under 15 minutes)? Let Lambda consume the queue directly and skip managing workers.", "techs": ["lambda"] },
+    { "text": "Self-hosted, or need routing and priorities? RabbitMQ is the classic open-source broker for this.", "techs": ["rabbitmq"] },
+    { "text": "Already on Postgres? pgmq or PgQueuer keep jobs in the same database, so a job can be enqueued in the same transaction as the data it’s about.", "techs": ["pgmq", "pgqueuer"] },
+    { "text": "Multi-step jobs with retries per step and long waits fit a workflow engine better than a bare queue.", "techs": ["temporal", "step-functions"] }
+  ],
+  "sources": [
+    { "label": "AWS docs: CloudWatch metrics for Amazon SQS (ApproximateAgeOfOldestMessage)", "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-available-cloudwatch-metrics.html" }
+  ]
+}

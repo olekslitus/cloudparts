@@ -1,0 +1,114 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Versity S3 Gateway",
+  "concepts": ["object"],
+  "provider": "oss",
+  "vendor": "Versity Software",
+  "license": "Apache 2.0",
+  "website": "https://www.versity.com/products/versitygw/",
+  "repo": "https://github.com/versity/versitygw",
+  "summary": "A stateless S3 server that exposes an existing file system, or another object store, through the S3 API.",
+  "intro": [
+    "Versity S3 Gateway (`versitygw`) is a single Go binary that translates S3 requests into operations on storage you already have. With the `posix` backend, every top-level directory under the gateway root is a bucket, and every object key becomes the same relative path: `reports/2026/january.csv` is a real file that `ls`, `rsync`, a backup agent or an HPC job can read. S3 metadata such as tags and ACLs is stored in extended attributes (xattrs) on those files, or, experimentally, in a separate sidecar directory when the file system lacks xattrs. Other backends cover Versity’s ScoutFS file system, Azure Blob Storage, another S3 service (the gateway then acts as a proxy) and out-of-process plugins.",
+    "The gateway keeps no state of its own. Data and metadata live in the backend, so several gateways pointed at the same shared file system can sit behind a load balancer, and any instance can serve any request, even different parts of one multipart upload. It adds no durability either: copies, RAID, snapshots and backups are whatever the storage underneath provides. That is the job MinIO’s gateway mode used to do, putting an S3 API in front of a NAS or another cloud, until MinIO deprecated it in February 2022 and removed it in October 2022."
+  ],
+  "strengths": [
+    "Puts an S3 API on data you already have: objects written over S3 are ordinary files, and files written by other tools appear as objects",
+    "One small binary with no database; stateless instances scale out behind a load balancer",
+    "Broad API for a gateway: multipart uploads, bucket policies and ACLs, tagging, CORS, static websites, plus object lock and versioning on POSIX when enabled",
+    "Apache 2.0, frequent releases, and builds for Linux, macOS, BSD and Windows on amd64 and arm64",
+    "Event notifications to Kafka, NATS, RabbitMQ or a webhook, configured on the gateway"
+  ],
+  "limits": [
+    "No storage layer of its own: durability, replication between sites and capacity come from the file system or object store behind it",
+    "Versioning and sidecar metadata are marked experimental, and the default metadata mode needs a file system with xattr support",
+    "No lifecycle rules, bucket replication, S3 Select, object ACLs or AWS bucket-notification API: those requests return `NotImplemented`",
+    "Built-in accounts have no identity policies, only bucket policies and ACLs; IAM users, roles and inline policies need the separate standalone IAM service",
+    "Sidecar metadata isn’t updated when files change directly on disk, and development is led by one company, Versity"
+  ],
+  "worksWith": [
+    { "id": "s3", "how": "speaks the API of" },
+    { "id": "azure-blob", "how": "can store objects in" },
+    { "id": "kafka", "how": "can send object events to" },
+    { "id": "kubernetes", "how": "can run on" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Serve an existing directory as S3, then use any S3 client",
+    "source": [
+      "# the directory becomes the gateway root; its file system must support xattrs",
+      "docker run -d --name versitygw -p 7070:7070 \\",
+      "  -e ROOT_ACCESS_KEY=admin -e ROOT_SECRET_KEY=\"$VGW_ROOT_SECRET\" \\",
+      "  -v /srv/projects:/data \\",
+      "  versity/versitygw:v1.8.0 posix /data",
+      "",
+      "export AWS_ACCESS_KEY_ID=admin AWS_SECRET_ACCESS_KEY=\"$VGW_ROOT_SECRET\" AWS_DEFAULT_REGION=us-east-1",
+      "aws s3 mb s3://reports --endpoint-url http://localhost:7070",
+      "aws s3 cp ./january.csv s3://reports/2026/january.csv --endpoint-url http://localhost:7070",
+      "",
+      "# the object is a plain file, and files added on disk show up in S3 listings",
+      "ls -l /srv/projects/reports/2026/january.csv",
+      "aws s3 ls s3://reports/2026/ --endpoint-url http://localhost:7070"
+    ]
+  },
+  "sections": [
+    {
+      "type": "text",
+      "title": "Moving from MinIO",
+      "body": [
+        "Pick versitygw when what you wanted from MinIO was an S3 endpoint over storage you already run: a NAS, a ZFS pool or an HPC site’s file system. It replaces MinIO’s old gateway mode more than a MinIO cluster, because it doesn’t spread objects across drives or servers itself. If MinIO’s erasure coding was your durability, put the gateway in front of a file system or object store that gives you the same.",
+        "To copy data, start the gateway on the target directory and create the buckets. Then define the MinIO endpoint and the gateway as two S3 remotes in rclone, run `rclone sync minio:bucket vgw:bucket --checksum`, and compare both sides with `rclone check`.",
+        "rclone copies objects, not configuration. Recreate users with the `versitygw admin` tool (or with `aws iam` against the standalone IAM service) and reapply bucket policies. Event targets are gateway options rather than per-bucket API calls. There is no lifecycle engine, so expiring old objects needs a script, for example `find` on the file system."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Versity Software was founded in 2011 by Bruce Gilpin and Harriet Coverston to build archival storage. It sells ScoutAM, a data management platform for exabyte-scale archives, and an S3-to-tape archive engine. Its collaborators on the gateway, Los Alamos National Laboratory and the Pawsey Supercomputing Research Centre, keep their data in large file systems while more and more tools expect S3.",
+      "MinIO had covered that need with a NAS gateway that put an S3 API on a file system. In February 2022 it deprecated all its gateways, saying features such as versioning and object locking couldn’t work in gateway mode, and in October 2022 it removed the code, telling users to stay on old releases if they wanted it.",
+      "Versity started `versitygw` in 2023 as an Apache 2.0 project to meet what it called “the community’s need for a reliable open source, high-performance object to file translation tool”. It is written in Go and ships as a single binary. The first tagged release, v0.1, came out in June 2023 and v1.0.0 in June 2024."
+    ],
+    "choices": [
+      { "choice": "Map object keys straight to file paths", "why": "Data stays usable by `ls`, `rsync`, backup software and HPC jobs without going through the gateway, and there is no proprietary on-disk format to get locked into." },
+      { "choice": "Keep S3 metadata in extended attributes", "why": "Metadata travels with each file, so there is no separate database to run, replicate or back up." },
+      { "choice": "Stateless gateways", "why": "Any instance can serve any request, so throughput and availability grow by adding gateways behind a load balancer, with no state to synchronise." },
+      { "choice": "Pluggable backends", "why": "The same S3 front end can serve POSIX file systems, ScoutFS, Azure Blob Storage, another S3 service or a custom plugin." }
+    ],
+    "timeline": [
+      { "year": "2011", "text": "Versity founded by Bruce Gilpin and Harriet Coverston" },
+      { "year": "2022", "text": "MinIO deprecates its gateways (February) and removes them (October)" },
+      { "year": "2023", "text": "versitygw v0.1 released in June" },
+      { "year": "2024", "text": "v1.0.0 released in June" },
+      { "year": "2026", "text": "v1.8.0 released in September" }
+    ],
+    "sources": [
+      { "label": "Versity: About", "url": "https://www.versity.com/about/" },
+      { "label": "Versity S3 Gateway product page", "url": "https://www.versity.com/products/versitygw/" },
+      { "label": "MinIO blog: Deprecation of the MinIO gateway (2022)", "url": "https://min.io/blog/deprecation-of-the-minio-gateway" },
+      { "label": "MinIO RELEASE.2022-10-29T06-21-33Z: gateway removed", "url": "https://github.com/minio/minio/releases/tag/RELEASE.2022-10-29T06-21-33Z" },
+      { "label": "versitygw v0.1 release", "url": "https://github.com/versity/versitygw/releases/tag/v0.1" },
+      { "label": "versitygw releases", "url": "https://github.com/versity/versitygw/releases" }
+    ]
+  },
+  "sources": [
+    { "label": "Versity S3 Gateway product page", "url": "https://www.versity.com/products/versitygw/" },
+    { "label": "versity/versitygw on GitHub", "url": "https://github.com/versity/versitygw" },
+    { "label": "versitygw wiki: Key features", "url": "https://github.com/versity/versitygw/wiki/Key-Features" },
+    { "label": "versitygw wiki: POSIX backend", "url": "https://github.com/versity/versitygw/wiki/POSIX-Backend" },
+    { "label": "versitygw wiki: POSIX metadata", "url": "https://github.com/versity/versitygw/wiki/POSIX-metadata" },
+    { "label": "versitygw wiki: POSIX transparent namespace", "url": "https://github.com/versity/versitygw/wiki/POSIX-Transparent-Namespace" },
+    { "label": "versitygw wiki: Load balancing", "url": "https://github.com/versity/versitygw/wiki/Load-Balancing" },
+    { "label": "versitygw wiki: S3 API reference", "url": "https://github.com/versity/versitygw/wiki/S3-API-reference" },
+    { "label": "versitygw wiki: Differences from AWS S3", "url": "https://github.com/versity/versitygw/wiki/Differences-from-AWS-S3" },
+    { "label": "versitygw wiki: Event notifications", "url": "https://github.com/versity/versitygw/wiki/Events-Notifications" },
+    { "label": "versitygw wiki: System requirements", "url": "https://github.com/versity/versitygw/wiki/System-Requirements" },
+    { "label": "versitygw wiki: Docker", "url": "https://github.com/versity/versitygw/wiki/Docker" },
+    { "label": "versitygw wiki: Quickstart", "url": "https://github.com/versity/versitygw/wiki/Quickstart" },
+    { "label": "MinIO RELEASE.2022-10-29T06-21-33Z: gateway removed", "url": "https://github.com/minio/minio/releases/tag/RELEASE.2022-10-29T06-21-33Z" },
+    { "label": "MinIO blog: Deprecation of the MinIO gateway (2022)", "url": "https://min.io/blog/deprecation-of-the-minio-gateway" },
+    { "label": "rclone: Amazon S3 and compatible storage", "url": "https://rclone.org/s3/" },
+    { "label": "rclone sync", "url": "https://rclone.org/commands/rclone_sync/" },
+    { "label": "rclone check", "url": "https://rclone.org/commands/rclone_check/" }
+  ],
+  "checked": "2026-10-05"
+}

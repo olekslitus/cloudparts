@@ -1,0 +1,116 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "K3s",
+  "concepts": ["orchestration"],
+  "parent": { "id": "kubernetes", "as": "distribution" },
+  "provider": "oss",
+  "vendor": "K3s project, a CNCF sandbox project; created by Rancher Labs, now maintained mainly by SUSE",
+  "license": "Apache 2.0",
+  "website": "https://k3s.io/",
+  "repo": "https://github.com/k3s-io/k3s",
+  "summary": "A certified Kubernetes distribution in one small binary, built for edge, IoT and other places where a full cluster is too heavy, with SQLite or embedded etcd for state.",
+  "intro": [
+    "K3s is a complete Kubernetes distribution in a single binary of under 100 MB. Run `k3s server` and one process starts the API server, scheduler, controller manager, kubelet and kube-proxy, along with containerd, Flannel networking, CoreDNS, the Traefik ingress controller, a ServiceLB load balancer, a network-policy controller and local-path storage. Run `k3s agent` with the server’s address and a join token on another machine and it becomes a worker: it runs the kubelet, container runtime and networking, but no datastore or control plane. The host needs little more than a modern Linux kernel and cgroup mounts: 2 cores and 2 GB of RAM for a server, 1 core and 512 MB for an agent.",
+    "Its biggest departure from upstream is where cluster state lives. A single server keeps it in an embedded SQLite file through kine (“Kine is not etcd”), a shim that translates the etcd API calls Kubernetes makes into SQL. For high availability, three or more servers form an embedded etcd cluster, or two or more share an external PostgreSQL, MySQL, MariaDB or etcd. The project describes K3s as “a highly available, certified Kubernetes distribution designed for production workloads in unattended, resource-constrained, remote locations or inside IoT appliances”, which sets it apart from kind and minikube, built for tests and laptops. Rancher Labs released it in 2019, SUSE bought Rancher in 2020, and K3s has been a CNCF sandbox project since August 2020; its application to move up to incubation, filed in November 2025, is still open."
+  ],
+  "strengths": [
+    "One binary and an install script give a working node in about 30 seconds, with ingress, load balancing, DNS and storage already included",
+    "Small enough for a Raspberry Pi, with ARM64 and ARMv7 builds; at launch a single-node cluster used about a quarter of the memory of upstream Kubernetes",
+    "A choice of datastore: SQLite for one server, embedded etcd for HA without a separate database, or a SQL database you already run",
+    "Follows upstream closely: v1.37.0+k3s1 shipped in September 2026, and patch releases for four minor versions came out the same day at month’s end"
+  ],
+  "limits": [
+    "SQLite can’t serve more than one server; going HA means restarting with `--cluster-init` to convert to embedded etcd, which can be slow on SD cards",
+    "Opinionated defaults: Traefik, ServiceLB and the rest run unless you pass `--disable`, and with every component in one process you can’t set separate log levels or destinations per component",
+    "Linux only: there is no native Windows support",
+    "External databases must support prepared statements (connection poolers such as PgBouncer need extra configuration), and multi-master setups such as Galera aren’t supported"
+  ],
+  "worksWith": [
+    { "id": "kubernetes", "how": "packages as one small binary" },
+    { "id": "sqlite", "how": "keeps a single server’s state in" },
+    { "id": "etcd", "how": "embeds for HA, or connects to," },
+    { "id": "postgresql", "how": "can keep cluster state, via kine, in" },
+    { "id": "mysql", "how": "can keep cluster state, via kine, in" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "A three-server HA cluster on embedded etcd, plus one agent",
+    "source": [
+      "# first server: start a new embedded etcd cluster",
+      "curl -sfL https://get.k3s.io | K3S_TOKEN=SECRET sh -s - server --cluster-init",
+      "",
+      "# second and third servers join it (keep an odd number of servers)",
+      "curl -sfL https://get.k3s.io | K3S_TOKEN=SECRET sh -s - server \\",
+      "  --server https://server1:6443",
+      "",
+      "# agents run workloads only: no datastore, no control plane",
+      "curl -sfL https://get.k3s.io | K3S_TOKEN=SECRET sh -s - agent \\",
+      "  --server https://server1:6443",
+      "",
+      "sudo k3s kubectl get nodes    # servers show roles control-plane,etcd"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Where K3s keeps cluster state",
+      "corner": "Datastore",
+      "columns": ["Servers", "Suits"],
+      "rows": [
+        { "label": "Embedded SQLite (default)", "values": ["Exactly one", "Short-lived CI clusters, single edge boxes"] },
+        { "label": "Embedded etcd", "values": ["Three or more, an odd number", "HA at the edge without running a separate database"] },
+        { "label": "External PostgreSQL, MySQL or MariaDB (via kine)", "values": ["Two or more", "Teams that know SQL databases better than etcd"] },
+        { "label": "External etcd", "values": ["Two or more", "Teams that already operate etcd"] }
+      ],
+      "notes": ["K3s picks embedded etcd automatically if etcd data is already on disk or a server is told to start or join an etcd cluster; otherwise, with no datastore configured, it uses SQLite."]
+    }
+  ],
+  "history": {
+    "story": [
+      "K3s began inside Rio, an experimental Rancher Labs project for running applications on Kubernetes. Rio embedded a full cluster, and to cut its memory use the team removed every feature it didn’t need. They noticed three things: the stripped-down cluster had become the simplest way they knew to run Kubernetes at all; customers, such as companies with many retail stores, wanted a cluster in each location rather than in the cloud; and people who found the component wanted a lighter Kubernetes that ran easily on ARM.",
+      "Rancher announced K3s as its own open-source project on February 26, 2019: a roughly 40 MB binary bundling the container runtime and host utilities, with the Kubernetes components combined into server and agent processes. Removing legacy and alpha features made the biggest difference: a single-node cluster used a little over 260 MiB, against a little over 1 GiB for upstream Kubernetes 1.13.3 with Docker. The name is a joke on size: Kubernetes is a 10-letter word written K8s, so something half as big is a 5-letter word written K3s, with no long form.",
+      "Version 1.0 followed in November 2019, and K3s joined the CNCF sandbox in August 2020. Its first HA mode, built on dqlite, was replaced that September by embedded etcd, which became stable in December. SUSE completed its acquisition of Rancher Labs on December 1, 2020, and SUSE engineers are the project’s contacts in its 2025 CNCF incubation application."
+    ],
+    "choices": [
+      { "choice": "One binary, one process", "why": "Folding the control plane into a single process removes moving parts and lets K3s automate jobs such as distributing certificates. The only outside dependencies are the kernel and cgroup mounts, which suits unattended machines." },
+      { "choice": "SQL through kine instead of mandatory etcd", "why": "etcd is another cluster to run. A short-lived CI cluster or a single edge box is simpler with an embedded SQLite file, and teams without etcd expertise can point K3s at MySQL or PostgreSQL instead." },
+      { "choice": "etcd, not dqlite, for HA", "why": "In 2020 the team switched “to leverage the existing effort and knowledge that has gone into operating Kubernetes with etcd”, which also brought etcd snapshots and restores. Existing dqlite clusters had no upgrade path." },
+      { "choice": "Batteries included", "why": "K3s packages ingress, a service load balancer, DNS and local storage for “batteries-included” cluster creation, so a cluster on bare hardware can route traffic and store data without a cloud provider or extra installs." }
+    ],
+    "timeline": [
+      { "year": "2018", "text": "Starts as an embedded component of Rancher’s Rio project" },
+      { "year": "2019", "text": "Announced on February 26; version 1.0 in November" },
+      { "year": "2020", "text": "CNCF sandbox in August; embedded etcd replaces dqlite; SUSE buys Rancher in December" },
+      { "year": "2025", "text": "Applies to the CNCF for incubation in November" },
+      { "year": "2026", "text": "v1.37.0+k3s1 in September" }
+    ],
+    "sources": [
+      { "label": "Rancher Labs blog: Introducing k3s, the lightweight Kubernetes distribution built for the edge (Feb 2019)", "url": "https://rancher.com/blog/2019/2019-02-26-introducing-k3s-the-lightweight-kubernetes-distribution-built-for-the-edge/", "archive": "https://web.archive.org/web/20210619180120/https://rancher.com/blog/2019/2019-02-26-introducing-k3s-the-lightweight-kubernetes-distribution-built-for-the-edge/" },
+      { "label": "K3s docs: What’s with the name?", "url": "https://docs.k3s.io/" },
+      { "label": "K3s v1.0.0 release on GitHub (Nov 2019)", "url": "https://github.com/k3s-io/k3s/releases/tag/v1.0.0" },
+      { "label": "CNCF: k3s project page (accepted to the sandbox August 19, 2020)", "url": "https://www.cncf.io/projects/k3s/" },
+      { "label": "K3s v1.19.1+k3s1 release on GitHub: embedded etcd replaces dqlite (Sep 2020)", "url": "https://github.com/k3s-io/k3s/releases/tag/v1.19.1%2Bk3s1" },
+      { "label": "K3s v1.19.5+k3s1 release on GitHub: embedded etcd no longer experimental (Dec 2020)", "url": "https://github.com/k3s-io/k3s/releases/tag/v1.19.5%2Bk3s1" },
+      { "label": "SUSE: SUSE completes acquisition of Rancher Labs (Dec 2020)", "url": "https://www.suse.com/news/suse-completes-rancher-acquisition/" },
+      { "label": "CNCF TOC issue #1957: K3s incubation application (Nov 2025, open)", "url": "https://github.com/cncf/toc/issues/1957" },
+      { "label": "K3s docs: Cluster datastore", "url": "https://docs.k3s.io/datastore" },
+      { "label": "K3s v1.37.0+k3s1 release on GitHub (Sep 2026)", "url": "https://github.com/k3s-io/k3s/releases/tag/v1.37.0%2Bk3s1" }
+    ]
+  },
+  "sources": [
+    { "label": "K3s website: production at the edge, ARM builds, install time", "url": "https://k3s.io/" },
+    { "label": "K3s docs: What is K3s? (single binary, bundled components, SQLite default)", "url": "https://docs.k3s.io/" },
+    { "label": "K3s docs: Architecture (servers, agents, HA options)", "url": "https://docs.k3s.io/architecture" },
+    { "label": "K3s docs: Cluster datastore (SQLite, etcd, external databases, kine caveats)", "url": "https://docs.k3s.io/datastore" },
+    { "label": "K3s docs: High availability embedded etcd", "url": "https://docs.k3s.io/datastore/ha-embedded" },
+    { "label": "K3s docs: Requirements (Linux, CPU and RAM)", "url": "https://docs.k3s.io/installation/requirements" },
+    { "label": "K3s docs: FAQ (Windows, Traefik, single-process logging)", "url": "https://docs.k3s.io/faq" },
+    { "label": "K3s docs: Managing packaged components", "url": "https://docs.k3s.io/installation/packaged-components" },
+    { "label": "Kine README: an etcd shim over SQLite, Postgres, MySQL and NATS", "url": "https://github.com/k3s-io/kine" },
+    { "label": "Rancher Labs blog: Introducing k3s (Feb 2019, memory comparison)", "url": "https://rancher.com/blog/2019/2019-02-26-introducing-k3s-the-lightweight-kubernetes-distribution-built-for-the-edge/", "archive": "https://web.archive.org/web/20210619180120/https://rancher.com/blog/2019/2019-02-26-introducing-k3s-the-lightweight-kubernetes-distribution-built-for-the-edge/" },
+    { "label": "CNCF: k3s project page (sandbox maturity level)", "url": "https://www.cncf.io/projects/k3s/" },
+    { "label": "CNCF TOC issue #1957: K3s incubation application (open)", "url": "https://github.com/cncf/toc/issues/1957" },
+    { "label": "K3s releases on GitHub (v1.37.0+k3s1, Sep 14, 2026; four patch releases, Sep 30, 2026)", "url": "https://github.com/k3s-io/k3s/releases" }
+  ],
+  "checked": "2026-10-06"
+}

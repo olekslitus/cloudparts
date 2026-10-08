@@ -1,0 +1,171 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Bytewax",
+  "concepts": ["stream-processing"],
+  "provider": "oss",
+  "vendor": "Community-maintained since 2025; built by Bytewax, Inc., which is no longer operating",
+  "license": "Apache 2.0",
+  "website": "https://github.com/bytewax/bytewax",
+  "repo": "https://github.com/bytewax/bytewax",
+  "summary": "A Python stream processing framework on a Rust engine built on Timely Dataflow; its company wound down in 2025 and the last release is from November 2024.",
+  "intro": [
+    "Bytewax is a Python library with a Rust core. You describe a `Dataflow` of operators (`map`, `filter`, `stateful_map`, `fold_window`, `join`) and give them plain Python functions. `python -m bytewax.run` compiles that graph into Timely Dataflow, a Rust dataflow runtime that Bytewax embeds through PyO3, and every worker calls your Python code for each item. Workers are threads; you can run several in one process (`-w`) or start processes on several machines (`-i`, `-a`), and items that must move to another worker for a keyed step are pickled and sent over the network. Inputs stamp items with epochs, short wall-clock intervals. At each snapshot interval every stateful operator pickles its state, and internal recovery operators write those snapshots and the input positions (including Kafka offsets, which Bytewax keeps itself rather than in consumer groups) into recovery partitions, which are SQLite files. After a crash, the next run finds the newest epoch that every partition finished, rewinds state and inputs to it, and can do so with a different number of workers. Output to Kafka is at-least-once: messages from that epoch are written again.",
+    "The code is Apache 2.0. Bytewax, Inc., founded by Zander Matheson, open-sourced it in 2022 and tried to sell a paid Bytewax Platform for running dataflows on Kubernetes. In May 2025 the company was no longer commercially viable and the core team stopped maintaining the project. A year later Matheson marked the repository as community-maintained, with himself as the only listed maintainer. Commits since then have updated CI and dependencies (including PyO3 for Python 3.13 and 3.14), but as of October 2026 there has been no release since 0.21.1 on 25 November 2024, whose wheels cover Python 3.8 to 3.12. The bytewax.io website and hosted docs no longer resolve; the docs source lives in the repository."
+  ],
+  "strengths": [
+    "Python all the way: operators take ordinary Python functions, so pandas, NumPy or online-learning libraries run inside the dataflow, installed with `pip` and no JVM",
+    "Stateful operators with recovery: `stateful_map`, joins, and tumbling, sliding and session windows on event or processing time",
+    "Rescaling between runs: on resume, saved state follows its keys to however many workers the new run has",
+    "The same script runs on a laptop, as several processes, or on Kubernetes with the published Helm chart"
+  ],
+  "limits": [
+    "No company behind it and one volunteer maintainer: the last release is 0.21.1 (November 2024), and there are no published wheels for Python 3.13 or newer",
+    "The paid Platform is gone, the website and hosted docs are offline, and the `waxctl` downloads repository is archived",
+    "Recovery partitions are SQLite files you create up front, in a count you can’t change later, and back up yourself, for example with cron or Litestream",
+    "Kafka output is at-least-once, so sinks see duplicates after a resume and should be idempotent; a resume can also replay up to one snapshot interval",
+    "Epochs follow each worker’s wall clock, so a cluster assumes roughly synchronized clocks"
+  ],
+  "worksWith": [
+    { "id": "timely-dataflow", "how": "runs its dataflows on" },
+    { "id": "kafka", "how": "reads and writes topics in" },
+    { "id": "redpanda", "how": "reads and writes topics in" },
+    { "id": "sqlite", "how": "keeps recovery snapshots in" },
+    { "id": "kubernetes", "how": "runs as a multi-process cluster on" },
+    { "id": "opentelemetry", "how": "exports traces through" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Average temperature per sensor per minute, from one Kafka topic to another (Bytewax 0.21)",
+    "source": [
+      "# dataflow.py",
+      "import json",
+      "from datetime import datetime, timedelta, timezone",
+      "",
+      "import bytewax.operators as op",
+      "import bytewax.operators.windowing as win",
+      "from bytewax.connectors.kafka import KafkaSinkMessage",
+      "from bytewax.connectors.kafka import operators as kop",
+      "from bytewax.dataflow import Dataflow",
+      "from bytewax.operators.windowing import EventClock, TumblingWindower",
+      "",
+      "BROKERS = [\"kafka-1:9092\"]",
+      "flow = Dataflow(\"sensor-averages\")",
+      "",
+      "msgs = kop.input(\"in\", flow, brokers=BROKERS, topics=[\"sensor-readings\"])",
+      "readings = op.map(\"parse\", msgs.oks, lambda m: json.loads(m.value))",
+      "by_sensor = op.key_on(\"key\", readings, lambda r: r[\"sensor_id\"])",
+      "",
+      "clock = EventClock(",
+      "    lambda r: datetime.fromisoformat(r[\"ts\"]),  # e.g. \"2026-10-06T12:00:03+00:00\"",
+      "    wait_for_system_duration=timedelta(seconds=10),  # wait for late readings",
+      ")",
+      "windower = TumblingWindower(",
+      "    length=timedelta(minutes=1),",
+      "    align_to=datetime(2026, 1, 1, tzinfo=timezone.utc),",
+      ")",
+      "sums = win.fold_window(",
+      "    \"sum\", by_sensor, clock, windower,",
+      "    builder=lambda: (0.0, 0),",
+      "    folder=lambda acc, r: (acc[0] + r[\"temp_c\"], acc[1] + 1),",
+      "    merger=lambda a, b: (a[0] + b[0], a[1] + b[1]),",
+      ")",
+      "",
+      "def encode(item):",
+      "    sensor_id, (window_id, (total, n)) = item",
+      "    body = {\"sensor_id\": sensor_id, \"window\": window_id, \"avg_c\": total / n}",
+      "    return KafkaSinkMessage(sensor_id.encode(), json.dumps(body).encode())",
+      "",
+      "out = op.map(\"encode\", sums.down, encode)",
+      "kop.output(\"out\", out, brokers=BROKERS, topic=\"sensor-averages-1m\")",
+      "",
+      "# once:  python -m bytewax.recovery recovery/ 4",
+      "# run:   python -m bytewax.run dataflow:flow -w 2 -r recovery/ -s 30 -b 0"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Project status, October 2026",
+      "intro": "What a new user would find today, checked 2026-10-06.",
+      "corner": "Item",
+      "columns": ["Status"],
+      "rows": [
+        { "label": "Latest release", "values": ["0.21.1, 25 November 2024 (GitHub and PyPI)"] },
+        { "label": "Python versions with wheels", "values": ["3.8 to 3.12; 3.13 and 3.14 support is merged but unreleased"] },
+        { "label": "Company", "values": ["Bytewax, Inc. said in May 2025 it was not commercially viable; the core team stepped back"] },
+        { "label": "Maintainers", "values": ["Founder Zander Matheson, best effort, looking for more maintainers in issue #560"] },
+        { "label": "Last commit to main", "values": ["20 June 2026 (CI and dependency upgrades); several pull requests open"] },
+        { "label": "Website, docs, `waxctl`", "values": ["bytewax.io doesn’t resolve; docs source is in the repo; `waxctl-downloads` is archived"] },
+        { "label": "Repository", "values": ["Not archived; Apache 2.0, so forks are allowed (one user publishes `bytewax-fork` on PyPI)"] }
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Where Bytewax users are looking",
+      "intro": "Alternatives named by users in the project’s own “State of the project?” issue.",
+      "items": [
+        { "name": "Quix Streams", "tag": "Apache 2.0", "text": "Pure-Python library on Kafka with RocksDB state and changelog topics, released every few weeks. Needs Kafka for everything, but no cluster of its own." },
+        { "name": "Pathway", "tag": "BSL 1.1", "text": "Python API on a Rust engine based on Differential Dataflow, a close cousin of Timely. Free production use is limited to one machine; the licence is source-available, not open source." },
+        { "name": "Arroyo", "tag": "MIT or Apache 2.0", "text": "A Rust stream engine where pipelines are SQL, with checkpoints to object storage, developed by the Arroyo team at Cloudflare." },
+        { "name": "Stay on 0.21 or a fork", "tag": "your own risk", "text": "Existing dataflows keep running on Python 3.12 or older. The repo accepts pull requests, and a user-run fork, `bytewax-fork`, carries extra fixes." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In the early 2020s the main stateful stream processors, such as Flink, Spark and Kafka Streams, ran on the JVM, and most meant running a cluster. Zander Matheson, who had worked on data at Heroku and GitHub, saw teams spend months on infrastructure before they could build fraud detection or monitoring, while the people writing that logic worked in Python.",
+      "His company, Bytewax, open-sourced its framework on 7 February 2022: a Python library on top of Timely Dataflow, a Rust dataflow engine, so it could scale from one machine to a cluster without a JVM. Version 0.17 in 2023 rebuilt recovery around SQLite partitions so dataflows could be rescaled, and 0.18 that December reshaped the API into stand-alone operator functions. Microsoft’s venture fund M12 invested in 2023 to support the open source and a paid Bytewax Platform.",
+      "The platform didn’t find enough customers. In May 2025 Matheson told users the company was not viable and the core team would stop maintaining the project. A year later he wrote on GitHub that Bytewax “wasn’t commercially viable and the original core team isn’t maintaining the project full-time anymore”, and set it up for community maintenance."
+    ],
+    "choices": [
+      { "choice": "A Python API on a Rust engine", "why": "The team wanted Python’s ecosystem for the logic and a fast, scalable back end, without making users learn another language or run another distributed system. Timely Dataflow supplied the Rust runtime and networking." },
+      { "choice": "Epochs from Timely’s progress tracking", "why": "Timely tells every operator when an epoch is finished across the whole cluster. Bytewax uses that signal both for backpressure and to send a consistent wave of snapshots through every stateful operator." },
+      { "choice": "Its own recovery store instead of Kafka consumer groups", "why": "To rewind every input and every operator to the same snapshot, and to change the worker count on resume, Bytewax keeps offsets and state together in SQLite recovery partitions. Version 0.17 dropped the earlier Kafka-based recovery for this design." }
+    ],
+    "timeline": [
+      { "year": "2021", "text": "Zander Matheson starts Bytewax, Inc." },
+      { "year": "2022", "text": "Open-sourced on 7 February as a Python framework on Timely Dataflow" },
+      { "year": "2023", "text": "0.17 reworks recovery and allows rescaling; M12 invests" },
+      { "year": "2024", "text": "0.21.1 in November, the last release so far" },
+      { "year": "2025", "text": "Company no longer viable in May; core team stops maintaining" },
+      { "year": "2026", "text": "Repository marked community-maintained in May" }
+    ],
+    "sources": [
+      { "label": "Bytewax blog: Announcing Bytewax, powerful stream processing for the rest of us (Feb 2022)", "url": "https://www.bytewax.io/blog/bytewax/", "archive": "https://web.archive.org/web/20220217010606/https://www.bytewax.io/blog/bytewax/" },
+      { "label": "Bytewax blog: M12 invests in the future of stream processing with Bytewax (2023)", "url": "https://bytewax.io/blog/m12-invests-in-the-future-of-stream-processing-with-bytewax", "archive": "https://web.archive.org/web/20231003151121/https://bytewax.io/blog/m12-invests-in-the-future-of-stream-processing-with-bytewax" },
+      { "label": "Bytewax CHANGELOG (0.17.0 recovery rework, 0.18.0 operator API)", "url": "https://github.com/bytewax/bytewax/blob/main/CHANGELOG.md" },
+      { "label": "Bytewax docs source: Architecture (Timely Dataflow, PyO3, epochs, SQLite recovery)", "url": "https://github.com/bytewax/bytewax/blob/main/docs/guide/contributing/architecture.md" },
+      { "label": "GitHub issue #560: State of the project? (Matheson’s May 2025 Slack note quoted; his May 2026 update)", "url": "https://github.com/bytewax/bytewax/issues/560" },
+      { "label": "GitHub: Bytewax v0.21.1 release (Nov 2024)", "url": "https://github.com/bytewax/bytewax/releases/tag/v0.21.1" }
+    ]
+  },
+  "sources": [
+    { "label": "Bytewax README (community-maintained notice, features)", "url": "https://github.com/bytewax/bytewax" },
+    { "label": "Bytewax MAINTAINERS.md (current maintainer, past core team)", "url": "https://github.com/bytewax/bytewax/blob/main/MAINTAINERS.md" },
+    { "label": "Bytewax LICENSE (Apache 2.0)", "url": "https://github.com/bytewax/bytewax/blob/main/LICENSE" },
+    { "label": "Bytewax Cargo.toml (timely, pyo3, rusqlite)", "url": "https://github.com/bytewax/bytewax/blob/main/Cargo.toml" },
+    { "label": "Bytewax releases on GitHub", "url": "https://github.com/bytewax/bytewax/releases" },
+    { "label": "Bytewax commit history", "url": "https://github.com/bytewax/bytewax/commits/main" },
+    { "label": "Bytewax pull requests", "url": "https://github.com/bytewax/bytewax/pulls" },
+    { "label": "Matheson’s update in issue #560 (May 2026)", "url": "https://github.com/bytewax/bytewax/issues/560#issuecomment-4384390559" },
+    { "label": "PyPI: bytewax 0.21.1 files (wheels for CPython 3.8 to 3.12)", "url": "https://pypi.org/project/bytewax/0.21.1/#files" },
+    { "label": "PyPI: bytewax-fork", "url": "https://pypi.org/project/bytewax-fork/" },
+    { "label": "Bytewax docs source: Architecture", "url": "https://github.com/bytewax/bytewax/blob/main/docs/guide/contributing/architecture.md" },
+    { "label": "Bytewax docs source: Recovery (SQLite partitions, fixed count, backups, at-least-once caveat)", "url": "https://github.com/bytewax/bytewax/blob/main/docs/guide/concepts/recovery.md" },
+    { "label": "Bytewax docs source: Workers and parallelization (threads, processes, pickling)", "url": "https://github.com/bytewax/bytewax/blob/main/docs/guide/concepts/workers-parallelization.md" },
+    { "label": "Bytewax docs source: Kafka (offsets kept in recovery partitions, Redpanda)", "url": "https://github.com/bytewax/bytewax/blob/main/docs/guide/concepts/kafka.md" },
+    { "label": "Bytewax docs source: Windowing", "url": "https://github.com/bytewax/bytewax/blob/main/docs/guide/concepts/windowing.md" },
+    { "label": "Bytewax docs source: Rescaling", "url": "https://github.com/bytewax/bytewax/blob/main/docs/guide/concepts/rescaling.md" },
+    { "label": "Bytewax docs source: Deployment overview (Bytewax Platform, waxctl, Helm chart)", "url": "https://github.com/bytewax/bytewax/blob/main/docs/guide/deployment/overview.md" },
+    { "label": "Bytewax docs source: Metrics (OpenTelemetry tracing)", "url": "https://github.com/bytewax/bytewax/blob/main/docs/guide/deployment/metrics.md" },
+    { "label": "Bytewax source: Kafka operators (at-least-once output, duplicates after resume)", "url": "https://github.com/bytewax/bytewax/blob/main/pysrc/bytewax/connectors/kafka/operators.py" },
+    { "label": "Bytewax source: windowing operators (EventClock, TumblingWindower, fold_window)", "url": "https://github.com/bytewax/bytewax/blob/main/pysrc/bytewax/operators/windowing.py" },
+    { "label": "Bytewax source: bytewax.run flags (-s snapshot and -b backup intervals required with recovery)", "url": "https://github.com/bytewax/bytewax/blob/main/pysrc/bytewax/run.py" },
+    { "label": "GitHub: bytewax/waxctl-downloads (archived)", "url": "https://github.com/bytewax/waxctl-downloads" },
+    { "label": "Quix Streams README", "url": "https://github.com/quixio/quix-streams" },
+    { "label": "Pathway README (Rust engine based on Differential Dataflow)", "url": "https://github.com/pathwaycom/pathway" },
+    { "label": "Pathway LICENSE (BSL 1.1, single-machine production grant)", "url": "https://github.com/pathwaycom/pathway/blob/main/LICENSE.txt" },
+    { "label": "Arroyo README", "url": "https://github.com/ArroyoSystems/arroyo" }
+  ],
+  "checked": "2026-10-06"
+}

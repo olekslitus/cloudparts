@@ -1,0 +1,103 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "kind",
+  "concepts": ["orchestration"],
+  "parent": { "id": "kubernetes", "as": "local" },
+  "provider": "oss",
+  "vendor": "Kubernetes project (SIG Testing)",
+  "license": "Apache 2.0",
+  "website": "https://kind.sigs.k8s.io/",
+  "repo": "https://github.com/kubernetes-sigs/kind",
+  "summary": "Kubernetes IN Docker: each cluster node is a container, so a conformant multi-node cluster starts and disappears inside a CI job.",
+  "intro": [
+    "kind (Kubernetes IN Docker) treats containers as machines. `kind create cluster` starts one container per Kubernetes node from a prebuilt “node image” that holds systemd, containerd, the kubelet and the other Kubernetes binaries. Inside each node container, kubeadm bootstraps the node as it would on a real server, and your Pods run as containers nested inside it, started by that node’s own containerd. A short config file asks for extra workers or three control-plane nodes, all on one host. kind keeps no state of its own: a cluster is just the set of containers carrying its label, so deleting the cluster deletes those containers. Docker is the default engine, with Podman and nerdctl also supported; on macOS and Windows the engine itself runs in a Linux VM such as Docker Desktop’s.",
+    "It was built in Kubernetes’ SIG Testing to test Kubernetes itself, and its docs call end-to-end test automation “the original & primary use case”; local development and CI for your own apps come second. The features follow from that: `kind build node-image` turns a Kubernetes source tree or release into a node image, `kind load docker-image` copies an image you just built into the nodes without a registry, and each release lists node images pinned by digest. Unlike minikube there are no VM drivers to choose, and unlike K3s or MicroK8s nothing is meant to outlive the test: kind is a CNCF-certified conformant installer, not a production distribution, and it is still pre-1.0 (v0.33 in August 2026)."
+  ],
+  "strengths": [
+    "Needs only a container engine, so a cluster fits on a CI runner and is created and deleted in one job",
+    "Multi-node and highly available control planes on one machine, each node a container you can `docker exec` into",
+    "Builds node images from Kubernetes source or any release, so you can test Kubernetes changes before they ship",
+    "Clusters are built by upstream kubeadm and pass the conformance tests, so tests exercise the real components"
+  ],
+  "limits": [
+    "Not for production or long-lived clusters; the project lists node reboots, upgrades and persistent volumes among the things it can’t yet test well",
+    "With Docker Desktop on macOS or Windows the nodes sit inside a VM, so their IPs aren’t reachable from the host without port mappings or a proxy",
+    "LoadBalancer Services need Cloud Provider KIND, a separate binary on the host with privileges to open ports and drive the container engine",
+    "Podman and nerdctl run rootless by default and need extra setup, and the node image’s internals are unsupported and may change in any release"
+  ],
+  "worksWith": [
+    { "id": "kubernetes", "how": "runs throwaway conformant clusters of" },
+    { "id": "docker", "how": "runs each cluster node as a container in" },
+    { "id": "podman", "how": "can also run its node containers in" },
+    { "id": "kubeadm", "how": "bootstraps every node with" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "A three-node test cluster, an image loaded without a registry, then cleanup",
+    "source": [
+      "cat > kind.yaml <<'EOF'",
+      "kind: Cluster",
+      "apiVersion: kind.x-k8s.io/v1alpha4",
+      "nodes:",
+      "  - role: control-plane",
+      "  - role: worker",
+      "  - role: worker",
+      "EOF",
+      "kind create cluster --name test --config kind.yaml --wait 5m",
+      "kind get nodes --name test          # each node is a container",
+      "",
+      "docker build -t my-app:ci .",
+      "kind load docker-image my-app:ci --name test",
+      "kubectl --context kind-test apply -f deploy.yaml",
+      "",
+      "kind delete cluster --name test     # removes the node containers"
+    ]
+  },
+  "history": {
+    "story": [
+      "Some Kubernetes tests need real clusters in a cloud, with a cloud provider attached. The SIG Testing design for kind argued that enough of them could run locally to justify something much cheaper: clusters “that any developer can locally replicate”, integrated with the project’s test tooling, thoroughly documented, “very stable” and able to pass all conformance tests. Each “node” would be a Docker container that boots into a paused state, so the tooling can fix mounts and preload images before it starts systemd and runs kubeadm.",
+      "The first release, v0.0.1, came out in November 2018 and v0.1.0 in January 2019. kind is a SIG Testing subproject led by Benjamin Elder and Antonio Ojea of Google. Its scope document ranks the goals: testing Kubernetes itself first, then testing applications built on Kubernetes (cert-manager and Cluster API providers were named stakeholders), then cheap bootstrap clusters for Cluster API. Replacing Docker Compose is explicitly out of scope.",
+      "Later releases widened where it runs. Rootless Docker, Podman and nerdctl became supported node providers in v0.11 (2021), and Cloud Provider KIND, presented at KubeCon EU 2024, gives LoadBalancer Services a real address by starting a load-balancer container for each one."
+    ],
+    "choices": [
+      { "choice": "Containers as nodes", "why": "A container starts far faster than a VM and runs anywhere a container engine does, including CI machines. Running systemd and containerd inside each node container keeps it close to a real node, and kubectl sees ordinary nodes." },
+      { "choice": "Reuse kubeadm and upstream libraries", "why": "Its principles say not to reinvent the wheel: kubeadm handles node configuration and certificates, kustomize merges user patches into the generated kubeadm config, and k8s.io libraries supply the config machinery. Clusters are therefore built the same way many real ones are." },
+      { "choice": "No external state", "why": "State lives in the node containers as labels, files and processes, and kind itself stores nothing. That keeps it portable, and deleting a cluster that doesn’t exist is deliberately not an error, so cleanup scripts can always run it." },
+      { "choice": "Built for automation, degrade gracefully", "why": "Because it is used for testing, a partly working cluster is better than a failure: images packed into the node image are preloaded, and if that fails the node’s runtime pulls them instead." }
+    ],
+    "timeline": [
+      { "year": "2018", "text": "SIG Testing design for containers as nodes; v0.0.1 in November" },
+      { "year": "2019", "text": "v0.1.0 in January; KubeCon EU talks on testing with kind" },
+      { "year": "2021", "text": "v0.11 supports rootless Docker, Podman and nerdctl" },
+      { "year": "2024", "text": "Cloud Provider KIND brings LoadBalancer Services (KubeCon EU)" },
+      { "year": "2026", "text": "v0.33 in August defaults to Kubernetes 1.37" }
+    ],
+    "sources": [
+      { "label": "kind docs: Initial design", "url": "https://kind.sigs.k8s.io/docs/design/initial/" },
+      { "label": "kind docs: Principles", "url": "https://kind.sigs.k8s.io/docs/design/principles/" },
+      { "label": "kind docs: Project scope", "url": "https://kind.sigs.k8s.io/docs/contributing/project-scope/" },
+      { "label": "Kubernetes community: SIG Testing subprojects (kind, Cloud Provider for KIND)", "url": "https://github.com/kubernetes/community/blob/master/sig-testing/README.md" },
+      { "label": "kind 0.0.1 release on GitHub (Nov 2018)", "url": "https://github.com/kubernetes-sigs/kind/releases/tag/0.0.1" },
+      { "label": "kind 0.1.0 release on GitHub (Jan 2019)", "url": "https://github.com/kubernetes-sigs/kind/releases/tag/0.1.0" },
+      { "label": "kind docs: Resources (KubeCon talks, 2019 to 2024)", "url": "https://kind.sigs.k8s.io/docs/user/resources/" },
+      { "label": "kind docs: Rootless (since v0.11.0)", "url": "https://kind.sigs.k8s.io/docs/user/rootless/" },
+      { "label": "kind v0.11.0 release on GitHub (May 2021)", "url": "https://github.com/kubernetes-sigs/kind/releases/tag/v0.11.0" },
+      { "label": "kind docs: LoadBalancer (Cloud Provider KIND)", "url": "https://kind.sigs.k8s.io/docs/user/loadbalancer/" },
+      { "label": "kind v0.33.0 release on GitHub (Aug 2026)", "url": "https://github.com/kubernetes-sigs/kind/releases/tag/v0.33.0" }
+    ]
+  },
+  "sources": [
+    { "label": "kind website: overview, conformant installer, 1.0 roadmap note", "url": "https://kind.sigs.k8s.io/" },
+    { "label": "kind docs: Quick start (providers, loading images, multi-node and HA configs)", "url": "https://kind.sigs.k8s.io/docs/user/quick-start/" },
+    { "label": "kind docs: Initial design (node containers, labels, kubeadm)", "url": "https://kind.sigs.k8s.io/docs/design/initial/" },
+    { "label": "kind docs: Principles (containerd in nodes, no external state, automation first)", "url": "https://kind.sigs.k8s.io/docs/design/principles/" },
+    { "label": "kind docs: Project scope (priorities and hard-to-test areas)", "url": "https://kind.sigs.k8s.io/docs/contributing/project-scope/" },
+    { "label": "kind docs: Node image (internals unsupported)", "url": "https://kind.sigs.k8s.io/docs/design/node-image/" },
+    { "label": "kind docs: Known issues (Docker Desktop networking)", "url": "https://kind.sigs.k8s.io/docs/user/known-issues/" },
+    { "label": "kind docs: LoadBalancer (Cloud Provider KIND)", "url": "https://kind.sigs.k8s.io/docs/user/loadbalancer/" },
+    { "label": "kind docs: Rootless", "url": "https://kind.sigs.k8s.io/docs/user/rootless/" },
+    { "label": "kind v0.33.0 release on GitHub (Aug 2026)", "url": "https://github.com/kubernetes-sigs/kind/releases/tag/v0.33.0" },
+    { "label": "Kubernetes docs: Install tools (kind and minikube)", "url": "https://kubernetes.io/docs/tasks/tools/" }
+  ],
+  "checked": "2026-10-06"
+}

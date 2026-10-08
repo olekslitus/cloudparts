@@ -1,0 +1,117 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Narrow tables",
+  "category": "modeling",
+  "order": 20,
+  "summary": "One row per entity, time and metric, with the metric’s name in one column and its value in another: the long or tall format.",
+  "howItWorks": "A narrow table stores each measurement as its own row: `(time, device_id, metric, value)`. A reading of CPU, memory and disk becomes three rows instead of one. The schema never changes, so a new metric is just a new value in the `metric` column, and devices or tenants can each send different metrics into the same table. The costs show up elsewhere. There is one row per value, so the table has several times more rows, each repeating the time and device. The single `value` column has one type, usually a double, so text, booleans and exact integers either get their own tables or are cast. And any question about several metrics at once needs a pivot (a conditional aggregate or a join per metric) to turn rows back into columns. Metric systems are built this way: Prometheus identifies each time series by a metric name plus labels and stores float64 samples, and OpenTelemetry’s timeseries model does the same with a metric name and attributes. Some guides, TigerData’s among them, also call a table per metric narrow: the same idea with the metric name moved into the table name. Stretched to any attribute of any entity, the pattern becomes entity-attribute-value (EAV).",
+  "analogy": "A logbook where every line is one reading: “09:00, pump 3, pressure, 4.2 bar”. A new kind of reading fits on the next line, but comparing pressure and temperature at 09:00 means finding two lines and copying them side by side.",
+  "useWhen": [
+    "Metrics are dynamic, user-defined, or differ per device or tenant",
+    "Most queries read one metric at a time, such as a chart or an alert per series",
+    "Readings arrive one at a time, so a wide row would be mostly NULL",
+    "Data comes from Prometheus, OpenTelemetry or other pipelines that already send one value per series"
+  ],
+  "avoidWhen": [
+    "Most reads combine many metrics of the same moment, so nearly every query pivots",
+    "Values have mixed types (numbers, text, booleans) that you want stored natively",
+    "You need per-metric constraints, such as `NOT NULL` or a `CHECK` on a range"
+  ],
+  "example": "An IoT platform lets each customer define their own sensor fields. Readings land in one `readings(time, device_id, metric, value)` table: a weather station sends `temp`, `humidity` and `wind_speed`, a freezer sends only `temp`, and next month’s soil sensor adds `moisture` with no migration. A device sending three metrics every minute writes about 4,300 rows a day instead of 1,440. The per-metric chart filters on `metric = 'temp'`; the station dashboard, which shows all three side by side, runs a pivot, and an index on `(device_id, metric, time)` lets each series be read in order.",
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "CREATE TABLE readings (",
+      "  time      timestamptz NOT NULL,",
+      "  device_id int         NOT NULL,",
+      "  metric    text        NOT NULL,",
+      "  value     double precision",
+      ");",
+      "",
+      "-- a new metric needs no migration",
+      "INSERT INTO readings VALUES",
+      "  ('2026-10-06 09:00', 7, 'temp',     21.4),",
+      "  ('2026-10-06 09:00', 7, 'humidity', 57.1),",
+      "  ('2026-10-06 09:00', 7, 'moisture', 0.31);",
+      "",
+      "-- reading several metrics together needs a pivot",
+      "SELECT time,",
+      "       avg(value) FILTER (WHERE metric = 'temp')     AS temp,",
+      "       avg(value) FILTER (WHERE metric = 'humidity') AS humidity",
+      "FROM readings",
+      "WHERE device_id = 7 AND time > now() - interval '1 hour'",
+      "GROUP BY time",
+      "ORDER BY time;"
+    ]
+  },
+  "related": ["wide-tables","hybrid-tables","eav","tsdb"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "The same readings, long and wide",
+      "intro": "Four rows of a narrow table: two metrics from one device over two minutes.",
+      "corner": "time",
+      "columns": ["device_id", "metric", "value"],
+      "rows": [
+        { "label": "09:00", "values": ["7", "temp", "21.4"] },
+        { "label": "09:00", "values": ["7", "humidity", "57.1"] },
+        { "label": "09:01", "values": ["7", "temp", "21.5"] },
+        { "label": "09:01", "values": ["7", "humidity", "56.8"] }
+      ],
+      "notes": [
+        "Pivoted by metric, the same data is two wide rows: (09:00, 7, 21.4, 57.1) and (09:01, 7, 21.5, 56.8). The `FILTER` query in the snippet above does that pivot in SQL."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Where narrow shows up",
+      "items": [
+        { "name": "Prometheus", "tag": "metrics", "text": "Every time series is a metric name plus labels, and each sample is a timestamp and a float64. A new metric or label value is a new series, never a schema change." },
+        { "name": "OpenTelemetry in ClickHouse", "tag": "metrics", "text": "The collector’s ClickHouse exporter keeps one table per metric type (gauge, sum, histogram and so on). Each row holds `MetricName`, an `Attributes` map and one `Value` column, sorted by service, metric name and time." },
+        { "name": "Data frames", "tag": "analysis", "text": "pandas’ `melt()` unpivots a wide DataFrame so every measured column ends up in one `variable` column and one `value` column; `pivot()` turns them back into columns. R’s tidyr does the same with `pivot_longer()` and `pivot_wider()`." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Statisticians named the shape long before databases did. Survey and panel data is kept either one row per subject (wide) or one row per subject per measurement (long), and analysts convert between the two all the time. Hadley Wickham’s reshape package for R, first released in 2005, called the wide-to-long step “melting”; his 2007 paper framed it as separating identifying variables from measured ones, and pandas uses the same word, `melt()`.",
+      "Wickham’s 2014 “Tidy Data” paper added a warning that still applies to narrow tables. Storing variable names in a column, such as an `element` column holding `tmax` and `tmin`, is one of its classic kinds of messy data, fixed by pivoting wider. Long is the right shape when a column holds values of one variable, and an awkward one when it holds the names of many. tidyr 1.0 (2019) renamed the tools `pivot_longer()` and `pivot_wider()`.",
+      "Monitoring made narrow the default for metrics. Prometheus, begun at SoundCloud in 2012, identifies every series by a metric name and labels and stores each sample as a float64, so a new metric is just a new series. OpenTelemetry’s metrics data model describes the same timeseries shape, and its ClickHouse exporter writes one row per data point with the metric name, an attributes map and a single value. Timescale’s 2024 schema guide called narrow the layout that changes least and compresses well, because its columns are uniform."
+    ],
+    "choices": [
+      { "choice": "Put the metric name in the data, not the schema", "why": "New metrics, devices and tenants arrive without migrations, which matters when the people defining metrics are customers or developers who will never run `ALTER TABLE`." },
+      { "choice": "One value type per table", "why": "A single `value` column has one type. Prometheus stores every sample as a float64; other designs add a table per type or a JSONB value column and cast on the way out." },
+      { "choice": "Pivot at read time", "why": "Combining metrics costs a `GROUP BY` with conditional aggregates, or a join per metric. That is cheap for a few metrics over a short range and grows with every metric added to the query." }
+    ],
+    "timeline": [
+      { "year": "2005", "text": "First release of Wickham’s reshape package for R" },
+      { "year": "2007", "text": "The reshape paper names the wide-to-long step “melting”" },
+      { "year": "2012", "text": "Prometheus starts at SoundCloud: one series per metric name and labels" },
+      { "year": "2014", "text": "“Tidy Data” warns against variable names stored in a column" },
+      { "year": "2019", "text": "tidyr 1.0 adds `pivot_longer()` and `pivot_wider()`" },
+      { "year": "2024", "text": "Timescale guide compares narrow, medium and wide layouts" }
+    ],
+    "sources": [
+      { "label": "Hadley Wickham: Reshaping data with the reshape package (Journal of Statistical Software, 2007)", "url": "https://www.jstatsoft.org/article/view/v021i12" },
+      { "label": "Hadley Wickham: Tidy Data (Journal of Statistical Software, 2014)", "url": "https://www.jstatsoft.org/article/view/v059i10" },
+      { "label": "tidyr vignette: Tidy data (variables stored in rows, pivot_wider)", "url": "https://tidyr.tidyverse.org/articles/tidy-data.html" },
+      { "label": "Tidyverse blog: tidyr 1.0.0 (Sept 2019; first reshape release fourteen years earlier)", "url": "https://tidyverse.org/blog/2019/09/tidyr-1-0-0/" },
+      { "label": "pandas user guide: Reshaping and pivot tables (melt, pivot)", "url": "https://pandas.pydata.org/docs/user_guide/reshaping.html" },
+      { "label": "Prometheus docs: Overview (built at SoundCloud, since 2012)", "url": "https://prometheus.io/docs/introduction/overview/" },
+      { "label": "Prometheus docs: Data model", "url": "https://prometheus.io/docs/concepts/data_model/" },
+      { "label": "OpenTelemetry specification: Metrics data model (timeseries model)", "url": "https://opentelemetry.io/docs/specs/otel/metrics/data-model/" },
+      { "label": "Chris Engelbert and Carlota Soto, Timescale: Designing your database schema, wide vs. narrow Postgres tables (Mar 2024)", "url": "https://www.tigerdata.com/learn/designing-your-database-schema-wide-vs-narrow-postgres-tables" }
+    ]
+  },
+  "sources": [
+    { "label": "TigerData docs: Wide, narrow, and medium tables (narrow as one table per metric)", "url": "https://www.tigerdata.com/docs/learn/data-model/wide-narrow-medium-tables" },
+    { "label": "Timescale: Designing your database schema, wide vs. narrow Postgres tables (metric and value columns, JSONB values, joins and unions)", "url": "https://www.tigerdata.com/learn/designing-your-database-schema-wide-vs-narrow-postgres-tables" },
+    { "label": "Prometheus docs: Data model (metric name and labels; float64 samples)", "url": "https://prometheus.io/docs/concepts/data_model/" },
+    { "label": "OpenTelemetry specification: Metrics data model (metric name, attributes, value type)", "url": "https://opentelemetry.io/docs/specs/otel/metrics/data-model/" },
+    { "label": "OpenTelemetry Collector Contrib: ClickHouse exporter README (one table per metric type)", "url": "https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/exporter/clickhouseexporter" },
+    { "label": "OpenTelemetry Collector Contrib: ClickHouse exporter gauge table definition", "url": "https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/exporter/clickhouseexporter/internal/sqltemplates/metrics_gauge_table.sql" },
+    { "label": "PostgreSQL docs: Aggregate expressions (FILTER clause)", "url": "https://www.postgresql.org/docs/current/sql-expressions.html" },
+    { "label": "pandas user guide: Reshaping and pivot tables", "url": "https://pandas.pydata.org/docs/user_guide/reshaping.html" },
+    { "label": "tidyr vignette: Tidy data", "url": "https://tidyr.tidyverse.org/articles/tidy-data.html" }
+  ]
+}

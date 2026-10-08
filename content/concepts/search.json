@@ -1,0 +1,172 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Search indexes",
+  "category": "data",
+  "order": 50,
+  "summary": "Find rows or files by what’s inside them: an index from words or character fragments to the places they appear.",
+  "howItWorks": "A search index is an inverted index: instead of storing each document with its words, it stores each term with a sorted list of the documents that contain it, called a posting list. To build it, an analyzer splits text into tokens, lowercases them and often reduces words to a stem, so “Headphones” and “headphone” land on the same entry. A query goes through the same analyzer; the engine loads the posting lists for its terms, intersects them for AND or merges them for OR, and only then touches the documents. Storing word positions in the lists answers phrase queries. Ranking orders the matches: BM25, the default in Elasticsearch, scores a document higher when a query term appears in it often, when the term is rare across the collection, and when the field is short. Word indexes can’t find fragments such as `%phone%`, part numbers or byte patterns, so a second kind of index keys on n-grams instead: every run of three characters (trigrams). A substring, fuzzy or regex query becomes a set of trigrams that any match must contain; the index returns candidates, and each candidate is checked against the real pattern. Search indexes are usually updated slightly after the data they describe: a separate engine is fed by a pipeline and makes new documents searchable after a refresh, while an index inside the database is updated in the same transaction.",
+  "analogy": "The index at the back of a book. You don’t read every page to find “gaskets”; you look up the word, get a short list of page numbers, and turn only to those pages. A trigram index is the same book indexed by every three-letter fragment, so you can also find “ask” inside “gaskets”.",
+  "useWhen": [
+    "Users type words into a search box and expect ranked results, typo tolerance and filters over product names, articles or tickets",
+    "`LIKE '%term%'`, `ILIKE` or regex queries are scanning whole tables",
+    "Finding logs, code or files by the strings inside them across gigabytes to terabytes",
+    "“Did you mean” suggestions and fuzzy matching of names and addresses"
+  ],
+  "avoidWhen": [
+    "Exact lookups by key, ranges and joins; a B-tree in the database already does that better",
+    "A few thousand rows, where a scan or the database’s built-in full-text search is fast enough and a separate engine is pure overhead",
+    "The search engine would be the only copy of the data; most are fed from a database and can be rebuilt from it",
+    "Results must reflect a write the moment it commits, unless the index lives inside the same database transaction"
+  ],
+  "example": "A parts shop has 2 million products in PostgreSQL. `WHERE name ILIKE '%gasket%'` reads every row and takes seconds. A trigram index on `name` turns it into a lookup of the trigrams “gas”, “ask”, “ske” and “ket”, and only rows containing all four are checked. When the team later wants ranking by relevance, synonyms and facets by brand, it feeds the product table into a search engine through change data capture and keeps PostgreSQL as the source of truth.",
+  "providers": {
+    "aws": "Amazon OpenSearch Service (managed clusters or Serverless; runs OpenSearch and legacy Elasticsearch up to 7.10). RDS for PostgreSQL includes pg_trgm and full-text search",
+    "gcp": "No managed Elasticsearch or OpenSearch of its own: Elastic Cloud is sold through Google Cloud Marketplace. Agent Search (formerly Vertex AI Search) is a managed search product for websites and documents; Spanner and BigQuery have search indexes, and Cloud SQL for PostgreSQL includes pg_trgm",
+    "azure": "Azure AI Search (full-text, vector and hybrid queries); Azure Database for PostgreSQL includes pg_trgm",
+    "oss": "Apache Lucene, the library under Elasticsearch, OpenSearch and Apache Solr; Elasticsearch (Apache 2.0 until 7.10, then SSPL or Elastic License, with AGPL added as a third option in 2024); OpenSearch (the Apache 2.0 fork of Elasticsearch 7.10.2 that AWS started, run by the OpenSearch Software Foundation at the Linux Foundation since September 2024); Meilisearch (MIT core, BUSL enterprise edition); Typesense (GPL-3.0); Tantivy (MIT, Rust) and Quickwit (Apache 2.0, now part of Datadog); in PostgreSQL, built-in full-text search and pg_trgm; UrsaDB for byte patterns in malware collections"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "import re",
+      "from collections import defaultdict",
+      "",
+      "docs = {1: \"Wireless headphones\", 2: \"Wired headphone stand\", 3: \"Wireless charger\"}",
+      "",
+      "def tokens(text):  # the analyzer: split, lowercase, crude stemming",
+      "    return {w.removesuffix(\"s\") for w in re.findall(r\"\\w+\", text.lower())}",
+      "",
+      "def trigrams(text):",
+      "    t = text.lower()",
+      "    return {t[i:i + 3] for i in range(len(t) - 2)}",
+      "",
+      "words, grams = defaultdict(set), defaultdict(set)  # term -> posting list",
+      "for doc_id, text in docs.items():",
+      "    for w in tokens(text): words[w].add(doc_id)",
+      "    for g in trigrams(text): grams[g].add(doc_id)",
+      "",
+      "# word search: intersect posting lists",
+      "print(set.intersection(*(words[w] for w in tokens(\"wireless headphones\"))))  # {1}",
+      "",
+      "# substring search: trigrams give candidates, then check each one",
+      "q = \"ire\"",
+      "candidates = set.intersection(*(grams[g] for g in trigrams(q)))",
+      "print({d for d in candidates if q in docs[d].lower()})  # {1, 2, 3}"
+    ]
+  },
+  "related": ["relational", "document", "observability"],
+  "diagram": {
+    "caption": "Row changes flow from the database into the indexer, which splits text into terms and adds each row to its terms’ posting lists, a little behind the database. Searches go through the same analyzer, read a few posting lists and get ranked ids back in milliseconds.",
+    "w": 780,
+    "h": 280,
+    "zones": [
+      { "x": 225, "y": 14, "w": 540, "h": 252, "label": "Search engine" }
+    ],
+    "nodes": [
+      {
+        "id": "db",
+        "x": 105,
+        "y": 70,
+        "label": "Products table",
+        "sub": "source of truth",
+        "concept": "relational",
+        "emit": { "every": 1300, "jitter": 0.4, "color": 2 },
+        "out": ["ix"]
+      },
+      {
+        "id": "ix",
+        "x": 360,
+        "y": 70,
+        "kind": "pool",
+        "label": "Indexer",
+        "sub": "tokenize · lowercase · stem",
+        "min": 1,
+        "max": 1,
+        "work": 700,
+        "out": ["inv"]
+      },
+      {
+        "id": "inv",
+        "x": 640,
+        "y": 140,
+        "label": "Inverted index",
+        "sub": "term → posting list",
+        "mode": "reply",
+        "delay": 60
+      },
+      {
+        "id": "user",
+        "x": 105,
+        "y": 210,
+        "label": "Search box",
+        "sub": "q=wireless headphones",
+        "emit": { "every": 650, "jitter": 0.4, "req": true, "color": 0 },
+        "out": ["qp"]
+      },
+      {
+        "id": "qp",
+        "x": 360,
+        "y": 210,
+        "label": "Query parser",
+        "sub": "same analyzer · BM25",
+        "out": ["inv"]
+      }
+    ]
+  },
+  "history": {
+    "story": [
+      "The key data structure of text search is the inverted index: for every term, a sorted list of the documents that contain it, so a query reads a few short lists instead of every document. Ranking theory grew alongside it, and work on probabilistic relevance in the 1970s and 1980s led Stephen Robertson and colleagues to BM25. In 1999 Doug Cutting wrote Lucene, his fifth search engine, as an open-source Java library; it joined the Apache Software Foundation in 2001 and became a standard foundation for search applications, including Apache Solr.",
+      "Shay Banon built Compass on Lucene in 2005, then started Elasticsearch in 2009 and open-sourced it in February 2010 as a search server built on Lucene. Meanwhile, in 2006, Google launched Code Search, which ran regular expressions over public source code by first narrowing the files with a trigram index. Russ Cox wrote up how it worked in 2012 and published a small implementation, and the same idea sits in PostgreSQL’s pg_trgm and in UrsaDB, an index for malware collections.",
+      "In 2021 Elastic moved Elasticsearch from Apache 2.0 to SSPL and its own Elastic License, and AWS forked the last Apache-licensed version as OpenSearch. In 2024 Elastic added AGPL as a third licence option for the free parts of the code."
+    ],
+    "choices": [
+      { "choice": "Index terms, not documents", "why": "Turning “document → words” around into “word → documents” makes a query cost proportional to the lists it reads, not the size of the collection, and sorted lists can be intersected in linear time." },
+      { "choice": "Trigrams for substrings and regex", "why": "Matches inside words don’t line up with tokens. As Russ Cox put it, there are too few distinct 2-grams and too many distinct 4-grams, so 3-grams it is." },
+      { "choice": "Candidates first, then verify", "why": "A trigram or hashed index can say which documents might match. Checking only those against the real pattern keeps results exact while skipping almost all the data." },
+      { "choice": "Rank by term rarity and frequency", "why": "Boolean matching returns thousands of hits in no order. BM25 weighs rare terms above common ones and dampens repeated terms and long fields, and it is the default scoring in Elasticsearch." }
+    ],
+    "timeline": [
+      { "year": "1999", "text": "Doug Cutting writes Lucene; it joins Apache in 2001" },
+      { "year": "2006", "text": "Google Code Search launches with regex search over a trigram index" },
+      { "year": "2010", "text": "Shay Banon open-sources Elasticsearch in February" },
+      { "year": "2012", "text": "Russ Cox publishes how Code Search worked, with an implementation" },
+      { "year": "2021", "text": "Elasticsearch leaves Apache 2.0; AWS forks it as OpenSearch" },
+      { "year": "2024", "text": "Elastic adds AGPL as a third licence option for Elasticsearch" }
+    ],
+    "sources": [
+      { "label": "Robertson and Zaragoza: The Probabilistic Relevance Framework, BM25 and beyond (Foundations and Trends in IR, 2009)", "url": "https://www.staff.city.ac.uk/~sbrp622/papers/foundations_bm25_review.pdf" },
+      { "label": "Wikipedia: Apache Lucene (history)", "url": "https://en.wikipedia.org/wiki/Apache_Lucene" },
+      { "label": "Russ Cox: Regular expression matching with a trigram index, or how Google Code Search worked (January 2012)", "url": "https://swtch.com/~rsc/regexp/regexp4.html" },
+      { "label": "Elastic blog: Doubling down on open, part II (Compass, Elasticsearch origins, licence change, January 2021)", "url": "https://www.elastic.co/blog/licensing-change" },
+      { "label": "AWS Open Source blog: Introducing OpenSearch (April 2021)", "url": "https://aws.amazon.com/blogs/opensource/introducing-opensearch/" },
+      { "label": "Elastic blog: Elasticsearch is open source. Again! (August 2024)", "url": "https://www.elastic.co/blog/elasticsearch-is-open-source-again" }
+    ]
+  },
+  "sources": [
+    { "label": "Russ Cox: Regular expression matching with a trigram index (posting lists, phrases, trigram queries, index size)", "url": "https://swtch.com/~rsc/regexp/regexp4.html" },
+    { "label": "Elasticsearch docs: Similarity settings (BM25 is the default)", "url": "https://www.elastic.co/docs/reference/elasticsearch/index-settings/similarity" },
+    { "label": "Elastic blog: Practical BM25, part 2, the BM25 algorithm and its variables (April 2018)", "url": "https://www.elastic.co/blog/practical-bm25-part-2-the-bm25-algorithm-and-its-variables" },
+    { "label": "PostgreSQL docs: Full text search, introduction (stemming, ranking, positions)", "url": "https://www.postgresql.org/docs/current/textsearch-intro.html" },
+    { "label": "PostgreSQL docs: Preferred index types for text search (GIN as an inverted index)", "url": "https://www.postgresql.org/docs/current/textsearch-indexes.html" },
+    { "label": "PostgreSQL docs: pg_trgm (trigram indexes for LIKE, ILIKE and regex)", "url": "https://www.postgresql.org/docs/current/pgtrgm.html" },
+    { "label": "AWS docs: What is Amazon OpenSearch Service? (OpenSearch and legacy Elasticsearch OSS up to 7.10)", "url": "https://docs.aws.amazon.com/opensearch-service/latest/developerguide/what-is.html" },
+    { "label": "Amazon RDS: PostgreSQL extensions supported on Amazon RDS (pg_trgm)", "url": "https://docs.aws.amazon.com/AmazonRDS/latest/PostgreSQLReleaseNotes/postgresql-extensions.html" },
+    { "label": "Elastic: Elastic on Google Cloud (Google Cloud Marketplace)", "url": "https://www.elastic.co/partners/google-cloud" },
+    { "label": "Google Cloud docs: Overview of Agent Search (formerly Vertex AI Search)", "url": "https://cloud.google.com/generative-ai-app-builder/docs/enterprise-search-introduction" },
+    { "label": "Spanner docs: Full-text search", "url": "https://cloud.google.com/spanner/docs/full-text-search" },
+    { "label": "BigQuery docs: Introduction to search in BigQuery", "url": "https://cloud.google.com/bigquery/docs/search-intro" },
+    { "label": "Cloud SQL for PostgreSQL docs: Configure PostgreSQL extensions (pg_trgm)", "url": "https://cloud.google.com/sql/docs/postgres/extensions" },
+    { "label": "Microsoft Learn: What’s Azure AI Search?", "url": "https://learn.microsoft.com/en-us/azure/search/search-what-is-azure-search" },
+    { "label": "Microsoft Learn: Extensions and versions in Azure Database for PostgreSQL (pg_trgm)", "url": "https://learn.microsoft.com/en-us/azure/postgresql/extensions/concepts-extensions-versions" },
+    { "label": "Elastic: Licensing FAQ (SSPL, ELv2, AGPLv3 option for the free portions)", "url": "https://www.elastic.co/pricing/faq/licensing" },
+    { "label": "elastic/elasticsearch LICENSE.txt (AGPL-3.0, SSPL 1 or Elastic License 2.0)", "url": "https://github.com/elastic/elasticsearch/blob/main/LICENSE.txt" },
+    { "label": "Linux Foundation: Announces OpenSearch Software Foundation (September 2024)", "url": "https://www.linuxfoundation.org/press/linux-foundation-announces-opensearch-software-foundation-to-foster-open-collaboration-in-search-and-analytics" },
+    { "label": "Apache Lucene", "url": "https://lucene.apache.org/" },
+    { "label": "Apache Solr on GitHub (Apache 2.0)", "url": "https://github.com/apache/solr" },
+    { "label": "Meilisearch LICENSE (MIT and BUSL-1.1 enterprise edition)", "url": "https://github.com/meilisearch/meilisearch/blob/main/LICENSE" },
+    { "label": "Typesense on GitHub (GPL-3.0)", "url": "https://github.com/typesense/typesense" },
+    { "label": "Tantivy on GitHub (MIT)", "url": "https://github.com/quickwit-oss/tantivy" },
+    { "label": "Quickwit blog: Quickwit joins Datadog, relicensing to Apache 2.0 (January 2025)", "url": "https://quickwit.io/blog/quickwit-joins-datadog" },
+    { "label": "CERT-Polska/ursadb on GitHub", "url": "https://github.com/CERT-Polska/ursadb" }
+  ]
+}

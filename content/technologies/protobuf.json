@@ -1,0 +1,144 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Protocol Buffers",
+  "concepts": ["rpc", "file-formats"],
+  "kinds": ["binary-serialization"],
+  "provider": "oss",
+  "vendor": "Google LLC",
+  "license": "BSD 3-Clause (Apache 2.0 until version 2.0.2 in September 2008)",
+  "website": "https://protobuf.dev/",
+  "repo": "https://github.com/protocolbuffers/protobuf",
+  "summary": "Google’s schema-first binary encoding: messages defined in `.proto` files, fields identified by number, code generated for each language.",
+  "intro": [
+    "You describe messages in a `.proto` file, where every field has a name, a type and a number. The compiler, `protoc`, generates classes for C++, Java, Python, Go and other languages, with accessors and methods that turn a message into bytes and back. On the wire a message is a list of records. Each starts with a tag that packs the field number and a wire type into one varint, `(field_number << 3) | wire_type`, followed by the value. Varints use 7 bits per byte, so small numbers take one byte: field 1 set to 150 encodes as `08 96 01`. Strings, nested messages and packed lists carry a length prefix, and unset fields aren’t written at all. Field names never appear, so a reader needs the `.proto` to know what field 2 means, but the wire type tells it how many bytes to skip. That is how old code ignores fields added later.",
+    "The skip rule is the compatibility contract. Adding a field with a new number is safe; removing one is safe if its number is reserved and never reused; changing a field’s number or moving it into an existing `oneof` breaks readers. The language has three dialects: proto2 (open-sourced in 2008), proto3 (stable in 2016) and Editions (from protoc 27.0 in 2024), which replace both with per-feature settings and leave the bytes unchanged. Protobuf is free under a BSD licence, and Google develops it for its own needs, accepting selected outside pull requests. Beyond RPC, it is gRPC’s default message format, the binary encoding of OpenTelemetry’s OTLP, the body of Prometheus remote-write requests and one of three formats Confluent Schema Registry supports for Kafka."
+  ],
+  "strengths": [
+    "Compact: field numbers and varints instead of names and text, and unset fields cost nothing",
+    "Written-down evolution rules for binary and JSON: add fields with new numbers, reserve deleted ones, and old and new code keep reading each other’s messages",
+    "One `.proto` generates code for C++, C#, Java, Kotlin, Objective-C, PHP, Python and Ruby in `protoc`, Dart and Go through Google’s plugins, and more languages through third-party projects",
+    "A defined JSON mapping (ProtoJSON) for debugging and for HTTP APIs that also need JSON",
+    "Used well beyond RPC: OTLP telemetry, Prometheus remote write, Kafka topics with a schema registry, and storage inside Google"
+  ],
+  "limits": [
+    "Not self-describing: without the `.proto` you see only field numbers and raw values, so Kafka topics need a schema registry and stored data needs its schema kept somewhere",
+    "Whole messages are parsed into memory before use; the docs suggest another format above a few megabytes, and encoded messages must stay under 2 GiB",
+    "Encoding isn’t canonical: the same message can produce different bytes, so you can’t compare or hash encoded messages to test equality",
+    "Row-at-a-time with a parse step: no random access or column scans, so analytics wants Parquet, and Cap’n Proto skips the parse entirely",
+    "Google steers it to its own needs, and proto2, proto3 and Editions coexist during a long transition"
+  ],
+  "worksWith": [
+    { "id": "kafka", "how": "is a Schema Registry message format on" },
+    { "id": "opentelemetry", "how": "is the binary encoding of OTLP in" },
+    { "id": "prometheus", "how": "encodes remote-write requests from" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Define a message, then look at its bytes with protoc",
+    "source": [
+      "cat > order.proto <<'EOF'",
+      "edition = \"2023\";",
+      "package shop;",
+      "",
+      "message Order {",
+      "  int64 id = 1;",
+      "  string customer = 2;",
+      "  repeated int32 item_ids = 3;  // packed by default since edition 2023",
+      "  reserved 4;                   // was `coupon`: never reuse the number",
+      "}",
+      "EOF",
+      "",
+      "# Encode a text-format message; field numbers, not names, go on the wire",
+      "echo 'id: 150 customer: \"ada\" item_ids: [1, 2, 3]' | protoc --encode=shop.Order order.proto | xxd",
+      "# 00000000: 0896 0112 0361 6461 1a03 0102 03   .....ada.....",
+      "",
+      "# Decode without the schema: only numbers and raw values survive",
+      "echo 'id: 150 customer: \"ada\"' | protoc --encode=shop.Order order.proto | protoc --decode_raw",
+      "# 1: 150",
+      "# 2: \"ada\"",
+      "",
+      "protoc --python_out=. --java_out=. order.proto  # generated classes per language"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Protocol Buffers, Avro and JSON",
+      "intro": "All three can carry the same record. They differ in where the field names live and what a reader needs to make sense of the bytes.",
+      "columns": ["Protocol Buffers", "Avro", "JSON"],
+      "rows": [
+        { "label": "Schema", "values": ["A `.proto` file, compiled to code", "JSON schema; code generation optional", "None in the format"] },
+        { "label": "How a field is found in the bytes", "values": ["By the field number in its tag", "By position, following the writer’s schema", "By its name, written out in every object"] },
+        { "label": "Read without the schema", "values": ["Numbers and raw values only", "No: values carry no tags", "Yes"] },
+        { "label": "Adding a field", "values": ["Give it a new number; old readers skip it", "Give it a default; fields are matched by name", "Up to each application"] },
+        { "label": "Bytes for id 150 and customer “ada”", "values": ["8", "6", "27"] }
+      ],
+      "notes": [
+        "Sizes are for the bare encodings: `08 96 01 12 03 61 64 61` in Protobuf, a zigzag varint and a length-prefixed string in Avro, and `{\"id\":150,\"customer\":\"ada\"}` without spaces. Avro container files add a header with the schema, and Confluent’s Kafka serializers put a version byte and a 4-byte schema ID in front of each message by default."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "proto2, proto3 and Editions",
+      "intro": "The bytes on the wire are the same in all three; what changes is the `.proto` syntax and the generated code’s behaviour.",
+      "items": [
+        { "name": "proto2", "tag": "2008", "text": "The first open-source version, a rewrite of Google’s internal Proto1. Fields are `optional`, `required` or `repeated`; optional fields remember whether they were set, defaults can be customised, and enums are closed. Still supported by current `protoc`." },
+        { "name": "proto3", "tag": "2016", "text": "Released alongside gRPC. Drops `required`; plain fields have no presence, so zero and unset look the same, and defaults are fixed per type. Repeated numbers are packed and enums open. Unknown fields were dropped at first and kept again from 3.5 (2017); `optional` returned by default in 3.15 (2021)." },
+        { "name": "Editions", "tag": "2023 onwards", "text": "`edition = \"2023\"` replaces the `syntax` line. Each behaviour (presence, packing, open or closed enums, UTF-8 checks) becomes a feature with a default per edition, which you can override per file, message or field. Edition 2023 needs protoc 27.0 (May 2024), 2024 needs 32.0 (August 2025) and 2026 needs 36.0 (August 2026)." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Google used thousands of data formats for messages between servers, index records and more. XML was too expensive at that scale, writing raw in-memory structs broke as soon as a new server version had to talk to old ones, and hand-written parsers didn’t scale to tens of thousands of structures. So, starting in early 2001, Google built Protocol Buffers: define records in a small language and compile them into classes. This first version, Proto1, grew new features whenever a team needed one and became, in Google’s own words, “a bit of a mess”.",
+      "Proto2, a complete rewrite whose primary author was Kenton Varda, kept most of the design but dropped the dependencies on Google’s internal libraries. Google open-sourced it on July 7, 2008, partly because other projects it wanted to release depended on it. A new generation, proto3, came out alongside gRPC in February 2015 and was declared stable in version 3.0.0 in July 2016.",
+      "In 2023 Google introduced Editions, which turn the all-or-nothing choice between proto2 and proto3 into individual features that can change a little with each yearly edition."
+    ],
+    "choices": [
+      { "choice": "Field numbers on the wire, names only in the schema", "why": "Numbers keep messages small, and they let servers running different versions exchange data, which Google needed because new servers almost always start out talking to old ones." },
+      { "choice": "Every record says how to skip it", "why": "The wire type tells a parser how long the value is, so old code can step over fields added after it was built instead of failing." },
+      { "choice": "Generated classes instead of hand-written parsers", "why": "With tens of thousands of structures in Google’s code base, writing each serializer by hand had already failed. A compiler produces the same optimised code for every type and language." },
+      { "choice": "No `required` fields in proto3", "why": "A required field can never safely be dropped, because any older parser in the path rejects messages without it. Google’s guide says required fields were “considered harmful by so many they were removed from proto3 completely”." }
+    ],
+    "timeline": [
+      { "year": "2001", "text": "Work on Proto1 starts inside Google" },
+      { "year": "2008", "text": "Proto2 is open-sourced on July 7; licence moves to BSD in September" },
+      { "year": "2015", "text": "proto3 arrives alongside gRPC in February" },
+      { "year": "2016", "text": "Version 3.0.0 makes proto3 stable in July" },
+      { "year": "2017", "text": "Version 3.5 keeps unknown fields in proto3 again" },
+      { "year": "2024", "text": "Editions officially released in protoc 27.0 in May" },
+      { "year": "2026", "text": "Edition 2026 arrives with protoc 36.0 in August" }
+    ],
+    "sources": [
+      { "label": "Google Open Source Blog: Protocol Buffers, Google’s data interchange format (Kenton Varda, July 2008)", "url": "https://opensource.googleblog.com/2008/07/protocol-buffers-googles-data.html" },
+      { "label": "Protocol Buffers docs: History (Proto1, Proto2, Editions)", "url": "https://protobuf.dev/history/" },
+      { "label": "Cap’n Proto: Introduction (Kenton Varda, primary author of Protocol Buffers v2)", "url": "https://capnproto.org/" },
+      { "label": "protocolbuffers/protobuf: CHANGES.txt (2.0.0 in July 2008; licence changed to New BSD in 2.0.2)", "url": "https://github.com/protocolbuffers/protobuf/blob/v3.0.0/CHANGES.txt" },
+      { "label": "Google Developers Blog: Introducing gRPC, with proto3 (February 2015)", "url": "https://developers.googleblog.com/introducing-grpc-a-new-open-source-http2-rpc-framework/" },
+      { "label": "protocolbuffers/protobuf: release v3.0.0 (July 2016)", "url": "https://github.com/protocolbuffers/protobuf/releases/tag/v3.0.0" },
+      { "label": "protocolbuffers/protobuf: release v3.5.0, unknown fields preserved in proto3 (November 2017)", "url": "https://github.com/protocolbuffers/protobuf/releases/tag/v3.5.0" },
+      { "label": "protocolbuffers/protobuf: release v27.0, Editions officially released (May 2024)", "url": "https://github.com/protocolbuffers/protobuf/releases/tag/v27.0" },
+      { "label": "Protocol Buffers docs: Proto best practices (don’t add a required field)", "url": "https://protobuf.dev/best-practices/dos-donts/" },
+      { "label": "Cap’n Proto: FAQ (why required fields broke Google systems)", "url": "https://capnproto.org/faq.html" }
+    ]
+  },
+  "sources": [
+    { "label": "Protocol Buffers docs: Overview (languages, when it’s not a good fit, open-source philosophy)", "url": "https://protobuf.dev/overview/" },
+    { "label": "Protocol Buffers docs: Encoding (varints, tags, wire types, 2 GiB limit)", "url": "https://protobuf.dev/programming-guides/encoding/" },
+    { "label": "Protocol Buffers docs: Language guide, proto3 (field numbers, updating a message type, defaults, unknown fields)", "url": "https://protobuf.dev/programming-guides/proto3/" },
+    { "label": "Protocol Buffers docs: ProtoJSON format and JSON wire safety", "url": "https://protobuf.dev/programming-guides/json/" },
+    { "label": "Protocol Buffers docs: Protobuf Editions overview (proto2 and proto3 compared)", "url": "https://protobuf.dev/editions/overview/" },
+    { "label": "Protocol Buffers docs: Version support (minimum protoc per edition)", "url": "https://protobuf.dev/support/version-support/" },
+    { "label": "protocolbuffers/protobuf: release v3.15.0, proto3 optional on by default (February 2021)", "url": "https://github.com/protocolbuffers/protobuf/releases/tag/v3.15.0" },
+    { "label": "protocolbuffers/protobuf: release v32.0, edition 2024 support (August 2025)", "url": "https://github.com/protocolbuffers/protobuf/releases/tag/v32.0" },
+    { "label": "protocolbuffers/protobuf: release v36.0, edition 2026 (August 2026)", "url": "https://github.com/protocolbuffers/protobuf/releases/tag/v36.0" },
+    { "label": "protocolbuffers/protobuf: LICENSE (BSD 3-Clause)", "url": "https://github.com/protocolbuffers/protobuf/blob/main/LICENSE" },
+    { "label": "Apache Avro specification: binary encoding and schema resolution", "url": "https://avro.apache.org/docs/++version++/specification/" },
+    { "label": "RFC 8259: The JavaScript Object Notation (JSON) data interchange format", "url": "https://www.rfc-editor.org/rfc/rfc8259" },
+    { "label": "OpenTelemetry: OTLP specification (binary and JSON Protobuf encodings)", "url": "https://opentelemetry.io/docs/specs/otlp/" },
+    { "label": "Prometheus: Remote-Write specification (Protobuf, Snappy-compressed)", "url": "https://prometheus.io/docs/specs/prw/remote_write_spec/" },
+    { "label": "Confluent docs: Formats, serializers and deserializers (Avro, Protobuf, JSON Schema; wire format)", "url": "https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html" },
+    { "label": "Cap’n Proto: Cap’n Proto, FlatBuffers and SBE compared (Protobuf must parse before use)", "url": "https://capnproto.org/news/2014-06-17-capnproto-flatbuffers-sbe.html" }
+  ],
+  "checked": "2026-10-06"
+}

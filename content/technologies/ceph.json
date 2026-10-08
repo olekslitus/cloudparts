@@ -1,0 +1,120 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Ceph",
+  "concepts": ["object", "block", "file"],
+  "provider": "oss",
+  "vendor": "Ceph Foundation (Linux Foundation); IBM is the premier sponsor",
+  "license": "LGPL 2.1 or 3 (core)",
+  "website": "https://ceph.io/",
+  "repo": "https://github.com/ceph/ceph",
+  "summary": "A distributed storage cluster that serves S3 buckets, block devices and a file system from the same pool of disks.",
+  "intro": [
+    "Ceph is built on RADOS, a cluster of storage daemons that keeps everything as objects in a flat namespace. Each disk runs an OSD daemon, and a small group of monitors keeps the cluster map and agrees on changes to it with Paxos. Clients don’t ask a central server where data lives: they hash an object’s name into a placement group and run CRUSH, a placement function, to map that group onto OSDs according to rules such as “one copy per host” or “one per rack”. Each pool is either replicated (three copies is typical) or erasure-coded, and the OSDs copy, check and repair data among themselves when a disk fails.",
+    "Three gateways sit on top. The RADOS Gateway (`radosgw`, or RGW) is an HTTP server that speaks a large subset of the S3 API, plus OpenStack Swift: it keeps each bucket’s index as key-value data (omap) on RADOS objects in an index pool and stores object contents in a data pool. RBD serves block devices to VMs and Kubernetes volumes, and CephFS adds a POSIX file system with its own metadata servers. New clusters are usually deployed with `cephadm`, which runs every daemon in a container. On Kubernetes, Rook, a CNCF graduated operator, runs Ceph for you: you declare a `CephCluster` and a `CephObjectStore`, Rook creates the pools and RGW pods, and apps can request buckets with an `ObjectBucketClaim`."
+  ],
+  "strengths": [
+    "One cluster serves S3 buckets, block volumes and a shared file system, so a single platform and team can cover all three",
+    "Broad S3 coverage: versioning, Object Lock, bucket policies, lifecycle rules, server-side encryption and notifications to Kafka, AMQP or HTTP, plus the Swift API",
+    "CRUSH rules spread copies across hosts, racks or rooms, and the cluster recovers by itself when disks or nodes fail",
+    "Multisite RGW replicates between zones in different data centres, and every zone can accept writes",
+    "Mature and widely deployed: research since 2004, a foundation-backed community and commercial support from IBM and others"
+  ],
+  "limits": [
+    "Far more to run than a single S3 server: monitors, managers, OSDs and gateways, each with its own failure modes and upgrade steps",
+    "Hungry for hardware: monitors need a majority to agree, so plan for at least three hosts, and each OSD targets 4 GB of RAM by default (about 48 GB for a 12-disk node)",
+    "Performance depends on tuning: the docs say the bucket index and data pools need placement-group tuning beyond the defaults, and a wrong CRUSH rule can put copies in the same failure domain",
+    "S3 support is a large subset, not all of it: bucket replication works only between RGW zones, and some headers and canned ACLs differ from AWS"
+  ],
+  "worksWith": [
+    { "id": "s3", "how": "speaks the API of" },
+    { "id": "kubernetes", "how": "runs (through Rook) on" },
+    { "id": "kafka", "how": "can send bucket notifications to" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Bootstrap a small cluster with cephadm, add an S3 gateway and use it with the aws CLI",
+    "source": [
+      "# on the first host: start a monitor and manager in containers",
+      "cephadm bootstrap --mon-ip 10.0.0.11",
+      "ceph orch host add node2 10.0.0.12",
+      "ceph orch host add node3 10.0.0.13",
+      "ceph orch apply osd --all-available-devices",
+      "",
+      "# two RADOS Gateway daemons serving S3 on port 8080",
+      "ceph orch apply rgw objects --placement=\"2 node1 node2\" --port=8080",
+      "",
+      "# an S3 user; the JSON output contains its access and secret keys",
+      "radosgw-admin user create --uid=backups --display-name=\"Backup jobs\"",
+      "",
+      "aws s3 mb s3://backups --endpoint-url http://node1:8080",
+      "aws s3 cp --recursive ./exports/ s3://backups/2026-10-05/ --endpoint-url http://node1:8080"
+    ]
+  },
+  "sections": [
+    {
+      "type": "text",
+      "title": "Moving from MinIO",
+      "body": [
+        "RGW covers nearly everything MinIO users rely on: versioning, Object Lock, bucket policies, lifecycle rules, server-side encryption, notifications and cross-site replication. The difference is the platform underneath. MinIO is one binary per server; Ceph is a cluster with its own operating model, so budget time to learn `ceph` and `radosgw-admin`, or let Rook run it if you are already on Kubernetes. Pick Ceph when you also want block or file storage, or need to grow to many petabytes; for buckets alone, a lighter store is less work.",
+        "Data moves over the S3 API. Create users with `radosgw-admin`, recreate buckets and their policies, then copy objects with `rclone sync minio:bucket ceph:bucket` (rclone has a `Ceph` provider setting). Run the sync again just before cutover to catch new writes, then switch the endpoint in your apps. Users, policies, lifecycle rules and notification targets don’t travel with the objects and have to be recreated, and a plain sync copies only current versions, not older ones."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Ceph began as Sage Weil’s PhD research at the University of California, Santa Cruz, funded by Lawrence Livermore, Sandia and Los Alamos national laboratories, which needed storage that could scale across thousands of disks. Weil wrote the first code in 2004. In November 2006 he presented the Ceph file system at OSDI and CRUSH, its placement algorithm, at SC ’06. RADOS, the object store underneath, followed in 2007, the year he finished his thesis.",
+      "Weil kept working on Ceph full-time after graduating, and in 2010 its client was merged into the Linux kernel. In 2012 he founded Inktank to sell support. Red Hat bought Inktank in 2014 for about $175 million; Inktank’s customers already included CERN and Cisco, and many early OpenStack clouds ran on Ceph’s object and block storage.",
+      "The Linux Foundation launched the Ceph Foundation in 2018. At the start of 2023 Red Hat’s Ceph team moved to IBM, which became the foundation’s premier sponsor and said its Ceph products would stay 100% open source and upstream-first."
+    ],
+    "choices": [
+      { "choice": "Compute where data lives instead of looking it up", "why": "A central table of every object’s location becomes a bottleneck at petabyte scale. With CRUSH, every client and OSD calculates locations from a small cluster map and talks to the right disks directly." },
+      { "choice": "Smart storage daemons", "why": "OSDs replicate data, watch their peers and recover lost copies themselves, so the monitors stay small and the cluster heals without a central coordinator." },
+      { "choice": "One object store, several interfaces", "why": "Building block devices, a file system and an S3 gateway on the same RADOS layer means one cluster can serve VMs, shared directories and buckets." }
+    ],
+    "timeline": [
+      { "year": "2004", "text": "Sage Weil writes the first Ceph code during his PhD at UC Santa Cruz" },
+      { "year": "2006", "text": "Ceph paper at OSDI and CRUSH paper at SC ’06" },
+      { "year": "2010", "text": "Ceph client merged into Linux 2.6.34" },
+      { "year": "2012", "text": "Weil founds Inktank to support Ceph commercially" },
+      { "year": "2014", "text": "Red Hat acquires Inktank for about $175 million" },
+      { "year": "2018", "text": "The Linux Foundation launches the Ceph Foundation" },
+      { "year": "2023", "text": "Red Hat’s Ceph team and product move to IBM" }
+    ],
+    "sources": [
+      { "label": "Ceph: Publications (thesis, OSDI, CRUSH and RADOS papers)", "url": "https://ceph.io/en/news/publications/" },
+      { "label": "USENIX OSDI ’06: Ceph: A Scalable, High-Performance Distributed File System", "url": "https://www.usenix.org/conference/osdi-06/ceph-scalable-high-performance-distributed-file-system" },
+      { "label": "CRUSH: Controlled, Scalable, Decentralized Placement of Replicated Data (SC ’06)", "url": "https://ceph.io/assets/pdfs/weil-crush-sc06.pdf" },
+      { "label": "Red Hat to Acquire Inktank, Provider of Ceph (April 2014)", "url": "https://www.redhat.com/en/about/press-releases/red-hat-acquire-inktank-provider-ceph" },
+      { "label": "IBM: Adding Red Hat Storage to IBM Offerings (October 2022)", "url": "https://newsroom.ibm.com/2022-10-04-IBM-Redefines-Hybrid-Cloud-Application-and-Data-Storage-Adding-Red-Hat-Storage-to-IBM-Offerings" },
+      { "label": "Wikipedia: Ceph (software)", "url": "https://en.wikipedia.org/wiki/Ceph_(software)" }
+    ]
+  },
+  "sources": [
+    { "label": "Ceph", "url": "https://ceph.io/" },
+    { "label": "ceph/ceph on GitHub", "url": "https://github.com/ceph/ceph" },
+    { "label": "ceph/ceph: COPYING (licence)", "url": "https://github.com/ceph/ceph/blob/main/COPYING" },
+    { "label": "Ceph docs: Architecture", "url": "https://docs.ceph.com/en/tentacle/architecture/" },
+    { "label": "Ceph docs: Pools", "url": "https://docs.ceph.com/en/tentacle/rados/operations/pools/" },
+    { "label": "Ceph docs: Ceph Object Gateway", "url": "https://docs.ceph.com/en/tentacle/radosgw/" },
+    { "label": "Ceph docs: Ceph Object Gateway S3 API (feature support)", "url": "https://docs.ceph.com/en/tentacle/radosgw/s3/" },
+    { "label": "Ceph docs: S3 bucket operations (Object Lock)", "url": "https://docs.ceph.com/en/tentacle/radosgw/s3/bucketops/" },
+    { "label": "Ceph docs: RGW data layout", "url": "https://docs.ceph.com/en/tentacle/radosgw/layout/" },
+    { "label": "Ceph docs: RGW pools", "url": "https://docs.ceph.com/en/tentacle/radosgw/pools/" },
+    { "label": "Ceph docs: RGW multisite", "url": "https://docs.ceph.com/en/tentacle/radosgw/multisite/" },
+    { "label": "Ceph docs: Bucket notifications", "url": "https://docs.ceph.com/en/tentacle/radosgw/notifications/" },
+    { "label": "Ceph docs: RGW admin guide", "url": "https://docs.ceph.com/en/tentacle/radosgw/admin/" },
+    { "label": "Ceph docs: Deploying a new cluster with cephadm", "url": "https://docs.ceph.com/en/tentacle/cephadm/install/" },
+    { "label": "Ceph docs: cephadm host management", "url": "https://docs.ceph.com/en/tentacle/cephadm/host-management/" },
+    { "label": "Ceph docs: cephadm OSD service", "url": "https://docs.ceph.com/en/tentacle/cephadm/services/osd/" },
+    { "label": "Ceph docs: cephadm RGW service", "url": "https://docs.ceph.com/en/tentacle/cephadm/services/rgw/" },
+    { "label": "Ceph docs: Hardware recommendations", "url": "https://docs.ceph.com/en/tentacle/start/hardware-recommendations/" },
+    { "label": "Ceph docs: Releases", "url": "https://docs.ceph.com/en/latest/releases/" },
+    { "label": "IBM: Adding Red Hat Storage to IBM Offerings (October 2022)", "url": "https://newsroom.ibm.com/2022-10-04-IBM-Redefines-Hybrid-Cloud-Application-and-Data-Storage-Adding-Red-Hat-Storage-to-IBM-Offerings" },
+    { "label": "Rook", "url": "https://rook.io/" },
+    { "label": "Rook docs: Object storage", "url": "https://rook.io/docs/rook/latest-release/Storage-Configuration/Object-Storage-RGW/object-storage/" },
+    { "label": "CNCF: Rook", "url": "https://www.cncf.io/projects/rook/" },
+    { "label": "rclone docs: Amazon S3 and compatible providers", "url": "https://rclone.org/s3/" },
+    { "label": "rclone docs: rclone sync", "url": "https://rclone.org/commands/rclone_sync/" }
+  ],
+  "checked": "2026-10-05"
+}

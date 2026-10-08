@@ -1,0 +1,130 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "pg_trgm",
+  "concepts": ["search", "relational"],
+  "provider": "oss",
+  "vendor": "PostgreSQL Global Development Group",
+  "license": "PostgreSQL License",
+  "website": "https://www.postgresql.org/docs/current/pgtrgm.html",
+  "repo": "https://github.com/postgres/postgres/tree/master/contrib/pg_trgm",
+  "summary": "A PostgreSQL extension that splits text into three-letter pieces, so `LIKE '%foo%'`, regex and typo-tolerant searches can use an index.",
+  "intro": [
+    "pg_trgm ships with PostgreSQL as a contrib module and is switched on per database with `CREATE EXTENSION pg_trgm`. It breaks text into trigrams: groups of three consecutive characters. Characters that aren’t letters or digits are ignored, and each word gets two spaces in front and one behind, so “cat” becomes “  c”, “ ca”, “cat” and “at ”. Two strings are as similar as the share of trigrams they have in common. `similarity()` returns a score from 0 to 1, and the `%` operator is true when the score passes `pg_trgm.similarity_threshold` (0.3 by default). `word_similarity()` scores the best-matching stretch of a longer string, for searching inside titles or descriptions.",
+    "The speed comes from two index operator classes. `gin_trgm_ops` builds a GIN index, an inverted index that keeps, for each trigram, the list of rows that contain it. `gist_trgm_ops` builds a GiST index that squeezes each value into a fixed-size bitmap signature, 12 bytes by default. Both can answer `LIKE`, `ILIKE`, `~` and `~*` with patterns that aren’t anchored at the start: PostgreSQL pulls the trigrams out of the pattern, finds the rows that contain them, then checks each candidate row against the real pattern. Only GiST can return the nearest matches by distance (`ORDER BY name <-> 'query' LIMIT 10`). It costs nothing beyond PostgreSQL itself, and Amazon RDS, Cloud SQL and Azure Database for PostgreSQL all offer it."
+  ],
+  "strengths": [
+    "Substring and regular-expression searches (`ILIKE '%wireless%'`, `~ '(foo|bar)'`) can use an index, where a B-tree only helps with patterns anchored at the start, such as `LIKE 'foo%'`",
+    "Typo-tolerant lookups and “did you mean” suggestions with `similarity()` and `%`, ranked by score; a GiST index returns the closest matches directly",
+    "Lives inside the database: the index is updated in the same transaction as the row, so there is no second system to feed or let drift out of date",
+    "No dictionaries or stemming, so it works on names, product codes, file paths and mixed languages that word-based full-text search handles poorly"
+  ],
+  "limits": [
+    "Patterns shorter than three characters, or made only of punctuation (non-alphanumeric characters are ignored), yield no trigrams, and the search falls back to scanning the whole index; very common trigrams also leave many candidate rows to recheck",
+    "GIN writes are expensive: every row adds one entry per distinct trigram. The pending list makes most writes fast but now and then one pays for a flush; GitLab measured flushes of about 0.5 to 3 seconds on merge-request descriptions",
+    "GiST is lossy: its signatures produce false matches that PostgreSQL must recheck against the table, and longer signatures (up to 2,024 bytes) cut rechecks only by making the index larger",
+    "Not a document search engine: no stemming, phrases, synonyms or BM25-style relevance, and on very short words one typo changes most of the few trigrams there are; equality is better served by a B-tree, and `<` or `>` aren’t supported at all"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "is a contrib extension for" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "Index a column for substring and fuzzy search",
+    "source": [
+      "CREATE EXTENSION IF NOT EXISTS pg_trgm;",
+      "",
+      "CREATE TABLE products (",
+      "  id   bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,",
+      "  name text NOT NULL",
+      ");",
+      "CREATE INDEX products_name_trgm ON products USING gin (name gin_trgm_ops);",
+      "",
+      "SELECT show_trgm('cat');  -- {\"  c\",\" ca\",\"at \",cat}",
+      "",
+      "-- unanchored, case-insensitive substring search can use the index",
+      "SELECT id, name FROM products WHERE name ILIKE '%headphone%';",
+      "",
+      "-- typo-tolerant: 'wireles hedphones' still finds 'Wireless Headphones'",
+      "SET pg_trgm.similarity_threshold = 0.3;",
+      "SELECT name, similarity(name, 'wireles hedphones') AS score",
+      "FROM products",
+      "WHERE name % 'wireles hedphones'",
+      "ORDER BY score DESC",
+      "LIMIT 10;"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "GIN or GiST for trigrams",
+      "intro": "Both operator classes speed up the same operators. They differ in what they store, which changes lookup speed, write cost and what they can sort by.",
+      "columns": ["GIN (`gin_trgm_ops`)", "GiST (`gist_trgm_ops`)"],
+      "rows": [
+        { "label": "What it stores", "values": ["Each trigram once, with the list of rows that contain it", "One fixed-length bitmap signature per row (12 bytes by default, `siglen` 1 to 2,024)"] },
+        { "label": "False matches", "values": ["None from the index itself; rows are still rechecked against `LIKE` and regex patterns", "Yes: different trigrams can set the same bit, so more rows are fetched and rechecked"] },
+        { "label": "`LIKE`, `ILIKE`, `~`, `~*`, `%`", "values": ["Yes", "Yes"] },
+        { "label": "Nearest matches (`ORDER BY col <-> 'q' LIMIT n`)", "values": ["No", "Yes"] },
+        { "label": "Writes", "values": ["Many index entries per row; batched in a pending list unless `fastupdate` is off", "One entry per row"] },
+        { "label": "Tuning", "values": ["`gin_pending_list_limit`, `fastupdate`; build speed depends on `maintenance_work_mem`", "`siglen`: longer signatures mean fewer rechecks and a bigger index"] }
+      ],
+      "notes": [
+        "PostgreSQL’s docs call GIN the preferred index type for full-text search, where the same two structures compete. Pick GiST when you need nearest-match ordering."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Other ways to search text in PostgreSQL",
+      "items": [
+        { "name": "B-tree with `text_pattern_ops`", "tag": "prefix only", "text": "A plain B-tree serves `LIKE 'foo%'` and `~ '^foo'` (outside the C locale, build it with `text_pattern_ops`). Small and cheap to update, but useless for `'%foo%'`." },
+        { "name": "Built-in full-text search", "tag": "words", "text": "`tsvector` columns with a GIN index match stemmed words and rank results with `ts_rank`. Better for documents and articles; pg_trgm’s docs suggest pairing the two to correct misspelled query words." },
+        { "name": "A separate search engine", "tag": "another system", "text": "Elasticsearch, OpenSearch or Meilisearch add relevance tuning, facets and typo handling across many fields, at the price of a second system that has to be kept in sync with the database." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "A B-tree index can only help a pattern search that is anchored at the start of the string, so `LIKE '%foo%'` meant reading every row, and fuzzy matching meant computing a distance against every value. Teodor Sigaev and Oleg Bartunov, Moscow developers who maintained PostgreSQL’s GiST support and the tsearch2 full-text module, added a trigram module to contrib in May 2004. It shipped with PostgreSQL 8.0 in January 2005, with GiST support and similarity matching for things like misspelled words.",
+      "Others kept extending it. Guillaume Smet added GIN support in 8.3 (2008). In 9.1 (2011) Alexander Korotkov taught the indexes to answer `LIKE` and `ILIKE`, and Sigaev added nearest-neighbour search. Korotkov added indexed regular expressions in 9.3 (2013), and word similarity followed in 9.6 (2016) with Artur Zakirov. The result is that substring, regex and fuzzy search on an ordinary text column became an index lookup instead of a full table scan, without adding a search engine."
+    ],
+    "choices": [
+      { "choice": "Trigrams instead of words", "why": "Counting shared three-character groups needs no dictionary and no language rules, and a misspelled word still shares most of its trigrams with the right one. The docs call this simple idea very effective for measuring word similarity in many languages." },
+      { "choice": "Padding each word with spaces", "why": "Two spaces in front and one behind give the start and end of every word trigrams of their own, so even short words produce something to compare, and matches at word boundaries count." },
+      { "choice": "The index finds candidates, the row decides", "why": "Trigrams can say which rows might match but not whether they do, especially for regex. The index returns candidates and PostgreSQL rechecks each against the real operator, so results are always exact." },
+      { "choice": "Both a GiST and a GIN operator class", "why": "GiST came first and later learned to order by distance; GIN, added for 8.3, keeps exact per-trigram row lists for faster lookups. The docs leave the choice to the workload." }
+    ],
+    "timeline": [
+      { "year": "2004", "text": "Teodor Sigaev commits the trigram module to contrib in May" },
+      { "year": "2005", "text": "Ships with PostgreSQL 8.0 in January, with GiST indexes" },
+      { "year": "2008", "text": "PostgreSQL 8.3 adds GIN support" },
+      { "year": "2011", "text": "9.1 indexes `LIKE` and `ILIKE` and adds nearest-neighbour search" },
+      { "year": "2013", "text": "9.3 indexes regular-expression searches" },
+      { "year": "2016", "text": "9.6 adds `word_similarity()`" },
+      { "year": "2020", "text": "PostgreSQL 13 lets GiST indexes set their signature length" }
+    ],
+    "sources": [
+      { "label": "postgres/postgres on GitHub: “trgm - Trigram matching for PostgreSQL” (Teodor Sigaev, May 2004)", "url": "https://github.com/postgres/postgres/commit/cbfa4092bb9c0668dba9870ca06038aebe71d7e6" },
+      { "label": "PostgreSQL 8.0 release notes (new contrib/trgm, January 2005)", "url": "https://www.postgresql.org/docs/release/8.0.0/" },
+      { "label": "PostgreSQL 8.3 release notes (GIN support for contrib/pg_trgm, February 2008)", "url": "https://www.postgresql.org/docs/release/8.3.0/" },
+      { "label": "PostgreSQL 9.1 release notes (LIKE and ILIKE index searches, nearest-neighbour search, September 2011)", "url": "https://www.postgresql.org/docs/release/9.1.0/" },
+      { "label": "PostgreSQL 9.3 release notes (indexing of regular-expression searches, September 2013)", "url": "https://www.postgresql.org/docs/release/9.3.0/" },
+      { "label": "PostgreSQL 9.6 release notes (word similarity, September 2016)", "url": "https://www.postgresql.org/docs/release/9.6.0/" }
+    ]
+  },
+  "sources": [
+    { "label": "PostgreSQL docs: pg_trgm (trigrams, functions, operators, thresholds, GIN and GiST index support, authors)", "url": "https://www.postgresql.org/docs/current/pgtrgm.html" },
+    { "label": "PostgreSQL docs: Index types (B-tree serves LIKE only when anchored at the start)", "url": "https://www.postgresql.org/docs/current/indexes-types.html" },
+    { "label": "PostgreSQL docs: Operator classes (text_pattern_ops)", "url": "https://www.postgresql.org/docs/current/indexes-opclass.html" },
+    { "label": "PostgreSQL docs: GIN indexes (fast update, pending list, create vs insert)", "url": "https://www.postgresql.org/docs/current/gin.html" },
+    { "label": "PostgreSQL docs: Preferred index types for text search (GIN vs GiST, lossy signatures)", "url": "https://www.postgresql.org/docs/current/textsearch-indexes.html" },
+    { "label": "PostgreSQL docs: Full text search, introduction (stemming, ranking)", "url": "https://www.postgresql.org/docs/current/textsearch-intro.html" },
+    { "label": "PostgreSQL 11 release notes (strict_word_similarity)", "url": "https://www.postgresql.org/docs/release/11.0/" },
+    { "label": "PostgreSQL 13 release notes (GiST signature length for pg_trgm)", "url": "https://www.postgresql.org/docs/release/13.0/" },
+    { "label": "pganalyze: Understanding Postgres GIN indexes, the good and the bad (GitLab trigram index pending-list flushes, December 2021)", "url": "https://pganalyze.com/blog/gin-index" },
+    { "label": "depesz: Waiting for 9.1, faster LIKE/ILIKE (index build time on 2 million rows, February 2011)", "url": "https://www.depesz.com/2011/02/19/waiting-for-9-1-faster-likeilike/" },
+    { "label": "PostgreSQL License", "url": "https://www.postgresql.org/about/licence/" },
+    { "label": "Amazon RDS: PostgreSQL extensions supported on Amazon RDS", "url": "https://docs.aws.amazon.com/AmazonRDS/latest/PostgreSQLReleaseNotes/postgresql-extensions.html" },
+    { "label": "Cloud SQL for PostgreSQL docs: Configure PostgreSQL extensions", "url": "https://cloud.google.com/sql/docs/postgres/extensions" },
+    { "label": "Microsoft Learn: Extensions and versions in Azure Database for PostgreSQL", "url": "https://learn.microsoft.com/en-us/azure/postgresql/extensions/concepts-extensions-versions" }
+  ],
+  "checked": "2026-10-06"
+}

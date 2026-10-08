@@ -1,0 +1,137 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "MotherDuck",
+  "concepts": ["warehouse", "query-engines"],
+  "provider": "vendor",
+  "vendor": "MotherDuck Corporation",
+  "license": "Proprietary (built on MIT-licensed DuckDB)",
+  "website": "https://motherduck.com/",
+  "summary": "A serverless cloud data warehouse built on DuckDB, where one query can run partly on your laptop and partly in the cloud.",
+  "intro": [
+    "MotherDuck runs DuckDB as a cloud service on AWS. Every user or service account gets its own DuckDB compute instance, called a Duckling, so one person’s heavy query never slows another’s. Small Ducklings start in about 100 ms and stop when idle, databases sit in MotherDuck’s managed storage, and up to 16 read-scaling replicas can serve dashboards. You connect from the web UI, from any DuckDB client with `ATTACH 'md:'`, or with ordinary Postgres drivers through a Postgres wire-protocol endpoint. When a local DuckDB is attached, MotherDuck uses dual execution: the planner splits one query between your machine and the cloud, runs each part next to its data and passes intermediate results between them. A local CSV can be joined with a cloud table, and scans of S3 run in MotherDuck’s region rather than over your laptop’s connection.",
+    "Pricing is a platform fee plus usage, in US dollars. The free Lite plan includes 10 GB of storage and 10 compute-unit hours a month on Pulse, the smallest Duckling. Business costs $250 a month per organisation plus usage: Pulse is metered per query at $0.60 per CU-hour, and the Standard, Jumbo, Mega and Giga sizes bill per second of running time, from $2.40 to $24.00 an hour in US regions. Storage is $0.04 per GB-month in the US, a little more in Europe and Asia. MotherDuck can also host DuckLake catalogs, either fully managed or over your own S3, R2, GCS or Azure bucket, and read and write Iceberg tables through REST catalogs such as AWS Glue and S3 Tables."
+  ],
+  "strengths": [
+    "The same engine and SQL on a laptop and in the cloud, so work moves between them unchanged",
+    "Dual execution joins local files with cloud tables and pushes S3 scans to the cloud",
+    "A Duckling per user isolates workloads, and per-query Pulse billing keeps small, bursty use cheap",
+    "Sharing a database and cloning one are zero-copy, so neither adds to the storage bill",
+    "Open formats underneath: DuckDB files, DuckLake, Iceberg and Parquet in your own bucket all work with plain DuckDB"
+  ],
+  "limits": [
+    "AWS only, in six regions, and each organisation is fixed to the region chosen at sign-up",
+    "Clients must run a supported DuckDB version (currently 1.4.x to 1.5.6); versions past end of life are blocked, so upgrades follow MotherDuck’s schedule",
+    "Larger Ducklings bill for wall-clock time including a cooldown after the last query: 1 minute by default, 5 for Mega, 10 for Giga",
+    "Storage bills include historical bytes: 7 days by default on Business (configurable up to 90) plus failsafe, so deleted data keeps costing for a while",
+    "Managed DuckLake is still in preview and only one account can write to each DuckLake database; read-scaling replicas can lag a few minutes"
+  ],
+  "worksWith": [
+    { "id": "duckdb", "how": "runs cloud instances of" },
+    { "id": "ducklake", "how": "hosts catalogs and tables in" },
+    { "id": "s3", "how": "reads and writes files in" },
+    { "id": "parquet", "how": "reads and writes" },
+    { "id": "iceberg", "how": "reads and writes tables in" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "From the DuckDB CLI: load S3 data in the cloud, then join it with a local file",
+    "source": [
+      "-- motherduck_token is set in the environment",
+      "ATTACH 'md:';",
+      "CREATE DATABASE IF NOT EXISTS analytics;",
+      "",
+      "CREATE SECRET IN MOTHERDUCK (",
+      "  TYPE s3, KEY_ID '<aws_access_key_id>', SECRET '<aws_secret_access_key>', REGION 'us-east-1'",
+      ");",
+      "",
+      "-- runs in MotherDuck, next to the bucket",
+      "CREATE TABLE analytics.main.orders AS",
+      "  FROM read_parquet('s3://acme-raw/orders/2026/*.parquet');",
+      "",
+      "-- dual execution: targets.csv is read locally, orders in the cloud",
+      "SELECT country, sum(o.amount) AS revenue, any_value(t.target) AS target",
+      "FROM analytics.main.orders AS o",
+      "JOIN read_csv('targets.csv') AS t USING (country)",
+      "GROUP BY country;"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Duckling sizes and list prices",
+      "intro": "Business plan, US regions (us-east-1, us-west-2), checked 5 October 2026. Europe costs about 22% more and Asia Pacific about 29% more.",
+      "corner": "Duckling",
+      "columns": ["Billed for", "Default cooldown", "Price per hour", "Plans"],
+      "rows": [
+        { "label": "Pulse", "values": ["Compute units used, per query (minimum 1 CU-second)", "None", "$0.60 per CU-hour", "Lite, Business"] },
+        { "label": "Standard", "values": ["Wall-clock seconds, 1-minute minimum", "1 minute", "$2.40", "Business"] },
+        { "label": "Jumbo", "values": ["Wall-clock seconds, 1-minute minimum", "1 minute", "$4.80", "Business"] },
+        { "label": "Mega", "values": ["Wall-clock seconds, 1-minute minimum", "5 minutes", "$12.00", "Business"] },
+        { "label": "Giga", "values": ["Wall-clock seconds, 1-minute minimum", "10 minutes", "$24.00", "Business"] }
+      ],
+      "notes": [
+        "Business adds a $250 platform fee per organisation per month. Lite is free and includes 10 CU-hours of Pulse and 10 GB of storage a month.",
+        "Cooldown is how long a Duckling stays running, and billed, after its last query. It can be set from 1 minute to 24 hours; `SHUTDOWN` stops a Duckling early.",
+        "Storage: $0.04 per GB-month in the US, $0.043 in Europe and $0.044 in Asia Pacific."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Where a query runs",
+      "items": [
+        { "name": "Locally", "tag": "your DuckDB", "text": "Queries on local files, local databases or inline values run in the DuckDB on your machine and cost nothing in MotherDuck." },
+        { "name": "In the cloud", "tag": "your Duckling", "text": "Queries on MotherDuck databases and on S3, GCS, Azure or R2 run in MotherDuck’s region, close to the data." },
+        { "name": "Both", "tag": "dual execution", "text": "A query that mixes the two is split: `EXPLAIN` marks each operator `L` (local) or `R` (remote), and intermediate results move between the halves." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Jordan Tigani was a founding engineer on Google BigQuery and spent more than ten years promoting big data. Looking at real usage changed his mind: most BigQuery customers stored less than a terabyte in total, and in his analysis 90% of queries processed less than 100 MB. Meanwhile DuckDB, an embedded engine from CWI in Amsterdam, could aggregate a billion-row table on a laptop in under a second. Tigani saw it and thought someone should build a serverless version.",
+      "DuckDB’s creators, Hannes Mühleisen and Mark Raasveldt, wanted a partner to build a commercial cloud service, and their company, DuckDB Labs, became a co-founder of MotherDuck. The first team, drawn from BigQuery, Snowflake, Databricks, AWS, SingleStore and others, met in Seattle in June 2022. In November it announced $47.5 million in seed and Series A funding for a hybrid design: use the computer you already have, and the cloud when it helps.",
+      "MotherDuck opened by invitation in June 2023, to everyone with a $52.5 million Series B that September, and became generally available in June 2024. In August 2026 DuckLabs, as DuckDB Labs is now called, announced it would join AWS; DuckDB itself stays MIT licensed under the DuckDB Foundation."
+    ],
+    "choices": [
+      { "choice": "Build on DuckDB instead of a new engine", "why": "DuckDB was already fast on one machine and ran anywhere, from laptops to browsers. Partnering with its creators let MotherDuck focus on the cloud service while DuckDB Labs kept improving the open-source core." },
+      { "choice": "Hybrid execution between laptop and cloud", "why": "Modern laptops have plenty of compute, and most datasets are small. Running part of each query locally uses that power and avoids paying for cloud compute that isn’t needed." },
+      { "choice": "One instance per user instead of a shared cluster", "why": "Small, isolated DuckDB instances that start quickly and scale to zero keep one user’s queries from slowing another’s, and cost nothing while idle." }
+    ],
+    "timeline": [
+      { "year": "2022", "text": "Founding team meets in June; $47.5M seed and Series A in November" },
+      { "year": "2023", "text": "Opens by invitation in June; Series B and open to all in September" },
+      { "year": "2024", "text": "General availability in June" },
+      { "year": "2025", "text": "DuckLake support in preview (July); first European region (September)" },
+      { "year": "2026", "text": "Postgres endpoint in March; DuckLake 1.0 in April; DuckLabs to join AWS in August" }
+    ],
+    "sources": [
+      { "label": "MotherDuck: About us (origin story, DuckLabs as co-founder, Seattle, June 2022)", "url": "https://motherduck.com/about-us/" },
+      { "label": "Jordan Tigani: Big data is dead (February 2023)", "url": "https://motherduck.com/blog/big-data-is-dead/" },
+      { "label": "MotherDuck blog: Announcing $47.5M seed and Series A with DuckDB Labs (November 2022)", "url": "https://motherduck.com/blog/announcing-series-seed-and-a/" },
+      { "label": "MotherDuck blog: MotherDuck, DuckDB in the cloud, available by invitation (June 2023)", "url": "https://motherduck.com/blog/announcing-motherduck-duckdb-in-the-cloud/" },
+      { "label": "MotherDuck blog: Open for all with a $52.5M Series B (September 2023)", "url": "https://motherduck.com/blog/motherduck-open-for-all-with-series-b/" },
+      { "label": "MotherDuck blog: General availability (June 2024)", "url": "https://motherduck.com/blog/announcing-motherduck-general-availability-data-warehousing-with-duckdb/" },
+      { "label": "DuckDB blog: DuckLabs to join AWS, projects to remain open source (August 2026)", "url": "https://duckdb.org/2026/08/26/ducklabs-to-join-aws.html" }
+    ]
+  },
+  "sources": [
+    { "label": "MotherDuck docs: Architecture and capabilities (Ducklings, dual execution, attaching md:)", "url": "https://motherduck.com/docs/concepts/architecture-and-capabilities/" },
+    { "label": "MotherDuck docs: Running hybrid queries (local and remote operators, EXPLAIN)", "url": "https://motherduck.com/docs/key-tasks/running-hybrid-queries/" },
+    { "label": "MotherDuck pricing", "url": "https://motherduck.com/pricing/" },
+    { "label": "MotherDuck docs: Pricing model (plans, compute and storage rates by region, cooldown, historical bytes)", "url": "https://motherduck.com/docs/about-motherduck/billing/pricing/" },
+    { "label": "MotherDuck docs: Duckling sizes (billing, cooldown, startup time, plans)", "url": "https://motherduck.com/docs/about-motherduck/billing/duckling-sizes/" },
+    { "label": "MotherDuck docs: Read scaling (up to 16 replicas, eventually consistent)", "url": "https://motherduck.com/docs/key-tasks/authenticating-and-connecting-to-motherduck/read-scaling/" },
+    { "label": "MotherDuck docs: Authenticating to MotherDuck (motherduck_token)", "url": "https://motherduck.com/docs/key-tasks/authenticating-and-connecting-to-motherduck/authenticating-to-motherduck" },
+    { "label": "MotherDuck docs: Amazon S3 (CREATE SECRET IN MOTHERDUCK, S3 reads run in the cloud)", "url": "https://motherduck.com/docs/integrations/cloud-storage/amazon-s3/" },
+    { "label": "MotherDuck docs: DuckLake (fully managed and bring your own bucket, limitations)", "url": "https://motherduck.com/docs/integrations/file-formats/ducklake/" },
+    { "label": "MotherDuck docs: DuckLake concepts (preview status)", "url": "https://motherduck.com/docs/concepts/ducklake/" },
+    { "label": "MotherDuck docs: Apache Iceberg (REST catalogs, reads and writes, limitations)", "url": "https://motherduck.com/docs/integrations/file-formats/apache-iceberg/" },
+    { "label": "MotherDuck docs: Parquet", "url": "https://motherduck.com/docs/integrations/file-formats/parquet/" },
+    { "label": "MotherDuck docs: DuckDB version lifecycle schedules", "url": "https://motherduck.com/docs/troubleshooting/version-lifecycle-schedules/" },
+    { "label": "MotherDuck blog: MotherDuck now speaks Postgres (March 2026)", "url": "https://motherduck.com/blog/motherduck-now-speaks-postgres/" },
+    { "label": "MotherDuck blog: DuckLake support in preview (July 2025)", "url": "https://motherduck.com/blog/announcing-ducklake-support-motherduck-preview/" },
+    { "label": "MotherDuck blog: DuckLake 1.0 on MotherDuck (April 2026)", "url": "https://motherduck.com/blog/announcing-ducklake-1-0-on-motherduck/" },
+    { "label": "MotherDuck blog: First European region (September 2025)", "url": "https://motherduck.com/blog/motherduck-in-europe/" },
+    { "label": "MotherDuck terms of service (MotherDuck Corporation)", "url": "https://motherduck.com/terms-of-service/" }
+  ],
+  "checked": "2026-10-05"
+}

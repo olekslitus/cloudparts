@@ -1,0 +1,127 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Garage",
+  "concepts": ["object"],
+  "provider": "oss",
+  "vendor": "Deuxfleurs (French non-profit)",
+  "license": "AGPLv3",
+  "website": "https://garagehq.deuxfleurs.fr/",
+  "repo": "https://git.deuxfleurs.fr/Deuxfleurs/garage",
+  "summary": "A lightweight S3 object store that keeps copies of your data in several sites linked by ordinary Internet connections.",
+  "intro": [
+    "Garage is a single Rust binary that runs on every node. It keeps full copies instead of erasure coding: each object is cut into blocks (1 MiB by default), and each block, named by its hash, is stored on as many nodes as the replication factor says, usually three. The cluster layout tells Garage how much capacity each node has and which zone (a site such as a house, an office or a data centre) it sits in, and Garage puts the copies of every block in different zones. Because blocks are addressed by their hash, identical blocks are stored once, and they can be compressed with zstd.",
+    "Metadata (buckets, access keys, object lists) lives in tables that each responsible node keeps in a local LMDB or SQLite database. The tables are CRDTs, data types that merge without conflicts, so Garage has no Raft leader: a request succeeds once a quorum of the nodes holding that item answers (two out of three), and nodes reconcile in the background. That keeps it usable over slow links between sites. Besides the S3 API, Garage can serve buckets as static websites, and an admin API and the `garage` CLI manage nodes, buckets and keys. Access is granted per key and per bucket (read, write, owner) instead of through S3 policies."
+  ],
+  "strengths": [
+    "Made for geo-distribution: copies land in different zones, and the stated network requirement is only 200 ms or less latency and 50 Mbps or more",
+    "Light: one dependency-free binary that runs with 1 GB of RAM on any recent x86_64 or ARM machine, and one cluster can mix whatever hardware you have",
+    "Easy to grow or shrink: change the layout and Garage moves copies itself to keep the replication factor",
+    "Serves static websites straight from buckets, and bucket aliases let you rename a bucket without copying it",
+    "Community-run, stable since v1.0 (2024), with development paid for by European NGI grants through NLnet"
+  ],
+  "limits": [
+    "Much of the S3 API is missing: no versioning, Object Lock, bucket replication, bucket notifications or object tagging, and lifecycle rules support only expiry and cleaning up unfinished uploads",
+    "No S3 bucket policies or ACLs: you grant each key read, write or owner rights on each bucket with Garage’s own CLI or admin API",
+    "No server-side encryption except SSE-C; the docs suggest encrypting disks or encrypting on the client",
+    "Full copies cost more disk than erasure coding: three replicas need three times the raw space, and high performance and feature breadth are stated non-goals",
+    "AGPLv3, like MinIO’s community edition: if you modify it and offer it over a network, you must publish your changes"
+  ],
+  "worksWith": [
+    { "id": "s3", "how": "speaks the API of" },
+    { "id": "kubernetes", "how": "can run on" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Run a single Garage node in Docker, create a bucket and key, then use the aws CLI",
+    "source": [
+      "cat > garage.toml <<EOF",
+      "metadata_dir = \"/var/lib/garage/meta\"",
+      "data_dir = \"/var/lib/garage/data\"",
+      "db_engine = \"lmdb\"",
+      "replication_factor = 1   # use 3 once you have nodes in three zones",
+      "rpc_bind_addr = \"[::]:3901\"",
+      "rpc_public_addr = \"127.0.0.1:3901\"",
+      "rpc_secret = \"$(openssl rand -hex 32)\"",
+      "",
+      "[s3_api]",
+      "s3_region = \"garage\"",
+      "api_bind_addr = \"[::]:3900\"",
+      "EOF",
+      "",
+      "docker run -d --name garage -p 3900:3900 -p 3901:3901 \\",
+      "  -v \"$PWD/garage.toml:/etc/garage.toml\" \\",
+      "  -v garage-meta:/var/lib/garage/meta -v garage-data:/var/lib/garage/data \\",
+      "  dxflrs/garage:v2.4.1",
+      "alias garage=\"docker exec garage /garage\"",
+      "",
+      "garage status                                  # shows the node ID",
+      "garage layout assign -z home -c 1T 563e        # zone and capacity for that node",
+      "garage layout apply --version 1",
+      "",
+      "garage bucket create backups",
+      "garage key create backups-app                  # prints the key ID and secret",
+      "garage bucket allow --read --write backups --key backups-app",
+      "",
+      "export AWS_ACCESS_KEY_ID=GK... AWS_SECRET_ACCESS_KEY=... AWS_DEFAULT_REGION=garage",
+      "aws s3 cp --recursive ./exports/ s3://backups/2026-10-05/ --endpoint-url http://localhost:3900"
+    ]
+  },
+  "sections": [
+    {
+      "type": "text",
+      "title": "Moving from MinIO",
+      "body": [
+        "Garage fits MinIO users who used buckets as plain storage: app media (Nextcloud, Matrix, Mastodon, PeerTube), backups with restic or rclone, static sites and build caches. Check the S3 compatibility page before you move anything that depends on versioning, Object Lock retention, bucket policies, notifications or replication rules: Garage returns `501 Not Implemented` for endpoints it lacks. The durability model also differs: MinIO erasure-codes across the drives of one site, while Garage keeps whole copies in different zones, so size your disks for the replication factor.",
+        "To copy data, create a key and buckets in Garage, then run `rclone sync minio:bucket garage:bucket` with Garage set up as an S3 remote with `provider = Other`, `force_path_style = true` and the region from `garage.toml`, as the Garage docs show. The MinIO client `mc` also works with Garage if you still have it. Repeat the sync just before switching endpoints, and recreate access keys as Garage keys, since MinIO users and policies have no Garage equivalent."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Garage comes from Deuxfleurs, a French non-profit that runs services for its members on machines kept in members’ homes rather than in data centres. Homes lose power and Internet connections, so Deuxfleurs wanted storage that keeps working when one site goes dark. The existing options didn’t fit: MinIO had no notion of sites and was sensitive to latency, Ceph was too heavy for a few small machines, and OpenStack Swift needed around 8 GB of RAM just to start.",
+      "Alex Auvolat made the first commit in April 2020, and version 0.1 followed that July. The design borrowed from research: Amazon’s Dynamo for spreading data over nodes, and CRDTs for metadata that merges without a leader. European Next Generation Internet (NGI) money paid for three full-time developers in 2021 and 2022, then further work through NLnet’s NGI0 Entrust (2023 to 2024) and NGI0 Commons funds (2025).",
+      "Garage 1.0 came out in April 2024 and 2.0, with a reworked admin API, in June 2025. Deuxfleurs runs it on nine nodes in three locations, and other small hosts such as Triplebit use it for Mastodon, PeerTube and Matrix media."
+    ],
+    "choices": [
+      { "choice": "Whole copies instead of erasure coding", "why": "The design goals call erasure coding a non-goal because it makes placing and synchronising data harder. Plain copies keep the system simple, and any zone can serve a complete object on its own." },
+      { "choice": "CRDTs and quorums instead of Raft", "why": "Without a leader to go through, a request only needs answers from the nodes holding its data, so slow home Internet links between sites don’t stall the whole cluster." },
+      { "choice": "Zones as a first-class idea", "why": "The layout records which site each node is in, and Garage places each block’s copies in different zones, so one house or data centre can go offline without losing data." },
+      { "choice": "Speak S3 and nothing more", "why": "Feature breadth is an explicit non-goal. Implementing S3 lets Garage back Nextcloud, Matrix, Mastodon, PeerTube, restic and rclone without custom clients." }
+    ],
+    "timeline": [
+      { "year": "2020", "text": "First commit in April; version 0.1 in July" },
+      { "year": "2021", "text": "NGI POINTER grant funds three full-time developers for a year" },
+      { "year": "2022", "text": "Public introduction on the Garage blog and a FOSDEM talk (February)" },
+      { "year": "2023", "text": "NLnet’s NGI0 Entrust fund pays for a developer for a year" },
+      { "year": "2024", "text": "Garage 1.0 released (April)" },
+      { "year": "2025", "text": "Garage 2.0 with a new admin API (June); NGI0 Commons Fund grant" }
+    ],
+    "sources": [
+      { "label": "Garage blog: Introducing Garage (February 2022)", "url": "https://garagehq.deuxfleurs.fr/blog/2022-introducing-garage/" },
+      { "label": "Garage docs: Related work", "url": "https://garagehq.deuxfleurs.fr/documentation/design/related-work/" },
+      { "label": "Garage docs: Goals and use cases", "url": "https://garagehq.deuxfleurs.fr/documentation/design/goals/" },
+      { "label": "Garage: Sponsors and funding (home page)", "url": "https://garagehq.deuxfleurs.fr/" },
+      { "label": "Garage: First commit (April 2020)", "url": "https://git.deuxfleurs.fr/Deuxfleurs/garage/commit/7102db1d544bec663a8492b24c455168d0b83f08" },
+      { "label": "Garage blog: Garage will be at FOSDEM’22", "url": "https://garagehq.deuxfleurs.fr/blog/2022-fosdem/" },
+      { "label": "Garage blog: Garage v2.0.0 has been released", "url": "https://garagehq.deuxfleurs.fr/blog/2025-06-garage-v2/" },
+      { "label": "Garage releases and tags", "url": "https://git.deuxfleurs.fr/Deuxfleurs/garage/releases" }
+    ]
+  },
+  "sources": [
+    { "label": "Garage", "url": "https://garagehq.deuxfleurs.fr/" },
+    { "label": "Deuxfleurs/garage (main repository)", "url": "https://git.deuxfleurs.fr/Deuxfleurs/garage" },
+    { "label": "deuxfleurs-org/garage on GitHub (mirror)", "url": "https://github.com/deuxfleurs-org/garage" },
+    { "label": "Garage: LICENSE (AGPLv3)", "url": "https://git.deuxfleurs.fr/Deuxfleurs/garage/src/branch/main-v2/LICENSE" },
+    { "label": "Garage release v2.4.1", "url": "https://git.deuxfleurs.fr/Deuxfleurs/garage/releases/tag/v2.4.1" },
+    { "label": "Garage docs: List of features", "url": "https://garagehq.deuxfleurs.fr/documentation/reference-manual/features/" },
+    { "label": "Garage docs: S3 compatibility status", "url": "https://garagehq.deuxfleurs.fr/documentation/reference-manual/s3-compatibility/" },
+    { "label": "Garage docs: Configuration file format", "url": "https://garagehq.deuxfleurs.fr/documentation/reference-manual/configuration/" },
+    { "label": "Garage docs: Internals", "url": "https://garagehq.deuxfleurs.fr/documentation/design/internals/" },
+    { "label": "Garage docs: Goals and use cases", "url": "https://garagehq.deuxfleurs.fr/documentation/design/goals/" },
+    { "label": "Garage docs: Quick start", "url": "https://garagehq.deuxfleurs.fr/documentation/quick-start/" },
+    { "label": "Garage docs: Browsing tools (rclone, mc)", "url": "https://garagehq.deuxfleurs.fr/documentation/connect/cli/" },
+    { "label": "Garage docs: Deploying on Kubernetes", "url": "https://garagehq.deuxfleurs.fr/documentation/cookbook/kubernetes/" },
+    { "label": "rclone docs: rclone sync", "url": "https://rclone.org/commands/rclone_sync/" }
+  ],
+  "checked": "2026-10-05"
+}

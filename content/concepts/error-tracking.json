@@ -1,0 +1,152 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Error tracking",
+  "category": "observe",
+  "order": 50,
+  "summary": "Catch every exception with its stack trace and context, and fold thousands of copies into one issue you can fix.",
+  "howItWorks": "An SDK inside the app hooks the language’s handler for uncaught exceptions, and lets you report caught ones too. For each error it sends an event: the exception type and message, the stack trace, and context such as the release, environment, user ID and request URL, plus breadcrumbs, the last few log lines, HTTP calls and clicks before the crash. The server computes a fingerprint for each event, typically from the app’s own stack frames (library frames are ignored), else from the exception type and message, else from the message alone with its parameters stripped. Events with the same fingerprint become one issue with a count, first and last seen times and the number of users hit, so a crash that happens 10,000 times is one line. Alerts go out when a new issue appears, when an issue marked fixed in one release comes back in a later one (a regression), or when a count spikes, not for every event. Minified JavaScript and stripped native binaries produce unreadable traces, so the build uploads source maps or debug symbols and the server turns frames back into original file names and line numbers. Unlike a log store, which keeps every line, an error tracker deduplicates and gives each issue a state (new, resolved, regressed, archived), much like a bug tracker.",
+  "analogy": "A repair shop’s complaints desk. Five hundred customers report the same rattle; the desk files one ticket marked “500 reports, started after the March model”, with the notes from the first few customers attached, and reopens it if the rattle comes back after the fix.",
+  "useWhen": [
+    "Any app with users you can’t watch: web front ends, mobile apps, APIs, background jobs",
+    "Finding which release introduced a crash, and how many users it hits",
+    "Turning minified JavaScript or native crash dumps back into readable stack traces"
+  ],
+  "avoidWhen": [
+    "As your only telemetry: it sees exceptions, not slow requests, wrong answers or a service that never got the request",
+    "Sending expected conditions, such as validation failures, as errors; they bury real issues and cost event quota"
+  ],
+  "example": "Release 4.2.0 of a web shop goes out at 14:00. Within 20 minutes `TypeError: Cannot read properties of undefined (reading 'price')` arrives 3,100 times from 870 users, but it is one new issue and one chat alert. The uploaded source map points at `cart/total.ts:57`, and the breadcrumbs show the cart API returned an empty item list just before. The fix ships in 4.2.1 and the issue is marked resolved in that release; if the same fingerprint shows up again in 4.2.3, it reopens as a regression.",
+  "providers": {
+    "aws": "No dedicated error tracker; CloudWatch RUM records client-side errors, crashes and app hangs from real user sessions",
+    "gcp": "Error Reporting, which groups errors found in Cloud Logging",
+    "azure": "Application Insights exception telemetry",
+    "oss": "GlitchTip (MIT, accepts Sentry SDKs); Sentry self-hosted (source-available FSL); hosted: Sentry, BugSnag (SmartBear), Rollbar, Honeybadger, Datadog Error Tracking, Better Stack Errors (accepts Sentry SDKs)"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "import sentry_sdk",
+      "",
+      "sentry_sdk.init(dsn=SENTRY_DSN, release=\"shop@4.2.0\", environment=\"production\")",
+      "sentry_sdk.set_user({\"id\": \"42\"})",
+      "sentry_sdk.add_breadcrumb(category=\"cart\", message=\"cart API returned 0 items\", level=\"info\")",
+      "",
+      "def charge(order):",
+      "    try:",
+      "        return payments.charge(order)",
+      "    except PaymentTimeout as err:",
+      "        with sentry_sdk.new_scope() as scope:",
+      "            scope.fingerprint = [\"payments\", \"timeout\"]   # every timeout: one issue",
+      "            sentry_sdk.capture_exception(err)",
+      "        raise",
+      "",
+      "# uncaught exceptions are captured automatically"
+    ]
+  },
+  "related": ["logs", "traces", "alerting", "observability"],
+  "diagram": {
+    "caption": "Two services report every exception. The tracker fingerprints each event from its stack trace, so all copies of the same bug (same color) pile up in one issue instead of three thousand alerts.",
+    "h": 270,
+    "nodes": [
+      {
+        "id": "web",
+        "x": 100,
+        "y": 75,
+        "label": "Web app",
+        "sub": "release 4.2.0",
+        "emit": { "every": 380, "jitter": 0.4, "types": ["a", "a", "a", "b"], "colorByType": { "a": 0, "b": 1, "c": 2 } },
+        "out": ["grp"]
+      },
+      {
+        "id": "api",
+        "x": 100,
+        "y": 195,
+        "label": "API server",
+        "sub": "release 4.2.0",
+        "emit": { "every": 700, "jitter": 0.4, "types": ["b", "c"], "colorByType": { "a": 0, "b": 1, "c": 2 } },
+        "out": ["grp"]
+      },
+      {
+        "id": "grp",
+        "x": 335,
+        "y": 135,
+        "label": "Grouping",
+        "sub": "fingerprint(stack)",
+        "route": "type",
+        "rules": { "a": ["i1"], "b": ["i2"], "c": ["i3"] }
+      },
+      { "id": "i1", "x": 590, "y": 55, "label": "Issue: TypeError", "sub": "cart/total.ts:57", "mode": "sink" },
+      { "id": "i2", "x": 590, "y": 135, "label": "Issue: KeyError", "sub": "orders.py:118", "mode": "sink" },
+      { "id": "i3", "x": 590, "y": 215, "label": "Issue: Timeout", "sub": "payments client", "mode": "sink" }
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Same idea, different names",
+      "intro": "Every tool groups occurrences into something you triage, but the words and the default rules differ. All of them let you override grouping with your own fingerprint.",
+      "corner": "Tool",
+      "columns": ["One occurrence", "The group", "Default grouping"],
+      "rows": [
+        { "label": "Sentry", "values": ["Event", "Issue", "The app’s own stack frames; else exception type and value; else the message"] },
+        { "label": "BugSnag", "values": ["Event", "Error", "Error class plus file and line of the top in-project stack frame"] },
+        { "label": "Rollbar", "values": ["Occurrence", "Item", "Its own grouping engine, with custom fingerprint rules"] },
+        { "label": "Google Cloud Error Reporting", "values": ["Error event", "Error group", "Exception type and the five topmost frames; else the message’s first three tokens"] },
+        { "label": "Datadog Error Tracking", "values": ["Error", "Issue", "Similar errors grouped into one issue"] }
+      ],
+      "notes": ["Grouping by message alone is fragile: messages often contain IDs, amounts or timestamps, so one bug splits into thousands of groups. Sentry’s docs call exception-based grouping “a lot less reliable because of changing error messages”."]
+    }
+  ],
+  "history": {
+    "story": [
+      "Before error trackers, a crash was a line in a log or an email. Microsoft hit the problem first at scale. Windows Error Reporting, in use since 1999 and built into every Windows system since XP, collected crash reports from about a billion computers. Its 2009 paper explains that, collected naively, the reports “would absolutely overwhelm programmers”, so WER sorted them into buckets, aiming for “one bug per bucket and one bucket per bug”, and used the bucket counts to decide what to fix first.",
+      "Web frameworks had the same flood on a smaller scale. Rails’ Exception Notifier plugin reported errors by email, and Django sent an email for every error, so a busy site filled inboxes with copies of one crash. In May 2008 David Cramer made the first commit of `django-db-log`, which stored exceptions in a database and showed them in aggregate; it grew into Sentry. In July 2008 thoughtbot launched Hoptoad, a hosted replacement for Exception Notifier where you could sort errors by project and mark them resolved; a trademark complaint made it Airbrake in 2011.",
+      "As front ends moved to minified JavaScript, stack traces pointed at line 1 of a one-line file. Source maps, first created by Joseph Schorr for Google’s Closure Inspector, map compiled code back to the original, and one of the format’s stated goals is server-side stack trace deobfuscation. After years as an informal Google Doc, the format became the Ecma standard ECMA-426 in December 2024."
+    ],
+    "choices": [
+      { "choice": "Group by stack trace, not by message", "why": "Messages carry IDs and values that differ on every occurrence. The code path that failed is a far more stable identity for “the same bug”, which is why WER, Sentry, BugSnag and Google all key on stack frames first." },
+      { "choice": "Only the app’s own frames count", "why": "Two crashes that differ only inside a framework or library are usually one bug in your code. Sentry groups only by frames the SDK marks as in-app, and BugSnag uses the top in-project frame." },
+      { "choice": "Capture context at the moment of the crash", "why": "By the time someone looks, the request is gone. Breadcrumbs, release, user and environment travel with the event, so the issue page answers “what was happening?” without reproducing it." },
+      { "choice": "Resolve against a release", "why": "Marking an issue fixed in version 4.2.1 lets the tracker ignore stragglers still running 4.2.0 and flag a real regression when the same fingerprint appears in a newer version." }
+    ],
+    "timeline": [
+      { "year": "1999", "text": "Windows Error Reporting goes into use, bucketing crash reports" },
+      { "year": "2008", "text": "First commit of `django-db-log`, later Sentry (May)" },
+      { "year": "2008", "text": "thoughtbot launches Hoptoad, a hosted error catcher for Rails (July)" },
+      { "year": "2009", "text": "Microsoft publishes ten years of WER experience at SOSP" },
+      { "year": "2011", "text": "Hoptoad is renamed Airbrake" },
+      { "year": "2024", "text": "Source maps become the Ecma standard ECMA-426" }
+    ],
+    "sources": [
+      { "label": "Glerum et al.: Debugging in the (Very) Large: Ten Years of Implementation and Experience (SOSP 2009)", "url": "https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/sosp153-glerum-web.pdf" },
+      { "label": "Microsoft Research: Debugging in the (Very) Large, abstract", "url": "https://www.microsoft.com/en-us/research/publication/debugging-in-the-very-large-ten-years-of-implementation-and-experience/" },
+      { "label": "Sentry blog: Sentry turns 9, by David Cramer (May 2017)", "url": "https://blog.sentry.io/happy-birthday-sentry/" },
+      { "label": "GitHub: first commit, djangodblog (12 May 2008)", "url": "https://github.com/getsentry/sentry/commit/3c2e87573d3bd16f61cf08fece0638cc47a4fc22" },
+      { "label": "thoughtbot: Ride the Toad, Hoptoad launch (29 July 2008)", "url": "https://thoughtbot.com/blog/ride-the-toad" },
+      { "label": "thoughtbot: Hoptoad is now Airbrake (15 July 2011)", "url": "https://thoughtbot.com/blog/hoptoad-is-now-airbrake" },
+      { "label": "ECMA-426: Source map format specification (draft, with history)", "url": "https://tc39.es/ecma426/" },
+      { "label": "Ecma International: ECMA-426, 1st edition (December 2024)", "url": "https://ecma-international.org/publications-and-standards/standards/ecma-426/" }
+    ]
+  },
+  "sources": [
+    { "label": "Sentry docs: Issue grouping (fingerprints, stack trace, exception, message)", "url": "https://docs.sentry.io/concepts/data-management/event-grouping/" },
+    { "label": "Sentry docs: Issue status (new, regressed, resolve in release)", "url": "https://docs.sentry.io/product/issues/states-triage/" },
+    { "label": "Sentry docs: Python SDK fingerprinting (new_scope, scope.fingerprint)", "url": "https://docs.sentry.io/platforms/python/usage/sdk-fingerprinting/" },
+    { "label": "Sentry docs: Python breadcrumbs", "url": "https://docs.sentry.io/platforms/python/enriching-events/breadcrumbs/" },
+    { "label": "Sentry docs: Python, identify users", "url": "https://docs.sentry.io/platforms/python/enriching-events/identify-user/" },
+    { "label": "Sentry docs: Python configuration options (release, environment)", "url": "https://docs.sentry.io/platforms/python/configuration/options/" },
+    { "label": "Sentry docs: JavaScript source maps", "url": "https://docs.sentry.io/platforms/javascript/sourcemaps/" },
+    { "label": "BugSnag docs: Error grouping", "url": "https://docs.bugsnag.com/product/error-grouping/" },
+    { "label": "Rollbar docs: Grouping (occurrences and items)", "url": "https://docs.rollbar.com/docs/grouping-occurrences" },
+    { "label": "Honeybadger docs: Error tracking", "url": "https://docs.honeybadger.io/guides/errors/" },
+    { "label": "Datadog docs: Error Tracking", "url": "https://docs.datadoghq.com/error_tracking/" },
+    { "label": "Google Cloud docs: How Error Reporting groups errors", "url": "https://cloud.google.com/error-reporting/docs/grouping-errors" },
+    { "label": "Microsoft Learn: Application Insights for .NET and Node.js, exception reporting", "url": "https://learn.microsoft.com/en-us/azure/azure-monitor/app/asp-net-exceptions" },
+    { "label": "AWS docs: CloudWatch RUM (client-side errors, crashes, app hangs)", "url": "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-RUM.html" },
+    { "label": "Better Stack docs: Errors (Sentry SDK compatible)", "url": "https://betterstack.com/docs/errors/start/" },
+    { "label": "GlitchTip docs: error tracking and uptime monitoring, open source", "url": "https://glitchtip.com/documentation" },
+    { "label": "GlitchTip docs: Sentry-compatible SDKs", "url": "https://glitchtip.com/sdkdocs" },
+    { "label": "GitLab: glitchtip-backend (MIT License)", "url": "https://gitlab.com/glitchtip/glitchtip-backend" },
+    { "label": "GitHub: Sentry LICENSE.md (FSL-1.1-Apache-2.0)", "url": "https://github.com/getsentry/sentry/blob/master/LICENSE.md" }
+  ]
+}

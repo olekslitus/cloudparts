@@ -1,0 +1,163 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Distributed tracing",
+  "category": "observe",
+  "order": 40,
+  "summary": "Follow one request through every service it touches, as a tree of timed spans that share one trace ID.",
+  "howItWorks": "When a request enters the system, the first service creates a trace ID and a span: a record of one unit of work with a name, a start time, a duration, a status and attributes. Every call it makes carries the trace ID and its own span ID onward, usually in the W3C `traceparent` HTTP header, or in message headers when the call goes through a queue. The next service reads the header, starts a child span whose parent is the caller’s span, and passes its own span ID on. Each service sends its finished spans to a collector, and the tracing backend joins them by trace ID into a tree, drawn as a waterfall: the whole request at the top, and every downstream call and database query nested underneath with its own bar. That shows at a glance where the time went and which hop failed, which metrics (no per-request detail) and logs (scattered across services) can’t show on their own. Instrumentation libraries for common HTTP servers, clients and database drivers, such as OpenTelemetry’s zero-code instrumentation, create most spans without changes to your code. Tracing every request costs a lot, so systems sample. Head sampling decides at the start, often by keeping a fixed share of trace IDs, such as 5%; it’s cheap, but it can’t know in advance which requests will fail. Tail sampling decides once a trace is complete, usually in a collector, and can keep every trace with an error or high latency, at the cost of holding all spans until the decision.",
+  "analogy": "A parcel’s tracking history. One tracking number follows it through every depot, and each depot adds a scan with the time, so you can see exactly where it sat for two days.",
+  "useWhen": [
+    "Requests that cross several services, queues or functions",
+    "Finding which hop made a request slow, or where it failed",
+    "Seeing the real dependency map of a system from its traffic",
+    "Jumping from a bad metric or an error log to an example request"
+  ],
+  "avoidWhen": [
+    "One process and one database; a profiler and good logs tell you more",
+    "Counting and trending; derive metrics instead of querying millions of traces",
+    "Keeping every trace at high traffic without a budget; sample"
+  ],
+  "example": "Checkout p95 jumps from 400 ms to 2.1 s. The latency histogram says it’s slow; a trace of one slow request says why. The gateway span lasts 2.1 s and the checkout span inside it almost as long, but most of that is a payments call that spends 1.8 s waiting on a fraud-check service deployed ten minutes earlier. The collector’s tail sampler kept that trace because it was slow, and its `trace_id` also finds the matching log lines in all four services.",
+  "providers": {
+    "aws": "AWS X-Ray, with traces in the CloudWatch console (Transaction Search, Application Signals)",
+    "gcp": "Cloud Trace",
+    "azure": "Application Insights (Azure Monitor)",
+    "oss": "OpenTelemetry for instrumentation and collection; backends: Jaeger, Zipkin, ClickStack"
+  },
+  "snippet": {
+    "lang": "text",
+    "source": [
+      "traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+      "             |  |                                |                |",
+      "             |  |                                |                flags: 01 = sampled",
+      "             |  |                                parent-id: the caller’s span (16 hex)",
+      "             |  trace-id: the same on every hop of this request (32 hex)",
+      "             version",
+      "",
+      "gateway  -> checkout   traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+      "checkout -> payments   traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-b7ad6b7169203331-01",
+      "                       same trace-id, new parent-id: payments’ span is a child of checkout’s"
+    ]
+  },
+  "related": ["correlation-ids", "logs", "metrics", "observability"],
+  "diagram": {
+    "caption": "A request travels from the gateway through checkout to payments and the answer comes back the same way, carrying one trace ID in its traceparent header. Each service also reports its own span (green) to the collector, which joins them by trace ID into one tree.",
+    "h": 280,
+    "nodes": [
+      {
+        "id": "user",
+        "x": 75,
+        "y": 95,
+        "label": "Browser",
+        "emit": { "every": 1100, "jitter": 0.3, "req": true },
+        "out": ["gw"]
+      },
+      {
+        "id": "gw",
+        "x": 245,
+        "y": 95,
+        "label": "API gateway",
+        "sub": "starts the trace",
+        "emit": { "every": 1100, "jitter": 0.3, "type": "span", "color": 2, "to": ["col"] },
+        "out": ["checkout"]
+      },
+      {
+        "id": "checkout",
+        "x": 435,
+        "y": 95,
+        "label": "Checkout",
+        "sub": "child span",
+        "emit": { "every": 1100, "jitter": 0.3, "type": "span", "color": 2, "to": ["col"] },
+        "out": ["pay"]
+      },
+      {
+        "id": "pay",
+        "x": 640,
+        "y": 95,
+        "label": "Payments",
+        "sub": "child span",
+        "mode": "reply",
+        "delay": 450,
+        "emit": { "every": 1100, "jitter": 0.3, "type": "span", "color": 2, "to": ["col"] }
+      },
+      { "id": "col", "x": 435, "y": 220, "label": "Collector", "sub": "joins spans by trace ID", "mode": "sink" }
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "One trace as a waterfall",
+      "intro": "The slow checkout from the example, span by span. All six spans share one trace ID; each row’s parent is the span that made the call.",
+      "corner": "Span",
+      "columns": ["Service", "Parent span", "Starts at", "Duration"],
+      "rows": [
+        { "label": "POST /checkout", "values": ["gateway", "none (the root)", "0 ms", "2,104 ms"] },
+        { "label": "PlaceOrder", "values": ["checkout", "POST /checkout", "6 ms", "2,090 ms"] },
+        { "label": "SELECT cart_items", "values": ["checkout, in PostgreSQL", "PlaceOrder", "9 ms", "14 ms"] },
+        { "label": "POST /charge", "values": ["payments", "PlaceOrder", "30 ms", "1,860 ms"] },
+        { "label": "POST /score", "values": ["fraud-check", "POST /charge", "41 ms", "1,800 ms"] },
+        { "label": "INSERT orders", "values": ["checkout, in PostgreSQL", "PlaceOrder", "1,900 ms", "11 ms"] }
+      ],
+      "notes": ["Read it as nested bars: POST /score sits inside POST /charge, which sits inside PlaceOrder. The 1,800 ms bar is where to look."]
+    }
+  ],
+  "history": {
+    "story": [
+      "Research systems such as Pinpoint and Magpie explored tracing requests across components, but the design most tools copy is Google’s Dapper, described in a 2010 paper after more than two years in production. At Google one request could fan out over many services written by different teams, in different languages, on thousands of machines. Dapper modelled each request as a tree of spans sharing a trace ID, kept the trace context in thread-local storage and carried it through Google’s shared RPC and callback libraries so applications needed almost no changes, and sampled heavily: one trace in 1,024 was enough for most uses.",
+      "Twitter built Zipkin during its first Hack Week as a basic version of the Dapper paper for its Thrift services and open-sourced it in June 2012. Uber created Jaeger in 2015; it entered the CNCF in 2017 and graduated in 2019. The bottleneck was instrumentation: every library had to be instrumented for every backend, and two vendor-neutral APIs competed, OpenTracing (in the CNCF from October 2016) and Google’s OpenCensus (open-sourced in January 2018). In 2019 they merged into OpenTelemetry.",
+      "Propagation needed a standard too. Each tool used its own headers, Zipkin’s `b3` and `X-B3-*` among them, so a trace broke wherever two vendors met. The W3C Trace Context specification, a Recommendation since February 2020 (revised November 2021), defined the `traceparent` and `tracestate` headers, which OpenTelemetry uses by default."
+    ],
+    "choices": [
+      {
+        "choice": "A trace as a tree of spans",
+        "why": "Each span records its own ID, its parent’s ID and the shared trace ID, so a backend can rebuild the causal tree from spans that arrive in any order from any host, and still see which call waited on which."
+      },
+      {
+        "choice": "Instrument shared libraries, not applications",
+        "why": "Almost all of Google’s services used one RPC framework and one callback library. Putting the tracing there made it nearly transparent: even web search could be traced without application-level annotations."
+      },
+      {
+        "choice": "Sample, and decide early",
+        "why": "Dapper’s authors found that tracing every request slowed latency-sensitive services, and that one request in thousands was enough. Deciding at the root and passing the decision on in the trace flags keeps every hop of a sampled trace and none of an unsampled one."
+      },
+      {
+        "choice": "One header every vendor understands",
+        "why": "With vendor-specific headers, traces collected by different tools couldn’t be correlated and intermediaries dropped the metadata. A W3C standard gives clouds, proxies and libraries one format to forward."
+      }
+    ],
+    "timeline": [
+      { "year": "2010", "text": "Google publishes the Dapper paper" },
+      { "year": "2012", "text": "Twitter open-sources Zipkin in June" },
+      { "year": "2015", "text": "Uber creates Jaeger" },
+      { "year": "2016", "text": "OpenTracing joins the CNCF" },
+      { "year": "2018", "text": "Google open-sources OpenCensus" },
+      { "year": "2019", "text": "OpenTracing and OpenCensus merge into OpenTelemetry; Jaeger graduates from the CNCF" },
+      { "year": "2020", "text": "W3C Trace Context becomes a Recommendation in February" }
+    ],
+    "sources": [
+      { "label": "Sigelman et al.: Dapper, a large-scale distributed systems tracing infrastructure (Google, 2010)", "url": "https://research.google/pubs/dapper-a-large-scale-distributed-systems-tracing-infrastructure/" },
+      { "label": "Twitter Engineering: Distributed systems tracing with Zipkin (June 2012)", "url": "https://blog.twitter.com/engineering/en_us/a/2012/distributed-systems-tracing-with-zipkin.html", "archive": "https://web.archive.org/web/20171207070215/https://blog.twitter.com/engineering/en_us/a/2012/distributed-systems-tracing-with-zipkin.html" },
+      { "label": "CNCF: Jaeger graduation announcement (Oct 2019)", "url": "https://www.cncf.io/announcements/2019/10/31/cloud-native-computing-foundation-announces-jaeger-graduation/" },
+      { "label": "CNCF blog: OpenTracing, turning the lights on for microservices (Oct 2016)", "url": "https://www.cncf.io/blog/2016/10/20/opentracing-turning-the-lights-on-for-microservices/" },
+      { "label": "Google Open Source Blog: OpenCensus, a stats collection and distributed tracing framework (Jan 2018)", "url": "https://opensource.googleblog.com/2018/01/opencensus.html" },
+      { "label": "CNCF blog: A brief history of OpenTelemetry (so far), May 2019", "url": "https://www.cncf.io/blog/2019/05/21/a-brief-history-of-opentelemetry-so-far/" },
+      { "label": "OpenZipkin: B3 propagation specification", "url": "https://github.com/openzipkin/b3-propagation" },
+      { "label": "W3C: Trace Context, Recommendation (Feb 2020, revised Nov 2021)", "url": "https://www.w3.org/TR/trace-context/" }
+    ]
+  },
+  "sources": [
+    { "label": "W3C: Trace Context (traceparent format, problem statement)", "url": "https://www.w3.org/TR/trace-context/" },
+    { "label": "OpenTelemetry docs: Context propagation (W3C TraceContext by default)", "url": "https://opentelemetry.io/docs/concepts/context-propagation/" },
+    { "label": "OpenTelemetry docs: Sampling (head and tail)", "url": "https://opentelemetry.io/docs/concepts/sampling/" },
+    { "label": "OpenTelemetry docs: Zero-code instrumentation", "url": "https://opentelemetry.io/docs/concepts/instrumentation/zero-code/" },
+    { "label": "OpenTelemetry semantic conventions: Messaging spans (context through queues)", "url": "https://opentelemetry.io/docs/specs/semconv/messaging/messaging-spans/" },
+    { "label": "Dapper paper (PDF)", "url": "https://static.googleusercontent.com/media/research.google.com/en//archive/papers/dapper-2010-1.pdf" },
+    { "label": "AWS docs: What is AWS X-Ray?", "url": "https://docs.aws.amazon.com/xray/latest/devguide/aws-xray.html" },
+    { "label": "AWS X-Ray docs: Use a console (X-Ray in the CloudWatch console)", "url": "https://docs.aws.amazon.com/xray/latest/devguide/aws-xray-interface-console.html" },
+    { "label": "AWS docs: CloudWatch Transaction Search", "url": "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Transaction-Search.html" },
+    { "label": "Google Cloud docs: Cloud Trace overview", "url": "https://cloud.google.com/trace/docs/overview" },
+    { "label": "Microsoft Learn: Application Insights overview", "url": "https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview" },
+    { "label": "Jaeger docs", "url": "https://www.jaegertracing.io/docs/latest/" },
+    { "label": "ClickHouse docs: ClickStack architecture", "url": "https://clickhouse.com/docs/clickstack/architecture" }
+  ]
+}

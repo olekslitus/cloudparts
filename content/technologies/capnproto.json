@@ -1,0 +1,136 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Cap’n Proto",
+  "concepts": ["rpc", "file-formats"],
+  "kinds": ["binary-serialization"],
+  "provider": "oss",
+  "vendor": "Cloudflare Workers team (created by Kenton Varda at Sandstorm.io)",
+  "license": "MIT",
+  "website": "https://capnproto.org/",
+  "repo": "https://github.com/capnproto/capnproto",
+  "summary": "A binary format laid out like an in-memory struct, so reading needs no parse step, plus an RPC system built on object references and promise pipelining.",
+  "intro": [
+    "A Cap’n Proto message is arranged the way a compiler lays out a struct: fixed-width fields at fixed offsets, in 8-byte words, little-endian, with strings, lists and nested structs reached through relative pointers. The same bytes are the in-memory representation and the wire format, so there’s no encode or decode step. Generated accessors read fields straight from the buffer and check each pointer’s bounds before following it. You can memory-map a large file and read one field without paging in the rest, or share a message between processes. The price is size: unset fields and padding are written as zeros, so for the network there’s an optional packing step that squeezes zero bytes out. Schemas number fields `@0`, `@1`, … in the order they were added, and new fields go at the end of a struct, so old readers keep working.",
+    "The RPC system uses the same schemas. Interfaces have methods, and a reference to a remote object (a capability) is a field type: passing one to someone lets them call it, and nobody else can. Every call returns a promise at once, and you can call methods on that promise before the result arrives, so `bar(foo())` goes out as two messages in one round trip. This promise pipelining comes from CapTP, the protocol of the E programming language. The reference implementation is in C++, together with the KJ async toolkit, and is maintained by the Cloudflare Workers team; Rust, Go, Python, C# and other implementations are separate community projects. It’s free under the MIT licence."
+  ],
+  "strengths": [
+    "No parse step: reading a field is a bounds check and a pointer hop, and big files can be memory-mapped and read lazily",
+    "Promise pipelining collapses a chain of dependent calls into one network round trip, without merging methods into awkward combined ones",
+    "Capability-based security: holding a reference is the permission to call it, which suits calls between parties that don’t trust each other",
+    "Proven at scale inside Cloudflare Workers, between sandboxes and their supervisors, between machines and data centres, and for Durable Objects",
+    "Small generated code, mostly inline accessors, which its author puts at an order of magnitude less than Protobuf’s per-type parsers"
+  ],
+  "limits": [
+    "Bigger messages than Protobuf unless you turn on packing, because unset fields and padding take space as zeros",
+    "Arena allocation: a list can’t be resized once allocated, and objects discarded inside a long-lived message keep their space until the whole message is freed",
+    "Only the C++ implementation is maintained by the core team; other languages vary in readiness and some lack RPC",
+    "No built-in encryption (run it over TLS), and the FAQ says the RPC layer isn’t yet robust against resource-exhaustion attacks",
+    "RPC objects are stateful, so calls to one object must reach the same machine and load balancing is left to you; the C++ implementation documents only level 1 of the protocol (no persistent capabilities or three-party handoff)"
+  ],
+  "worksWith": [
+    { "id": "cloudflare-workers", "how": "carries internal RPC for" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Build a message and read it back with pycapnp",
+    "source": [
+      "import capnp  # pip install pycapnp",
+      "",
+      "# Fields are numbered @0, @1, ... in the order they were added",
+      "with open(\"order.capnp\", \"w\") as f:",
+      "    f.write(\"\"\"",
+      "@0xbf5147cbbecf40c1;  # file ID, generated with `capnp id`",
+      "struct Order {",
+      "  id @0 :UInt64;",
+      "  customer @1 :Text;",
+      "  itemIds @2 :List(UInt32);",
+      "}",
+      "\"\"\")",
+      "order_capnp = capnp.load(\"order.capnp\")",
+      "",
+      "msg = order_capnp.Order.new_message(id=150, customer=\"ada\", itemIds=[1, 2, 3])",
+      "data = msg.to_bytes()  # the in-memory layout, written out as is",
+      "print(len(data))       # 64: 8-byte words, fixed-width slots, pointers",
+      "                       # (to_bytes_packed() squeezes out the zeros: 22 bytes)",
+      "",
+      "# No parse step: accessors read straight from the buffer, checking bounds",
+      "with order_capnp.Order.from_bytes(data) as order:",
+      "    print(order.id, order.customer, list(order.itemIds))  # 150 ada [1, 2, 3]"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Cap’n Proto and Protocol Buffers",
+      "intro": "Same author, opposite trade-off: Protobuf spends CPU to make messages small; Cap’n Proto spends bytes so that reading costs almost nothing.",
+      "columns": ["Cap’n Proto", "Protocol Buffers"],
+      "rows": [
+        { "label": "Reading a message", "values": ["Accessors read the buffer in place, after bounds checks", "Parse the whole message into objects first"] },
+        { "label": "Read one field of a huge file", "values": ["Yes: memory-map it and follow pointers", "No: everything before the field must be parsed"] },
+        { "label": "Unset fields", "values": ["Keep their slot, as zeros; packing removes them", "Not written at all"] },
+        { "label": "Optional and required fields", "values": ["Neither; use a union with `Void` or a sentinel default", "`optional` with presence; `required` in proto2 and as a legacy Editions setting"] },
+        { "label": "RPC", "values": ["Built in: capabilities and promise pipelining", "Service definitions only; RPC comes from gRPC or others"] },
+        { "label": "Languages from the core team", "values": ["C++ (others are community projects)", "C++, C#, Java, Kotlin, Objective-C, PHP, Python, Ruby, Dart, Go"] },
+        { "label": "Licence", "values": ["MIT", "BSD 3-Clause"] }
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Where it’s used",
+      "items": [
+        { "name": "Cloudflare Workers runtime", "tag": "production", "text": "The `workerd` runtime is built on Cap’n Proto and KJ. It carries messages between sandbox processes and their supervisors, between machines and data centres, and inside Durable Objects. Cloudflare’s logging pipeline used it before Varda joined." },
+        { "name": "Workers RPC", "tag": "2024", "text": "JavaScript-native calls between Workers and to Durable Objects, built on Cap’n Proto but with no schema to write. Functions and objects can be passed as arguments, and chained calls are pipelined into one round trip." },
+        { "name": "Cap’n Web", "tag": "2025", "text": "A schema-less sibling for browsers and the web stack, from the same author: the same object-capability model and pipelining, but the encoding is JSON." },
+        { "name": "Sandstorm", "tag": "origin", "text": "The self-hosted app platform Varda co-founded developed Cap’n Proto and used it heavily. The company stopped most operations in 2017 and dissolved in 2022; the open-source project continues." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Kenton Varda was the primary author of Protocol Buffers version 2, the one Google open-sourced. Cap’n Proto came out of years of working on Protobuf and listening to its users, and its big idea was to drop the encoding step altogether. On April 1, 2013 he announced it: “I may have rewritten Protocol Buffers. Again.” Because its encoding was also its in-memory format, a benchmark he admitted was unfair had it “infinity times faster”.",
+      "The project was developed at Sandstorm.io, the self-hosting start-up Varda co-founded, and used throughout its platform. Version 0.4, in December 2013, added the RPC system and promise pipelining, which he billed as “time-traveling RPC”. In March 2017 most of the Sandstorm team joined Cloudflare, which Varda called perhaps the biggest Cap’n Proto user.",
+      "At Cloudflare Varda leads Workers, whose runtime is built on Cap’n Proto. Version 1.0, in July 2023, was cut as a long-term-support release so the Workers team could make breaking C++ API changes on a new 2.0 branch. Workers RPC in 2024 and Cap’n Web in 2025 carried the object-capability model to JavaScript without schemas."
+    ],
+    "choices": [
+      { "choice": "The wire format is the in-memory format", "why": "Removing the parse step makes reading nearly free and allows memory-mapping and shared memory between processes. It requires arena allocation and fixed layouts, which is why lists can’t grow." },
+      { "choice": "Fields at fixed offsets, numbered in the order added", "why": "With no per-field tags, compatibility comes from position: new fields are appended to a struct and old readers simply bounds-check, so nothing needs renumbering." },
+      { "choice": "Promise pipelining in the RPC protocol", "why": "Over a high-latency link, a clean object interface turns one task into several round trips. Sending calls on not-yet-returned results keeps the clean interface and pays the latency once." },
+      { "choice": "Remote calls don’t pretend to be local", "why": "Varda blames CORBA’s failure largely on making remote calls look like local ones. Cap’n Proto calls return promises and raise “disconnected” errors, so the network stays visible." }
+    ],
+    "timeline": [
+      { "year": "2013", "text": "Announced on April 1; version 0.4 adds RPC in December" },
+      { "year": "2017", "text": "The Sandstorm team, Varda included, joins Cloudflare in March" },
+      { "year": "2022", "text": "Sandstorm the company formally dissolves; the project lives on" },
+      { "year": "2023", "text": "Version 1.0 released in July as a long-term-support line" },
+      { "year": "2024", "text": "Cloudflare launches Workers RPC, built on Cap’n Proto" },
+      { "year": "2025", "text": "Cap’n Web brings the model to browsers, encoded as JSON" }
+    ],
+    "sources": [
+      { "label": "Cap’n Proto news: Announcing Cap’n Proto (April 2013)", "url": "https://capnproto.org/news/2013-04-01-announcing-capn-proto.html" },
+      { "label": "Cap’n Proto: Introduction (Kenton Varda, primary author of Protocol Buffers v2)", "url": "https://capnproto.org/" },
+      { "label": "Cap’n Proto news: v0.4, time-traveling RPC (December 2013)", "url": "https://capnproto.org/news/2013-12-12-capnproto-0.4-time-travel.html" },
+      { "label": "Sandstorm blog: The Sandstorm team is joining Cloudflare (Kenton Varda, March 2017)", "url": "https://sandstorm.io/news/2017-03-13-joining-cloudflare" },
+      { "label": "Sandstorm: About (Kenton Varda, co-founder)", "url": "https://sandstorm.io/about" },
+      { "label": "Cap’n Proto: FAQ (Sandstorm and Cloudflare)", "url": "https://capnproto.org/faq.html" },
+      { "label": "Cap’n Proto: RPC protocol (promise pipelining, why CORBA failed)", "url": "https://capnproto.org/rpc.html" },
+      { "label": "Cap’n Proto news: Cap’n Proto 1.0 (July 2023)", "url": "https://capnproto.org/news/2023-07-28-capnproto-1.0.html" },
+      { "label": "Cloudflare blog: We’ve added JavaScript-native RPC to Cloudflare Workers (April 2024)", "url": "https://blog.cloudflare.com/javascript-native-rpc/" },
+      { "label": "Cloudflare blog: Cap’n Web, a new RPC system for browsers and web servers (September 2025)", "url": "https://blog.cloudflare.com/capnweb-javascript-rpc-library/" }
+    ]
+  },
+  "sources": [
+    { "label": "Cap’n Proto: Introduction (no encoding step, packing, generated code size)", "url": "https://capnproto.org/" },
+    { "label": "Cap’n Proto: Encoding spec (words, segments, pointers, packing)", "url": "https://capnproto.org/encoding.html" },
+    { "label": "Cap’n Proto: Schema language (field numbering, evolving your protocol)", "url": "https://capnproto.org/language.html" },
+    { "label": "Cap’n Proto: RPC protocol (capabilities, promise pipelining, levels, CapTP)", "url": "https://capnproto.org/rpc.html" },
+    { "label": "Cap’n Proto: C++ RPC (level 1 implementation)", "url": "https://capnproto.org/cxxrpc.html" },
+    { "label": "Cap’n Proto: FAQ (optional and required fields, list resizing, security, stateful servers, Cloudflare)", "url": "https://capnproto.org/faq.html" },
+    { "label": "Cap’n Proto: Other languages", "url": "https://capnproto.org/otherlang.html" },
+    { "label": "Cap’n Proto news: Cap’n Proto, FlatBuffers and SBE compared (random access, arena allocation)", "url": "https://capnproto.org/news/2014-06-17-capnproto-flatbuffers-sbe.html" },
+    { "label": "Protocol Buffers docs: History (Protobuf is an interchange format, not tied to one RPC system)", "url": "https://protobuf.dev/history/" },
+    { "label": "Protocol Buffers docs: Overview (languages supported by Google)", "url": "https://protobuf.dev/overview/" },
+    { "label": "capnproto/capnproto: LICENSE (MIT)", "url": "https://github.com/capnproto/capnproto/blob/v2/LICENSE" },
+    { "label": "pycapnp on GitHub (Python bindings)", "url": "https://github.com/capnproto/pycapnp" }
+  ],
+  "checked": "2026-10-06"
+}

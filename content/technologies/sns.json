@@ -1,0 +1,95 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Amazon SNS",
+  "concepts": ["pubsub"],
+  "provider": "aws",
+  "vendor": "Amazon Web Services",
+  "license": "Proprietary",
+  "website": "https://aws.amazon.com/sns/",
+  "summary": "AWS’s managed pub/sub topics, which push each message to queues, functions, webhooks, phones and inboxes.",
+  "intro": [
+    "You publish a message to an SNS topic, and SNS pushes a copy to every subscription: SQS queues, Lambda functions, HTTPS endpoints and Amazon Data Firehose streams, or, for people, SMS, email and mobile push. Subscribers don’t poll; SNS calls them and retries failed deliveries. A filter policy on each subscription, matched against the message attributes or the JSON body, lets a subscriber receive only the messages it cares about.",
+    "Standard topics allow up to 12.5 million subscriptions each, with best-effort ordering. FIFO topics keep order within a message group and remove duplicates, but allow 100 subscriptions, and SQS is the main AWS service that can subscribe to them; in return they can archive messages and replay them. Messages are up to 256 KiB. A standard topic keeps nothing, so a new subscriber never sees earlier messages, which is why the usual pattern is SNS-to-SQS fan-out: each consumer gets its own durable queue."
+  ],
+  "strengths": [
+    "Fan-out to millions of subscribers with push delivery and no polling",
+    "One service for both application messages and notifications to people (SMS, email, push)",
+    "Per-subscription filter policies on attributes or message body, so publishers don’t need to know who wants what",
+    "Nothing to run or size: up to 30,000 messages per second per account in US East (N. Virginia) by default, and more on request"
+  ],
+  "limits": [
+    "Messages top out at 256 KiB, smaller than the 1 MiB that SQS and EventBridge now accept",
+    "Standard topics store nothing: no history and no replay",
+    "FIFO topics allow only 100 subscriptions and mostly deliver to SQS",
+    "Routing is limited to filter policies (200 per topic by default); for richer content-based routing, use EventBridge"
+  ],
+  "worksWith": [
+    { "id": "sqs", "how": "fans messages out to queues in" },
+    { "id": "lambda", "how": "invokes functions in" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Fan out to an SQS queue that only wants paid orders, plus an email alert",
+    "source": [
+      "TOPIC_ARN=$(aws sns create-topic --name order-events --query TopicArn --output text)",
+      "",
+      "# the queue’s access policy must allow sns.amazonaws.com to send to it",
+      "aws sns subscribe --topic-arn \"$TOPIC_ARN\" --protocol sqs \\",
+      "  --notification-endpoint arn:aws:sqs:us-east-1:111122223333:billing \\",
+      "  --attributes '{\"RawMessageDelivery\": \"true\", \"FilterPolicy\": \"{\\\"status\\\": [\\\"paid\\\"]}\"}'",
+      "aws sns subscribe --topic-arn \"$TOPIC_ARN\" --protocol email \\",
+      "  --notification-endpoint ops@example.com",
+      "",
+      "aws sns publish --topic-arn \"$TOPIC_ARN\" --message '{\"orderId\": 42}' \\",
+      "  --message-attributes '{\"status\": {\"DataType\": \"String\", \"StringValue\": \"paid\"}}'"
+    ]
+  },
+  "history": {
+    "story": [
+      "By 2010 SQS let AWS customers hand work from one component to another, but each message went to one consumer, and only when that consumer asked for it. Sending the same event to several systems, or alerting a person, meant building your own notification layer. AWS’s Adam Selipsky called that “undifferentiated heavy lifting”.",
+      "On April 7, 2010 AWS released Amazon SNS in beta. You publish once to a topic and SNS delivers a copy to every subscriber, using a “push” mechanism that, in AWS’s words, “eliminates the need to periodically check or ‘poll’ for new information and updates.” At launch it delivered over HTTP, HTTPS and email and into SQS queues, with messages of up to 8 KB. InfoQ noted that AWS had chosen its own API rather than AMQP or WS-Notification, and that SNS promised neither guaranteed delivery nor ordering.",
+      "The pairing with SQS became its main use. In 2012 AWS made it easy to subscribe a queue to a topic from the console, and SNS-to-SQS fan-out, with a durable queue behind each consumer, became a standard AWS pattern. SNS also grew towards people, with SMS in 2011 and mobile push in 2013."
+    ],
+    "choices": [
+      { "choice": "Push, not poll", "why": "SNS calls each subscriber as soon as a message arrives, so nothing has to run a polling loop, and adding a consumer doesn’t change the publisher." },
+      { "choice": "Standard topics store nothing", "why": "SNS hands each message to the current subscribers and forgets it, which keeps it simple and fast. Durability is left to SQS: put a queue behind each subscriber and nothing is lost while a consumer is down." },
+      { "choice": "A plain AWS web API, like SQS", "why": "Matching SQS’s HTTP API made SNS easy to call from any language and to wire into queues. The cost, as InfoQ pointed out at launch, was tying users to AWS instead of a messaging standard." },
+      { "choice": "Filtering per subscription", "why": "Filter policies, added in 2017, let each subscriber say which messages it wants, so a publisher can send everything to one topic instead of keeping a topic per audience." }
+    ],
+    "timeline": [
+      { "year": "2010", "text": "Beta launch in April, delivering over HTTP, HTTPS, email and to SQS" },
+      { "year": "2011", "text": "SMS text message delivery" },
+      { "year": "2013", "text": "Mobile push notifications; messages grow to 256 KB" },
+      { "year": "2017", "text": "Subscription filter policies" },
+      { "year": "2020", "text": "FIFO topics with ordering and deduplication" },
+      { "year": "2022", "text": "Filtering on the message body, not just attributes" },
+      { "year": "2025", "text": "High-throughput mode lets FIFO topics match the throughput of standard topics" }
+    ],
+    "sources": [
+      { "label": "Amazon press release: AWS introduces Amazon SNS (Apr 2010)", "url": "https://press.aboutamazon.com/2010/4/amazon-web-services-introduces-amazon-simple-notification-service-amazon-sns" },
+      { "label": "AWS What’s New: Announcing Amazon Simple Notification Service (Apr 2010)", "url": "https://aws.amazon.com/about-aws/whats-new/2010/04/07/announcing-amazon-simple-notification-service/" },
+      { "label": "AWS News Blog: Introducing the Amazon Simple Notification Service (Apr 2010)", "url": "https://aws.amazon.com/blogs/aws/introducing-the-amazon-simple-notification-service/" },
+      { "label": "Amazon SNS FAQs, April 2010 (8 KB messages)", "url": "https://aws.amazon.com/sns/faqs/", "archive": "https://web.archive.org/web/20100413223325/http://aws.amazon.com:80/sns/faqs/" },
+      { "label": "InfoQ: Amazon Simple Notification Service (Apr 2010)", "url": "https://www.infoq.com/news/2010/04/Simple-Notification-Service" },
+      { "label": "AWS What’s New: Amazon SNS introduces SMS text message notifications (Nov 2011)", "url": "https://aws.amazon.com/about-aws/whats-new/2011/11/02/amazon-sns-introduces-sms-text-message-notifications/" },
+      { "label": "AWS What’s New: Amazon SQS announces console support for SNS subscriptions (Nov 2012)", "url": "https://aws.amazon.com/about-aws/whats-new/2012/11/21/amazon-sqs-announces-console-support-for-sns-subscriptions/" },
+      { "label": "AWS What’s New: Amazon SQS and SNS announce 256KB payloads (Jun 2013)", "url": "https://aws.amazon.com/about-aws/whats-new/2013/06/18/amazon-sqs-announces-256KB-large-payloads/" },
+      { "label": "AWS What’s New: Announcing Mobile Push from Amazon SNS (Aug 2013)", "url": "https://aws.amazon.com/about-aws/whats-new/2013/08/13/amazon-sns-announces-mobile-push/" },
+      { "label": "AWS What’s New: Amazon SNS introduces message filtering (Nov 2017)", "url": "https://aws.amazon.com/about-aws/whats-new/2017/11/amazon-simple-notification-service-sns-introduces-message-filtering/" },
+      { "label": "AWS What’s New: Amazon SNS introduces FIFO topics (Oct 2020)", "url": "https://aws.amazon.com/about-aws/whats-new/2020/10/amazon-sns-introduces-fifo-topics-with-strict-ordering-and-deduplication-of-messages/" },
+      { "label": "AWS What’s New: Amazon SNS adds payload-based message filtering (Nov 2022)", "url": "https://aws.amazon.com/about-aws/whats-new/2022/11/amazon-sns-payload-based-message-filtering/" },
+      { "label": "AWS What’s New: High-throughput mode for Amazon SNS FIFO topics (Jan 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/01/high-throughput-mode-amazon-sns-fifo-topics/" }
+    ]
+  },
+  "sources": [
+    { "label": "AWS docs: Amazon SNS endpoints and quotas", "url": "https://docs.aws.amazon.com/general/latest/gr/sns.html" },
+    { "label": "AWS docs: Amazon SNS event destinations", "url": "https://docs.aws.amazon.com/sns/latest/dg/sns-event-destinations.html" },
+    { "label": "AWS docs: Amazon SNS message delivery retries", "url": "https://docs.aws.amazon.com/sns/latest/dg/sns-message-delivery-retries.html" },
+    { "label": "AWS docs: Amazon SNS message filtering", "url": "https://docs.aws.amazon.com/sns/latest/dg/sns-message-filtering.html" },
+    { "label": "AWS docs: Message delivery for Amazon SNS FIFO topics", "url": "https://docs.aws.amazon.com/sns/latest/dg/fifo-message-delivery.html" },
+    { "label": "AWS docs: Message archiving and replay for SNS FIFO topics", "url": "https://docs.aws.amazon.com/sns/latest/dg/fifo-message-archiving-replay.html" },
+    { "label": "AWS docs: Fanout SNS notifications to Amazon SQS queues", "url": "https://docs.aws.amazon.com/sns/latest/dg/sns-sqs-as-subscriber.html" },
+    { "label": "AWS Compute Blog: Serverless services now support payloads up to 1 MB (Jan 2026)", "url": "https://aws.amazon.com/blogs/compute/more-room-to-build-serverless-services-now-support-payloads-up-to-1-mb/" }
+  ],
+  "checked": "2026-10-05"
+}

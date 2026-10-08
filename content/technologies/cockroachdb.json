@@ -1,0 +1,174 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "CockroachDB",
+  "concepts": ["relational"],
+  "provider": "vendor",
+  "vendor": "Cockroach Labs, Inc.",
+  "license": "CockroachDB Software License (proprietary, source available) since v24.3 in November 2024; before that Business Source License 1.1 plus the CockroachDB Community License from v19.2 (2019), and Apache 2.0 for the core until v19.1",
+  "website": "https://www.cockroachlabs.com/",
+  "repo": "https://github.com/cockroachdb/cockroach",
+  "summary": "A distributed SQL database that speaks the PostgreSQL wire protocol, replicates every slice of data with Raft and keeps transactions serializable across nodes and regions.",
+  "intro": [
+    "Every node runs the same `cockroach` binary, and any node accepts SQL over the PostgreSQL wire protocol, so a load balancer can send clients anywhere. The SQL layer turns rows and indexes into key-value pairs in one sorted keyspace, cut into ranges of up to 512 MiB that split and merge on their own. Each range is copied to three nodes by default and forms its own Raft group: a write commits once a majority of its replicas agree, and one replica, the leaseholder, serves reads and coordinates writes for that range. On disk each node keeps its replicas in Pebble, an LSM key-value store written in Go that replaced RocksDB as the default in 20.2 (2020), with several timestamped versions of every key (MVCC). Transactions are `SERIALIZABLE` by default; `READ COMMITTED` has been available since 23.2. Instead of Spanner’s atomic clocks, nodes use hybrid logical clocks over NTP: a node whose clock drifts more than the maximum offset (500 ms by default) from the others shuts itself down, and a read that meets a value inside that uncertainty window restarts at a later timestamp. For multi-region clusters you tag nodes with their region, then mark each table `REGIONAL BY TABLE`, `REGIONAL BY ROW` (each row lives in the region named in a hidden `crdb_region` column) or `GLOBAL` (fast reads everywhere, slower writes). Changefeeds stream row changes to Kafka, Pub/Sub, cloud storage or webhooks.",
+    "Since November 2024 all of CockroachDB is under the proprietary CockroachDB Software License: the source is on GitHub, but production clusters need a license key from Cockroach Labs. Enterprise Free costs nothing for businesses under $10 million in annual revenue, is renewed each year and requires the cluster to send telemetry; a cluster without a key, or that stops sending telemetry, is throttled after 7 days to 5 concurrent open transactions. A single-node development cluster needs no key. Larger companies buy Enterprise through sales. The managed service changed on 15 September 2026: new organizations get Cockroach Continuum, billed per provisioned vCPU-hour ($0.092 for Standard and $0.162 for Mission Critical in AWS us-east-1), plus storage, backups and data transfer, with a 30-day trial and $400 of credit. The older Basic, Standard and Advanced plans, including Basic’s free monthly allowance, remain only for clusters created before that date."
+  ],
+  "strengths": [
+    "Survives the loss of a node, a zone or, with `SURVIVE REGION FAILURE`, a whole region without manual failover, because every range commits through a Raft majority",
+    "Scales writes as well as reads by adding nodes: ranges split and rebalance automatically, and Cockroach Labs reports 300-node clusters tested and over 250 nodes in one production cluster",
+    "Serializable transactions and strong consistency on ordinary hardware, on any cloud or on premises, including Kubernetes through the CockroachDB operator",
+    "Row-level data placement: `REGIONAL BY ROW` keeps each customer’s rows near them (and inside their jurisdiction), while `GLOBAL` tables serve local reads in every region",
+    "Speaks the PostgreSQL wire protocol, so `psql` and Postgres drivers connect unchanged, and has built-in change data capture to Kafka, Pub/Sub, S3, GCS, Azure Blob Storage and webhooks"
+  ],
+  "limits": [
+    "No longer open source: free production use is limited to businesses under $10 million in revenue, renewed yearly and with mandatory telemetry; without a valid key the cluster is throttled, and the licence also adds conditions on publishing benchmarks",
+    "PostgreSQL-compatible, not PostgreSQL: no range types, XML functions, column-level privileges, foreign data wrappers or session-scoped advisory locks, and integer division returns a `decimal`",
+    "Serializable isolation means retry errors (SQLSTATE `40001`): CockroachDB retries automatically only when a transaction arrives as one batch, so applications need retry loops or `READ COMMITTED`",
+    "Every write waits for a Raft majority, so a cluster that survives region loss pays cross-region round trips on writes, and nodes crash rather than serve data if clocks drift past the maximum offset",
+    "New Cloud organizations have no free tier since 15 September 2026, idle clusters are billed for provisioned vCPUs, an edition can’t be changed in place, and Mission Critical bills provisioned storage at 4.5 times the data size ($0.155 per GiB-month in us-east-1)"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "speaks the wire protocol of" },
+    { "id": "kafka", "how": "streams changefeeds to" },
+    { "id": "google-pubsub", "how": "streams changefeeds to" },
+    { "id": "s3", "how": "writes backups and changefeeds to" },
+    { "id": "gcs", "how": "writes backups and changefeeds to" },
+    { "id": "kubernetes", "how": "is deployed by its own operator on" },
+    { "id": "terraform", "how": "can be provisioned with" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "A three-region database: rows homed near their customers, a global lookup table, a changefeed",
+    "source": [
+      "-- nodes were started with --locality=region=us-east1 (and us-west1, europe-west1)",
+      "SHOW REGIONS FROM CLUSTER;",
+      "",
+      "CREATE DATABASE shop PRIMARY REGION \"us-east1\" REGIONS \"us-west1\", \"europe-west1\"",
+      "  SURVIVE REGION FAILURE;            -- keep working if a whole region goes down",
+      "USE shop;",
+      "",
+      "-- each row's leaseholder sits in the region stored in the hidden crdb_region column",
+      "CREATE TABLE customers (",
+      "  id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),",
+      "  email STRING NOT NULL UNIQUE,",
+      "  name  STRING",
+      ") LOCALITY REGIONAL BY ROW;",
+      "",
+      "-- read everywhere, written rarely: fast local reads, slower writes",
+      "CREATE TABLE currencies (",
+      "  code STRING PRIMARY KEY,",
+      "  name STRING NOT NULL",
+      ") LOCALITY GLOBAL;",
+      "",
+      "INSERT INTO customers (email, name, crdb_region) VALUES ('ada@example.com', 'Ada', 'europe-west1');",
+      "SHOW TRANSACTION ISOLATION LEVEL;   -- serializable",
+      "",
+      "-- stream every change to Kafka (self-hosted: SET CLUSTER SETTING kv.rangefeed.enabled = true first)",
+      "CREATE CHANGEFEED FOR TABLE customers INTO 'kafka://kafka:9092' WITH updated, resolved = '10s';"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Which way to run it?",
+      "intro": "Cloud prices are list prices for AWS us-east-1 from Cockroach Labs’ pricing page, checked 2026-10-06. They apply to organizations created on or after 15 September 2026; older clusters keep the Basic, Standard and Advanced plans.",
+      "corner": "",
+      "columns": ["Continuum Standard", "Continuum Mission Critical", "Self-hosted, Enterprise Free", "Self-hosted, Enterprise"],
+      "rows": [
+        { "label": "Who runs it", "values": ["Cockroach Labs", "Cockroach Labs", "You", "You"] },
+        { "label": "Infrastructure", "values": ["Shared; AWS and GCP", "Dedicated; AWS, GCP and Azure", "Anywhere, including on premises and Kubernetes", "Anywhere, including air-gapped"] },
+        { "label": "Price", "values": ["$0.092 per vCPU-hour; about $203 a month for 2 vCPUs and 100 GB", "$0.162 per vCPU-hour; about $1,528 a month for 12 vCPUs and 100 GB", "Free for businesses under $10M annual revenue, renewed yearly", "Quote from sales"] },
+        { "label": "Storage", "values": ["Usage-based", "Provisioned at 4.5 times the data size ($0.155 per GiB-month); usage-based in preview", "Your disks", "Your disks"] },
+        { "label": "Availability SLA", "values": ["99.99%", "99.999% with multi-region", "None: you run it", "None: you run it"] },
+        { "label": "Telemetry", "values": ["Not applicable", "Not applicable", "Required; throttled after 7 days without it", "Can be turned off"] },
+        { "label": "Change data capture", "values": ["Add-on, $0.006 per vCPU-hour", "Add-on, $0.023 per vCPU-hour", "Included", "Included"] }
+      ],
+      "notes": [
+        "Cloud usage is metered by the minute; data transfer out of the cluster is billed separately. New organizations get a 30-day trial with $400 of credit, after which clusters pause and are deleted 30 days later without a payment method.",
+        "A single-node cluster for development or testing needs no license key and is never throttled."
+      ]
+    },
+    {
+      "type": "table",
+      "title": "CockroachDB, Spanner, Aurora DSQL or YugabyteDB?",
+      "intro": "Four distributed SQL databases that replicate data across zones or regions with consensus. This site has no pages yet for the other three.",
+      "corner": "",
+      "columns": ["CockroachDB", "Google Cloud Spanner", "Amazon Aurora DSQL", "YugabyteDB"],
+      "rows": [
+        { "label": "Where it runs", "values": ["Self-hosted anywhere, or managed on AWS, GCP and Azure", "Google Cloud only", "AWS only, serverless", "Self-hosted anywhere, or managed"] },
+        { "label": "SQL interface", "values": ["Its own SQL engine speaking the PostgreSQL wire protocol", "GoogleSQL or a PostgreSQL dialect, through drivers or PGAdapter", "PostgreSQL 16 compatible", "A modified fork of the PostgreSQL query layer (YSQL), plus a Cassandra-style API"] },
+        { "label": "Time and ordering", "values": ["Hybrid logical clocks over NTP, 500 ms maximum offset", "TrueTime: GPS and atomic clocks, commit wait", "Managed by AWS, not exposed", "Hybrid logical clocks"] },
+        { "label": "Isolation", "values": ["Serializable by default; read committed", "External consistency (serializable)", "Snapshot isolation", "Snapshot, serializable and read committed"] },
+        { "label": "Licence", "values": ["Proprietary, source available", "Proprietary service", "Proprietary service", "Apache 2.0 database; management platform under a 32-day trial licence"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In the early 2000s Spencer Kimball, Peter Mattis and Ben Darnell built infrastructure at Google, Kimball and Mattis on the Colossus file system and Darnell on Reader, and watched teams shard databases by hand inside their applications. In 2012 Kimball and Mattis left to build Viewfinder, a photo-sharing app, and found no open-source database that was both resilient at scale and transactionally correct, nothing like what they had left behind.",
+      "Kimball wrote the first design in 2014 and put it on GitHub: a sorted key-value map split into Raft-replicated ranges, serializable transactions by default, and data zones modelled on Google’s Spanner, but without Spanner’s atomic clocks. Cockroach Labs followed in 2015 with a $6.3 million seed round led by Benchmark, and 1.0 shipped in May 2017.",
+      "The licence tightened in steps. The core started under Apache 2.0, with enterprise features under the CockroachDB Community License. Version 19.2 moved the core to the Business Source License, which barred offering it as a commercial database service and turned each release into Apache 2.0 after about three years. In 2024 Cockroach Labs retired the free Core edition, and from v24.3 everything ships under its own proprietary licence."
+    ],
+    "choices": [
+      { "choice": "Spanner’s design without atomic clocks", "why": "Spanner relies on TrueTime hardware in Google’s data centres. Hybrid logical clocks with a bounded clock offset run on commodity machines in any cloud; the cost is occasional read restarts instead of Spanner’s wait after every write." },
+      { "choice": "One Raft group per range", "why": "Replicating each small range independently lets data move, split and rebalance range by range, and a write needs only a majority of its own replicas to commit." },
+      { "choice": "Serializable isolation by default", "why": "The design document says clients should have to consciously trade correctness for performance, not get weaker isolation by accident; read committed came only in 2024, for applications migrated from other databases." },
+      { "choice": "The PostgreSQL wire protocol instead of a new client protocol", "why": "Speaking pgwire lets applications use existing PostgreSQL drivers and tools such as `psql`, while the storage and transaction layers underneath are entirely CockroachDB’s own." }
+    ],
+    "timeline": [
+      { "year": "2014", "text": "Spencer Kimball publishes the design on GitHub" },
+      { "year": "2015", "text": "Cockroach Labs founded; $6.3 million seed led by Benchmark" },
+      { "year": "2017", "text": "CockroachDB 1.0 in May, with a $27 million Series B" },
+      { "year": "2019", "text": "Version 19.2 moves the core from Apache 2.0 to the Business Source License" },
+      { "year": "2024", "text": "Read committed GA in 24.1; proprietary licence and Enterprise Free from 24.3" },
+      { "year": "2026", "text": "Cockroach Continuum replaces Cloud plans for new organizations" }
+    ],
+    "sources": [
+      { "label": "Cockroach Labs blog: Hello, world (Jun 2015)", "url": "https://www.cockroachlabs.com/blog/hello-world/" },
+      { "label": "Cockroach Labs: About (founders, first design on GitHub in 2014, seed round)", "url": "https://www.cockroachlabs.com/about/" },
+      { "label": "Cockroach Labs blog: Spanner vs. CockroachDB (founders’ work on Colossus and Reader)", "url": "https://www.cockroachlabs.com/blog/spanner-vs-cockroachdb/" },
+      { "label": "CockroachDB design document (Raft, SSI by default, Spanner-style zones)", "url": "https://github.com/cockroachdb/cockroach/blob/master/docs/design.md" },
+      { "label": "Cockroach Labs: CockroachDB, towards an open-source Spanner (FOSDEM 2015)", "url": "https://www.cockroachlabs.com/resources/cockroachdb-towards-an-open-source-spanner-fosdem-2015/" },
+      { "label": "Cockroach Labs blog: CockroachDB 1.0 is production-ready (May 2017)", "url": "https://www.cockroachlabs.com/blog/cockroachdb-1-0-release/" },
+      { "label": "CockroachDB v19.1.0 LICENSE (Apache 2.0 core, CCL enterprise code)", "url": "https://github.com/cockroachdb/cockroach/blob/v19.1.0/LICENSE" },
+      { "label": "CockroachDB v19.2.0 Business Source License (Database Service restriction, change date)", "url": "https://github.com/cockroachdb/cockroach/blob/v19.2.0/licenses/BSL.txt" },
+      { "label": "Cockroach Labs blog: Enterprise licence announcement (Aug 2024)", "url": "https://www.cockroachlabs.com/blog/enterprise-license-announcement/" },
+      { "label": "Cockroach Labs blog: Read committed in CockroachDB 23.2 (Jan 2024)", "url": "https://www.cockroachlabs.com/blog/232-read-committed-no-more-anomaly-tables/" },
+      { "label": "Cockroach Labs press release: Cockroach Labs launches Cockroach Continuum (Sep 2026)", "url": "https://www.cockroachlabs.com/press/cockroach-labs-launches-cockroach-continuum/" }
+    ]
+  },
+  "sources": [
+    { "label": "CockroachDB docs: Architecture overview (ranges, Raft, leaseholders, any node accepts SQL)", "url": "https://docs.cockroachlabs.com/docs/stable/architecture/overview" },
+    { "label": "CockroachDB docs: Distribution layer (range splits and merges)", "url": "https://docs.cockroachlabs.com/docs/stable/architecture/distribution-layer" },
+    { "label": "CockroachDB docs: Replication zones (512 MiB `range_max_bytes`)", "url": "https://docs.cockroachlabs.com/docs/stable/configure-replication-zones" },
+    { "label": "CockroachDB docs: Storage layer (Pebble, MVCC, HLC timestamps)", "url": "https://docs.cockroachlabs.com/docs/stable/architecture/storage-layer" },
+    { "label": "CockroachDB docs: `cockroach start` (`--max-offset`, default 500ms)", "url": "https://docs.cockroachlabs.com/docs/stable/cockroach-start" },
+    { "label": "Cockroach Labs blog: Living without atomic clocks", "url": "https://www.cockroachlabs.com/blog/living-without-atomic-clocks/" },
+    { "label": "CockroachDB docs: Read committed isolation", "url": "https://docs.cockroachlabs.com/docs/stable/read-committed" },
+    { "label": "CockroachDB docs: Transaction retry error reference", "url": "https://docs.cockroachlabs.com/docs/stable/transaction-retry-error-reference" },
+    { "label": "CockroachDB docs: PostgreSQL compatibility", "url": "https://docs.cockroachlabs.com/docs/stable/postgresql-compatibility" },
+    { "label": "CockroachDB docs: Multi-region overview", "url": "https://docs.cockroachlabs.com/docs/stable/multiregion-overview" },
+    { "label": "CockroachDB docs: Table localities", "url": "https://docs.cockroachlabs.com/docs/stable/table-localities" },
+    { "label": "CockroachDB docs: Survival goals", "url": "https://docs.cockroachlabs.com/docs/stable/multiregion-survival-goals" },
+    { "label": "CockroachDB docs: Changefeed sinks", "url": "https://docs.cockroachlabs.com/docs/stable/changefeed-sinks" },
+    { "label": "CockroachDB docs: CREATE CHANGEFEED", "url": "https://docs.cockroachlabs.com/docs/stable/create-changefeed" },
+    { "label": "CockroachDB docs: Use cloud storage (backups to S3, GCS, Azure)", "url": "https://docs.cockroachlabs.com/docs/stable/use-cloud-storage" },
+    { "label": "CockroachDB docs: Kubernetes overview (CockroachDB operator)", "url": "https://docs.cockroachlabs.com/docs/stable/kubernetes-overview" },
+    { "label": "CockroachDB Cloud docs: Provision a cluster with Terraform", "url": "https://docs.cockroachlabs.com/docs/cockroachcloud/provision-a-cluster-with-terraform" },
+    { "label": "CockroachDB docs: Licensing FAQs (Enterprise Free, telemetry, throttling, single-node exemption)", "url": "https://docs.cockroachlabs.com/docs/stable/licensing-faqs" },
+    { "label": "CockroachDB Software License (LICENSE on GitHub)", "url": "https://github.com/cockroachdb/cockroach/blob/master/LICENSE" },
+    { "label": "GitHub commit: “license: change to the new CockroachDB Software License” (Sep 2024)", "url": "https://github.com/cockroachdb/cockroach/commit/c0274df57a9f8d0086577bcf74c81110db2cea22" },
+    { "label": "Cockroach Labs blog: Enterprise licence announcement (Aug 2024)", "url": "https://www.cockroachlabs.com/blog/enterprise-license-announcement/" },
+    { "label": "Cockroach Labs: Pricing (Cockroach Continuum, from 15 September 2026)", "url": "https://www.cockroachlabs.com/pricing/" },
+    { "label": "Cockroach Labs: CockroachDB pricing (Basic, Standard, Advanced, for clusters created before 15 September 2026)", "url": "https://www.cockroachlabs.com/cockroachdb/pricing/" },
+    { "label": "Cockroach Labs: Cockroach Continuum (cluster scale figures)", "url": "https://www.cockroachlabs.com/product/continuum/" },
+    { "label": "Cockroach Labs: CockroachDB Enterprise (self-hosted, air-gapped)", "url": "https://www.cockroachlabs.com/product/enterprise/" },
+    { "label": "Google Cloud: Spanner, TrueTime and external consistency", "url": "https://docs.cloud.google.com/spanner/docs/true-time-external-consistency" },
+    { "label": "Google Cloud: Spanner PostgreSQL interface", "url": "https://docs.cloud.google.com/spanner/docs/postgresql-interface" },
+    { "label": "AWS: What is Amazon Aurora DSQL?", "url": "https://docs.aws.amazon.com/aurora-dsql/latest/userguide/what-is-aurora-dsql.html" },
+    { "label": "YugabyteDB on GitHub (README: YSQL, Raft, hybrid logical clocks, isolation levels)", "url": "https://github.com/yugabyte/yugabyte-db" },
+    { "label": "YugabyteDB LICENSE.md (Apache 2.0 core, Polyform Free Trial for YugabyteDB Anywhere)", "url": "https://github.com/yugabyte/yugabyte-db/blob/master/LICENSE.md" },
+    { "label": "CockroachDB release tags on GitHub", "url": "https://github.com/cockroachdb/cockroach/tags" },
+    { "label": "Cockroach Labs blog: Introducing Pebble, a RocksDB-inspired key-value store written in Go", "url": "https://www.cockroachlabs.com/blog/pebble-rocksdb-kv-store/" }
+  ],
+  "checked": "2026-10-06"
+}

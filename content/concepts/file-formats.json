@@ -1,0 +1,367 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "File formats",
+  "category": "analytics",
+  "order": 10,
+  "summary": "How rows and columns are laid out inside a data file, which decides how much a query has to read.",
+  "howItWorks": "Row formats such as CSV, JSON lines and Avro write one whole record after another. That’s ideal for appending events, but a query has to read every field of every row. Columnar formats such as Apache Parquet and ORC split rows into row groups (ORC calls them stripes) and store each column separately inside them, compressed with encodings that suit the values. A footer holds the schema plus min/max statistics for every column chunk, so an engine reads only the columns a query names and skips row groups that can’t match.",
+  "analogy": "A filing cabinet with one drawer per field. To total every invoice amount you open the “amount” drawer, instead of pulling out every folder and reading each page.",
+  "useWhen": [
+    "Parquet for anything a warehouse, Spark, Trino or DuckDB will scan",
+    "Avro or JSON lines for event streams and logs written one record at a time",
+    "CSV only for small hand-offs to spreadsheets and partners"
+  ],
+  "avoidWhen": [
+    "Single-row lookups or frequent in-place updates; that’s a database",
+    "Thousands of tiny Parquet files: per-file overhead dominates, so compact them into files of a few hundred MB (Iceberg’s default target is 512 MB)"
+  ],
+  "example": "Sensors write readings with 40 fields each. As gzipped CSV, a month is 1.2 TB, and “average temperature per day” reads all of it. Rewritten as Parquet with ZSTD compression it shrinks to about 150 GB, and the same query reads only the `ts` and `temp_c` columns: around 8 GB.",
+  "providers": {
+    "aws": "Open formats: Athena, Redshift Spectrum and Glue read Parquet, ORC, Avro, CSV and JSON",
+    "gcp": "BigQuery loads and external tables over Parquet, ORC, Avro, CSV and JSON",
+    "azure": "Fabric (over OneLake) and Synapse serverless SQL query Parquet, CSV and JSON files",
+    "oss": "Apache Parquet, Apache ORC, Lance (fast row lookups for AI data), Vortex (compressed encodings you can filter without decompressing; LF AI & Data), TileDB (dense and sparse multi-dimensional arrays, MIT), Apache Avro, Apache Arrow (in memory), CSV, JSON and JSON Lines; for messages: Protocol Buffers, Cap’n Proto; for configuration: YAML, TOML and XML; for describing existing binary formats: Kaitai Struct"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "import pyarrow.csv as csv",
+      "import pyarrow.parquet as pq",
+      "",
+      "table = csv.read_csv(\"readings.csv\")",
+      "pq.write_table(table, \"readings.parquet\", compression=\"zstd\")",
+      "",
+      "# read two columns; the other 38 are never touched",
+      "temps = pq.read_table(\"readings.parquet\", columns=[\"ts\", \"temp_c\"])",
+      "print(temps.num_rows, temps.nbytes)"
+    ]
+  },
+  "related": ["table-formats","query-engines","object","warehouse"],
+  "diagram": {
+    "caption": "The same question asked of two copies of the data. Against CSV, the query has to read every column of every row before it can answer. Against Parquet, it reads the footer, goes straight to the one column it needs and answers far sooner. The other 39 columns are never read.",
+    "w": 800,
+    "h": 290,
+    "zones": [
+      {"x":14,"y":12,"w":772,"h":122,"label":"Row format · CSV"},
+      {"x":14,"y":152,"w":772,"h":128,"label":"Columnar format · Parquet"}
+    ],
+    "nodes": [
+      {
+        "id": "q1",
+        "x": 100,
+        "y": 80,
+        "label": "Query",
+        "sub": "avg(temp_c)",
+        "emit": {"every":2800,"jitter":0.2,"req":true,"color":0},
+        "out": ["csv"]
+      },
+      {
+        "id": "csv",
+        "x": 460,
+        "y": 80,
+        "label": "readings.csv",
+        "sub": "scans all 40 columns",
+        "mode": "reply",
+        "delay": 1600
+      },
+      {
+        "id": "q2",
+        "x": 100,
+        "y": 222,
+        "label": "Query",
+        "sub": "avg(temp_c)",
+        "emit": {"every":2800,"jitter":0.2,"req":true,"color":2},
+        "out": ["footer"]
+      },
+      {"id":"footer","x":310,"y":222,"label":"Footer","sub":"schema · min/max stats","out":["col"]},
+      {
+        "id": "col",
+        "x": 515,
+        "y": 222,
+        "label": "Column chunk",
+        "sub": "temp_c only",
+        "mode": "reply",
+        "delay": 150
+      },
+      {"id":"rest","x":690,"y":222,"label":"39 other columns","sub":"never read","mode":"sink"}
+    ]
+  },
+  "kinds": [
+    {
+      "id": "columnar-files",
+      "name": "Columnar files",
+      "summary": "Files on disk that store each column on its own, compressed, so a query reads only the columns it names and skips blocks that can’t match.",
+      "body": [
+        "Apache Parquet and Apache ORC cut a table into large row groups (ORC calls them stripes) and, inside each, store every column as a separate compressed chunk. A footer holds the schema plus min/max statistics for every chunk, so an engine reads only the columns a query names and skips row groups whose statistics rule them out.",
+        "That suits analytics, which reads a few columns across many rows, and fits single-row lookups poorly. Newer formats aim at that gap: Vortex and Lance both claim random access about 100 times faster than Parquet, Lance by dropping row groups altogether.",
+        "Table formats build on these files rather than replacing them. Apache Iceberg tracks Parquet, ORC or Avro data files as one table, and Delta Lake does the same with Parquet."
+      ],
+      "sources": [
+        {
+          "label": "Apache Parquet docs: File format (row groups, column chunks, footer metadata)",
+          "url": "https://parquet.apache.org/docs/file-format/"
+        },
+        {
+          "label": "Apache Parquet docs: Page index (min/max statistics for skipping pages)",
+          "url": "https://parquet.apache.org/docs/file-format/pageindex/"
+        },
+        {
+          "label": "Apache ORC specification v1 (stripes, column streams, file footer)",
+          "url": "https://orc.apache.org/specification/ORCv1/"
+        },
+        {
+          "label": "vortex-data/vortex on GitHub: 100x faster random access reads than Parquet",
+          "url": "https://github.com/vortex-data/vortex"
+        },
+        {
+          "label": "Lance file format: no row groups; statistics and indexes kept out of the file",
+          "url": "https://lance.org/format/file/"
+        },
+        {
+          "label": "Lance homepage: 100× faster random access than Parquet",
+          "url": "https://lance.org/"
+        },
+        {
+          "label": "Apache Iceberg table spec (data files in Parquet, ORC or Avro)",
+          "url": "https://iceberg.apache.org/spec/"
+        },
+        {
+          "label": "Delta Lake transaction log protocol (data stored in Parquet files)",
+          "url": "https://github.com/delta-io/delta/blob/master/PROTOCOL.md"
+        }
+      ]
+    },
+    {
+      "id": "in-memory-columnar",
+      "name": "In-memory columnar",
+      "summary": "A shared layout for tables in RAM, so libraries and engines in different languages can hand each other data without copying or converting it.",
+      "body": [
+        "Apache Arrow fixes how a column sits in memory, byte for byte: a validity bitmap that marks nulls, a buffer of values and, for strings and lists, an offsets buffer. Every language uses the same layout, so a C++ library, a Rust engine and a Python program can pass each other pointers to the same buffers instead of serialising and parsing.",
+        "It works alongside the on-disk formats rather than against them. Parquet is encoded and compressed to be small on disk, Arrow is laid out to be computed on, and most tools read Parquet straight into Arrow. When Arrow data does go to disk, its IPC file format (also called Feather v2) keeps the in-memory bytes, so a reader can memory-map the file without decoding it."
+      ],
+      "sources": [
+        {
+          "label": "Apache Arrow: Overview (in-memory columnar format, languages)",
+          "url": "https://arrow.apache.org/overview/"
+        },
+        {
+          "label": "Arrow docs: Columnar format (buffers, validity bitmap, offsets, IPC stream and file)",
+          "url": "https://arrow.apache.org/docs/format/Columnar.html"
+        },
+        {
+          "label": "Apache Arrow FAQ: Arrow vs Parquet, Feather is the IPC file format, memory-mapping",
+          "url": "https://arrow.apache.org/faq/"
+        },
+        {
+          "label": "PyArrow docs: Reading and writing Parquet files into Arrow tables",
+          "url": "https://arrow.apache.org/docs/python/parquet.html"
+        }
+      ]
+    },
+    {
+      "id": "array-formats",
+      "name": "Array formats",
+      "summary": "Storage for dense and sparse multi-dimensional arrays, such as images, climate grids, genomic variants and LiDAR points, read by slicing coordinates.",
+      "body": [
+        "A table has rows and columns; an array has dimensions. A dense array fills every cell of a grid, like an image or a climate model’s lattice, while a sparse array stores only the cells that exist, keyed by their coordinates. TileDB groups cells into fixed-size tiles and stores each attribute separately, so a read fetches only the tiles and attributes a slice touches.",
+        "Writes never edit old files. Each one creates an immutable fragment named after the time range it covers, which suits object stores such as S3 and lets readers open an array as it was at an earlier time."
+      ],
+      "sources": [
+        {
+          "label": "TileDB README: dense and sparse arrays, cloud object stores, APIs",
+          "url": "https://github.com/TileDB-Inc/TileDB"
+        },
+        {
+          "label": "TileDB format specification",
+          "url": "https://github.com/TileDB-Inc/TileDB/blob/main/format_spec/FORMAT_SPEC.md"
+        },
+        {
+          "label": "TileDB format specification: Fragment",
+          "url": "https://github.com/TileDB-Inc/TileDB/blob/main/format_spec/fragment.md"
+        },
+        {
+          "label": "TileDB format specification: Timestamped name (milliseconds since 1970)",
+          "url": "https://github.com/TileDB-Inc/TileDB/blob/main/format_spec/timestamped_name.md"
+        }
+      ]
+    },
+    {
+      "id": "binary-serialization",
+      "name": "Binary serialization",
+      "summary": "Compact, schema-driven encodings for one record or message at a time: the bytes between services and inside event streams.",
+      "body": [
+        "Avro, Protocol Buffers and Cap’n Proto all start from a schema and encode records in binary, but differently. Avro writes no field names or type tags, so its bytes are small and a reader needs the writer’s schema. Protocol Buffers tags each field with the number it has in the `.proto` file. Cap’n Proto lays a message out like an in-memory struct, so reading it needs no parse step.",
+        "Schemas let producers and consumers upgrade at different times. Avro’s schema resolution matches fields by name and fills in defaults, Protocol Buffers keeps old field numbers stable, and on Kafka a schema registry stores each version and checks that new ones stay compatible.",
+        "These are row formats: they write whole records one after another, which suits messages and appends. For scanning one column across millions of rows, data usually lands in columnar files."
+      ],
+      "sources": [
+        {
+          "label": "Apache Avro specification: schemas, binary encoding, container files and schema resolution",
+          "url": "https://avro.apache.org/docs/++version++/specification/"
+        },
+        {
+          "label": "Protocol Buffers docs: Encoding (varints, tags, wire types)",
+          "url": "https://protobuf.dev/programming-guides/encoding/"
+        },
+        {
+          "label": "Protocol Buffers docs: Language guide, proto3 (field numbers, updating a message type)",
+          "url": "https://protobuf.dev/programming-guides/proto3/"
+        },
+        {
+          "label": "Cap’n Proto: Introduction (no encoding step)",
+          "url": "https://capnproto.org/"
+        },
+        {
+          "label": "Confluent docs: Schema evolution and compatibility",
+          "url": "https://docs.confluent.io/platform/current/schema-registry/fundamentals/schema-evolution.html"
+        },
+        {
+          "label": "Apache Parquet docs: Motivation (columnar storage for analytics)",
+          "url": "https://parquet.apache.org/docs/overview/motivation/"
+        }
+      ]
+    },
+    {
+      "id": "text-formats",
+      "name": "Text and markup",
+      "summary": "Human-readable formats for APIs, configuration files and documents: JSON, XML, YAML and TOML.",
+      "body": [
+        "These are plain text that people read and edit as often as programs do. JSON is the data format of web APIs, defined by one small grammar. XML marks up trees of tagged text and still defines Office documents, SVG and RSS feeds. YAML and TOML are mostly used for configuration, from Kubernetes manifests in YAML to `Cargo.toml` and `pyproject.toml` in TOML.",
+        "They differ most in how they handle types. JSON has strings, numbers, booleans, null, arrays and objects, and nothing else, not even comments or dates. XML is all text until a schema adds types. YAML guesses a type from how a value looks, so under YAML 1.1 rules `no` reads as false, while TOML quotes every string and guesses nothing."
+      ],
+      "sources": [
+        {
+          "label": "RFC 8259: The JavaScript Object Notation (JSON) Data Interchange Format",
+          "url": "https://www.rfc-editor.org/rfc/rfc8259"
+        },
+        {
+          "label": "W3C: Extensible Markup Language (XML) 1.0, Fifth Edition",
+          "url": "https://www.w3.org/TR/xml/"
+        },
+        {
+          "label": "ECMA-376: Office Open XML file formats",
+          "url": "https://ecma-international.org/publications-and-standards/standards/ecma-376/"
+        },
+        {
+          "label": "W3C: Scalable Vector Graphics (SVG) 2, a language based on XML",
+          "url": "https://www.w3.org/TR/SVG2/"
+        },
+        {
+          "label": "RSS Advisory Board: RSS 2.0 specification",
+          "url": "https://www.rssboard.org/rss-specification"
+        },
+        {
+          "label": "YAML Ain’t Markup Language, revision 1.2.2",
+          "url": "https://yaml.org/spec/1.2.2/"
+        },
+        {
+          "label": "Boolean language-independent type for YAML 1.1 (yes, no, on, off)",
+          "url": "https://yaml.org/type/bool.html"
+        },
+        {
+          "label": "Kubernetes docs: Objects in Kubernetes (manifests in YAML)",
+          "url": "https://kubernetes.io/docs/concepts/overview/working-with-objects/"
+        },
+        {
+          "label": "TOML v1.1.0 specification",
+          "url": "https://toml.io/en/v1.1.0"
+        },
+        {
+          "label": "The Cargo Book: The manifest format (Cargo.toml is written in TOML)",
+          "url": "https://doc.rust-lang.org/cargo/reference/manifest.html"
+        },
+        {
+          "label": "Python Packaging User Guide: Writing your pyproject.toml",
+          "url": "https://packaging.python.org/en/latest/guides/writing-pyproject-toml/"
+        }
+      ]
+    },
+    {
+      "id": "format-description",
+      "name": "Format descriptions",
+      "summary": "Languages that describe a binary format someone else designed, field by field, and generate a parser for it.",
+      "body": [
+        "Serialization formats start from data in your program and define their own bytes. A format description goes the other way: it starts from bytes that already exist, such as a GIF, a ZIP archive, an ELF binary or a device protocol, and describes them as they are. Kaitai Struct writes these descriptions in YAML and compiles them into parsers for a dozen programming languages.",
+        "So these tools show up in reverse engineering, digital forensics and digital preservation rather than in data pipelines."
+      ],
+      "sources": [
+        {
+          "label": "Kaitai Struct home page (languages, projects using it)",
+          "url": "https://kaitai.io/"
+        },
+        {
+          "label": "Kaitai Struct User Guide",
+          "url": "https://doc.kaitai.io/user_guide.html"
+        },
+        {
+          "label": "Kaitai Struct FAQ (digital forensics and preservation; compared with Protocol Buffers)",
+          "url": "https://doc.kaitai.io/faq.html"
+        },
+        {
+          "label": "Kaitai Struct v0.11 released (reverse engineering and debugging)",
+          "url": "https://kaitai.io/news/2025/09/07/kaitai-struct-v0.11-released.html"
+        }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "For decades, data moved between systems as text. CSV was used to swap data between spreadsheet programs for so long that when RFC 4180 finally wrote it down in 2005, it noted the format had “never been formally documented”. Row files like CSV, and later JSON lines, are easy to write, but a query that needs one column still has to read every byte of every row.",
+      "Databases had already found the alternative. In 2005 Michael Stonebraker and colleagues at MIT, Brown, Brandeis and UMass Boston published C-Store, a database that stores data by column to make reads fast, and Google’s 2010 Dremel paper showed how to lay out nested records in columns and aggregate trillion-row tables in seconds. Hadoop users wanted the same for files. Doug Cutting’s Avro (2009) gave Hadoop compact row files with a schema, and in early 2013, a month apart, Hortonworks and Facebook announced ORC to speed up Hive, and Twitter and Cloudera announced Parquet.",
+      "Parquet won the broadest support and became the default data file under table formats such as Iceberg and Delta Lake. Apache Arrow (2016) applied the same columnar layout in memory, so engines and languages can hand data to each other without converting it. Newer formats such as Lance revisit the trade-offs for AI data, where fetching single rows matters as much as scanning."
+    ],
+    "choices": [
+      { "choice": "Store each column together, not each row", "why": "Analytical queries read a few columns of many rows. Keeping a column’s values together means a query reads only what it needs, and similar values next to each other compress far better." },
+      { "choice": "Put the schema inside the file", "why": "CSV carries no types, so every reader has to guess or be told. Avro and Parquet embed their schema, so any tool can open a file without outside definitions." },
+      { "choice": "Shred nested records into flat columns", "why": "Real data has lists and structs. Dremel’s repetition and definition levels let nested records be stored as plain columns and rebuilt on read, and Parquet adopted the technique." }
+    ],
+    "timeline": [
+      { "year": "2005", "text": "C-Store paper makes the case for column stores; RFC 4180 documents CSV" },
+      { "year": "2009", "text": "Avro brings schema-described binary row files to Hadoop" },
+      { "year": "2010", "text": "Google’s Dremel paper shows columnar storage for nested data" },
+      { "year": "2013", "text": "ORC (February) and Parquet (March) announced for Hadoop" },
+      { "year": "2016", "text": "Apache Arrow standardises columnar data in memory" },
+      { "year": "2025", "text": "Parquet adds `variant` and geospatial types; a Lance paper tackles random access" }
+    ],
+    "sources": [
+      { "label": "RFC 4180: Common Format and MIME Type for CSV Files (October 2005)", "url": "https://www.rfc-editor.org/rfc/rfc4180" },
+      { "label": "C-Store: A Column-oriented DBMS (VLDB 2005)", "url": "https://www.vldb.org/archives/website/2005/program/paper/thu/p553-stonebraker.pdf" },
+      { "label": "Dremel: Interactive Analysis of Web-Scale Datasets (VLDB 2010)", "url": "https://research.google/pubs/dremel-interactive-analysis-of-web-scale-datasets-2/" },
+      { "label": "Doug Cutting: [PROPOSAL] new subproject: Avro (hadoop-general, April 2009)", "url": "https://lists.apache.org/thread/z571w0r5jmfsjvnl0fq4fgg0vh28d3bk" },
+      { "label": "Hortonworks blog: The Stinger Initiative, ORCFile built with Facebook (20 February 2013)", "url": "http://hortonworks.com/blog/100x-faster-hive", "archive": "https://web.archive.org/web/20130328050712/http://hortonworks.com/blog/100x-faster-hive" },
+      { "label": "Introducing Parquet: Twitter and Cloudera announcement (hdfs-user list, 12 March 2013)", "url": "https://lists.apache.org/thread/5orcmnsq7rsy90nmg8lt8s5yvw9k9qnv" },
+      { "label": "ASF board minutes: Establish the Apache Arrow Project (January 2016)", "url": "https://www.apache.org/foundation/records/minutes/2016/board_minutes_2016_01_20.txt" },
+      { "label": "Apache Arrow: Overview (a standard in-memory columnar format)", "url": "https://arrow.apache.org/overview/" },
+      { "label": "parquet-format 2.11.0 release notes: Variant, GEOMETRY and GEOGRAPHY types (March 2025)", "url": "https://github.com/apache/parquet-format/releases/tag/apache-parquet-format-2.11.0" },
+      { "label": "Lance: Efficient Random Access in Columnar Storage (arXiv, April 2025)", "url": "https://arxiv.org/abs/2504.15247" }
+    ]
+  },
+  "sources": [
+    { "label": "Apache Parquet docs: File format (row groups, column chunks, footer)", "url": "https://parquet.apache.org/docs/file-format/" },
+    { "label": "Apache Parquet docs: Page index and column chunk statistics", "url": "https://parquet.apache.org/docs/file-format/pageindex/" },
+    { "label": "Apache ORC specification v1 (stripes, footer, column statistics)", "url": "https://orc.apache.org/specification/ORCv1/" },
+    { "label": "Apache Avro specification (row-oriented container files)", "url": "https://avro.apache.org/docs/++version++/specification/" },
+    { "label": "JSON Lines format", "url": "https://jsonlines.org/" },
+    { "label": "Iceberg docs: Configuration (write.target-file-size-bytes defaults to 512 MB)", "url": "https://iceberg.apache.org/docs/latest/configuration/" },
+    { "label": "Athena docs: Supported SerDes and data formats", "url": "https://docs.aws.amazon.com/athena/latest/ug/supported-serdes.html" },
+    { "label": "Redshift docs: Data files for queries in Redshift Spectrum", "url": "https://docs.aws.amazon.com/redshift/latest/dg/c-spectrum-data-files.html" },
+    { "label": "AWS Glue docs: Data format options for ETL", "url": "https://docs.aws.amazon.com/glue/latest/dg/aws-glue-programming-etl-format.html" },
+    { "label": "BigQuery docs: Batch loading data (Avro, Parquet, ORC, CSV, JSON)", "url": "https://docs.cloud.google.com/bigquery/docs/batch-loading-data" },
+    { "label": "BigQuery docs: Cloud Storage external tables", "url": "https://docs.cloud.google.com/bigquery/docs/external-data-cloud-storage" },
+    { "label": "Microsoft Fabric docs: Browse Parquet, CSV and JSONL files with OPENROWSET", "url": "https://learn.microsoft.com/en-us/fabric/data-warehouse/browse-file-content-with-openrowset" },
+    { "label": "Azure Synapse docs: Query storage files with serverless SQL (Parquet, CSV)", "url": "https://learn.microsoft.com/en-us/azure/synapse-analytics/sql/query-data-storage" },
+    { "label": "Azure Synapse docs: Query JSON files with serverless SQL", "url": "https://learn.microsoft.com/en-us/azure/synapse-analytics/sql/query-json-files" },
+    { "label": "Lance homepage: fast random access for AI data", "url": "https://lance.org/" },
+    { "label": "PyArrow docs: Reading CSV files", "url": "https://arrow.apache.org/docs/python/csv.html" },
+    { "label": "PyArrow docs: Reading and writing Parquet files", "url": "https://arrow.apache.org/docs/python/parquet.html" },
+    { "label": "Protocol Buffers docs: Encoding", "url": "https://protobuf.dev/programming-guides/encoding/" },
+    { "label": "Cap’n Proto: Introduction", "url": "https://capnproto.org/" },
+    { "label": "RFC 8259: The JavaScript Object Notation (JSON) Data Interchange Format", "url": "https://www.rfc-editor.org/rfc/rfc8259" },
+    { "label": "JSON Lines", "url": "https://jsonlines.org/" },
+    { "label": "YAML Ain’t Markup Language, revision 1.2.2", "url": "https://yaml.org/spec/1.2.2/" },
+    { "label": "TOML v1.1.0 specification", "url": "https://toml.io/en/v1.1.0" },
+    { "label": "W3C: Extensible Markup Language (XML) 1.0, Fifth Edition", "url": "https://www.w3.org/TR/xml/" },
+    { "label": "vortex-data/vortex on GitHub", "url": "https://github.com/vortex-data/vortex" },
+    { "label": "TileDB-Inc/TileDB on GitHub (MIT)", "url": "https://github.com/TileDB-Inc/TileDB" }
+  ]
+}

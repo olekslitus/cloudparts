@@ -1,0 +1,112 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "RocksDB",
+  "concepts": ["key-value"],
+  "provider": "oss",
+  "vendor": "Meta",
+  "license": "Dual: GPLv2 or Apache 2.0, your choice (BSD plus a patent grant until July 2017)",
+  "website": "https://rocksdb.org/",
+  "repo": "https://github.com/facebook/rocksdb",
+  "summary": "The embedded key-value engine Facebook forked from LevelDB: an LSM tree in a C++ library that many databases and stream processors use as their storage layer.",
+  "intro": [
+    "RocksDB is not a server. It is a C++ library that your program links in: you open a directory and call `Put`, `Get`, `Delete` and iterators, with keys and values as arbitrary byte strings kept in sorted order. There is no network protocol, no SQL and no user accounts. Many threads in one process can share a database, but only one process may open it for writing; others can open it read-only or as a “secondary” that catches up on demand. Official Java bindings (RocksJava, over JNI) are why so many JVM systems embed it.",
+    "It stores data as a log-structured merge (LSM) tree. A write goes into the memtable, a sorted buffer in memory, and (optionally) into a write-ahead log file so it survives a crash. When the memtable fills, it is flushed to an immutable sorted file (an SST) in level 0. Background threads then compact files down through levels L1, L2 and so on, each typically ten times larger than the one above, merging them and dropping overwritten values and deletion markers. A read checks the memtable first, then the levels from newest to oldest, using Bloom filters to skip files that can’t hold the key. The compaction style and many tuning options trade write, read and space amplification against each other.",
+    "On top of that it adds column families (separate key spaces in one database), atomic multi-key `WriteBatch` writes, snapshots, optimistic and pessimistic transactions, merge operators and compaction filters. Those pieces made it the storage engine inside other systems: TiKV (under TiDB) keeps each node’s data and Raft log in RocksDB, ArangoDB is built on it, MyRocks puts it under MySQL, and Kafka Streams, Flink, Spark Structured Streaming and Quix Streams use it to hold local state that can outgrow memory."
+  ],
+  "strengths": [
+    "Write-optimized: an LSM tree compresses better and writes less than an update-in-place B-tree; Facebook’s MyRocks used 50% less storage than compressed InnoDB for the same data",
+    "No network hop: an embedded store answers from local memory or flash, and lets an application keep far more state than fits in its heap",
+    "Proven as a building block: the storage layer of TiKV, ArangoDB and MyRocks, and the default persistent state store of Kafka Streams",
+    "Permissive licence choice (Apache 2.0 or GPLv2) and an active release cadence from Meta’s database engineering team"
+  ],
+  "limits": [
+    "Only a storage engine: no server, replication, SQL or secondary indexes; systems like TiKV and CockroachDB built Raft replication and SQL on top themselves",
+    "One writer process per database directory, enforced with an OS lock",
+    "Tuning is a craft: when compaction can’t keep up, RocksDB deliberately stalls writes, and its own guide warns that finely tuned instances often regress when the workload or hardware changes",
+    "A C++ core behind foreign-function boundaries: JNI caps keys and values at 2^31 bytes in Flink, and the cost of crossing cgo was one reason CockroachDB replaced it with Pebble, written in Go"
+  ],
+  "worksWith": [
+    { "id": "kafka-streams", "how": "is the default state store in" },
+    { "id": "flink", "how": "is a state backend for" },
+    { "id": "spark", "how": "is a streaming state store for" },
+    { "id": "mysql", "how": "is a storage engine, via MyRocks, for" },
+    { "id": "arangodb", "how": "is the storage engine of" },
+    { "id": "quix-streams", "how": "holds the local state of" },
+    { "id": "cockroachdb", "how": "was the storage engine (until 20.2) of" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Write, read and compact a database with the bundled `ldb` and `sst_dump` tools",
+    "source": [
+      "ldb --db=/tmp/test_db --create_if_missing put a1 b1",
+      "ldb --db=/tmp/test_db batchput a3 b3 a4 b4     # one atomic WriteBatch",
+      "ldb --db=/tmp/test_db get a1",
+      "ldb --db=/tmp/test_db scan                     # keys come back in sorted order",
+      "",
+      "# merge SST files down the levels, recompressing on the way",
+      "ldb --db=/tmp/test_db compact --compression_type=bzip2",
+      "",
+      "# look inside the immutable sorted files themselves",
+      "sst_dump --file=/tmp/test_db --command=scan"
+    ]
+  },
+  "history": {
+    "story": [
+      "By mid-2011 Dhruba Borthakur, a Facebook engineer, had spent five years building HDFS and HBase and wanted to serve low-latency queries, not just analytics. Data was moving to flash, where a read takes about 100 microseconds while a hop across the data-centre network adds about 50, so a database embedded in the application could be markedly faster than one reached over the network. Google had open-sourced LevelDB, a small C++ LSM library, in July 2011, and it topped the benchmarks. But Borthakur found those benchmarks used databases that fit in RAM: on one five times larger than memory, LevelDB’s single-threaded compaction caused frequent write stalls and huge 99th-percentile latency, and it couldn’t use all the I/O a flash card offered.",
+      "So in 2012 he forked LevelDB (version 1.5) and rebuilt it for servers: multi-threaded compaction, a choice of compaction styles, and pluggable compression, memtables, file formats and compaction filters. Facebook open-sourced RocksDB on November 21, 2013, saying it already managed close to a petabyte across its applications and ran random writes and bulk loads 10 times faster than LevelDB. In 2016 Facebook announced MyRocks, RocksDB as a MySQL storage engine, which let its user database tier store the same data in half the space of compressed InnoDB.",
+      "RocksDB first shipped under BSD plus a separate patent grant. In 2017 Apache Cassandra developers asked the Apache Software Foundation whether that grant was acceptable; the foundation then barred Facebook’s BSD-plus-Patents licence from its projects, and on July 15, 2017 RocksDB was relicensed under GPLv2 or Apache 2.0. By then it had become the default answer for “I need a fast local store”: CockroachDB used it from the start until it replaced it in 2020 with Pebble, its own RocksDB-inspired engine in Go, while TiKV, Kafka Streams, Flink and Spark still build on it."
+    ],
+    "choices": [
+      { "choice": "Fork LevelDB instead of adapting HBase or Cassandra", "why": "HBase and Cassandra were already LSM designs, but they were servers with their own management and deployment; making either an embeddable library would have been a large project. LevelDB was a simple C++ library and the fastest embedded store in open benchmarks, so it was the shortest path." },
+      { "choice": "Multi-threaded compaction, built for flash", "why": "LevelDB’s single compaction thread couldn’t keep up with server write rates and stalled writers. Running compactions in parallel lets a database sustain high update rates and use the million-plus IOPS of striped flash cards." },
+      { "choice": "Make the amplification trade-off tunable", "why": "Flash wears out with writes, so write amplification mattered as much as speed. Leveled and universal compaction, and the options behind them, let each application choose between write, read and space amplification instead of accepting one fixed balance." },
+      { "choice": "Pluggable parts", "why": "Facebook’s workloads differed, so compression, memtable structures, file formats, merge operators and compaction filters can all be swapped without forking the engine; one team used a compaction filter to expire keys." }
+    ],
+    "timeline": [
+      { "year": "2011", "text": "Google open-sources LevelDB under a BSD-style licence, July 27" },
+      { "year": "2012", "text": "Dhruba Borthakur forks LevelDB 1.5 at Facebook" },
+      { "year": "2013", "text": "Facebook open-sources RocksDB, November 21" },
+      { "year": "2016", "text": "Flink 1.0 adds a RocksDB state backend; Facebook announces MyRocks for MySQL" },
+      { "year": "2017", "text": "Relicensed as GPLv2 or Apache 2.0 after the ASF bars Facebook’s BSD-plus-Patents licence" },
+      { "year": "2020", "text": "CockroachDB 20.2 makes Pebble its default engine, replacing RocksDB" },
+      { "year": "2021", "text": "Spark 3.2 adds a RocksDB state store for Structured Streaming" }
+    ],
+    "sources": [
+      { "label": "Dhruba Borthakur: The history of RocksDB (Nov 2013)", "url": "http://rocksdb.blogspot.com/2013/11/the-history-of-rocksdb.html" },
+      { "label": "Engineering at Meta: Under the hood, building and open-sourcing RocksDB (Nov 2013)", "url": "https://engineering.fb.com/2013/11/21/core-infra/under-the-hood-building-and-open-sourcing-rocksdb/" },
+      { "label": "Google Open Source Blog: LevelDB, a fast persistent key-value store (Jul 2011)", "url": "https://opensource.googleblog.com/2011/07/leveldb-fast-persistent-key-value-store.html" },
+      { "label": "RocksDB wiki: Overview (forked from LevelDB 1.5)", "url": "https://github.com/facebook/rocksdb/wiki/RocksDB-Overview" },
+      { "label": "Engineering at Meta: MyRocks, a space- and write-optimized MySQL database (Aug 2016)", "url": "https://engineering.fb.com/2016/08/31/core-infra/myrocks-a-space-and-write-optimized-mysql-database/" },
+      { "label": "Apache Flink: Announcing Apache Flink 1.0.0 (Mar 2016)", "url": "https://flink.apache.org/2016/03/08/announcing-apache-flink-1.0.0/" },
+      { "label": "Apache JIRA LEGAL-303: RocksDB integrations (Apr 2017)", "url": "https://issues.apache.org/jira/browse/LEGAL-303" },
+      { "label": "The Register: Apache says “no” to Facebook code libraries (Jul 2017)", "url": "https://www.theregister.com/2017/07/17/apache_says_no_to_facebook_code_libraries/" },
+      { "label": "facebook/rocksdb commit: Change RocksDB License (Jul 15, 2017)", "url": "https://github.com/facebook/rocksdb/commit/3c327ac2d0fd50bbd82fe1f1af5de909dad769e6" },
+      { "label": "Cockroach Labs blog: Introducing Pebble, a RocksDB-inspired key-value store written in Go (Sep 2020)", "url": "https://www.cockroachlabs.com/blog/pebble-rocksdb-kv-store/" },
+      { "label": "Apache Spark: Spark 3.2.0 release notes (RocksDB StateStore)", "url": "https://spark.apache.org/releases/spark-release-3-2-0.html" },
+      { "label": "Wikipedia: RocksDB (created April 2012, first diverging commit May 2012)", "url": "https://en.wikipedia.org/wiki/RocksDB" }
+    ]
+  },
+  "sources": [
+    { "label": "RocksDB README: LSM design, LevelDB origins, dual GPLv2 / Apache 2.0 licence", "url": "https://github.com/facebook/rocksdb/blob/main/README.md" },
+    { "label": "RocksDB wiki: Overview (memtable, WAL, SST files, column families, transactions)", "url": "https://github.com/facebook/rocksdb/wiki/RocksDB-Overview" },
+    { "label": "RocksDB wiki: Leveled compaction (levels, target sizes, multiplier)", "url": "https://github.com/facebook/rocksdb/wiki/Leveled-Compaction" },
+    { "label": "RocksDB wiki: Basic operations (one process per database, thread safety)", "url": "https://github.com/facebook/rocksdb/wiki/Basic-Operations" },
+    { "label": "RocksDB wiki: Read-only and secondary instances", "url": "https://github.com/facebook/rocksdb/wiki/Read-only-and-Secondary-instances" },
+    { "label": "RocksDB wiki: Tuning guide", "url": "https://github.com/facebook/rocksdb/wiki/RocksDB-Tuning-Guide" },
+    { "label": "RocksDB wiki: Write stalls", "url": "https://github.com/facebook/rocksdb/wiki/Write-Stalls" },
+    { "label": "RocksDB wiki: RocksJava basics (JNI layers)", "url": "https://github.com/facebook/rocksdb/wiki/RocksJava-Basics" },
+    { "label": "RocksDB wiki: Administration and data access tool (ldb, sst_dump)", "url": "https://github.com/facebook/rocksdb/wiki/Administration-and-Data-Access-Tool" },
+    { "label": "RocksDB USERS.md: who embeds RocksDB", "url": "https://github.com/facebook/rocksdb/blob/main/USERS.md" },
+    { "label": "Engineering at Meta: MyRocks, a space- and write-optimized MySQL database (Aug 2016)", "url": "https://engineering.fb.com/2016/08/31/core-infra/myrocks-a-space-and-write-optimized-mysql-database/" },
+    { "label": "Percona Server for MySQL docs: Percona MyRocks introduction", "url": "https://docs.percona.com/percona-server/8.4/myrocks-index.html" },
+    { "label": "TiDB docs: TiKV overview (Region data and Raft logs in RocksDB)", "url": "https://docs.pingcap.com/tidb/stable/tikv-overview/" },
+    { "label": "ArangoDB docs: Storage engine (based on RocksDB)", "url": "https://docs.arango.ai/arangodb/stable/components/arangodb-server/storage-engine/" },
+    { "label": "Kafka docs: Processor API (persistent key-value stores use RocksDB)", "url": "https://kafka.apache.org/43/streams/developer-guide/processor-api/" },
+    { "label": "Flink docs: State backends (EmbeddedRocksDBStateBackend, JNI size limit)", "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/ops/state/state_backends/" },
+    { "label": "Spark docs: Structured Streaming, RocksDB state store implementation", "url": "https://spark.apache.org/docs/latest/streaming/apis-on-dataframes-and-datasets.html" },
+    { "label": "Quix Streams docs: Stateful processing (state store backed by RocksDB)", "url": "https://quix.io/docs/quix-streams/advanced/stateful-processing.html" },
+    { "label": "Cockroach Labs blog: Introducing Pebble, a RocksDB-inspired key-value store written in Go (Sep 2020)", "url": "https://www.cockroachlabs.com/blog/pebble-rocksdb-kv-store/" },
+    { "label": "facebook/rocksdb releases on GitHub (v11.8.1, Aug 2026)", "url": "https://github.com/facebook/rocksdb/releases" }
+  ],
+  "checked": "2026-10-06"
+}

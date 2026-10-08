@@ -1,0 +1,112 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Apache Ozone",
+  "concepts": ["object", "file"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://ozone.apache.org/",
+  "repo": "https://github.com/apache/ozone",
+  "summary": "A Hadoop-born object store that serves the same buckets over S3 and as a Hadoop file system.",
+  "intro": [
+    "Apache Ozone is a distributed object store built by Hadoop engineers to sit beside or replace HDFS. It splits metadata in two. The Ozone Manager (OM) keeps the namespace of volumes, buckets and keys. The Storage Container Manager (SCM) tracks the Datanodes and storage containers: 5 GB units that each hold many blocks. Datanodes report and replicate whole containers rather than individual blocks, so billions of small files don’t swamp the metadata services. OM and SCM replicate their own state with Apache Ratis, a Raft implementation. Open containers are copied three ways through Raft; a bucket can use erasure coding instead, such as 6 data plus 3 parity pieces, which cuts the storage overhead from 200% to 50%.",
+    "Clients reach the data through several front ends. The S3 Gateway is a separate, stateless service, so you run several behind a load balancer; each S3 bucket is a bucket in the `/s3v` volume. Hadoop tools such as Spark, Hive and Trino use `ofs://`, a Hadoop-compatible file system that sees every volume and bucket. A bucket’s layout decides what works: file-system-optimized (FSO) buckets, the default for buckets made with Ozone’s own tools, store real directories, so renaming or deleting a whole directory is one metadata change. Object-store (OBS) buckets, the default for buckets made through S3, store flat keys and can’t be used through `ofs`. Security builds on Kerberos, with Ozone’s own ACLs or Apache Ranger for authorization."
+  ],
+  "strengths": [
+    "One copy of the data over S3 and as a Hadoop file system, so Spark jobs and S3 applications can share buckets",
+    "Designed for billions of keys: separate namespace and block services, with containers keeping small files cheap to track",
+    "Per-bucket choice between three-way Raft replication and erasure coding for colder data",
+    "Governed by the Apache Software Foundation; Tencent, Cloudera, Shopee, DiDi and others list production use",
+    "Fits existing Hadoop security: Kerberos, Ranger policies and transparent data encryption"
+  ],
+  "limits": [
+    "Many moving parts (OM, SCM, Datanodes, S3 Gateway, Recon), each with its own high-availability setup: far heavier to run than a single MinIO binary",
+    "Partial S3 coverage: no bucket versioning, object lock, S3 server-side encryption, bucket policies or S3 Select, and lifecycle rules, replication and event notifications are still on the roadmap",
+    "S3 access uses Ozone’s own permission model, and on a secured cluster users need Kerberos just to get S3 keys",
+    "Buckets created through S3 use the flat layout and can’t be read through `ofs`, so create FSO buckets up front when both sides need the data"
+  ],
+  "worksWith": [
+    { "id": "s3", "how": "speaks the API of" },
+    { "id": "spark", "how": "acts as a Hadoop file system for" },
+    { "id": "trino", "how": "stores data files queried by" },
+    { "id": "kubernetes", "how": "can run on" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Try Ozone with Docker, then write over S3 and read through ofs",
+    "source": [
+      "# evaluation cluster: OM, SCM, 3 Datanodes, S3 Gateway, Recon (replication factor 1)",
+      "curl -O https://raw.githubusercontent.com/apache/ozone-docker/refs/heads/latest/docker-compose.yaml",
+      "docker compose up -d --scale datanode=3",
+      "",
+      "# a file-system-optimized bucket in the S3 volume, usable from S3 and ofs",
+      "docker compose exec om ozone sh bucket create /s3v/lake --layout FILE_SYSTEM_OPTIMIZED",
+      "",
+      "# without Kerberos the S3 Gateway accepts any key pair",
+      "export AWS_ACCESS_KEY_ID=testuser AWS_SECRET_ACCESS_KEY=anything AWS_DEFAULT_REGION=us-east-1",
+      "aws s3 cp ./events.json s3://lake/events/2026/events.json --endpoint-url http://localhost:9878",
+      "",
+      "# the same object through the Hadoop-compatible file system",
+      "docker compose exec om ozone fs -ls -R ofs://om/s3v/lake/"
+    ]
+  },
+  "sections": [
+    {
+      "type": "text",
+      "title": "Moving from MinIO",
+      "body": [
+        "Ozone fits best when your MinIO cluster mainly fed Spark, Hive or Trino: the same buckets can then be read over S3 and through `ofs://`. Check the gaps first. Ozone’s S3 Gateway doesn’t implement bucket versioning, object lock, S3 ACLs, bucket policies or S3 server-side encryption, and lifecycle rules, replication and bucket notifications are still on its roadmap. If you relied on MinIO’s object locking for backups or its bucket notifications, Ozone can’t replace them yet. Conditional writes (`If-None-Match`, `If-Match`), which tools use to update manifests and metadata safely, arrived in Ozone 2.2.",
+        "Create the target buckets before copying, and choose the layout. Buckets made through S3 get the flat object-store layout, so create file-system-optimized buckets with `ozone sh bucket create /s3v/<name> --layout FILE_SYSTEM_OPTIMIZED` when Hadoop jobs will use them too. On a Kerberos-secured cluster, each user gets S3 credentials with `ozone s3 getsecret`.",
+        "Then define the MinIO endpoint and the Ozone S3 Gateway as two S3 remotes in rclone, run `rclone sync minio:bucket ozone:bucket --checksum`, and compare both sides with `rclone check`. rclone copies objects only: users, policies and lifecycle rules have to be set up again, and on Ozone access is managed with Ozone ACLs or Apache Ranger."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "HDFS, Hadoop’s file system, keeps every file and block in the memory of one NameNode. It scales to huge clusters of large files but not to huge numbers of small ones: a 2018 post introducing Ozone said HDFS “struggles with over 400 Million files”. In October 2014 Jitendra Nath Pandey opened HDFS-7240, proposing an object store built on HDFS’s Datanodes but independent of the NameNode’s namespace.",
+      "The work grew inside the Apache Hadoop project as Hadoop Ozone, on a new block layer, the Hadoop Distributed Data Store, that groups blocks into containers. The first alpha, 0.2.1, came out on 1 October 2018 with a Hadoop-compatible file system API; an S3-compatible REST API and high availability were next. Version 1.0.0 was tagged in September 2020, and in October 2020 the ASF board made Ozone a top-level project of its own.",
+      "Since then Ozone has added erasure coding, file-system-optimized buckets with atomic directory renames and steady S3 Gateway work. Ozone 2.2.0, in July 2026, added S3 conditional requests, a compare-and-set primitive for systems that coordinate through objects, such as table catalogs."
+    ],
+    "choices": [
+      { "choice": "Separate the namespace from block management", "why": "HDFS’s NameNode holds both and runs out of memory first. Splitting them into the Ozone Manager and the Storage Container Manager lets each scale on its own." },
+      { "choice": "Group blocks into large containers", "why": "Datanodes report and replicate containers, not blocks, so billions of small files mean billions of local block entries but only a manageable number of containers for SCM to track." },
+      { "choice": "Strong consistency through Raft", "why": "The designers wanted strict serializability because it makes applications simpler. Ratis replicates metadata and open containers so every replica agrees on each write." },
+      { "choice": "A Hadoop file system API from the first release", "why": "Hive, Spark and MapReduce could use Ozone without changes, and Ozone could run beside HDFS on the same cluster, which made trying it cheap for Hadoop users." }
+    ],
+    "timeline": [
+      { "year": "2014", "text": "HDFS-7240 proposes an object store on HDFS Datanodes" },
+      { "year": "2018", "text": "First alpha, Hadoop Ozone 0.2.1, released in October" },
+      { "year": "2020", "text": "Version 1.0.0 in September; top-level Apache project in October" },
+      { "year": "2026", "text": "Ozone 2.2.0 adds S3 conditional requests (July)" }
+    ],
+    "sources": [
+      { "label": "Apache JIRA: HDFS-7240, Scaling HDFS", "url": "https://issues.apache.org/jira/browse/HDFS-7240" },
+      { "label": "Cloudera blog: Introducing Apache Hadoop Ozone (2018)", "url": "https://www.cloudera.com/blog/technical/introducing-apache-hadoop-ozone-object-store-apache-hadoop.html" },
+      { "label": "Apache Hadoop Ozone: Release 0.2.1-alpha available", "url": "https://hadoop.apache.org/ozone/release/0.2.1-alpha/", "archive": "https://web.archive.org/web/20190331123105/https://hadoop.apache.org/ozone/release/0.2.1-alpha/" },
+      { "label": "ASF board minutes, 21 October 2020: Establish the Apache Ozone Project", "url": "https://www.apache.org/foundation/records/minutes/2020/board_minutes_2020_10_21.txt" },
+      { "label": "apache/ozone: tag ozone-1.0.0", "url": "https://github.com/apache/ozone/releases/tag/ozone-1.0.0" },
+      { "label": "Apache Ozone: Release 2.2.0", "url": "https://ozone.apache.org/release-notes/2.2.0" }
+    ]
+  },
+  "sources": [
+    { "label": "Apache Ozone", "url": "https://ozone.apache.org/" },
+    { "label": "apache/ozone on GitHub", "url": "https://github.com/apache/ozone" },
+    { "label": "Ozone docs: Architecture overview", "url": "https://ozone.apache.org/docs/core-concepts/architecture/overview/" },
+    { "label": "Ozone docs: Storage containers", "url": "https://ozone.apache.org/docs/core-concepts/replication/storage-containers/" },
+    { "label": "Ozone docs: Erasure coding", "url": "https://ozone.apache.org/docs/core-concepts/replication/erasure-coding/" },
+    { "label": "Ozone docs: S3 Gateway", "url": "https://ozone.apache.org/docs/core-concepts/architecture/s3-gateway/" },
+    { "label": "Ozone docs: S3 API support", "url": "https://ozone.apache.org/docs/user-guide/client-interfaces/s3/s3-api/" },
+    { "label": "Ozone docs: ofs, the Hadoop-compatible interface", "url": "https://ozone.apache.org/docs/user-guide/client-interfaces/ofs/" },
+    { "label": "Ozone docs: File system optimized buckets", "url": "https://ozone.apache.org/docs/core-concepts/namespace/buckets/layouts/file-system-optimized/" },
+    { "label": "Ozone docs: Object store buckets", "url": "https://ozone.apache.org/docs/core-concepts/namespace/buckets/layouts/object-store/" },
+    { "label": "Ozone docs: Try Ozone with Docker", "url": "https://ozone.apache.org/docs/quick-start/installation/docker/" },
+    { "label": "Ozone docs: Install on Kubernetes", "url": "https://ozone.apache.org/docs/quick-start/installation/kubernetes/" },
+    { "label": "Apache Ozone: Who uses Ozone?", "url": "https://ozone.apache.org/community/who-uses-ozone" },
+    { "label": "Apache Ozone: Release 2.2.0", "url": "https://ozone.apache.org/release-notes/2.2.0" },
+    { "label": "Apache Ozone blog: S3 conditional requests (July 2026)", "url": "https://ozone.apache.org/blog/2026/07/08/ozone-s3-conditional-request" },
+    { "label": "rclone: Amazon S3 and compatible storage", "url": "https://rclone.org/s3/" },
+    { "label": "rclone sync", "url": "https://rclone.org/commands/rclone_sync/" },
+    { "label": "rclone check", "url": "https://rclone.org/commands/rclone_check/" }
+  ],
+  "checked": "2026-10-05"
+}

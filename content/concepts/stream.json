@@ -1,0 +1,123 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Event streams",
+  "category": "messaging",
+  "order": 20,
+  "summary": "An append-only log of events that many readers replay at their own pace.",
+  "howItWorks": "Producers append records to the end of a log that’s kept for a retention period: hours, days or forever. Reading removes nothing. Each consumer group tracks its own position, called an offset, so a real-time alerting job, a dashboard and a nightly batch can all read the same data independently. Logs are split into partitions for scale, and order is guaranteed within a partition.",
+  "analogy": "A DVR recording of live TV. You can watch live, pause, or rewind to this morning, and your roommate can be at a different point in the same recording.",
+  "useWhen": [
+    "High-volume telemetry, clickstreams and IoT readings",
+    "Several independent consumers of the same events",
+    "Reprocessing history after a bug fix or to build a new view"
+  ],
+  "avoidWhen": [
+    "Simple job distribution where each task runs once; a queue is simpler",
+    "Low volume, where running a stream platform is more work than it saves"
+  ],
+  "example": "Thousands of well sensors publish pressure readings to a `readings` topic. Alerting reads each one within a second, the dashboard updates every few seconds, and the ML team replays the whole week on Sunday to retrain a model.",
+  "providers": {
+    "aws": "Kinesis Data Streams, MSK (Kafka)",
+    "gcp": "Managed Service for Apache Kafka, Pub/Sub",
+    "azure": "Event Hubs",
+    "oss": "Apache Kafka, Redpanda (source-available, BSL), Apache Pulsar; WarpStream (Kafka API on object storage); Apache Fluss (streaming storage with updatable tables, for Flink)"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "from kafka import KafkaProducer, KafkaConsumer",
+      "",
+      "producer = KafkaProducer(bootstrap_servers=\"broker:9092\")",
+      "producer.send(\"readings\", key=b\"well-42\", value=b'{\"psi\": 812.4}')",
+      "",
+      "# Each group_id keeps its own offset in the same log",
+      "consumer = KafkaConsumer(\"readings\", group_id=\"alerts\",",
+      "                         bootstrap_servers=\"broker:9092\",",
+      "                         auto_offset_reset=\"earliest\")",
+      "for record in consumer:",
+      "    check_thresholds(record.offset, record.value)"
+    ]
+  },
+  "related": ["queue","pubsub","tsdb","eventbus","stream-processing"],
+  "diagram": {
+    "caption": "Records stay in the log after they’re read. Three consumer groups move through the same records at different speeds; the ML job falls behind, then catches up in batches.",
+    "h": 280,
+    "nodes": [
+      {
+        "id": "src",
+        "x": 95,
+        "y": 110,
+        "label": "Well sensors",
+        "sub": "2 msgs/s",
+        "emit": {"every":430,"jitter":0.25,"cycle":true},
+        "out": ["log"]
+      },
+      {
+        "id": "log",
+        "x": 390,
+        "y": 110,
+        "kind": "log",
+        "cells": 10,
+        "label": "Topic: readings",
+        "sub": "partition 0 · retention 7 days",
+        "retain": 40,
+        "readers": [
+          {"to":"alert","every":440,"name":"alerts"},
+          {"to":"dash","every":1150,"name":"dash"},
+          {"to":"ml","every":6000,"batch":9,"name":"ml-train"}
+        ]
+      },
+      {"id":"alert","x":655,"y":50,"label":"Alerting","sub":"group: alerts","mode":"sink"},
+      {"id":"dash","x":655,"y":130,"label":"Dashboard","sub":"group: dash","mode":"sink"},
+      {"id":"ml","x":655,"y":210,"label":"ML training","sub":"group: ml-train","mode":"sink"}
+    ]
+  },
+  "history": {
+    "story": [
+      "Before event streams, companies moved data between systems with one-off pipelines. At LinkedIn around 2010, Jay Kreps recalled, “we built jerry-rigged piping between systems and applications on an as needed basis,” and the complexity meant “the data was always unreliable.” Off-the-shelf brokers such as ActiveMQ were hard to scale, and dumps into Hadoop arrived in batches rather than in real time.",
+      "In 2010 LinkedIn decided to build one system for streams of data: Apache Kafka, open-sourced in 2011. The team called it “the global commit log thingy”: an ordered, append-only record that every system could write to and read from at its own pace. Amazon Kinesis offered the same model as a managed cloud service in 2013, and Apache Pulsar, which keeps storage separate from its brokers, became a top-level Apache project in 2018. Retention grew from hours to months, so a stream became a durable record that new systems could replay from the start.",
+      "Streams and queues have since converged from both sides: RabbitMQ added streams in 2021, and Kafka made queue-style share groups production-ready in 2026."
+    ],
+    "choices": [
+      { "choice": "Reading doesn’t delete", "why": "Records stay for a retention period whoever has read them, so a dashboard, an alerting job and a nightly batch can all consume the same data, and a bug fix can be followed by a replay." },
+      { "choice": "Each consumer keeps its own position", "why": "The log doesn’t track delivery per message, so adding readers is cheap, and a reader can rewind just by moving its offset." },
+      { "choice": "Partitions for scale, order within each", "why": "Splitting a log across machines lets it grow; promising order only within a partition (one device, one user) avoids a global bottleneck." },
+      { "choice": "Sequential writes to disk", "why": "Appending to the end of a file is the fastest thing a disk does, which lets a log absorb very high write rates on ordinary hardware." }
+    ],
+    "timeline": [
+      { "year": "2010", "text": "LinkedIn starts building Kafka to replace ad hoc pipelines" },
+      { "year": "2011", "text": "Kafka is open-sourced" },
+      { "year": "2013", "text": "Amazon Kinesis brings managed streams to the cloud" },
+      { "year": "2018", "text": "Apache Pulsar becomes a top-level Apache project" },
+      { "year": "2020", "text": "Kinesis retention can be extended to 365 days" },
+      { "year": "2021", "text": "RabbitMQ 3.9 adds streams" },
+      { "year": "2026", "text": "Kafka 4.2 makes queue-style share groups production-ready" }
+    ],
+    "sources": [
+      { "label": "Jay Kreps (Confluent): Putting Apache Kafka to use, a practical guide, part 1 (Feb 2015)", "url": "https://www.confluent.io/blog/event-streaming-platform-1/" },
+      { "label": "Kreps, Narkhede, Rao: Kafka, a distributed messaging system for log processing (NetDB 2011 paper)", "url": "https://www.microsoft.com/en-us/research/wp-content/uploads/2017/09/Kafka.pdf", "archive": "https://web.archive.org/web/20260928144900/https://www.microsoft.com/en-us/research/wp-content/uploads/2017/09/Kafka.pdf" },
+      { "label": "AWS News Blog: Amazon Kinesis, real-time processing of streaming big data (Nov 2013)", "url": "https://aws.amazon.com/blogs/aws/amazon-kinesis-real-time-processing-of-streamed-data/" },
+      { "label": "LinkedIn blog: Open-sourcing Kafka, LinkedIn’s distributed message queue (Jan 2011)", "url": "http://blog.linkedin.com/2011/01/11/open-source-linkedin-kafka/", "archive": "https://web.archive.org/web/20110207151844/http://blog.linkedin.com/2011/01/11/open-source-linkedin-kafka/" },
+      { "label": "Apache Incubator: Pulsar project status (graduated September 2018)", "url": "https://incubator.apache.org/projects/pulsar.html" },
+      { "label": "Apache Pulsar docs: Architecture overview (brokers and BookKeeper storage)", "url": "https://pulsar.apache.org/docs/next/concepts-architecture-overview/" },
+      { "label": "AWS What’s New: Kinesis Data Streams retention of up to one year (Nov 2020)", "url": "https://aws.amazon.com/about-aws/whats-new/2020/11/amazon-kinesis-data-streams-enables-data-stream-retention/" },
+      { "label": "RabbitMQ blog: RabbitMQ Streams overview, streams in 3.9 (July 2021)", "url": "https://www.rabbitmq.com/blog/2021/07/13/rabbitmq-streams-overview" },
+      { "label": "Apache Kafka 4.2.0 release announcement (Feb 2026)", "url": "https://kafka.apache.org/blog/2026/02/17/apache-kafka-4.2.0-release-announcement/" }
+    ]
+  },
+  "sources": [
+    { "label": "Kafka docs: Introduction (partitions, ordering, replication)", "url": "https://kafka.apache.org/43/getting-started/introduction/" },
+    { "label": "Kafka docs: Design (consumer position, partitions and consumer groups)", "url": "https://kafka.apache.org/43/design/design/" },
+    { "label": "Kafka docs: Broker configs (default retention of 168 hours)", "url": "https://kafka.apache.org/43/configuration/broker-configs/" },
+    { "label": "Kafka docs: Topic configs (retention.ms, -1 for no time limit)", "url": "https://kafka.apache.org/43/configuration/topic-configs/" },
+    { "label": "kafka-python documentation (KafkaProducer, KafkaConsumer)", "url": "https://kafka-python.readthedocs.io/en/master/" },
+    { "label": "AWS docs: Kinesis Data Streams terminology and concepts", "url": "https://docs.aws.amazon.com/streams/latest/dev/key-concepts.html" },
+    { "label": "AWS docs: What is Amazon MSK?", "url": "https://docs.aws.amazon.com/msk/latest/developerguide/what-is-msk.html" },
+    { "label": "Google Cloud docs: Managed Service for Apache Kafka overview", "url": "https://docs.cloud.google.com/managed-service-for-apache-kafka/docs/overview" },
+    { "label": "Google Cloud docs: What is Pub/Sub?", "url": "https://docs.cloud.google.com/pubsub/docs/overview" },
+    { "label": "Microsoft Learn: What is Azure Event Hubs?", "url": "https://learn.microsoft.com/en-us/azure/event-hubs/event-hubs-about" },
+    { "label": "Redpanda docs: Kafka compatibility", "url": "https://docs.redpanda.com/streaming/current/develop/kafka-clients/" },
+    { "label": "Apache Pulsar docs: Concepts overview", "url": "https://pulsar.apache.org/docs/next/concepts-overview/" },
+    { "label": "WarpStream docs: Architecture", "url": "https://docs.warpstream.com/warpstream/overview/architecture" }
+  ]
+}

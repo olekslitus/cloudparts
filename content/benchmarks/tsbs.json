@@ -1,0 +1,110 @@
+{
+  "$schema": "../../.astro/collections/benchmarks.schema.json",
+  "name": "Time Series Benchmark Suite (TSBS)",
+  "by": "Tiger Data (formerly Timescale)",
+  "website": "https://github.com/timescale/tsbs",
+  "repo": "https://github.com/timescale/tsbs",
+  "license": "MIT",
+  "summary": "A Go toolkit that generates synthetic server-monitoring or IoT time series, bulk-loads it into a database and times a fixed set of time-series queries.",
+  "intro": [
+    "TSBS is a set of Go programs. You pick a use case, a random seed, a scale (how many hosts or trucks), a time range and a reading interval, and `tsbs_generate_data` writes the data in the target database’s own load format. `devops` simulates 9 groups of server metrics, 100 values per host per reading; `cpu-only` keeps just 10 CPU metrics; `iot` simulates a fleet of trucks, with out-of-order and missing readings and late batches from trucks that were offline. The same seed gives every database identical data and identical queries. 4,000 hosts over three days at 10-second intervals is just over 100 million rows (1 billion metrics).",
+    "A run has three phases. First, data and queries are generated ahead of time, so generating them doesn’t slow the measurement. Second, `tsbs_load` (or a per-database `tsbs_load_<db>`) inserts the file with a chosen number of workers and batch size and reports metrics per second and rows per second. Third, `tsbs_run_queries_<db>` replays a file of one query type with N workers and reports minimum, median, mean, maximum and standard deviation of latency, plus wall-clock time. There are 15 devops query types (for example the max of one metric for 1 host over 1 hour, or the last reading of every host) and 12 IoT ones (last location, low fuel, driving sessions).",
+    "There is no official results page. Whoever wants numbers runs it on their own hardware with their own settings, and in practice that is usually a database vendor. The upstream repository has no releases or tags, and its last code change was in September 2023."
+  ],
+  "setup": [
+    { "label": "Use cases", "value": "`devops` (100 metrics per host per reading), `cpu-only` (10 CPU metrics), `iot` (trucks, with out-of-order and missing readings)" },
+    { "label": "Dataset", "value": "Synthetic and deterministic from a seed; size set by host or truck count, time range and interval" },
+    { "label": "Phases", "value": "Generate data and queries, bulk load, run queries; reads and writes are never measured together" },
+    { "label": "Load metrics", "value": "Metrics per second and rows per second, for a chosen number of workers and batch size" },
+    { "label": "Query metrics", "value": "Min, median, mean, max and standard deviation of latency per query type, and wall-clock time" },
+    { "label": "Query types", "value": "15 for devops and cpu-only, 12 for IoT" },
+    { "label": "Databases (upstream)", "value": "Akumuli, Cassandra, ClickHouse, CrateDB, InfluxDB 1.x, MongoDB, QuestDB, SiriDB, TimescaleDB, Amazon Timestream, VictoriaMetrics" },
+    { "label": "Hardware", "value": "Not fixed: you choose the machines" },
+    { "label": "Who publishes results", "value": "Whoever runs it, usually a database vendor" },
+    { "label": "Maintenance", "value": "No releases; last code change September 2023, a CI update in May 2026; 121 open issues and pull requests (October 2026)" }
+  ],
+  "caveats": [
+    "Vendors wrote it. InfluxData built the original to publish comparisons such as “InfluxDB is 27x Faster vs MongoDB for Time-Series Workloads”. Timescale forked it in 2018 and used it in its own posts. The data shape and query list follow the monitoring and IoT workloads those products target.",
+    "The data is synthetic: the generator inherited from influxdb-comparisons emits random walks per host at a fixed interval. Value distributions and regularity drive compression and query cost, so real data can behave quite differently.",
+    "Upstream code is old. It supports InfluxDB 1.x only; a pull request for InfluxDB 2.x has been open since July 2025, and InfluxDB 3 needs its own support (QuestDB’s fork added it). Tiger Data’s own TimescaleDB vs InfluxDB post compared TimescaleDB 1.7.1 with InfluxDB 1.8.0. Check the version and date behind any number you see.",
+    "Vendors keep their own forks. QuestDB’s fork adds loader optimisations for QuestDB, its own binary protocol and InfluxDB 2 and 3 support; TDengine and GreptimeDB keep copies too. Numbers produced by different forks aren’t comparable.",
+    "The results you find are vendor-run. QuestDB’s README, for example, shows QuestDB loading 8.59 million rows per second against 1.75 million for ClickHouse and 1.08 million for TimescaleDB on one r8a.8xlarge, all run by QuestDB in August 2026. Worker count, batch size and each database’s tuning flags (chunk size, partitioning, indexes) move such numbers a lot.",
+    "Loading and querying are measured separately; the README says concurrent inserts and queries aren’t tested, though that is how most monitoring systems run. The query set is mostly time-bucketed aggregates, threshold filters and last-point lookups."
+  ],
+  "concepts": ["tsdb"],
+  "technologies": ["cassandra", "clickhouse", "influxdb", "mongodb", "questdb", "timescaledb", "timestream"],
+  "sections": [
+    {
+      "type": "code",
+      "title": "The three phases",
+      "intro": "Adapted from the README: generate three days of `cpu-only` data and one query type for 4,000 hosts, load it into TimescaleDB with 8 workers, then run the queries.",
+      "lang": "bash",
+      "source": [
+        "# 1. Generate data and queries (same seed, scale and start time)",
+        "tsbs_generate_data --use-case=cpu-only --seed=123 --scale=4000 \\",
+        "  --timestamp-start=2016-01-01T00:00:00Z --timestamp-end=2016-01-04T00:00:00Z \\",
+        "  --log-interval=10s --format=timescaledb | gzip > /tmp/timescaledb-data.gz",
+        "",
+        "tsbs_generate_queries --use-case=cpu-only --seed=123 --scale=4000 \\",
+        "  --timestamp-start=2016-01-01T00:00:00Z --timestamp-end=2016-01-04T00:00:01Z \\",
+        "  --queries=1000 --query-type=cpu-max-all-8 --format=timescaledb \\",
+        "  | gzip > /tmp/timescaledb-cpu-max-all-8.gz",
+        "",
+        "# 2. Load: prints metrics/s and rows/s",
+        "NUM_WORKERS=8 BATCH_SIZE=10000 BULK_DATA_DIR=/tmp scripts/load/load_timescaledb.sh",
+        "",
+        "# 3. Run queries: prints min, median, mean, max latency and wall-clock time",
+        "gunzip < /tmp/timescaledb-cpu-max-all-8.gz | tsbs_run_queries_timescaledb --workers=8 \\",
+        "  --postgres=\"host=localhost user=postgres sslmode=disable\""
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Forks and alternatives",
+      "items": [
+        {
+          "name": "influxdb-comparisons",
+          "tag": "InfluxData, MIT",
+          "text": "The original suite TSBS was forked from, focused on the devops use case. It still gets dependency updates."
+        },
+        {
+          "name": "questdb/tsbs",
+          "tag": "QuestDB fork",
+          "text": "Actively maintained fork with QuestDB loader optimisations, its binary QWP protocol, query-generation fixes and InfluxDB 2 and 3 support."
+        },
+        {
+          "name": "taosdata/tsbs and GreptimeTeam/tsbs",
+          "tag": "vendor copies",
+          "text": "TDengine’s copy adds a TDengine target for devops and IoT; GreptimeDB keeps a fork of the upstream repository."
+        },
+        {
+          "name": "SciTS",
+          "tag": "academic",
+          "text": "Independent benchmark from a 2022 paper for scientific and industrial IoT workloads; tests inserts, queries and resource use on TimescaleDB, InfluxDB, PostgreSQL and ClickHouse."
+        },
+        {
+          "name": "ClickBench",
+          "tag": "analytics",
+          "text": "Not a time-series benchmark: 43 analytical queries over one web-analytics table, with a public results page that time-series databases also appear on."
+        }
+      ]
+    }
+  ],
+  "sources": [
+    { "label": "TSBS README: supported databases, use cases, phases, metrics, query types", "url": "https://github.com/timescale/tsbs/blob/master/README.md" },
+    { "label": "TSBS LICENSE (MIT)", "url": "https://github.com/timescale/tsbs/blob/master/LICENSE" },
+    { "label": "TSBS commit history (last code change Sep 2023, CI update May 2026)", "url": "https://github.com/timescale/tsbs/commits/master" },
+    { "label": "TSBS open pull request: Add support for InfluxDB 2.X (#285)", "url": "https://github.com/timescale/tsbs/pull/285" },
+    { "label": "InfluxData: influxdb-comparisons README (methodology and comparison write-ups)", "url": "https://github.com/influxdata/influxdb-comparisons" },
+    { "label": "Tiger Data: TimescaleDB vs. InfluxDB (benchmarked with TSBS)", "url": "https://www.tigerdata.com/blog/timescaledb-vs-influxdb-for-time-series-data-timescale-influx-sql-nosql-36489299877" },
+    { "label": "Tiger Data press release: Timescale becomes Tiger Data (Jun 2025)", "url": "https://www.tigerdata.com/newsroom/timescale-becomes-tiger-data-defining-a-new-standard-as-the-fastest-postgresql-platform-for-modern-applications" },
+    { "label": "QuestDB fork of TSBS (README lists changes)", "url": "https://github.com/questdb/tsbs" },
+    { "label": "QuestDB: Optimizing the Optimizer, the Time-Series Benchmark Suite", "url": "https://questdb.com/blog/optimizing-optimizer-time-series-benchmark-suite/" },
+    { "label": "QuestDB README: TSBS ingestion comparison (run by QuestDB, Aug 2026)", "url": "https://github.com/questdb/questdb#questdb-performance-vs-other-databases" },
+    { "label": "TDengine copy of TSBS (taosdata/tsbs)", "url": "https://github.com/taosdata/tsbs" },
+    { "label": "GreptimeDB fork of TSBS (GreptimeTeam/tsbs)", "url": "https://github.com/GreptimeTeam/tsbs" },
+    { "label": "SciTS: A Benchmark for Time-Series Databases in Scientific Experiments and Industrial Internet of Things (arXiv 2204.09795)", "url": "https://arxiv.org/abs/2204.09795" },
+    { "label": "ClickBench README: similar projects (TSBS, SciTS)", "url": "https://github.com/ClickHouse/ClickBench/blob/main/README.md" }
+  ],
+  "checked": "2026-10-06"
+}

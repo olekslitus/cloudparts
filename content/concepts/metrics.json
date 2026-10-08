@@ -1,0 +1,156 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Metrics",
+  "category": "observe",
+  "order": 30,
+  "summary": "Numbers measured over time, such as requests per second, error rate or p95 latency: cheap enough to keep for every service and to alert on.",
+  "howItWorks": "A metric is a named number sampled over time, with labels that say what it describes: `http_requests_total{route=\"/orders\",status=\"500\"}`. Three shapes cover most needs. A counter only goes up (requests served, bytes sent) and you chart its rate. A gauge goes up and down (queue depth, memory in use). A histogram counts observations into buckets (requests under 100 ms, under 500 ms and so on), so you can estimate percentiles later and add up the buckets from many servers. The program keeps only running totals and reports them every few seconds, so a metric costs about the same at 10 requests a second as at 10,000. That’s why metrics, not logs, drive dashboards and alerts. The catch is cardinality: every unique combination of label values is a separate time series, so a label such as `user_id` turns one metric into millions of series and the bill, or the database, falls over. Metrics travel two ways. Prometheus pulls: it scrapes each target’s `/metrics` HTTP endpoint on an interval (one minute by default, 15 seconds is common), which also tells it when a target is down. StatsD and OpenTelemetry’s OTLP push: the program sends numbers to a collector, which suits short-lived jobs. For what to measure, Google’s SRE book names four golden signals for a user-facing system (latency, traffic, errors, saturation); Tom Wilkie’s RED method (rate, errors, duration) applies the same idea to each microservice, and Brendan Gregg’s USE method (utilization, saturation, errors) to each resource, such as a CPU, disk or connection pool.",
+  "analogy": "A car’s dashboard. The speedometer and fuel gauge don’t record every turn of the wheel, just a few numbers, all the time, so you notice a problem the moment it starts. To find out why, you need the trip log.",
+  "useWhen": [
+    "Dashboards and alerts: error rate, latency percentiles, queue depth, saturation",
+    "Trends and capacity planning over weeks and months",
+    "Service level objectives, which are ratios of good events to all events",
+    "Very high traffic, where recording every event would cost too much"
+  ],
+  "avoidWhen": [
+    "Labels with unbounded values, such as user IDs, emails or raw URLs; each value is a new series",
+    "Explaining one particular request; that’s what logs and traces are for",
+    "Averaging percentiles across servers or time windows; add up histogram buckets instead"
+  ],
+  "example": "An API runs on 20 pods. Each exposes one histogram, `http_request_duration_seconds`, labelled by route (15 values) and status class (5), with 12 buckets plus a sum and a count: 15 × 5 × 14 = 1,050 series per pod, 21,000 in all, and the number stays the same at ten times the traffic. The p95 alert adds up the buckets from all pods before computing the percentile, because the average of 20 separate p95s isn’t the p95 of the service. When someone proposes a `customer_id` label for 50,000 customers, the arithmetic says no: about a billion series.",
+  "providers": {
+    "aws": "CloudWatch metrics (Classic, or OpenTelemetry metrics queried with PromQL); Amazon Managed Service for Prometheus",
+    "gcp": "Cloud Monitoring; Google Cloud Managed Service for Prometheus",
+    "azure": "Azure Monitor Metrics; Azure Monitor managed service for Prometheus",
+    "oss": "Prometheus, StatsD, OpenTelemetry SDKs and Collector, Telegraf with InfluxDB; dashboards: Grafana; hosted: Datadog"
+  },
+  "snippet": {
+    "lang": "text",
+    "source": [
+      "# what a service exposes at /metrics (Prometheus text format)",
+      "# TYPE http_requests_total counter",
+      "http_requests_total{route=\"/orders\",status=\"200\"} 10432",
+      "http_requests_total{route=\"/orders\",status=\"500\"} 17",
+      "# TYPE queue_depth gauge",
+      "queue_depth 42",
+      "# TYPE http_request_duration_seconds histogram",
+      "http_request_duration_seconds_bucket{route=\"/orders\",le=\"0.1\"} 9100",
+      "http_request_duration_seconds_bucket{route=\"/orders\",le=\"0.5\"} 10300",
+      "http_request_duration_seconds_bucket{route=\"/orders\",le=\"+Inf\"} 10449",
+      "http_request_duration_seconds_sum{route=\"/orders\"} 812.4",
+      "http_request_duration_seconds_count{route=\"/orders\"} 10449",
+      "",
+      "# PromQL: share of requests failing, and p95 latency, over 5 minutes",
+      "sum(rate(http_requests_total{status=~\"5..\"}[5m])) / sum(rate(http_requests_total[5m]))",
+      "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))"
+    ]
+  },
+  "related": ["tsdb", "logs", "alerting", "observability", "narrow-tables"],
+  "diagram": {
+    "caption": "Prometheus pulls. On every interval it scrapes each target’s /metrics endpoint, and the current numbers come back as the reply. A nightly job ends before anyone could scrape it, so it pushes its result to a Pushgateway, which Prometheus scrapes like any other target.",
+    "h": 270,
+    "nodes": [
+      {
+        "id": "prom",
+        "x": 130,
+        "y": 135,
+        "label": "Prometheus",
+        "sub": "scrape every 15 s",
+        "emit": { "every": 1500, "jitter": 0.05, "req": true, "route": "fanout" },
+        "out": ["api", "wk", "pgw"]
+      },
+      { "id": "api", "x": 420, "y": 55, "label": "API", "sub": "GET /metrics", "mode": "reply", "delay": 120 },
+      { "id": "wk", "x": 420, "y": 135, "label": "Worker", "sub": "GET /metrics", "mode": "reply", "delay": 120 },
+      { "id": "pgw", "x": 420, "y": 215, "label": "Pushgateway", "sub": "holds pushed results", "mode": "reply", "delay": 120 },
+      {
+        "id": "job",
+        "x": 660,
+        "y": 215,
+        "label": "Nightly job",
+        "sub": "pushes, then exits",
+        "emit": { "every": 2600, "jitter": 0.3, "color": 1 },
+        "out": ["pgw"]
+      }
+    ]
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "What to measure",
+      "intro": "Three checklists that overlap on purpose. Use the first two for services and the third for the resources under them.",
+      "items": [
+        { "name": "Four golden signals", "tag": "Google SRE book", "text": "Latency, traffic, errors and saturation for each user-facing system. Measure the latency of failed requests separately: a fast error and a slow success shouldn’t be averaged together." },
+        { "name": "RED", "tag": "Tom Wilkie, 2015", "text": "Rate, errors and duration of the requests each service handles. Measuring the same three things on every service lets people go on call for code they didn’t write." },
+        { "name": "USE", "tag": "Brendan Gregg, 2012", "text": "Utilization, saturation and errors for every resource: CPUs, disks, network links, connection pools. Saturation is the extra work a resource can’t service yet, often waiting in a queue." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Watching numbers over time became central at Google first. Shortly after the Borg scheduler was created in 2003, Google built Borgmon to monitor it, and over the next decade moved from check scripts that alerted on failures to collecting time series and turning them into charts and alerts with a rule language. Outside Google, Graphite, written by Chris Davis at Orbitz in 2006, stored and graphed any number you sent it. In 2011 Etsy released StatsD, a small daemon that took counts and timings over UDP and flushed them to Graphite every 10 seconds, so tracking something new needed no setup at all.",
+      "Graphite names were dotted strings, so slicing by anything that wasn’t in the name was hard. At SoundCloud, hitting those limits with hundreds of services, a colleague’s 2012 pet project became Prometheus: a multi-dimensional data model with labels such as instance, service, endpoint and method, a query language to slice by them, and metrics pulled over HTTP. Google’s SRE book later noted how closely Prometheus resembles Borgmon.",
+      "Methods for choosing what to measure got names too. Brendan Gregg published the USE method in 2012, Tom Wilkie created RED in 2015 for microservices, and Google’s Site Reliability Engineering book (2016) set out the four golden signals and warned against designing around averages: a service with a 100 ms mean can easily have 1% of requests taking 5 seconds. By 2026 the clouds had converged on the open formats; in June CloudWatch began accepting OpenTelemetry metrics and answering PromQL queries."
+    ],
+    "choices": [
+      {
+        "choice": "Labels instead of names with everything baked in",
+        "why": "One metric name with key-value labels can be summed, filtered or grouped by any label at query time. The cost is that each new combination of label values is a new series, so the label set has to stay bounded."
+      },
+      {
+        "choice": "Pull over HTTP",
+        "why": "Prometheus scrapes targets so that it can tell reliably when one is down, so extra servers (even a laptop) can scrape the same targets, and so a person can open a target’s metrics in a browser. Its authors call pull “slightly better” and keep the Pushgateway for batch jobs that can’t be scraped."
+      },
+      {
+        "choice": "Fire-and-forget UDP",
+        "why": "StatsD used UDP because it’s fast and the application doesn’t care whether StatsD is up: if packets are lost the graphs go a bit wonky, but the site stays up."
+      },
+      {
+        "choice": "Buckets, not percentiles, on the client",
+        "why": "A percentile computed inside each process can’t be combined with others. Counting requests into latency buckets lets you add buckets from every server and then estimate the percentile for the whole service."
+      }
+    ],
+    "timeline": [
+      { "year": "2003", "text": "Google creates Borg, and soon Borgmon to monitor it" },
+      { "year": "2006", "text": "Chris Davis writes Graphite at Orbitz" },
+      { "year": "2011", "text": "Etsy releases StatsD" },
+      { "year": "2012", "text": "Prometheus starts at SoundCloud; Brendan Gregg publishes the USE method" },
+      { "year": "2015", "text": "Tom Wilkie creates the RED method" },
+      { "year": "2016", "text": "Google’s SRE book names the four golden signals" },
+      { "year": "2026", "text": "CloudWatch adds native OpenTelemetry metrics with PromQL in June" }
+    ],
+    "sources": [
+      { "label": "Google SRE book: Practical alerting from time-series data (Borgmon)", "url": "https://sre.google/sre-book/practical-alerting/" },
+      { "label": "Graphite docs: FAQ (Chris Davis, Orbitz, 2006)", "url": "https://graphite.readthedocs.io/en/latest/faq.html" },
+      { "label": "Etsy Code as Craft: Measure anything, measure everything (StatsD, Feb 2011)", "url": "https://codeascraft.com/2011/02/15/measure-anything-measure-everything/", "archive": "https://web.archive.org/web/20130608093521/http://codeascraft.com:80/2011/02/15/measure-anything-measure-everything/" },
+      { "label": "SoundCloud: Prometheus, monitoring at SoundCloud (2015)", "url": "https://developers.soundcloud.com/blog/prometheus-monitoring-at-soundcloud" },
+      { "label": "Brendan Gregg: The USE Method", "url": "https://www.brendangregg.com/usemethod.html" },
+      { "label": "Grafana Labs blog: The RED Method, how to instrument your services (Aug 2018)", "url": "https://grafana.com/blog/2018/08/02/the-red-method-how-to-instrument-your-services/" },
+      { "label": "Google SRE book: Monitoring distributed systems (four golden signals, tail latency)", "url": "https://sre.google/sre-book/monitoring-distributed-systems/" },
+      { "label": "Wikipedia: Site reliability engineering (SRE book, O’Reilly 2016)", "url": "https://en.wikipedia.org/wiki/Site_reliability_engineering" },
+      { "label": "AWS What’s New: CloudWatch introduces native OpenTelemetry metrics with PromQL querying (June 2026)", "url": "https://aws.amazon.com/about-aws/whats-new/2026/06/amazon-cloudwatch-otel-metrics/" },
+      { "label": "Prometheus docs: FAQ, why do you pull rather than push?", "url": "https://prometheus.io/docs/introduction/faq/" }
+    ]
+  },
+  "sources": [
+    { "label": "Prometheus docs: Metric types", "url": "https://prometheus.io/docs/concepts/metric_types/" },
+    { "label": "Prometheus docs: Data model (metric names and labels)", "url": "https://prometheus.io/docs/concepts/data_model/" },
+    { "label": "Prometheus docs: Metric and label naming (high-cardinality caution)", "url": "https://prometheus.io/docs/practices/naming/" },
+    { "label": "Prometheus docs: Histograms and summaries (quantiles can’t be aggregated)", "url": "https://prometheus.io/docs/practices/histograms/" },
+    { "label": "Prometheus docs: Exposition formats", "url": "https://prometheus.io/docs/instrumenting/exposition_formats/" },
+    { "label": "Prometheus docs: Query functions (histogram_quantile)", "url": "https://prometheus.io/docs/prometheus/latest/querying/functions/" },
+    { "label": "Prometheus docs: Configuration (scrape_interval defaults to 1m)", "url": "https://prometheus.io/docs/prometheus/latest/configuration/configuration/" },
+    { "label": "Prometheus docs: When to use the Pushgateway", "url": "https://prometheus.io/docs/practices/pushing/" },
+    { "label": "OpenTelemetry docs: Metrics (counter, up-down counter, gauge, histogram)", "url": "https://opentelemetry.io/docs/concepts/signals/metrics/" },
+    { "label": "Google SRE book: Monitoring distributed systems", "url": "https://sre.google/sre-book/monitoring-distributed-systems/" },
+    { "label": "Grafana Labs blog: The RED Method", "url": "https://grafana.com/blog/2018/08/02/the-red-method-how-to-instrument-your-services/" },
+    { "label": "Brendan Gregg: The USE Method", "url": "https://www.brendangregg.com/usemethod.html" },
+    { "label": "AWS docs: What is Amazon CloudWatch? (OpenTelemetry and Classic metrics)", "url": "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/WhatIsCloudWatch.html" },
+    { "label": "AWS docs: What is Amazon Managed Service for Prometheus?", "url": "https://docs.aws.amazon.com/prometheus/latest/userguide/what-is-Amazon-Managed-Service-Prometheus.html" },
+    { "label": "Google Cloud docs: Cloud Monitoring overview", "url": "https://cloud.google.com/monitoring/docs/monitoring-overview" },
+    { "label": "Google Cloud docs: Managed Service for Prometheus", "url": "https://cloud.google.com/stackdriver/docs/managed-prometheus" },
+    { "label": "Microsoft Learn: Azure Monitor Metrics overview", "url": "https://learn.microsoft.com/en-us/azure/azure-monitor/metrics/data-platform-metrics" },
+    { "label": "Microsoft Learn: Azure Monitor managed service for Prometheus", "url": "https://learn.microsoft.com/en-us/azure/azure-monitor/metrics/prometheus-metrics-overview" },
+    { "label": "Telegraf docs", "url": "https://docs.influxdata.com/telegraf/v1/" },
+    { "label": "Datadog docs: Getting started", "url": "https://docs.datadoghq.com/getting_started/" }
+  ]
+}

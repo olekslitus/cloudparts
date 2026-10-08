@@ -1,0 +1,183 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Estuary",
+  "concepts": ["etl", "stream"],
+  "provider": "vendor",
+  "vendor": "Estuary Technologies, Inc.",
+  "license": "Proprietary hosted service. The Flow runtime source (estuary/flow) is under the Business Source License 1.1 (since November 2020), which converts to Apache 2.0 on its change date (2029-11-20 in the current text) and bans offering it as a data processing service to third parties; only `go/protocols` is also available under Apache 2.0. Most connectors are BSL too, and the Gazette broker underneath is MIT",
+  "website": "https://estuary.dev/",
+  "repo": "https://github.com/estuary/flow",
+  "summary": "A managed data-movement platform that captures changes from databases and SaaS sources into collections kept as JSON files in your own bucket, then keeps warehouses and other systems in sync, in real time or on a schedule.",
+  "intro": [
+    "An Estuary pipeline has three kinds of task, each a connector packaged as a Docker image. A capture reads a source: the transaction log of PostgreSQL, MySQL or MongoDB (change data capture), or incremental pulls and webhooks for APIs and SaaS apps. It writes JSON documents into a collection, which has a key and a JSON schema every document must match. Collections are Gazette journals: just-written documents sit in a replicated broker buffer that readers can tail within milliseconds, then get flushed as ordinary compressed JSON files under the collection’s prefix in your S3, GCS or Azure bucket. A materialization reads one or more collections and keeps tables in a destination up to date. A new reader fetches history straight from the files and then switches to the live tail, so adding a destination never re-reads the source database. On the way, the runtime combines documents with the same key (last write wins by default; schema annotations can sum or merge fields), so the destination receives fewer rows. Each destination has its own sync schedule, from continuous to batched.",
+    "Derivations are collections built continuously from other collections, written as SQL (run in SQLite), TypeScript or Python, with internal state for joins and aggregates. Dekaf lets Kafka clients read collections as if they were topics. Estuary sells a hosted control plane with public data planes, plus private and bring-your-own-cloud data planes on annual contracts. As of October 2026 list pricing is $0.50 per GB moved into or out of Estuary, plus $100 a month for each of the first six connector instances and $50 for each one after that, charged by the hour. The free plan covers two connectors and 10 GB a month."
+  ],
+  "strengths": [
+    "Capture once, deliver many times: new destinations and backfills read history from your bucket, not from the production database",
+    "Collections are plain JSON files in a bucket you own, so Spark, Snowflake or pandas can read them directly, and leaving Estuary doesn’t strand the data",
+    "Streaming and batch in one pipeline: each destination chooses continuous or scheduled delivery without a second tool",
+    "Transforms in flight in SQL or TypeScript, including stateful joins and aggregations, and Kafka-protocol access through Dekaf",
+    "Published per-GB and per-connector list prices that are easy to estimate"
+  ],
+  "limits": [
+    "Data is billed on the way in and again on the way out: the pricing calculator’s default of 800 GB with two connectors comes to $1,000 a month, which is 1,600 GB at $0.50 plus $200 in connector fees",
+    "Source-available, not open source: the BSL bans offering it as a service to third parties, and the supported ways to run it are Estuary’s cloud or a private or BYOC deployment on an annual contract",
+    "You manage the storage: the trial bucket deletes collection data after 20 days, and in your own bucket a lifecycle rule that touches the `recovery/` logs can break tasks for good",
+    "Postgres CDC needs care: an unbounded replication slot can fill the disk with WAL, and if `max_slot_wal_keep_size` invalidates the slot, every table has to be backfilled again",
+    "Python derivations run only on private and BYOC data planes"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "captures WAL changes (CDC) from" },
+    { "id": "mysql", "how": "captures binlog changes from" },
+    { "id": "kafka", "how": "captures topics from" },
+    { "id": "s3", "how": "stores collection journals as files in" },
+    { "id": "snowflake", "how": "materializes collections into" },
+    { "id": "bigquery", "how": "materializes collections into" },
+    { "id": "databricks", "how": "materializes collections into" },
+    { "id": "iceberg", "how": "materializes collections as tables in" },
+    { "id": "dbt", "how": "triggers dbt Cloud jobs in" }
+  ],
+  "snippet": {
+    "lang": "yaml",
+    "title": "Postgres CDC, a SQL derivation and a Snowflake table in one catalog file",
+    "source": [
+      "# flow.yaml; publish with:  flowctl catalog publish --source flow.yaml",
+      "captures:",
+      "  acmeCo/shop/postgres:",
+      "    endpoint:",
+      "      connector:",
+      "        image: ghcr.io/estuary/source-postgres:v3",
+      "        config:",
+      "          address: db.internal.example.com:5432",
+      "          database: shop",
+      "          user: flow_capture",
+      "          credentials:",
+      "            auth_type: UserPassword",
+      "            password: secret",
+      "    bindings:",
+      "      # discovery also generates the acmeCo/shop/orders collection and its schema",
+      "      - resource: { namespace: public, stream: orders }",
+      "        target: acmeCo/shop/orders",
+      "",
+      "collections:",
+      "  # a derivation: kept up to date as new orders arrive",
+      "  acmeCo/shop/large-orders:",
+      "    schema:",
+      "      type: object",
+      "      properties:",
+      "        id: { type: integer }",
+      "        customer_id: { type: integer }",
+      "        total: { type: number }",
+      "      required: [id]",
+      "    key: [/id]",
+      "    derive:",
+      "      using:",
+      "        sqlite: {}",
+      "      transforms:",
+      "        - name: fromOrders",
+      "          source: acmeCo/shop/orders",
+      "          shuffle: any",
+      "          lambda: |",
+      "            select $id as id, $customer_id as customer_id, $total as total",
+      "            where $total >= 1000;",
+      "",
+      "materializations:",
+      "  acmeCo/shop/snowflake:",
+      "    endpoint:",
+      "      connector:",
+      "        image: ghcr.io/estuary/materialize-snowflake:v4",
+      "        config:",
+      "          host: myorg-analytics.snowflakecomputing.com",
+      "          database: ANALYTICS",
+      "          schema: SHOP",
+      "          warehouse: COMPUTE_WH",
+      "          credentials:",
+      "            auth_type: jwt",
+      "            user: ESTUARY",
+      "            private_key: |",
+      "              -----BEGIN PRIVATE KEY-----",
+      "              ...",
+      "              -----END PRIVATE KEY-----",
+      "    bindings:",
+      "      - resource: { table: large_orders }",
+      "        source: acmeCo/shop/large-orders"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Free, Cloud and Enterprise",
+      "intro": "List prices from estuary.dev/pricing and the pricing docs, checked 6 October 2026.",
+      "columns": ["Free", "Cloud", "Enterprise"],
+      "rows": [
+        { "label": "Data", "values": ["Up to 10 GB a month", "$0.50 per GB moved in or out", "Volume discounts by contract"] },
+        { "label": "Connector instances", "values": ["Up to 2", "$100 a month each for the first 6, then $50 each (billed per task hour: $0.14, then $0.07)", "By contract"] },
+        { "label": "Where it runs", "values": ["Estuary’s public data planes", "Estuary’s public data planes (US and EU)", "Adds private and BYOC data planes (annual contract only)"] },
+        { "label": "Collection storage", "values": ["Estuary’s trial bucket (20-day retention) or your own", "Your own bucket, or the trial bucket", "Your own bucket"] },
+        { "label": "SSO, PrivateLink, SOC 2 and HIPAA reports", "values": ["No", "No", "Yes"] }
+      ],
+      "notes": [
+        "Going over the free limits starts a 30-day trial of the Cloud plan; no credit card is needed.",
+        "For materializations, volume is what Estuary reads in, before reductions, so the bytes landing in the destination can be fewer than the bytes billed."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "David Yaffe and Johnny Graettinger had already built ad-tech infrastructure together at Invite Media, a demand-side platform later bought by Google. At their next startup, Arbor, founded in 2014 as a marketplace for people-based data, they kept hitting the same problem: data spread over many systems whose pipelines disagreed with each other and took a lot of staff to keep in line.",
+      "To fix it they built Gazette, a streaming broker that stores its data as regular files in cloud storage. A new application could backfill petabytes by reading files instead of hammering production brokers, and one hands-off engineer ran a service averaging 7 GB a second. LiveRamp bought Arbor in 2016, and Gazette was open-sourced afterwards, but it stayed a tool for experts.",
+      "In 2019 they founded Estuary to turn Gazette into a managed platform that, unlike the batch-oriented “modern data stack”, handled real-time and historical data in one pipeline. The hosted product launched in 2023, and an M13-led $17M Series A followed in October 2025."
+    ],
+    "choices": [
+      { "choice": "Journals stored as files in the customer’s bucket", "why": "Gazette’s founding idea: history serves from cheap object storage, so backfills never threaten live brokers, disks never run out, and any tool that reads files can read the data." },
+      { "choice": "JSON documents with a key and a JSON schema", "why": "Databases, APIs and pub/sub messages all map onto documents, and a key plus reduction annotations let the runtime merge many updates to one entity before writing them." },
+      { "choice": "Connectors as Docker images", "why": "Each image wraps the details of one external system and runs in isolation. The runtime speaks both the Airbyte connector specification and Estuary’s own low-latency gRPC protocols, whose definitions in `go/protocols` are the one part of the repository also offered under Apache 2.0." },
+      { "choice": "Business Source License instead of an open-source licence", "why": "Anyone may read and run the code, but no one may sell it as a hosted data processing service before each version’s change date, which protects the managed product." }
+    ],
+    "timeline": [
+      { "year": "2014", "text": "Gazette starts inside Arbor as an internal streaming framework" },
+      { "year": "2016", "text": "LiveRamp acquires Arbor" },
+      { "year": "2019", "text": "Yaffe and Graettinger found Estuary to build a platform on Gazette" },
+      { "year": "2020", "text": "The Flow repository adopts the Business Source License in November" },
+      { "year": "2021", "text": "FirstMark invests $7M" },
+      { "year": "2023", "text": "Hosted, self-service product launches" },
+      { "year": "2025", "text": "$17M Series A led by M13 in October" }
+    ],
+    "sources": [
+      { "label": "Estuary blog: The Estuary story and guiding principles (Yaffe and Graettinger)", "url": "https://estuary.dev/blog/the-estuary-story-and-guiding-principles/" },
+      { "label": "Estuary: About (timeline 2014 to 2025, team)", "url": "https://estuary.dev/about/" },
+      { "label": "SiliconANGLE: Estuary raises $17M (Oct 2025)", "url": "https://siliconangle.com/2025/10/21/estuary-raises-14m-try-solve-one-hardest-problems-data-movement/" },
+      { "label": "GitHub: estuary/flow LICENSE-BSL history (BSL added November 2020)", "url": "https://github.com/estuary/flow/commits/master/LICENSE-BSL" },
+      { "label": "GitHub: gazette/core (MIT)", "url": "https://github.com/gazette/core" }
+    ]
+  },
+  "sources": [
+    { "label": "Estuary docs: Collections", "url": "https://docs.estuary.dev/concepts/collections/" },
+    { "label": "Estuary docs: Journals (fragment files in cloud storage)", "url": "https://docs.estuary.dev/concepts/advanced/journals/" },
+    { "label": "Estuary docs: Captures", "url": "https://docs.estuary.dev/concepts/captures/" },
+    { "label": "Estuary docs: Connectors (Docker images, Airbyte spec and gRPC protocols)", "url": "https://docs.estuary.dev/concepts/connectors/" },
+    { "label": "Estuary docs: Materializations", "url": "https://docs.estuary.dev/concepts/materialization/" },
+    { "label": "Estuary docs: Derivations (SQLite, TypeScript, Python)", "url": "https://docs.estuary.dev/concepts/derivations/" },
+    { "label": "Estuary docs: Reduction strategies", "url": "https://docs.estuary.dev/reference/reduction-strategies/" },
+    { "label": "Estuary docs: Storage mappings (20-day trial bucket, recovery logs)", "url": "https://docs.estuary.dev/concepts/storage-mappings/" },
+    { "label": "Estuary docs: Materialization sync schedule", "url": "https://docs.estuary.dev/reference/materialization-sync-schedule/" },
+    { "label": "Estuary docs: Connecting to Kafka using Dekaf", "url": "https://docs.estuary.dev/guides/dekaf_reading_collections_from_kafka/" },
+    { "label": "Estuary docs: Pricing", "url": "https://docs.estuary.dev/getting-started/pricing/" },
+    { "label": "Estuary pricing page and calculator (checked 2026-10-06)", "url": "https://estuary.dev/pricing/" },
+    { "label": "Estuary docs: Deployment options", "url": "https://docs.estuary.dev/getting-started/deployment-options/" },
+    { "label": "Estuary docs: PostgreSQL capture connector (replication slots, max_slot_wal_keep_size)", "url": "https://docs.estuary.dev/reference/Connectors/capture-connectors/PostgreSQL/" },
+    { "label": "Estuary docs: MySQL capture connector", "url": "https://docs.estuary.dev/reference/Connectors/capture-connectors/MySQL/" },
+    { "label": "Estuary docs: Apache Kafka capture connector", "url": "https://docs.estuary.dev/reference/Connectors/capture-connectors/apache-kafka/" },
+    { "label": "Estuary docs: Snowflake materialization", "url": "https://docs.estuary.dev/reference/Connectors/materialization-connectors/Snowflake/" },
+    { "label": "Estuary docs: BigQuery materialization", "url": "https://docs.estuary.dev/reference/Connectors/materialization-connectors/BigQuery/" },
+    { "label": "Estuary docs: Databricks materialization", "url": "https://docs.estuary.dev/reference/Connectors/materialization-connectors/databricks/" },
+    { "label": "Estuary docs: Apache Iceberg materialization", "url": "https://docs.estuary.dev/reference/Connectors/materialization-connectors/apache-iceberg/" },
+    { "label": "Estuary docs: dbt Cloud integration", "url": "https://docs.estuary.dev/guides/dbt-integration/" },
+    { "label": "Estuary docs: SQL derivation tutorial (flowctl catalog publish)", "url": "https://docs.estuary.dev/guides/derivation_tutorial_sql/" },
+    { "label": "GitHub: estuary/flow LICENSE (per-directory licensing)", "url": "https://github.com/estuary/flow/blob/master/LICENSE" },
+    { "label": "GitHub: estuary/flow LICENSE-BSL (additional use grant, change date)", "url": "https://github.com/estuary/flow/blob/master/LICENSE-BSL" },
+    { "label": "GitHub: estuary/connectors LICENSE", "url": "https://github.com/estuary/connectors/blob/main/LICENSE" },
+    { "label": "GitHub: gazette/core (MIT)", "url": "https://github.com/gazette/core" }
+  ],
+  "checked": "2026-10-06"
+}

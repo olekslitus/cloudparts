@@ -1,0 +1,167 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Artie",
+  "concepts": ["etl"],
+  "provider": "vendor",
+  "vendor": "Artie Technologies Inc.",
+  "license": "Proprietary managed service. Its writer, Artie Transfer, was published on GitHub under the source-available Elastic License 2.0 from 2023, but that repository is no longer public (404 in October 2026); the Terraform provider and CLI are MIT",
+  "website": "https://www.artie.com/",
+  "summary": "A managed change data capture service that copies every insert, update and delete from production databases into a warehouse, aiming for under a minute of delay.",
+  "intro": [
+    "An Artie pipeline has two halves. A source reader connects to your database and follows its transaction log: logical replication of the write-ahead log for PostgreSQL, the binlog for MySQL, change streams for MongoDB and DocumentDB, DynamoDB Streams, or PlanetScale’s VStream API. Every change goes into an internal Kafka topic. A writer reads that topic, keeps changes in memory and collapses several changes to the same primary key into one. When a flush rule fires (enough seconds, rows or bytes), it writes the batch to the destination as an idempotent upsert or `MERGE`, then commits its Kafka offset. A new table starts with a backfill that scans it in batches, optionally from a read replica, while live changes wait in Kafka and are applied once the scan finishes. One reader can feed several pipelines, so the database is read once for Snowflake and S3 alike. Table settings add a history table that records every change as a row, soft deletes, and column exclusion or hashing.",
+    "Artie always hosts the control plane: dashboard, configuration and monitoring. The data plane runs in Artie’s cloud in your region or, on the Enterprise plan, inside your own cloud account (bring your own cloud), where you provide Kubernetes, Kafka and storage and Artie operates it remotely. You configure it in the dashboard, through a REST API, a Terraform provider or an MCP server. Billing counts rows changed after the first backfill; backfills are free. As of October 2026 the Free plan covers 1 million rows a month and two pipelines, Growth starts at $500 a month billed annually, and Enterprise, which adds Oracle, SQL Server, Iceberg and Delta Lake, is priced by quote."
+  ],
+  "strengths": [
+    "No Debezium, Kafka cluster or merge code to run yourself: Artie operates the reader, the buffer and the writes into the warehouse",
+    "Backfills run alongside live replication and never count toward the bill",
+    "One source reader can feed several destinations, so a Postgres replication slot or MySQL binlog is read only once",
+    "Warehouse-friendly writes: changes are deduplicated per key before each batched merge, with history tables and soft deletes available as table settings"
+  ],
+  "limits": [
+    "A closed service from a young company (founded 2023, about $15M raised by early 2026). The Transfer source it once published is no longer public, so there is no self-hosted fallback outside an Enterprise contract",
+    "It copies tables rather than transforming them: in-flight options are column-level (exclude, hash, encrypt), so joins and modelling still happen downstream, for example in dbt",
+    "Databases only, plus an events API: no SaaS-app connectors, and Oracle, SQL Server, Iceberg, Delta Lake and MySQL destinations need the Enterprise plan",
+    "Log-based CDC still costs the source something: a stalled Postgres replication slot keeps WAL until the disk fills, so the docs ask you to set heartbeats and `max_slot_wal_keep_size`",
+    "Rows bigger than the internal Kafka message limit (2 MB by default) are skipped unless you turn on message compression"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "streams WAL changes out of" },
+    { "id": "mysql", "how": "reads the binlog of" },
+    { "id": "mongodb", "how": "reads change streams from" },
+    { "id": "kafka", "how": "buffers every change event in" },
+    { "id": "snowflake", "how": "merges batched changes into" },
+    { "id": "bigquery", "how": "merges batched changes into" },
+    { "id": "databricks", "how": "merges batched changes into" },
+    { "id": "iceberg", "how": "writes tables (Enterprise plan) into" },
+    { "id": "terraform", "how": "is configured as code through" },
+    { "id": "estuary", "how": "competes for real-time CDC with" }
+  ],
+  "snippet": {
+    "lang": "hcl",
+    "title": "A Postgres-to-Snowflake pipeline with the Artie Terraform provider",
+    "source": [
+      "terraform {",
+      "  required_providers {",
+      "    artie = { source = \"artie-labs/artie\" }",
+      "  }",
+      "}",
+      "",
+      "provider \"artie\" {",
+      "  api_key = var.artie_api_key",
+      "}",
+      "",
+      "resource \"artie_connector\" \"postgres\" {",
+      "  name = \"Production Postgres\"",
+      "  type = \"postgresql\"",
+      "  postgresql_config = {",
+      "    host     = \"db.internal.example.com\"",
+      "    port     = 5432",
+      "    username = \"artie\"",
+      "    password = var.postgres_password",
+      "  }",
+      "}",
+      "",
+      "resource \"artie_connector\" \"snowflake\" {",
+      "  name = \"Snowflake analytics\"",
+      "  type = \"snowflake\"",
+      "  snowflake_config = {",
+      "    account_identifier = \"myorg-analytics\"",
+      "    virtual_dwh        = \"COMPUTE_WH\"",
+      "    username           = \"ARTIE\"",
+      "    private_key        = var.snowflake_private_key",
+      "  }",
+      "}",
+      "",
+      "# one reader (one replication slot) can feed several pipelines",
+      "resource \"artie_source_reader\" \"shop\" {",
+      "  name           = \"shop reader\"",
+      "  connector_uuid = artie_connector.postgres.uuid",
+      "  database_name  = \"shop\"",
+      "}",
+      "",
+      "resource \"artie_pipeline\" \"shop_to_snowflake\" {",
+      "  name                       = \"shop to Snowflake\"",
+      "  source_reader_uuid         = artie_source_reader.shop.uuid",
+      "  destination_connector_uuid = artie_connector.snowflake.uuid",
+      "  destination_config = {",
+      "    database = \"ANALYTICS\"",
+      "    schema   = \"SHOP\"",
+      "  }",
+      "  tables = {",
+      "    \"public.orders\"    = { name = \"orders\", schema = \"public\", enable_history_mode = true }",
+      "    \"public.customers\" = { name = \"customers\", schema = \"public\" }",
+      "  }",
+      "  soft_delete_rows = true",
+      "}"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Free, Growth and Enterprise",
+      "intro": "List prices from artie.com/pricing, checked 6 October 2026. Every plan uses the same pipelines; the plans differ in volume, connectors and where the data plane runs.",
+      "columns": ["Free", "Growth", "Enterprise"],
+      "rows": [
+        { "label": "Price", "values": ["$0", "From $500 a month billed annually ($6,000 a year), $600 month to month; volume discounts above the commitment", "Custom"] },
+        { "label": "Billable rows", "values": ["Up to 1 million a month", "Unlimited, billed by volume", "Unlimited, by contract"] },
+        { "label": "Active pipelines", "values": ["2", "Unlimited", "Unlimited"] },
+        { "label": "Sources", "values": ["PostgreSQL, MySQL, MongoDB, DynamoDB, DocumentDB, CockroachDB, PlanetScale, Supabase, Amazon Keyspaces", "Same as Free", "Adds Oracle and SQL Server, including archive-log replication"] },
+        { "label": "Destinations", "values": ["Snowflake, BigQuery, Databricks, Redshift, ClickHouse, MotherDuck, PostgreSQL, S3, GCS", "Same as Free", "Adds Iceberg, Delta Lake, SQL Server and MySQL"] },
+        { "label": "PrivateLink", "values": ["No", "$500 a month per connection", "Included"] },
+        { "label": "Data plane in your own cloud", "values": ["No", "No", "Yes"] },
+        { "label": "SSO, role-based access, HIPAA", "values": ["No", "Yes (HIPAA needs a signed BAA)", "Yes"] }
+      ],
+      "notes": [
+        "Billable rows are rows processed after a table’s first backfill; backfills, including ones you rerun later, are never counted.",
+        "New accounts get a 14-day Growth trial that starts when the first pipeline is deployed, then drop to Free if they fit its limits."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Robin Tang had built change-data pipelines twice before Artie. At a startup acquired by Zendesk, CDC and Kafka were part of the core architecture. At Opendoor he assembled streaming pipelines from Debezium, Kafka, custom merge logic and schema inference, and after a year of work, observability and recovery from odd edge cases were still missing. Meanwhile most companies still loaded their warehouses with batch jobs every few hours or overnight.",
+      "In 2022 he started building his own replication tool, and in early 2023 he launched Artie with Jacqueline Cheong, a former investor in public software companies, who took on the business side. The first public piece, Artie Transfer, was a Go service under the Elastic License that read Debezium change events from Kafka and merged them into Snowflake. Artie joined Y Combinator’s Summer 2023 batch. Its first customer, Substack, went from warehouse data hours old to 10 to 15 seconds behind.",
+      "Since then Artie has replaced the do-it-yourself parts with its own readers and a hosted Kafka buffer, added more warehouses and lakes, raised a $3.3M seed (2024) and a $12M Series A (2026), and opened a free plan. The Transfer repository, public with about 800 stars in early 2026, is no longer visible."
+    ],
+    "choices": [
+      { "choice": "Kafka between the reader and the writer", "why": "The reader can keep pace with the database even when a warehouse is slow. Changes queue up during a backfill, and a pipeline paused for writing only can resume within 14 days without a new backfill." },
+      { "choice": "Batched merges, deduplicated per key", "why": "Warehouses handle a few large merges far better than a stream of single-row updates. Collapsing repeated changes to one row before each flush cuts the volume written, and Artie argues small continuous merges use less Snowflake compute than bulk loads every hour or two." },
+      { "choice": "Bill changed rows, not table size", "why": "Charging only for rows processed after the first snapshot makes backfills and re-syncs free, so fixing a broken table doesn’t cost extra." },
+      { "choice": "Source-available rather than open source", "why": "The Elastic License 2.0 let anyone read, run and modify Transfer but forbade offering it as a hosted service, which kept the managed product protected." }
+    ],
+    "timeline": [
+      { "year": "2022", "text": "Robin Tang starts building his own CDC replication tool" },
+      { "year": "2023", "text": "Artie Transfer appears on GitHub under ELv2: Debezium events from Kafka into Snowflake" },
+      { "year": "2023", "text": "Joins Y Combinator’s Summer 2023 batch" },
+      { "year": "2024", "text": "$3.3M seed led by Exponent Founders Capital" },
+      { "year": "2026", "text": "$12M Series A led by Standard Capital in January" },
+      { "year": "2026", "text": "Free plan launches in August; the Transfer repository is no longer public" }
+    ],
+    "sources": [
+      { "label": "Artie: About us (Robin Tang’s timeline, Zendesk and Maxwell, 2022 MVP)", "url": "https://www.artie.com/about" },
+      { "label": "Artie blog: Artie raises $3.3M seed round (Feb 2024)", "url": "https://www.artie.com/blogs/artie-raises-3-3m-seed-round-from-exponent-founders-capital-general-catalyst-and-y-combinator-to-revolutionize-database-replication" },
+      { "label": "Artie blog: Series A, real-time data streaming platform (Jan 2026; Opendoor pipelines)", "url": "https://www.artie.com/blogs/artie-series-a-real-time-data-streaming-platform" },
+      { "label": "Y Combinator: Artie (Summer 2023, founders)", "url": "https://www.ycombinator.com/companies/artie" },
+      { "label": "GitHub: artie-labs/transfer README, January 2023 snapshot (ELv2, Debezium on Kafka, Snowflake only)", "url": "https://github.com/artie-labs/transfer", "archive": "https://web.archive.org/web/20230117174402/https://github.com/artie-labs/transfer" },
+      { "label": "GitHub: artie-labs/transfer, February 2026 snapshot (801 stars)", "url": "https://github.com/artie-labs/transfer", "archive": "https://web.archive.org/web/20260203054502/https://github.com/artie-labs/transfer" },
+      { "label": "Artie blog: Artie’s free plan is live (Aug 2026)", "url": "https://www.artie.com/blogs/artie-free-plan-is-live" }
+    ]
+  },
+  "sources": [
+    { "label": "Artie docs: Architecture (reader, Kafka buffer, writer; cloud and BYOC data planes)", "url": "https://artie.com/docs/concepts/architecture" },
+    { "label": "Artie docs: Pipelines (shared source readers, pause modes, 2 MB message limit)", "url": "https://artie.com/docs/pipelines/overview" },
+    { "label": "Artie docs: Backfills", "url": "https://artie.com/docs/pipelines/backfill" },
+    { "label": "Artie docs: Flush rules", "url": "https://artie.com/docs/pipelines/flush-rules/overview" },
+    { "label": "Artie docs: Glossary (history mode)", "url": "https://artie.com/docs/glossary" },
+    { "label": "Artie docs: documentation index (sources, destinations, Terraform, MCP)", "url": "https://artie.com/docs/llms.txt" },
+    { "label": "Artie docs: PostgreSQL troubleshooting (replication slot growth)", "url": "https://artie.com/docs/sources/postgresql/troubleshooting" },
+    { "label": "Artie docs: Preventing WAL growth on RDS Postgres", "url": "https://artie.com/docs/guides/database/preventing-postgres-wal-growth-on-rds" },
+    { "label": "Artie pricing (checked 2026-10-06)", "url": "https://www.artie.com/pricing" },
+    { "label": "Artie: home page (column inclusion, exclusion, encryption and hashing)", "url": "https://www.artie.com/" },
+    { "label": "Artie docs: ELv2 licence addendum for Transfer", "url": "https://www.artie.com/docs/legal/elv2-license-addendum" },
+    { "label": "GitHub: artie-labs organisation (public repositories)", "url": "https://github.com/artie-labs" },
+    { "label": "GitHub: artie-labs/terraform-provider-artie (MIT)", "url": "https://github.com/artie-labs/terraform-provider-artie" },
+    { "label": "Artie blog: seed and Series A announcements (funding amounts)", "url": "https://www.artie.com/blogs/artie-raises-3-3m-seed-round-from-exponent-founders-capital-general-catalyst-and-y-combinator-to-revolutionize-database-replication" }
+  ],
+  "checked": "2026-10-06"
+}

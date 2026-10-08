@@ -1,0 +1,168 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Pivot",
+  "concepts": ["olap", "query-engines"],
+  "provider": "oss",
+  "vendor": "Epsio Labs",
+  "license": "MIT or Apache 2.0, at your option",
+  "website": "https://pivotlake.io/",
+  "repo": "https://github.com/pivotlake/pivot",
+  "summary": "A young open-source analytics server in Rust that speaks the PostgreSQL protocol and queries Iceberg and Delta Lake tables straight from object storage.",
+  "intro": [
+    "Pivot is one Rust binary. `pivot server` listens on port 5432 for PostgreSQL clients such as `psql`, BI tools and app drivers; `pivot open s3://bucket/path` starts a local SQL shell on the same engine with no server. It keeps no data of its own: tables live in object storage (S3, GCS or a local directory) in one of two datastores. A Pivot datastore is a set of Delta Lake tables of Parquet files that Pivot writes, compacts and keeps statistics for; an Iceberg datastore points at an Iceberg REST catalog and is read-only. One query can join tables from several datastores. SQL is parsed, bound and optimised by a fork of DuckDB’s planner, then translated into Pivot’s own operators, which run on one worker thread per core with `io_uring` I/O, its own cache instead of the OS page cache, and work stealing between cores. Server settings, users and datastore definitions come from YAML configuration; a shared PostgreSQL-backed metastore for clusters is still in development.",
+    "Speed on Parquet comes mostly from reading less. A table can be soft-sorted with `sort_by`, and background compaction rewrites files whose sort-key ranges overlap, six at a time, so file and row-group min/max statistics prune well; dictionary checks and page-level pruning skip more, and late materialization reads wide columns only for rows that survive a filter or `LIMIT`. Pivot is made by Epsio Labs, the company behind the Epsio incremental SQL engine, and is free under MIT or Apache 2.0; there is no paid edition yet. The project calls itself early and not production ready: v0.1.0 was tagged on 5 October 2026, and the docs warn that SQL, configuration and on-disk layout change between releases with no migration path."
+  ],
+  "strengths": [
+    "Serves low-latency SQL over open tables without first copying them into a separate real-time database",
+    "Any PostgreSQL client or driver can connect, and the same engine runs as a local shell for ad hoc work or AI agents",
+    "Holds no state except object storage, so instances can be added or stopped quickly and several servers can share one datastore",
+    "Tables it writes are ordinary Delta Lake and Parquet, readable by Spark, DuckDB, Trino and others",
+    "Permissive MIT or Apache 2.0 licence, with the benchmark harness published for anyone to rerun"
+  ],
+  "limits": [
+    "Very new and explicitly not production ready: breaking changes in SQL, config and storage format between releases, and whole areas of SQL missing",
+    "Append-only for now: no `DELETE` or `UPDATE`, and Iceberg tables can be read but not written",
+    "No spill to disk, so a large join, aggregation or sort must fit in memory; a single query can’t yet span several machines",
+    "Linux only: the installer and packages target Linux, and the engine relies on `io_uring`, which Docker blocks unless run with `seccomp=unconfined`",
+    "Two people have made nearly all commits, and there are no GitHub releases yet, only tags, Docker images and Debian packages"
+  ],
+  "worksWith": [
+    { "id": "iceberg", "how": "reads tables via a REST catalog in" },
+    { "id": "delta-lake", "how": "writes and compacts its own tables as" },
+    { "id": "parquet", "how": "stores and scans data as" },
+    { "id": "s3", "how": "keeps all table data in" },
+    { "id": "gcs", "how": "can keep its datastores in" },
+    { "id": "duckdb", "how": "parses and plans SQL with a fork of" },
+    { "id": "postgresql", "how": "speaks the wire protocol of" },
+    { "id": "arrow", "how": "ingests data in the IPC format of" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "In `psql` connected to a Pivot server: a soft-sorted table loaded from Parquet on S3",
+    "source": [
+      "CREATE TABLE trips (",
+      "  vendor_id       INTEGER,",
+      "  pickup_at       TIMESTAMP,",
+      "  passenger_count BIGINT,",
+      "  trip_distance   DOUBLE,",
+      "  fare_amount     DOUBLE,",
+      "  tip_amount      DOUBLE",
+      ") WITH (sort_by = 'pickup_at');",
+      "",
+      "INSERT INTO trips",
+      "SELECT VendorID, tpep_pickup_datetime, passenger_count,",
+      "       trip_distance, fare_amount, tip_amount",
+      "FROM read_parquet('s3://pivotlake-examples/nyc-taxi/yellow_tripdata_2024-01.parquet');",
+      "",
+      "COMPACT trips;",
+      "",
+      "SELECT date_trunc('day', pickup_at) AS day,",
+      "       count(*) AS trips,",
+      "       CAST(avg(tip_amount) AS DECIMAL(10, 2)) AS avg_tip",
+      "FROM trips",
+      "WHERE pickup_at >= '2024-01-01' AND pickup_at < '2024-02-01'",
+      "GROUP BY day",
+      "ORDER BY trips DESC",
+      "LIMIT 5;"
+    ]
+  },
+  "sections": [
+    {
+      "type": "code",
+      "title": "A server over its own bucket and an existing Iceberg catalog",
+      "intro": "`pivot server --config pivot.yaml` serves both datastores; `SELECT … FROM lake.crm.customers` reaches the Iceberg tables, and unqualified names go to the default one.",
+      "lang": "yaml",
+      "source": [
+        "datastores:",
+        "  events:",
+        "    kind: pivot",
+        "    location: s3://acme-analytics/pivot/",
+        "    default: true",
+        "  lake:",
+        "    kind: iceberg",
+        "    uri: https://catalog.example.com/api",
+        "    warehouse: s3://acme-lake/warehouse/",
+        "    secret: lake-catalog",
+        "secrets:",
+        "  acme-analytics:",
+        "    type: s3",
+        "    scope: s3://acme-analytics/",
+        "    region: us-east-1",
+        "    access_key_id: replace-me",
+        "    secret_access_key: replace-me",
+        "  lake-catalog:",
+        "    type: iceberg",
+        "    credential: client-id:client-secret",
+        "users:",
+        "  dashboard:",
+        "    auth:",
+        "      method: scram-sha-256",
+        "      verifier: pivot-scram-sha-256$..."
+      ]
+    },
+    {
+      "type": "table",
+      "title": "The vendor’s own benchmark numbers",
+      "intro": "From the Pivot homepage, checked 6 October 2026: query time relative to the fastest engine, lower is better. Epsio Labs ran every engine itself, on one AWS c8gd.metal-48xl, with the harness in its `pivotlake/benchmarks` repository. Treat these as claims to reproduce, not independent results.",
+      "corner": "Engine (storage)",
+      "columns": ["ClickBench, 43 queries", "TPC-H SF1000", "Star Schema SF1000"],
+      "rows": [
+        { "label": "Pivot (Parquet)", "values": ["1.09×", "1.00×", "1.00×"] },
+        { "label": "ClickHouse (native)", "values": ["2.17×", "4.68×", "3.36×"] },
+        { "label": "DuckDB (Parquet)", "values": ["4.31×", "2.16×", "2.58×"] },
+        { "label": "DuckDB (native)", "values": ["4.17×", "3.10×", "5.00×"] },
+        { "label": "DataFusion (Parquet)", "values": ["3.09×", "7.37×", "12.86×"] },
+        { "label": "ClickHouse (Parquet)", "values": ["3.61×", "27.14×", "120.51×"] },
+        { "label": "Spark", "values": ["53.73×", "43.59×", "44.38×"] }
+      ],
+      "notes": [
+        "TPC-H and SSB are scored as one timed run of all queries after dropping the page cache; the ClickBench column uses ClickBench’s own scoring, a geometric mean of per-query ratios.",
+        "Pivot’s authors also added `pivot-parquet` entries to the official ClickBench repository; the pull request was merged on 1 October 2026. Compare on the public dashboard, same machine only."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Epsio Labs, founded by Gilad Kleinman and Maor Kern, sells Epsio, an engine that keeps the results of heavy SQL queries up to date incrementally inside an existing database. Pivot is built by Epsio’s team, with nearly all commits from Kern and one colleague, and tackles a nearby problem: teams that keep their data in open table formats on object storage still copy it into a separate real-time database, such as ClickHouse or Druid, when dashboards and apps need fast answers for many users.",
+      "Kern’s first commit, a per-core task runtime called Dispatch, landed in December 2025. The team took DuckDB’s parser and optimiser instead of writing a planner and spent its effort on execution: morsel-sized batches that stay in CPU cache, its own 2 MB block allocator on huge pages, direct I/O with `io_uring`, and pruning tuned for Parquet. The docs say the initial codebase was written without LLMs, and that LLMs are now used to hunt for local optimisations that humans then redesign before merging.",
+      "The project moved to its own `pivotlake` GitHub organisation in August 2026, tagged its first release candidate that month, submitted results to ClickBench in September and tagged v0.1.0 in October."
+    ],
+    "choices": [
+      { "choice": "Query open formats instead of a proprietary store", "why": "Data already sits in Iceberg or Delta Lake for other engines. Writing Pivot’s own tables as Delta Lake too means nothing is locked in a format only Pivot can read." },
+      { "choice": "Reuse DuckDB’s planner, write a new executor", "why": "Parsing, binding and logical optimisation are mature in DuckDB. Owning only the physical operators let a two-person team concentrate on scheduling, memory and I/O." },
+      { "choice": "Thread per core with work stealing", "why": "Context switches and cold caches cost more than the computation in analytical queries. One worker per core that prefers cache-hot work, stealing only when idle, keeps cores busy without that cost." },
+      { "choice": "The PostgreSQL wire protocol", "why": "Every language and BI tool already has a PostgreSQL driver, so applications can connect without a new client library." }
+    ],
+    "timeline": [
+      { "year": "2025", "text": "First commit in December: the Dispatch per-core runtime" },
+      { "year": "2026", "text": "GitHub repository created in March under Epsio Labs" },
+      { "year": "2026", "text": "Moves to the pivotlake organisation; first release candidate in August" },
+      { "year": "2026", "text": "ClickBench entries merged on 1 October; v0.1.0 tagged on 5 October" }
+    ],
+    "sources": [
+      { "label": "GitHub: pivotlake/pivot commit history (first commit by Maor Kern, December 2025)", "url": "https://github.com/pivotlake/pivot/commits/main" },
+      { "label": "GitHub: pivotlake/pivot tags (v0.1.0-rc in August, v0.1.0 in October 2026)", "url": "https://github.com/pivotlake/pivot/tags" },
+      { "label": "GitHub API: repository metadata (created 17 March 2026 as Epsio-Labs/pivotdb)", "url": "https://api.github.com/repos/pivotlake/pivot" },
+      { "label": "Epsio: About us (Gilad Kleinman and Maor Kern, co-founders)", "url": "https://www.epsio.io/about-us" },
+      { "label": "Pivot docs: Why is Pivot fast? (design, LLM policy)", "url": "https://pivotlake.io/docs/database/why-pivot-is-fast/" },
+      { "label": "ClickBench pull request #2276: Add Pivot (merged 1 October 2026)", "url": "https://github.com/ClickHouse/ClickBench/pull/2276" }
+    ]
+  },
+  "sources": [
+    { "label": "Pivot homepage (modes, datastores, benchmark chart, © Epsio Labs)", "url": "https://pivotlake.io/" },
+    { "label": "Pivot docs: Introduction and project status", "url": "https://pivotlake.io/docs/" },
+    { "label": "Pivot docs: Architecture (Dispatch pool, DuckDB-based planner, catalog, datastores, metastore)", "url": "https://pivotlake.io/docs/database/architecture/" },
+    { "label": "Pivot docs: Why is Pivot fast? (soft sorting, compaction, late materialization, io_uring, allocator)", "url": "https://pivotlake.io/docs/database/why-pivot-is-fast/" },
+    { "label": "Pivot docs: Roadmap (deletes, spill to disk, MPP, Unity Catalog)", "url": "https://pivotlake.io/docs/database/roadmap/" },
+    { "label": "Pivot docs: Quickstart (install, Docker, Debian package, loading data)", "url": "https://pivotlake.io/docs/quickstart/" },
+    { "label": "Pivot docs: Datastores and storage credentials", "url": "https://pivotlake.io/docs/reference/server/datastores/" },
+    { "label": "Pivot docs: Users and authentication", "url": "https://pivotlake.io/docs/reference/server/authentication/" },
+    { "label": "Pivot docs: COMPACT", "url": "https://pivotlake.io/docs/reference/statements/compact/" },
+    { "label": "GitHub: pivotlake/pivot README (early development, licence)", "url": "https://github.com/pivotlake/pivot" },
+    { "label": "GitHub: pivotlake/pivot NOTICE (dual licence, bundled DuckDB fork)", "url": "https://github.com/pivotlake/pivot/blob/main/NOTICE" },
+    { "label": "GitHub: pivotlake/pivot contributors", "url": "https://github.com/pivotlake/pivot/graphs/contributors" },
+    { "label": "GitHub: pivotlake/benchmarks (harness and scoring)", "url": "https://github.com/pivotlake/benchmarks" },
+    { "label": "ClickBench: pivot-parquet entry", "url": "https://github.com/ClickHouse/ClickBench/tree/main/pivot-parquet" }
+  ],
+  "checked": "2026-10-06"
+}

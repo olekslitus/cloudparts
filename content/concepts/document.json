@@ -1,0 +1,127 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Document databases",
+  "category": "data",
+  "order": 21,
+  "summary": "Records stored as JSON documents that the database can query, index and update field by field.",
+  "howItWorks": "A document database stores each record as a self-contained document, usually JSON or a binary form of it such as MongoDB’s BSON, grouped into collections. Like a key-value store it can fetch a document by its ID, but it also understands what’s inside. You can filter on any field, including nested objects and arrays, index those fields, change one field without rewriting the rest, and run aggregations. Documents in one collection don’t need the same fields, so the shape can change without a migration, and most databases can still validate documents against a schema if you want one. Data that’s read together, such as an order and its line items, usually lives in one document, so reading it is one lookup, but data shared between documents gets copied or linked by ID, and joins across collections are limited. To scale out, a collection is split across shards by a shard key: a query that includes the key goes to one shard, and one that doesn’t goes to all of them.",
+  "analogy": "A filing cabinet of complete forms, one folder per customer. The clerk can pull every folder where the city is Oslo, and new forms can gain boxes without reprinting the old ones.",
+  "useWhen": [
+    "Records with nested, varying fields: product catalogs, user profiles, content",
+    "Data that’s read and written as one object, like an order with its line items",
+    "Apps whose data shape changes often, especially when the code already works in JSON"
+  ],
+  "avoidWhen": [
+    "Data with many relationships, queried from every side; joins across collections are limited",
+    "Work that needs transactions across many records all the time; they exist, but cost more than single-document writes"
+  ],
+  "example": "An online shop keeps each product as one MongoDB document: name, price, a `specs` object whose fields differ between laptops and shoes, and an array of sizes with stock counts. An index on `specs.brand` serves the brand filter, and a price change is one `$set` on one field. A monthly report joining products with orders and returns, though, is easier in SQL.",
+  "providers": {
+    "aws": "Amazon DocumentDB (MongoDB-compatible); DynamoDB also stores JSON documents",
+    "gcp": "Firestore",
+    "azure": "Azure Cosmos DB, with its own NoSQL API or a MongoDB-compatible one",
+    "oss": "MongoDB (SSPL, source-available), Apache CouchDB, FerretDB (MongoDB-compatible, on PostgreSQL), ArangoDB (BSL, also a graph database); PostgreSQL’s `jsonb` for documents inside a relational database"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "from pymongo import MongoClient",
+      "products = MongoClient()[\"shop\"][\"products\"]",
+      "",
+      "products.insert_one({",
+      "    \"_id\": \"sku-17\", \"name\": \"Trail runner\", \"price\": 89,",
+      "    \"specs\": {\"brand\": \"Ostra\", \"drop_mm\": 6},",
+      "    \"sizes\": [{\"eu\": 42, \"stock\": 3}, {\"eu\": 43, \"stock\": 0}],",
+      "})",
+      "",
+      "products.create_index(\"specs.brand\")                    # index a nested field",
+      "cheap = products.find({\"specs.brand\": \"Ostra\", \"price\": {\"$lt\": 100}})",
+      "products.update_one({\"_id\": \"sku-17\"}, {\"$set\": {\"price\": 79}})   # change one field"
+    ]
+  },
+  "related": ["key-value","wide-column","relational","search","emergent-schema"],
+  "diagram": {
+    "caption": "The collection is sharded by user ID. Lookups that include it (colored by key) go to the one shard that holds that user. A search on another field, such as city, can’t know where matches live, so the router sends it to every shard and merges the answers.",
+    "w": 760,
+    "h": 280,
+    "nodes": [
+      {
+        "id": "app",
+        "x": 100,
+        "y": 70,
+        "label": "App",
+        "sub": "find by user_id",
+        "emit": {"every":420,"jitter":0.3,"req":true,"colorByKey":3},
+        "out": ["targeted"]
+      },
+      {
+        "id": "search",
+        "x": 100,
+        "y": 210,
+        "label": "Search",
+        "sub": "city = \"Oslo\"",
+        "emit": {"every":2600,"jitter":0.3,"req":true,"color":3},
+        "out": ["broadcast"]
+      },
+      {"id":"targeted","x":330,"y":70,"label":"Router","sub":"has shard key → one shard","route":"hash","out":["s1","s2","s3"]},
+      {"id":"broadcast","x":330,"y":210,"label":"Router","sub":"no shard key → every shard","route":"fanout","out":["s1","s2","s3"]},
+      {"id":"s1","x":620,"y":50,"label":"Shard A","sub":"JSON documents","mode":"reply","delay":40},
+      {"id":"s2","x":620,"y":140,"label":"Shard B","sub":"JSON documents","mode":"reply","delay":40},
+      {"id":"s3","x":620,"y":230,"label":"Shard C","sub":"JSON documents","mode":"reply","delay":40}
+    ]
+  },
+  "history": {
+    "story": [
+      "By the mid-2000s, web applications passed data around as JSON, which Douglas Crockford described in RFC 4627 in 2006, while relational databases made developers split every object into rows across tables and join them back together. In April 2005 Damien Katz, who had worked on Lotus Notes at IBM, started CouchDB: a database of JSON documents with a schema-free design, read and written over HTTP. It became a top-level Apache project in November 2008.",
+      "MongoDB, built at 10gen, had its first official release in February 2009. It kept the JSON-like documents but added what developers expected from a database, such as queries on any field, secondary indexes and in-place updates. Later releases filled in what the early versions left out, including the WiredTiger storage engine, acquired in 2014, and multi-document ACID transactions in 2018.",
+      "The model then spread beyond MongoDB itself. In October 2018 MongoDB moved to the SSPL, aimed at companies offering it as a service, and in January 2019 AWS launched DocumentDB, its own MongoDB-compatible service. Relational databases met documents halfway: PostgreSQL 9.4 added the indexable `jsonb` type in 2014. Today the same JSON record can live in a document database, a relational one or DynamoDB."
+    ],
+    "choices": [
+      { "choice": "Store objects whole, as JSON", "why": "Applications already worked with nested objects. Keeping an object and its parts in one document removed the mapping to tables and made reading it a single lookup." },
+      { "choice": "No fixed schema per collection", "why": "Each document can have its own fields, so a new field ships with the code instead of waiting for a migration. Optional schema validation lets teams add the guarantees back where they want them." },
+      { "choice": "Shard by a key the developer chooses", "why": "Splitting a collection across servers by a shard key lets the cluster grow, and queries that name the key stay on one shard. Choosing that key well is the big design decision." }
+    ],
+    "timeline": [
+      { "year": "2005", "text": "Damien Katz starts CouchDB" },
+      { "year": "2006", "text": "RFC 4627 describes JSON" },
+      { "year": "2008", "text": "CouchDB becomes a top-level Apache project" },
+      { "year": "2009", "text": "MongoDB’s first official release, 0.8" },
+      { "year": "2014", "text": "PostgreSQL 9.4 adds the `jsonb` type" },
+      { "year": "2018", "text": "MongoDB 4.0 adds multi-document transactions; licence moves to SSPL" },
+      { "year": "2019", "text": "AWS launches DocumentDB, compatible with MongoDB" }
+    ],
+    "sources": [
+      { "label": "RFC 4627: The application/json media type for JSON (Douglas Crockford, Jul 2006)", "url": "https://www.rfc-editor.org/rfc/rfc4627" },
+      { "label": "Wikipedia: Apache CouchDB, on Damien Katz and the April 2005 start", "url": "https://en.wikipedia.org/wiki/Apache_CouchDB" },
+      { "label": "Apache Incubator: CouchDB project status (graduated 2008-11-19)", "url": "https://incubator.apache.org/projects/couchdb.html" },
+      { "label": "MongoDB: Our story", "url": "https://www.mongodb.com/company/our-story" },
+      { "label": "mongodb/mongo on GitHub: tag r0.8.0, first official release (Feb 2009)", "url": "https://github.com/mongodb/mongo/releases/tag/r0.8.0" },
+      { "label": "MongoDB press release: MongoDB acquires WiredTiger (Dec 2014)", "url": "https://www.mongodb.com/company/newsroom/press-releases/wired-tiger" },
+      { "label": "MongoDB blog: multi-document ACID transactions (2018)", "url": "https://www.mongodb.com/company/blog/product-release-announcements/mongodb-multi-document-acid-transactions-general-availability" },
+      { "label": "MongoDB: Server Side Public License FAQ (Oct 2018)", "url": "https://www.mongodb.com/legal/licensing/server-side-public-license/faq" },
+      { "label": "AWS What’s New: Amazon DocumentDB (with MongoDB compatibility) generally available (Jan 2019)", "url": "https://aws.amazon.com/about-aws/whats-new/2019/01/amazon-documentdb-with-mongodb-compatibility-generally-available/" },
+      { "label": "PostgreSQL: PostgreSQL 9.4 released, with JSONB (Dec 2014)", "url": "https://www.postgresql.org/about/news/postgresql-94-released-1557/" }
+    ]
+  },
+  "sources": [
+    { "label": "DB-Engines: Document stores", "url": "https://db-engines.com/en/article/Document+Stores" },
+    { "label": "MongoDB manual: BSON types", "url": "https://www.mongodb.com/docs/manual/reference/bson-types/" },
+    { "label": "MongoDB manual: Query on embedded documents (dot notation)", "url": "https://www.mongodb.com/docs/manual/tutorial/query-embedded-documents/" },
+    { "label": "MongoDB manual: Multikey indexes (indexes on arrays)", "url": "https://www.mongodb.com/docs/manual/core/indexes/index-types/index-multikey/" },
+    { "label": "MongoDB manual: $set (replace the value of one field)", "url": "https://www.mongodb.com/docs/manual/reference/operator/update/set/" },
+    { "label": "MongoDB manual: Aggregation operations", "url": "https://www.mongodb.com/docs/manual/aggregation/" },
+    { "label": "MongoDB manual: $lookup (joins with another collection)", "url": "https://www.mongodb.com/docs/manual/reference/operator/aggregation/lookup/" },
+    { "label": "MongoDB manual: Data modeling (flexible schema, embedding)", "url": "https://www.mongodb.com/docs/manual/data-modeling/" },
+    { "label": "MongoDB manual: Schema validation", "url": "https://www.mongodb.com/docs/manual/core/schema-validation/" },
+    { "label": "MongoDB manual: Transactions (greater cost than single-document writes)", "url": "https://www.mongodb.com/docs/manual/core/transactions/" },
+    { "label": "MongoDB manual: Sharded cluster query routing (targeted and broadcast operations)", "url": "https://www.mongodb.com/docs/manual/core/sharded-cluster-query-router/" },
+    { "label": "PyMongo docs", "url": "https://www.mongodb.com/docs/languages/python/pymongo-driver/current/" },
+    { "label": "Amazon DocumentDB Developer Guide: What is Amazon DocumentDB?", "url": "https://docs.aws.amazon.com/documentdb/latest/developerguide/what-is.html" },
+    { "label": "DynamoDB Developer Guide: What is Amazon DynamoDB? (key-value and document models)", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Introduction.html" },
+    { "label": "Google Cloud: Firestore overview", "url": "https://cloud.google.com/firestore/docs/overview" },
+    { "label": "Microsoft Learn: Azure Cosmos DB introduction", "url": "https://learn.microsoft.com/en-us/azure/cosmos-db/introduction" },
+    { "label": "Microsoft Learn: What is Azure Cosmos DB for MongoDB?", "url": "https://learn.microsoft.com/en-us/azure/cosmos-db/mongodb/introduction" },
+    { "label": "Apache CouchDB docs: Why CouchDB?", "url": "https://docs.couchdb.org/en/stable/intro/why.html" },
+    { "label": "FerretDB on GitHub: MongoDB-compatible, on PostgreSQL (Apache 2.0)", "url": "https://github.com/FerretDB/FerretDB" }
+  ]
+}

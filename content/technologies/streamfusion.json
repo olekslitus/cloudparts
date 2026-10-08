@@ -1,0 +1,147 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "StreamFusion",
+  "concepts": ["stream-processing"],
+  "provider": "oss",
+  "vendor": "Jordan Epstein and contributors, in the datafusion-contrib GitHub organization (not an Apache project)",
+  "license": "Apache 2.0 (LICENSE file since the repository opened in datafusion-contrib, July 2026)",
+  "website": "https://streamfusion.tech/",
+  "repo": "https://github.com/datafusion-contrib/StreamFusion",
+  "summary": "An open-source accelerator for Apache Flink SQL: Flink still plans and coordinates the job, while the operators it can reproduce exactly run natively in Rust on Arrow and DataFusion.",
+  "intro": [
+    "StreamFusion is not a separate engine. You put its loader and core JARs in the `lib` directory of a Flink 2.2 cluster and submit ordinary Flink SQL jobs, unchanged. After Flink’s planner has optimized a query, StreamFusion inspects the plan: if every operator between the source and the sink has a native version that gives byte-identical results, it swaps them for Rust operators called over JNI; if even one doesn’t, the whole query runs on stock Flink. The native operators pass Apache Arrow column batches to each other and use Apache DataFusion for expressions, hash joins and aggregates, with streaming operators ported from Arroyo, so rows are converted to columns only at the edges. For Kafka, Flink’s own client still handles partitions, offsets and transactions while Rust decodes and encodes the JSON, CSV, Avro, Protobuf or CDC bytes straight to and from Arrow. Flink also keeps checkpoints, rescaling and monitoring: checkpoint barriers flow through the JVM as usual and trigger each native operator’s snapshot, stored as opaque keyed state that Flink can redistribute. State sits in memory or in a RocksDB instance owned by the Rust code, with incremental checkpoints.",
+    "Native coverage includes `TUMBLE`, `HOP`, `SESSION` and `CUMULATE` windows, `OVER` aggregates, regular, interval, window, temporal and lookup joins, updating `GROUP BY`, Top-N and deduplication, plus Parquet, ORC and Delta Lake sinks and Paimon sources and sinks. `MATCH_RECOGNIZE`, lateral table functions and PyFlink UDFs stay on Flink. Jordan Epstein started it in June 2026 and has written most of it; it is free under Apache 2.0, with no company or paid edition behind it, and so far ships only release candidates (0.1.0-rc1 in August 2026 to 0.1.0-rc4 on 6 October 2026) through Maven Central."
+  ],
+  "strengths": [
+    "Drop-in: no query rewriting and no application change, and `streamfusion.native.enabled=false` puts everything back on stock Flink",
+    "Parity first: it only substitutes what it can reproduce byte for byte, checked by a parity harness and Flink’s own SQL tests in CI, and it can log why each plan node fell back",
+    "Accelerates stateful SQL (windows, joins, changelog aggregation, Top-N), not just stateless filters and projections",
+    "Faster on the project’s own Nexmark runs: a geometric mean of 1.3 to 1.4 times Flink’s throughput with in-memory state and 2.8 to 3.4 times with RocksDB, with byte-identical output",
+    "Open source under Apache 2.0, where the other native Flink engines (Alibaba’s Flash, Ververica’s VERA-X) are proprietary"
+  ],
+  "limits": [
+    "Pre-release: only 0.1.0 release candidates so far, internal APIs may change before 1.0, and savepoint upgrades across versions haven’t been validated",
+    "Pinned to Flink 2.2.0 and 2.2.1 while Flink itself is at 2.3.0; a Flink 1.18 build exists for development only, and the published native libraries cover Linux x86-64 and Apple Silicon Macs, not Linux ARM64",
+    "SQL and Table API only: DataStream jobs, PyFlink UDFs, `MATCH_RECOGNIZE` and lateral table functions stay on Flink, and one unsupported operator sends the whole query back",
+    "Mostly one developer’s project (over 1,300 of about 1,660 commits), written with heavy help from AI coding tools by his own account, so its future rests on a small group",
+    "Native state and buffers come out of the TaskManager’s off-heap memory, which you have to size, and each connector and format needs its own extra JAR"
+  ],
+  "worksWith": [
+    { "id": "flink", "how": "speeds up SQL jobs as a plugin for" },
+    { "id": "datafusion", "how": "builds its native operators on" },
+    { "id": "arrow", "how": "passes column batches between operators as" },
+    { "id": "arroyo", "how": "ports streaming operator code from" },
+    { "id": "kafka", "how": "decodes and encodes records natively for" },
+    { "id": "paimon", "how": "reads and writes lake tables natively in" },
+    { "id": "delta-lake", "how": "writes table data natively into" },
+    { "id": "parquet", "how": "writes sink files natively as" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Add StreamFusion to a Flink 2.2.1 distribution and run an ordinary SQL job",
+    "source": [
+      "cd \"$FLINK_HOME\"   # Flink 2.2.1 on Java 17",
+      "SF=0.1.0-rc4",
+      "M=https://repo1.maven.org/maven2",
+      "",
+      "# the loader and core runtime",
+      "curl -fL -o lib/00-streamfusion-loader.jar \"$M/tech/streamfusion/streamfusion-loader/$SF/streamfusion-loader-$SF.jar\"",
+      "curl -fL -o lib/streamfusion-core.jar \"$M/tech/streamfusion/streamfusion-core/$SF/streamfusion-core-$SF-runtime.jar\"",
+      "",
+      "# Kafka with JSON: StreamFusion's modules plus Flink's own Kafka connector",
+      "curl -fL -o lib/streamfusion-kafka.jar \"$M/tech/streamfusion/streamfusion-kafka/$SF/streamfusion-kafka-$SF.jar\"",
+      "curl -fL -o lib/streamfusion-json.jar \"$M/tech/streamfusion/streamfusion-json/$SF/streamfusion-json-$SF.jar\"",
+      "curl -fL -o lib/flink-connector-kafka-5.0.0-2.2.jar \"$M/org/apache/flink/flink-connector-kafka/5.0.0-2.2/flink-connector-kafka-5.0.0-2.2.jar\"",
+      "curl -fL -o lib/kafka-clients-4.2.0.jar \"$M/org/apache/kafka/kafka-clients/4.2.0/kafka-clients-4.2.0.jar\"",
+      "",
+      "# native operators draw on task off-heap memory; keep state in the Rust-owned RocksDB;",
+      "# log every plan node that stays on Flink, and why",
+      "cat >> conf/config.yaml <<'EOF'",
+      "taskmanager.memory.task.off-heap.size: 512m",
+      "state.backend.type: tech.streamfusion.state.RocksDBNativeStateBackendFactory",
+      "env.java.opts.all: -Dstreamfusion.logFallbackReasons=true",
+      "EOF",
+      "",
+      "./bin/start-cluster.sh",
+      "# an unchanged Flink SQL job; EXPLAIN shows Native* nodes when it accelerates",
+      "./bin/sql-client.sh -f revenue_per_minute.sql"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "StreamFusion’s own Nexmark numbers",
+      "intro": "StreamFusion throughput divided by stock Flink throughput, as published in the project’s README. Measured by the StreamFusion project, not independently.",
+      "columns": ["In-memory state", "RocksDB state"],
+      "rows": [
+        { "label": "Geometric mean, mini-batch off", "values": ["1.31×", "2.75×"] },
+        { "label": "Geometric mean, mini-batch on", "values": ["1.44×", "3.41×"] },
+        { "label": "Range over 23 queries", "values": ["0.99× to 3.32×", "1.08× to 68.20×"] }
+      ],
+      "notes": [
+        "Setup: an Apple M1 Max, parallelism 4, a 2-million-event JSON corpus read from a four-partition Kafka topic, results written exactly once to Kafka with one-second checkpoints. In-memory columns are one run each (2026-08-25); RocksDB columns are the best of two runs (2026-09-05). Query q6 is left out because Flink SQL can’t run it.",
+        "Seven queries use opt-in expression variants (approximate decimals, native datetime or regex behaviour) that can differ from Flink at documented edge cases. The biggest gains come from stateful queries on RocksDB (q9, q20), where StreamFusion batches state access."
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Native accelerators for Flink",
+      "intro": "All four keep Flink’s APIs and planner and replace the row-at-a-time execution underneath. Speed-ups are each vendor’s own claims, on different setups, so they aren’t directly comparable.",
+      "columns": ["StreamFusion", "Flash (Alibaba Cloud)", "VERA-X (Ververica)", "Iron Vector (Irontools)"],
+      "rows": [
+        { "label": "Source", "values": ["Open, Apache 2.0", "Proprietary, on Alibaba Cloud", "Proprietary, in Ververica’s platform", "Not open source, per StreamFusion’s comparison"] },
+        { "label": "Native layer", "values": ["Rust on Arrow and DataFusion", "C++ vectorized operators and the ForStDB state store", "A native vectorized engine with a new state store", "Rust on Arrow and DataFusion, plans passed as Substrait"] },
+        { "label": "Stateful operators", "values": ["Yes: windows, joins, changelog", "Yes", "Yes", "No, stateless only when announced"] },
+        { "label": "Claimed speed-up", "values": ["1.3× to 3.4× geometric mean (Nexmark, Kafka in and out)", "5× to 10× on Nexmark against Flink 1.19", "5× to 10× on Nexmark SQL against Flink 1.19", "About 97% on a stateless pipeline"] },
+        { "label": "Announced", "values": ["August 2026", "2024 (Apsara Conference)", "October 2025", "September 2025"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Spark has had native accelerators for years: Databricks’ Photon and open-source projects such as Gluten (Velox), RAPIDS and DataFusion Comet keep Spark’s planner and scheduler and replace the code that touches each row with vectorized operators. Flink, the default for stream processing, had nothing comparable in the open: Alibaba’s Flash and Ververica’s VERA-X claimed five to ten times Flink’s speed, but both are paid products.",
+      "Jordan Epstein, a New York engineer who had spent four years making videos about distributed systems and had contributed to Iceberg, DataFusion, Comet, Arrow Java and Paimon, decided to build an open one. He made the first commit on 18 June 2026; in July the code moved to the `datafusion-contrib` GitHub organization. He modelled the project on Comet, ported streaming operators from Arroyo and RisingWave, and, working alone alongside a day job, wrote much of it with AI coding tools, relying on a parity harness against Flink to check the results.",
+      "The first release candidate came out on 15 August 2026 with a launch post claiming over 33% more throughput than Flink on Kafka-to-Kafka Nexmark runs. A handful of other contributors have joined since, and by October it had grown file and lake-table connectors (Parquet, ORC, Delta Lake, Paimon)."
+    ],
+    "choices": [
+      { "choice": "Accelerate Flink instead of writing another engine", "why": "Flink’s adoption, connectors and community make it hard to leave, and Flink SQL’s limited set of operators can be reimplemented one by one, as the Spark accelerators had done." },
+      { "choice": "All-or-nothing substitution with byte-identical results", "why": "Exact parity with Flink is the project’s goal. Accelerating only whole queries keeps data in Arrow between operators and avoids subtle differences; operations like regular expressions, which can behave differently in Java and Rust, stay on Flink unless you opt in." },
+      { "choice": "Port operators from Arroyo and RisingWave", "why": "Both use the same Chandy-Lamport-style barrier checkpoints as Flink, so their operators fit Flink’s checkpointing; engines built on other models, such as Feldera’s DBSP, would not." },
+      { "choice": "Native state as opaque keyed blobs", "why": "Flink can then move key groups between subtasks when a job rescales without understanding the bytes, provided StreamFusion reproduces Flink’s key hashing exactly in Rust." }
+    ],
+    "timeline": [
+      { "year": "2024", "text": "Alibaba presents Flash, a closed native Flink engine" },
+      { "year": "2025", "text": "Irontools announces Iron Vector (stateless) and Ververica announces VERA-X" },
+      { "year": "2026", "text": "Jordan Epstein starts StreamFusion in June; it moves to datafusion-contrib in July" },
+      { "year": "2026", "text": "First release candidate, 0.1.0-rc1, and launch post in August" },
+      { "year": "2026", "text": "Fourth release candidate, 0.1.0-rc4, on 6 October" }
+    ],
+    "sources": [
+      { "label": "StreamFusion blog: Streaming for the AI age (Jordan Epstein, Aug 2026)", "url": "https://streamfusion.tech/blogs/streaming-for-the-ai-age/" },
+      { "label": "StreamFusion: first commit (18 June 2026)", "url": "https://github.com/datafusion-contrib/StreamFusion/commit/5467cfbaac9d21c8f239a3da3c35db98d5f163bd" },
+      { "label": "StreamFusion: v0.1.0-rc1 release (15 August 2026)", "url": "https://github.com/datafusion-contrib/StreamFusion/releases/tag/v0.1.0-rc1" },
+      { "label": "Alibaba Cloud blog: Flash, a vectorized stream processing engine compatible with Apache Flink", "url": "https://www.alibabacloud.com/blog/flash-a-next-gen-vectorized-stream-processing-engine-compatible-with-apache-flink_602088" },
+      { "label": "Ververica blog: VERA-X, the first native vectorized Apache Flink engine (Oct 2025)", "url": "https://www.ververica.com/blog/vera-x-introducing-the-first-native-vectorized-apache-flink-engine" },
+      { "label": "Irontools blog: Introducing Iron Vector (Sep 2025)", "url": "https://irontools.dev/blog/introducing-iron-vector/" }
+    ]
+  },
+  "sources": [
+    { "label": "StreamFusion README (coverage, fallbacks, Nexmark tables, related work, licence)", "url": "https://github.com/datafusion-contrib/StreamFusion" },
+    { "label": "StreamFusion LICENSE (Apache 2.0)", "url": "https://github.com/datafusion-contrib/StreamFusion/blob/main/LICENSE" },
+    { "label": "StreamFusion docs: Introduction", "url": "https://streamfusion.tech/" },
+    { "label": "StreamFusion docs: Deployment (Flink 2.2.0 and 2.2.1, JARs in lib, platforms)", "url": "https://streamfusion.tech/deployment/" },
+    { "label": "StreamFusion docs: Flink line compatibility (1.18 development build)", "url": "https://streamfusion.tech/flink-compatibility/" },
+    { "label": "StreamFusion docs: Configuration (switches, off-heap memory, fallback logging)", "url": "https://streamfusion.tech/configuration/" },
+    { "label": "StreamFusion docs: RocksDB backend", "url": "https://streamfusion.tech/backends/rocksdb/" },
+    { "label": "StreamFusion docs: Benchmarks", "url": "https://streamfusion.tech/benchmarks/" },
+    { "label": "StreamFusion docs: Pre-1.0 API boundaries", "url": "https://github.com/datafusion-contrib/StreamFusion/blob/main/docs/api-stability.md" },
+    { "label": "StreamFusion releases on GitHub (0.1.0-rc1 to rc4)", "url": "https://github.com/datafusion-contrib/StreamFusion/releases" },
+    { "label": "StreamFusion contributors on GitHub", "url": "https://github.com/datafusion-contrib/StreamFusion/graphs/contributors" },
+    { "label": "Apache Flink downloads (latest 2.3.0)", "url": "https://flink.apache.org/downloads/" },
+    { "label": "Maven Central: tech.streamfusion artifacts", "url": "https://repo1.maven.org/maven2/tech/streamfusion/" },
+    { "label": "Alibaba Cloud blog: Flash (claims and benchmark setup)", "url": "https://www.alibabacloud.com/blog/flash-a-next-gen-vectorized-stream-processing-engine-compatible-with-apache-flink_602088" },
+    { "label": "Ververica blog: VERA-X (claims and benchmark setup)", "url": "https://www.ververica.com/blog/vera-x-introducing-the-first-native-vectorized-apache-flink-engine" },
+    { "label": "Irontools blog: Introducing Iron Vector (stateless only, claims)", "url": "https://irontools.dev/blog/introducing-iron-vector/" }
+  ],
+  "checked": "2026-10-06"
+}

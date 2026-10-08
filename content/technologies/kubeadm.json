@@ -1,0 +1,103 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "kubeadm",
+  "concepts": ["orchestration"],
+  "parent": { "id": "kubernetes", "as": "tool" },
+  "provider": "oss",
+  "vendor": "Cloud Native Computing Foundation",
+  "license": "Apache 2.0",
+  "website": "https://kubernetes.io/docs/reference/setup-tools/kubeadm/",
+  "repo": "https://github.com/kubernetes/kubernetes/tree/master/cmd/kubeadm",
+  "summary": "The official tool for turning Linux machines you already have into a Kubernetes cluster: `kubeadm init`, then `kubeadm join`.",
+  "intro": [
+    "kubeadm is the Kubernetes project’s own cluster bootstrapper, maintained by SIG Cluster Lifecycle. On the first machine, `kubeadm init` runs preflight checks, creates a certificate authority and the certificates and kubeconfig files each component needs, and writes static Pod manifests for the API server, controller manager, scheduler and a local etcd. The kubelet, which you install yourself, starts those Pods. kubeadm then prints a `kubeadm join` command with a bootstrap token (valid for 24 hours by default) and a hash of the CA’s public key, so a new node can check it is joining the right cluster.",
+    "Its scope is deliberately narrow. kubeadm doesn’t create machines, install the kubelet or a container runtime, or pick a Pod network: until you apply a CNI network plugin of your choice, CoreDNS won’t start. Monitoring, dashboards and cloud integrations are out of scope too. What it does cover is the cluster’s lifecycle after creation: `kubeadm upgrade` moves the control plane one minor version at a time, renewing certificates as it goes, and `kubeadm join --control-plane` adds control plane nodes behind a load balancer for high availability. That narrowness is why other tools build on it: when kubeadm went GA in 2018, minikube already ran it inside its VM, and SIG Cluster Lifecycle’s Cluster API covers the machine provisioning that kubeadm leaves out."
+  ],
+  "strengths": [
+    "Produces a plain upstream cluster that follows Certified Kubernetes guidelines, with secure defaults such as TLS for all etcd traffic and token-based node joining",
+    "Works on any Linux machines: bare metal, VMs on any cloud, or a Raspberry Pi",
+    "A composable building block: phases (`kubeadm init phase ...`) and a config file API let higher-level tools reuse its steps",
+    "Handles in-place control plane upgrades, including etcd, and renews certificates during them"
+  ],
+  "limits": [
+    "Only the bootstrap: you still provision machines, install the runtime and kubelet, choose a CNI and add a load balancer for HA",
+    "A default cluster has one control plane node and one etcd; if it fails you can lose the cluster, so HA needs at least three control plane nodes",
+    "Client certificates expire after one year; a cluster that isn’t upgraded at least yearly needs a manual `kubeadm certs renew`",
+    "Upgrades can’t skip minor versions, and each node’s kubelet has to be drained and upgraded separately"
+  ],
+  "worksWith": [
+    { "id": "kubernetes", "how": "bootstraps the control plane of" },
+    { "id": "etcd", "how": "runs a local, TLS-secured member of" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Bootstrap a control plane, install a Pod network, join a worker",
+    "source": [
+      "# on the first control plane node (behind a load balancer if you plan HA)",
+      "sudo kubeadm init --control-plane-endpoint k8s-api.example.com:6443 \\",
+      "  --pod-network-cidr 10.244.0.0/16 --upload-certs",
+      "",
+      "# kubeadm installs no network: apply a CNI plugin of your choice",
+      "kubectl apply -f <your-cni-plugin.yaml>",
+      "",
+      "# on each worker, using the command init printed",
+      "sudo kubeadm join k8s-api.example.com:6443 --token abcdef.0123456789abcdef \\",
+      "  --discovery-token-ca-cert-hash sha256:<hash>",
+      "",
+      "# later: upgrade the control plane one minor version at a time",
+      "sudo kubeadm upgrade plan && sudo kubeadm upgrade apply v1.37.x"
+    ]
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "Two ways to make the control plane highly available",
+      "intro": "Both need a TCP load balancer in front of the API servers on port 6443. kubeadm bootstraps etcd statically, so you plan the members up front.",
+      "items": [
+        { "name": "Stacked etcd", "tag": "default", "text": "Each control plane node runs an API server, controller manager, scheduler and its own etcd member, created by `kubeadm init` and `kubeadm join --control-plane`. Simpler to run, but losing a node loses an etcd member and a control plane instance together, so run at least three." },
+        { "name": "External etcd", "tag": "more machines", "text": "etcd runs on its own hosts, separate from the control plane nodes. Losing a control plane node doesn’t touch etcd, at the cost of twice as many machines to manage." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In 2016, users told the Kubernetes community that installing it was harder than it should be. A cluster needed machines, then Kubernetes installed on them with certificates configured, then add-ons such as DNS, monitoring and a Pod network. SIG Cluster Lifecycle split the job into three stages (provisioning machines, bootstrapping Kubernetes on them, and installing add-ons) and decided to own only the middle one.",
+      "kubeadm arrived as an alpha in Kubernetes 1.4 on September 26, 2016, reducing bootstrap to two commands. It was a cross-company effort: Ilya Dmitrichenko of Weaveworks wrote most of the early code, CoreOS built the TLS bootstrapping it relied on, and Red Hat contributed the discovery service. Rather than poke settings into place from outside, the team changed Kubernetes itself so that it would be easy to install.",
+      "kubeadm reached general availability in Kubernetes 1.13 in December 2018, with stable commands, a versioned configuration file and fully supported upgrades. Automated high-availability control planes reached beta in 1.15 in 2019. Several community installers adopted it as their base layer instead of reinventing the bootstrap."
+    ],
+    "choices": [
+      { "choice": "Don’t provision machines", "why": "Users created machines with Terraform, CloudFormation, Chef, Puppet, Ansible or PXE boot, on clouds, bare metal or Raspberry Pis. Assuming only “some computers running Linux” let kubeadm work everywhere and fit into any of those tools." },
+      { "choice": "Run the control plane as static Pods", "why": "kubeadm writes manifest files and the kubelet, which every node runs anyway, starts the API server, scheduler, controller manager and etcd from them. The GA announcement listed this among the methods that “shouldn’t change any time soon”." },
+      { "choice": "Bootstrap tokens plus CA pinning for joining", "why": "A short-lived shared token lets a new node authenticate, and the CA public key hash lets the node check it is talking to the right control plane, without copying certificates around by hand." },
+      { "choice": "Leave networking and add-ons to the user", "why": "Every team prefers a different Pod network and monitoring stack. Keeping them out kept kubeadm lean, vendor neutral and easy to embed in higher-level tools." }
+    ],
+    "timeline": [
+      { "year": "2016", "text": "Alpha in Kubernetes 1.4, September 26" },
+      { "year": "2018", "text": "Generally available in Kubernetes 1.13, December" },
+      { "year": "2019", "text": "Automated HA control planes reach beta in 1.15" },
+      { "year": "2026", "text": "Ships with Kubernetes 1.37 in August" }
+    ],
+    "sources": [
+      { "label": "Kubernetes Blog: How we made Kubernetes insanely easy to install (Sep 2016)", "url": "https://kubernetes.io/blog/2016/09/how-we-made-kubernetes-easy-to-install/" },
+      { "label": "Kubernetes Blog: Kubernetes 1.4, making it easy to run on Kubernetes anywhere (Sep 2016)", "url": "https://kubernetes.io/blog/2016/09/kubernetes-1-4-making-it-easy-to-run-on-kuberentes-anywhere/" },
+      { "label": "Kubernetes Blog: Kubernetes 1.13 release announcement, kubeadm GA (Dec 2018)", "url": "https://kubernetes.io/blog/2018/12/03/kubernetes-1-13-release-announcement/" },
+      { "label": "Kubernetes Blog: Production-ready Kubernetes cluster creation with kubeadm (Dec 2018)", "url": "https://kubernetes.io/blog/2018/12/04/production-ready-kubernetes-cluster-creation-with-kubeadm/" },
+      { "label": "Kubernetes Blog: Automated high availability in kubeadm v1.15 (Jun 2019)", "url": "https://kubernetes.io/blog/2019/06/24/automated-high-availability-in-kubeadm-v1.15-batteries-included-but-swappable/" },
+      { "label": "Kubernetes v1.37.0 release on GitHub (Aug 2026)", "url": "https://github.com/kubernetes/kubernetes/releases/tag/v1.37.0" }
+    ]
+  },
+  "sources": [
+    { "label": "Kubernetes docs: kubeadm overview and scope", "url": "https://kubernetes.io/docs/reference/setup-tools/kubeadm/" },
+    { "label": "Kubernetes docs: kubeadm init (phases, static Pods, token TTL)", "url": "https://kubernetes.io/docs/reference/setup-tools/kubeadm/kubeadm-init/" },
+    { "label": "Kubernetes docs: kubeadm join (discovery and CA pinning)", "url": "https://kubernetes.io/docs/reference/setup-tools/kubeadm/kubeadm-join/" },
+    { "label": "Kubernetes docs: Installing kubeadm (kubelet and runtime not managed)", "url": "https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/install-kubeadm/" },
+    { "label": "Kubernetes docs: Creating a cluster with kubeadm (CNI, version skew, limitations)", "url": "https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/create-cluster-kubeadm/" },
+    { "label": "Kubernetes docs: Options for highly available topology", "url": "https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/ha-topology/" },
+    { "label": "Kubernetes docs: Creating highly available clusters with kubeadm", "url": "https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/high-availability/" },
+    { "label": "Kubernetes docs: Upgrading kubeadm clusters", "url": "https://kubernetes.io/docs/tasks/administer-cluster/kubeadm/kubeadm-upgrade/" },
+    { "label": "Kubernetes docs: Certificate management with kubeadm", "url": "https://kubernetes.io/docs/tasks/administer-cluster/kubeadm/kubeadm-certs/" },
+    { "label": "kubeadm issue tracker and README on GitHub", "url": "https://github.com/kubernetes/kubeadm" },
+    { "label": "Kubernetes Blog: Production-ready Kubernetes cluster creation with kubeadm (Dec 2018)", "url": "https://kubernetes.io/blog/2018/12/04/production-ready-kubernetes-cluster-creation-with-kubeadm/" }
+  ],
+  "checked": "2026-10-06"
+}

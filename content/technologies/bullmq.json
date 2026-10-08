@@ -1,0 +1,151 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "BullMQ",
+  "concepts": ["queue"],
+  "provider": "oss",
+  "vendor": "Taskforce.sh (BullForce Labs AB)",
+  "license": "MIT (BullMQ Pro is commercial)",
+  "website": "https://bullmq.io/",
+  "repo": "https://github.com/taskforcesh/bullmq",
+  "summary": "The Node.js job queue on Redis, Bull’s successor, with ports to other languages and, since v6, a Postgres backend.",
+  "intro": [
+    "BullMQ is a library, not a server. A `Queue` object in your app adds jobs, and `Worker` objects in your own processes pick them up; all the state lives in Redis 6.2 or newer, or a compatible server. A job moves between states (waiting, prioritized, delayed, active, completed, failed), and each change runs as a Lua script inside Redis, so it stays atomic with many workers. A worker holds a lock on each active job and keeps renewing it. If the lock lapses, because the process died or blocked the event loop too long, the job is “stalled” and goes back to waiting, or to failed after too many stalls. On top come retries with fixed or exponential backoff, delays, priorities, rate limits, deduplication, cron-style job schedulers and parent and child jobs (“flows”) across queues.",
+    "The core is MIT-licensed and developed by Taskforce.sh; Manuel Astudillo, who wrote the earlier Bull library, started it. It’s native to Node.js and Bun, with ports for Python, Elixir, .NET and Rust that share queues with Node.js, and a PHP client that can only add jobs. BullMQ 6 (July 2026) made storage pluggable and added a PostgreSQL backend with the same API, which its docs put at roughly 1.5 to 2 times fewer processed jobs a second than Redis. BullMQ Pro adds groups, batches and observables for Node.js and Bun under a commercial licence: $1,395 a year or $139 a month per deployment for organizations with fewer than 100 employees, and custom pricing above that (checked October 2026)."
+  ],
+  "strengths": [
+    "A mature feature set: retries with backoff, delays, priorities, rate limiting, deduplication, job schedulers and parent and child flows",
+    "Runs on Redis, Valkey and Dragonfly (all three tested in CI), managed services such as ElastiCache and MemoryDB, and since v6 on PostgreSQL",
+    "Queues are shared across languages: Node.js, Python, Elixir, .NET and Rust workers, plus PHP producers",
+    "Fast: its site cites over 250,000 jobs a second in benchmarks on Dragonfly",
+    "Sandboxed processors run CPU-heavy jobs in separate processes, and graceful shutdown and stalled-job recovery are built in"
+  ],
+  "limits": [
+    "Redis must use `maxmemory-policy noeviction`; a cache-style eviction policy breaks queues, and ElastiCache Serverless can’t be set that way",
+    "Completed and failed jobs stay in Redis by default; without `removeOnComplete` and `removeOnFail`, memory keeps filling",
+    "A handler that blocks Node’s event loop can’t renew its lock, so the job stalls and runs again on another worker",
+    "Groups (per-tenant fairness), batches and observables need the paid Pro edition, for Node.js and Bun only",
+    "Ports aren’t equal: PHP can only add jobs and Python was introduced as experimental; v6 removed legacy repeatable jobs and Redis internals, so upgrading needs code changes"
+  ],
+  "worksWith": [
+    { "id": "redis", "how": "keeps jobs and locks in" },
+    { "id": "valkey", "how": "keeps jobs and locks in" },
+    { "id": "postgresql", "how": "can keep jobs in (v6 and later)" },
+    { "id": "elasticache", "how": "runs on node-based clusters of" },
+    { "id": "memorydb", "how": "runs in cluster mode on" }
+  ],
+  "snippet": {
+    "lang": "ts",
+    "title": "Add a job with retries, process it, and log failures",
+    "source": [
+      "import { Queue, Worker } from 'bullmq';",
+      "import IORedis from 'ioredis';",
+      "",
+      "const connection = new IORedis({ maxRetriesPerRequest: null });",
+      "",
+      "const thumbnails = new Queue('thumbnails', { connection });",
+      "await thumbnails.add(",
+      "  'resize',",
+      "  { key: 'uploads/123.jpg', width: 320 },",
+      "  { attempts: 5, backoff: { type: 'exponential', delay: 1000 } },",
+      ");",
+      "",
+      "const worker = new Worker(",
+      "  'thumbnails',",
+      "  async job => {",
+      "    await resize(job.data.key, job.data.width);",
+      "    return { done: true };",
+      "  },",
+      "  { connection, concurrency: 10, removeOnComplete: { count: 1000 } },",
+      ");",
+      "",
+      "worker.on('failed', (job, err) => console.error(job?.id, err.message));"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Where BullMQ can keep its queues",
+      "intro": "The API is the same everywhere; what changes is the setting you have to get right.",
+      "corner": "Backend",
+      "columns": ["Status", "What to watch"],
+      "rows": [
+        { "label": "Redis 6.2+", "values": ["Default backend", "Set `maxmemory-policy` to `noeviction`"] },
+        { "label": "Valkey", "values": ["Tested in CI against Valkey 8", "Also works through the Valkey Glide client adapter"] },
+        { "label": "Dragonfly", "values": ["Tested in CI; listed as officially supported", "Wrap queue names in `{}` so each queue gets its own thread"] },
+        { "label": "Amazon ElastiCache", "values": ["Documented", "Node-based clusters only; Serverless uses an incompatible eviction policy"] },
+        { "label": "Amazon MemoryDB", "values": ["Documented", "Cluster mode only, so put hash tags in queue names"] },
+        { "label": "PostgreSQL 13+", "values": ["Since v6.0 (July 2026)", "LISTEN/NOTIFY replaces blocking pops; about 1.5 to 2 times fewer jobs a second than Redis"] }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Bull, BullMQ and BullMQ Pro",
+      "columns": ["Bull", "BullMQ", "BullMQ Pro"],
+      "rows": [
+        { "label": "Status", "values": ["Maintenance mode: bug fixes only", "Actively developed", "Actively developed"] },
+        { "label": "Licence and price", "values": ["MIT, free", "MIT, free", "Commercial: $1,395 a year or $139 a month per deployment (under 100 employees); custom above"] },
+        { "label": "Languages", "values": ["Node.js", "Node.js and Bun, plus Python, Elixir, .NET, Rust and PHP clients", "Node.js and Bun"] },
+        { "label": "Parent and child flows", "values": ["No", "Yes", "Yes"] },
+        { "label": "Groups, batches, observables", "values": ["No", "No", "Yes"] }
+      ],
+      "notes": ["A deployment is one operational environment, such as a Kubernetes cluster, server or VM, connecting to one or more Redis instances. Prices from bullmq.io, checked 2026-10-06."]
+    }
+  ],
+  "history": {
+    "story": [
+      "In June 2013 Manuel Astudillo of OptimalBits started Bull, a job queue for Node.js that kept its state in Redis and leaned on Redis’s atomic operations. It sat alongside libraries such as Kue and Bee, and Redis’s own guide to queues later picked Bull as its Node.js example.",
+      "In December 2018 Astudillo began BullMQ, a rewrite in TypeScript, under the taskforcesh organization on GitHub; 1.0 shipped in October 2019. Bull went into maintenance mode, fixing only bugs. The business around it is Taskforce.sh, which sells a hosted dashboard for queues and BullMQ Pro, a commercial edition with groups, batches and observables, while the core stays MIT.",
+      "BullMQ then stopped being only a Node.js library. A Python package appeared in 2023, Elixir and PHP clients in December 2025, and Rust and .NET in mid-2026, all reading and writing the same queues. BullMQ 6, in July 2026, hid Redis behind a backend interface and added PostgreSQL, so the same code can run on a database many teams already operate."
+    ],
+    "choices": [
+      { "choice": "Lua scripts for every state change", "why": "Moving a job between states touches several Redis keys. Running each move as a script inside Redis makes it atomic without locks in the application, so many workers can share one queue safely." },
+      { "choice": "A library, not a server", "why": "Queues and workers are objects in your own processes, and Redis holds the state, so there’s nothing extra to deploy. Other platforms can reach queues through the separate BullMQ Proxy." },
+      { "choice": "Renewable locks on active jobs", "why": "A worker that dies can’t release its jobs, so each lock must be renewed periodically. A lapsed lock marks the job stalled and returns it to the queue." },
+      { "choice": "An MIT core with a paid Pro edition", "why": "Pro features such as groups and batches, plus support, fund development, while the main library stays free with no limits on workers or concurrency." }
+    ],
+    "timeline": [
+      { "year": "2013", "text": "Manuel Astudillo starts Bull at OptimalBits" },
+      { "year": "2018", "text": "BullMQ, a TypeScript rewrite, begins in December" },
+      { "year": "2019", "text": "BullMQ 1.0 released in October" },
+      { "year": "2023", "text": "First Python package (0.1) released" },
+      { "year": "2025", "text": "Elixir and PHP clients reach first releases" },
+      { "year": "2026", "text": "BullMQ 6 adds pluggable backends and PostgreSQL" }
+    ],
+    "sources": [
+      { "label": "Bull: initial commit by Manuel Astudillo (Jun 2013)", "url": "https://github.com/OptimalBits/bull/commit/452fbba40bcfa6fc48f0140eea14d9a61abbc758" },
+      { "label": "BullMQ: initial commit by Manuel Astudillo (Dec 2018)", "url": "https://github.com/taskforcesh/bullmq/commit/43e5efcd9bc60505d111715df23090d3e91d5bf7" },
+      { "label": "Bull README: maintenance mode", "url": "https://github.com/OptimalBits/bull/blob/develop/README.md" },
+      { "label": "BullMQ changelog v1 (1.0.0, Oct 2019)", "url": "https://github.com/taskforcesh/bullmq/blob/master/docs/gitbook/changelogs/changelog-v1.md" },
+      { "label": "BullMQ Python changelog v0 (0.1.0, Feb 2023)", "url": "https://github.com/taskforcesh/bullmq/blob/master/docs/gitbook/python/changelogs/changelog-v0.md" },
+      { "label": "BullMQ Elixir changelog v1 (1.0.0, Dec 2025)", "url": "https://github.com/taskforcesh/bullmq/blob/master/docs/gitbook/elixir/changelogs/changelog-v1.md" },
+      { "label": "BullMQ PHP changelog v1 (0.1.0, Dec 2025)", "url": "https://github.com/taskforcesh/bullmq/blob/master/docs/gitbook/php/changelogs/changelog-v1.md" },
+      { "label": "BullMQ Rust changelog (1.0.0, Jul 2026)", "url": "https://github.com/taskforcesh/bullmq/blob/master/docs/gitbook/rust/changelog.md" },
+      { "label": "BullMQ .NET changelog (1.0.0, Aug 2026)", "url": "https://github.com/taskforcesh/bullmq/blob/master/docs/gitbook/dotnet/changelog.md" },
+      { "label": "Redis glossary: Redis queue (Bull as the Node.js example)", "url": "https://redis.io/glossary/redis-queue/" },
+      { "label": "BullMQ changelog (6.0.0, Jul 2026)", "url": "https://github.com/taskforcesh/bullmq/blob/master/docs/gitbook/changelog.md" }
+    ]
+  },
+  "sources": [
+    { "label": "BullMQ README", "url": "https://github.com/taskforcesh/bullmq/blob/master/README.md" },
+    { "label": "BullMQ home page (backends, benchmarks, Pro pricing)", "url": "https://bullmq.io/" },
+    { "label": "BullMQ docs: Architecture", "url": "https://docs.bullmq.io/guide/architecture" },
+    { "label": "BullMQ docs: Connections (ioredis, node-redis, Bun, Valkey Glide)", "url": "https://docs.bullmq.io/guide/connections" },
+    { "label": "BullMQ docs: Going to production (noeviction)", "url": "https://docs.bullmq.io/guide/going-to-production" },
+    { "label": "BullMQ docs: Stalled jobs", "url": "https://docs.bullmq.io/guide/workers/stalled-jobs" },
+    { "label": "BullMQ docs: Retrying failing jobs", "url": "https://docs.bullmq.io/guide/retrying-failing-jobs" },
+    { "label": "BullMQ docs: Auto-removal of jobs", "url": "https://docs.bullmq.io/guide/workers/auto-removal-of-jobs" },
+    { "label": "BullMQ docs: Sandboxed processors", "url": "https://docs.bullmq.io/guide/workers/sandboxed-processors" },
+    { "label": "BullMQ docs: Graceful shutdown", "url": "https://docs.bullmq.io/guide/workers/graceful-shutdown" },
+    { "label": "BullMQ docs: PostgreSQL backend", "url": "https://docs.bullmq.io/guide/postgresql" },
+    { "label": "BullMQ docs: Redis compatibility", "url": "https://docs.bullmq.io/guide/redis-tm-compatibility" },
+    { "label": "BullMQ docs: Dragonfly", "url": "https://docs.bullmq.io/guide/redis-tm-compatibility/dragonfly" },
+    { "label": "BullMQ docs: AWS ElastiCache", "url": "https://docs.bullmq.io/guide/redis-tm-hosting/aws-elasticache" },
+    { "label": "BullMQ docs: AWS MemoryDB", "url": "https://docs.bullmq.io/guide/redis-tm-hosting/aws-memorydb" },
+    { "label": "BullMQ docs: PHP introduction (producer only)", "url": "https://docs.bullmq.io/php/introduction" },
+    { "label": "BullMQ docs: Python introduction", "url": "https://docs.bullmq.io/python/introduction" },
+    { "label": "BullMQ CI workflow (Redis, Valkey 8, Dragonfly, PostgreSQL)", "url": "https://github.com/taskforcesh/bullmq/blob/master/.github/workflows/test.yml" },
+    { "label": "BullMQ LICENSE (MIT, BullForce Labs AB)", "url": "https://github.com/taskforcesh/bullmq/blob/master/LICENSE" },
+    { "label": "Dragonfly docs: BullMQ integration", "url": "https://www.dragonflydb.io/docs/integrations/bullmq" }
+  ],
+  "checked": "2026-10-06"
+}

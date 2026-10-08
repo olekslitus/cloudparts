@@ -1,0 +1,386 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "HashiCorp Packer",
+  "concepts": [
+    "iac",
+    "vm",
+    "containers"
+  ],
+  "provider": "vendor",
+  "vendor": "HashiCorp, an IBM company",
+  "license": "Business Source License 1.1 since 1.10.0 (source-available, not OSI open source); MPL 2.0 before the August 2023 change",
+  "website": "https://developer.hashicorp.com/packer",
+  "repo": "https://github.com/hashicorp/packer",
+  "summary": "Builds machine images (AMIs, Azure and Google images, VMware, Docker) from one HCL template, so every server starts already configured.",
+  "intro": [
+    "Packer is a command-line tool you run on a laptop or a CI runner. A template, written in HCL2 (`.pkr.hcl`), names one or more `source` blocks, each handled by a builder for one platform. For an AMI, the `amazon-ebs` builder launches a temporary EC2 instance from a base image in your own account, with a temporary key pair and security group rules, and connects to it over SSH or WinRM. Provisioners (shell scripts, Ansible, Chef, Puppet, file uploads) then install and configure software inside the running machine. Packer snapshots the result as an image, cleans up the temporary resources, and hands the artifact (a set of AMI IDs, a VMware directory, a Docker image) to optional post-processors that compress, upload, tag or convert it, for example into a Vagrant box. Several sources in one template build in parallel, so the same provisioning produces matching images for AWS, Azure, Google Cloud and VMware at once. Packer doesn’t manage images afterwards: deleting old AMIs is up to you.",
+    "Builders, provisioners, post-processors and data sources are plugins, separate programs that Packer starts for each component. Since Packer 1.10 none of HashiCorp’s plugins ship inside the binary: a `required_plugins` block lists them with version constraints and `packer init` downloads them. The older JSON template format still works but can’t use `packer init`. HCP Packer, HashiCorp’s hosted registry, stores metadata about each build (image IDs per region, Git commit, labels), not the images themselves. Teams assign versions to channels such as `production`, and Packer or Terraform look up “the current production image” instead of a hard-coded ID; revoking a version stops new builds from using it and flags it in Terraform. Packer moved from MPL 2.0 to the Business Source License with version 1.10.0, and IBM completed its acquisition of HashiCorp in February 2025."
+  ],
+  "strengths": [
+    "One template builds matching images for many platforms in parallel: AWS, Azure, Google Cloud, VMware, VirtualBox, Docker and more through plugins",
+    "Reuses the provisioning you already have (shell, Ansible, Chef, Puppet), so the image is configured with the same scripts as before, only once at build time",
+    "Servers launched from a pre-built image start configured, and a broken install script fails the build instead of a production boot",
+    "With HCP Packer, Terraform reads the current image ID from a channel, and revoking a bad image (and optionally its descendants) stops it from being used"
+  ],
+  "limits": [
+    "No longer OSI open source since 1.10.0: building a competing hosted product needs a commercial agreement",
+    "Each build launches a real temporary machine, so it needs cloud credentials that can create instances, key pairs and security group rules",
+    "Packer builds images but doesn’t manage them: sharing, retention and deleting old AMIs need other tooling",
+    "Plugins are separate downloads since 1.10, so templates need a `required_plugins` block and `packer init`; JSON templates must be converted to HCL first",
+    "HCP Packer is SaaS only and billed per tracked image bucket and per channel lookup; scheduled revocation and the HCP Terraform validation run task need its paid Standard edition"
+  ],
+  "worksWith": [
+    {
+      "id": "ec2",
+      "how": "builds AMIs on"
+    },
+    {
+      "id": "docker",
+      "how": "builds and pushes container images with"
+    },
+    {
+      "id": "terraform",
+      "how": "passes image IDs through HCP Packer to"
+    },
+    {
+      "id": "vagrant",
+      "how": "builds boxes for"
+    }
+  ],
+  "snippet": {
+    "lang": "hcl",
+    "title": "An Ubuntu AMI with nginx, tracked in HCP Packer",
+    "source": [
+      "# Run with: packer init . && packer build .",
+      "packer {",
+      "  required_plugins {",
+      "    amazon = {",
+      "      version = \">= 1.3.0\"",
+      "      source  = \"github.com/hashicorp/amazon\"",
+      "    }",
+      "  }",
+      "}",
+      "",
+      "source \"amazon-ebs\" \"web\" {",
+      "  region        = \"eu-west-1\"",
+      "  instance_type = \"t3.micro\"",
+      "  ssh_username  = \"ubuntu\"",
+      "  ami_name      = \"web-${formatdate(\"YYYYMMDD-hhmm\", timestamp())}\"",
+      "  source_ami_filter {",
+      "    filters = {",
+      "      name                = \"ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*\"",
+      "      virtualization-type = \"hvm\"",
+      "      root-device-type    = \"ebs\"",
+      "    }",
+      "    owners      = [\"099720109477\"] # Canonical",
+      "    most_recent = true",
+      "  }",
+      "}",
+      "",
+      "# Pushes build metadata to HCP Packer; needs HCP_CLIENT_ID and HCP_CLIENT_SECRET",
+      "hcp_packer_registry {",
+      "  bucket_name = \"web\"",
+      "  description = \"Ubuntu 24.04 with nginx\"",
+      "}",
+      "",
+      "build {",
+      "  sources = [\"source.amazon-ebs.web\"]",
+      "",
+      "  provisioner \"shell\" {",
+      "    inline = [",
+      "      \"sudo apt-get update\",",
+      "      \"sudo apt-get install -y nginx\",",
+      "    ]",
+      "  }",
+      "}"
+    ]
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "The parts of a Packer build",
+      "intro": "A template wires these components together. Each one is a plugin, and one build runs them in this order.",
+      "items": [
+        {
+          "name": "Data sources",
+          "tag": "before the build",
+          "text": "Fetch values from outside the template, such as the newest matching AMI, a secret from AWS Secrets Manager, or the current image on an HCP Packer channel."
+        },
+        {
+          "name": "Builders (`source` blocks)",
+          "tag": "one per platform",
+          "text": "Start a machine on one platform, connect to it, and turn it into an image at the end. Examples: `amazon-ebs`, `azure-arm`, `googlecompute`, `vsphere-iso`, `docker`, plus the built-in `file` and `null`."
+        },
+        {
+          "name": "Provisioners",
+          "tag": "inside the machine",
+          "text": "Install and configure software while the machine runs: `shell`, `file`, `powershell`, Ansible, Chef, Puppet. This is where most of the work happens."
+        },
+        {
+          "name": "Post-processors",
+          "tag": "after the image",
+          "text": "Take the finished artifact and make a new one: compress it, push a Docker image to a registry, import a disk into AWS, or package a Vagrant box."
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Packer or the cloud’s own image builder",
+      "intro": "AWS and Azure each run a managed service that builds images for their own cloud only. Azure’s is itself built on Packer.",
+      "columns": [
+        "Packer",
+        "EC2 Image Builder",
+        "Azure VM Image Builder"
+      ],
+      "rows": [
+        {
+          "label": "Where the build runs",
+          "values": [
+            "Wherever you run the `packer` CLI; it starts temporary machines in your account",
+            "Managed AWS service; build and test instances run in your account",
+            "Managed Azure service; a staging resource group with a build VM in your subscription"
+          ]
+        },
+        {
+          "label": "Targets",
+          "values": [
+            "Any platform with a plugin: AWS, Azure, Google Cloud, VMware, VirtualBox, Docker and more",
+            "AMIs and container images, AWS only",
+            "Azure Compute Gallery images, managed images and VHDs, Azure only"
+          ]
+        },
+        {
+          "label": "Configuration",
+          "values": [
+            "HCL2 template (JSON legacy)",
+            "Recipes of components written in YAML or JSON",
+            "Image template submitted through the CLI, PowerShell or ARM templates"
+          ]
+        },
+        {
+          "label": "Testing and scheduling",
+          "values": [
+            "Up to your scripts and CI pipeline",
+            "Built-in test stage and scheduled pipelines; distributes only if tests pass",
+            "Starts when you invoke `Run` on the image template, from a pipeline or a DevOps task"
+          ]
+        },
+        {
+          "label": "Versioned catalogue",
+          "values": [
+            "HCP Packer channels and revocation (paid SaaS)",
+            "Image Builder managed images with versions; sharing through AWS RAM and Organizations",
+            "Azure Compute Gallery image versions, replicated across regions"
+          ]
+        },
+        {
+          "label": "Price of the tool",
+          "values": [
+            "Free to use under BUSL; HCP Packer billed separately",
+            "No charge; you pay for instances, snapshots and storage",
+            "No charge; you pay for the build VM, storage and egress"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "code",
+      "title": "Terraform picks up the current production image",
+      "intro": "With HCP Packer, the Terraform `hcp` provider looks the image up by channel. Moving the `production` channel to a new version changes the AMI on the next plan, with no code change.",
+      "lang": "hcl",
+      "source": [
+        "data \"hcp_packer_artifact\" \"web\" {",
+        "  bucket_name  = \"web\"",
+        "  channel_name = \"production\"",
+        "  platform     = \"aws\"",
+        "  region       = \"eu-west-1\"",
+        "}",
+        "",
+        "resource \"aws_instance\" \"web\" {",
+        "  ami           = data.hcp_packer_artifact.web.external_identifier",
+        "  instance_type = \"t3.micro\"",
+        "}"
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "By 2013, pre-built machine images were known to launch fast and behave the same everywhere, but making them was tedious and the few tools to automate it were hard to learn, so most teams didn’t use them. Mitchell Hashimoto, who had created Vagrant, spent two months on a tool to fix that and announced Packer 0.1 on June 28, 2013: one template, images for several platforms in parallel, such as AMIs for production and nearly identical Vagrant boxes for development. It was the first project started at HashiCorp.",
+      "Packer 1.0 followed in April 2017, by which time tens of thousands of organizations used it and more than 500 people had contributed. HCL2 templates arrived as a beta in 1.5 and became the official format in 1.7, which also added `packer init` to download plugins. HCP Packer, a hosted registry for image metadata, became generally available in March 2022. In August 2023 HashiCorp moved its products to the Business Source License, which covers Packer from 1.10.0; that release, in December 2023, also stopped bundling HashiCorp’s plugins in the binary."
+    ],
+    "choices": [
+      {
+        "choice": "One template, many platforms at once",
+        "why": "Hashimoto wanted the AMI used in production and the Vagrant box used on a laptop to come from the same input. Builds for each platform run in parallel from one template, so the images stay nearly identical."
+      },
+      {
+        "choice": "Leave configuration to existing tools",
+        "why": "Packer doesn’t replace configuration management. Provisioners run shell scripts, Chef, Puppet or Ansible inside the machine, so teams keep the scripts they already trust and run them once at build time."
+      },
+      {
+        "choice": "Builders as plugins",
+        "why": "Support for more platforms was meant to come through plugins, and the 0.1 announcement asked people to add builders. In 2023 HashiCorp finished the split: bundling every plugin meant each fix waited for a Packer release and made the binary heavier."
+      },
+      {
+        "choice": "A registry of metadata, not of images",
+        "why": "HCP Packer records which image IDs a build produced and which version is approved, while the images stay in each cloud account. That is enough for Terraform and later Packer builds to ask for the current approved image."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "2013",
+        "text": "Mitchell Hashimoto releases Packer 0.1 on June 28, HashiCorp’s first project"
+      },
+      {
+        "year": "2017",
+        "text": "Packer 1.0 in April, used by tens of thousands of organizations"
+      },
+      {
+        "year": "2019",
+        "text": "HCL2 templates arrive as a beta in Packer 1.5"
+      },
+      {
+        "year": "2021",
+        "text": "Packer 1.7 adds `packer init` and plugin requirements in templates"
+      },
+      {
+        "year": "2022",
+        "text": "HCP Packer becomes generally available in March"
+      },
+      {
+        "year": "2023",
+        "text": "Business Source License announced in August; 1.10 unbundles plugins in December"
+      },
+      {
+        "year": "2025",
+        "text": "IBM completes its acquisition of HashiCorp in February"
+      }
+    ],
+    "sources": [
+      {
+        "label": "Mitchell Hashimoto: Packer (announcement, June 28, 2013)",
+        "url": "https://mitchellh.com/writing/packer"
+      },
+      {
+        "label": "GitHub: Packer v0.1.0 tag (June 28, 2013)",
+        "url": "https://github.com/hashicorp/packer/tree/v0.1.0"
+      },
+      {
+        "label": "HashiCorp blog: HashiCorp Packer 1.0 (April 2017)",
+        "url": "https://www.hashicorp.com/en/blog/packer-1-0"
+      },
+      {
+        "label": "Packer CHANGELOG (1.0.0, 1.5.0 HCL2 beta, 1.7.0 packer init, 1.10.0)",
+        "url": "https://github.com/hashicorp/packer/blob/main/CHANGELOG.md"
+      },
+      {
+        "label": "HashiCorp blog: HCP Packer is now generally available (March 2022)",
+        "url": "https://www.hashicorp.com/en/blog/hcp-packer-is-now-generally-available"
+      },
+      {
+        "label": "HashiCorp blog: Announcing the removal of bundled plugins in HashiCorp Packer (Sept 2023)",
+        "url": "https://www.hashicorp.com/en/blog/announcing-the-removal-of-bundled-plugins-in-hashicorp-packer"
+      },
+      {
+        "label": "HashiCorp blog: HashiCorp adopts Business Source License (Aug 2023)",
+        "url": "https://www.hashicorp.com/en/blog/hashicorp-adopts-business-source-license",
+        "archive": "https://web.archive.org/web/20250304013523/https://www.hashicorp.com/en/blog/hashicorp-adopts-business-source-license"
+      },
+      {
+        "label": "IBM: IBM completes acquisition of HashiCorp (Feb 2025)",
+        "url": "https://newsroom.ibm.com/2025-02-27-ibm-completes-acquisition-of-hashicorp,-creates-comprehensive,-end-to-end-hybrid-cloud-platform"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "Packer docs: Introduction to Packer",
+      "url": "https://developer.hashicorp.com/packer/docs/intro"
+    },
+    {
+      "label": "Packer docs: Why use Packer",
+      "url": "https://developer.hashicorp.com/packer/docs/intro/why"
+    },
+    {
+      "label": "Packer docs: Terminology (builders, provisioners, post-processors, data sources)",
+      "url": "https://developer.hashicorp.com/packer/docs/terminology"
+    },
+    {
+      "label": "Packer docs: Communicators (SSH and WinRM)",
+      "url": "https://developer.hashicorp.com/packer/docs/communicators"
+    },
+    {
+      "label": "Packer docs: Templates (HCL2 official since 1.7.0)",
+      "url": "https://developer.hashicorp.com/packer/docs/templates"
+    },
+    {
+      "label": "Packer docs: Builders overview",
+      "url": "https://developer.hashicorp.com/packer/docs/builders"
+    },
+    {
+      "label": "Packer docs: Plugin installation overview",
+      "url": "https://developer.hashicorp.com/packer/docs/plugins"
+    },
+    {
+      "label": "Packer docs: packer init command (JSON templates not supported)",
+      "url": "https://developer.hashicorp.com/packer/docs/commands/init"
+    },
+    {
+      "label": "Packer docs: hcp_packer_registry block",
+      "url": "https://developer.hashicorp.com/packer/docs/templates/hcl_templates/blocks/build/hcp_packer_registry"
+    },
+    {
+      "label": "Amazon plugin: amazon-ebs builder (temporary key pairs and security groups; does not manage AMIs)",
+      "url": "https://developer.hashicorp.com/packer/integrations/hashicorp/amazon/latest/components/builder/ebs"
+    },
+    {
+      "label": "Docker plugin: docker builder",
+      "url": "https://developer.hashicorp.com/packer/integrations/hashicorp/docker/latest/components/builder/docker"
+    },
+    {
+      "label": "Vagrant plugin: vagrant post-processor (how official Vagrant boxes are built)",
+      "url": "https://developer.hashicorp.com/packer/integrations/hashicorp/vagrant/latest/components/post-processor/vagrant"
+    },
+    {
+      "label": "GitHub: Packer v1.10.0 release notes (bundled plugins removed)",
+      "url": "https://github.com/hashicorp/packer/releases/tag/v1.10.0"
+    },
+    {
+      "label": "Packer LICENSE: BUSL 1.1 for version 1.10.0 and later, with production-use grant",
+      "url": "https://github.com/hashicorp/packer/blob/main/LICENSE"
+    },
+    {
+      "label": "HCP Packer docs: What is HCP Packer? (metadata, not artifacts; Essentials and Standard editions)",
+      "url": "https://developer.hashicorp.com/hcp/docs/packer"
+    },
+    {
+      "label": "HCP Packer docs: Create and manage channels",
+      "url": "https://developer.hashicorp.com/hcp/docs/packer/manage/channel"
+    },
+    {
+      "label": "HCP Packer docs: Revoke and restore artifact versions",
+      "url": "https://developer.hashicorp.com/hcp/docs/packer/manage/revoke-restore"
+    },
+    {
+      "label": "HCP Packer docs: Reference artifact metadata from Packer and Terraform",
+      "url": "https://developer.hashicorp.com/hcp/docs/packer/store/reference"
+    },
+    {
+      "label": "HCP docs: Pricing definitions (HCP Packer buckets and requests)",
+      "url": "https://developer.hashicorp.com/hcp/docs/hcp/admin/billing/pricing-definitions"
+    },
+    {
+      "label": "AWS docs: What is EC2 Image Builder?",
+      "url": "https://docs.aws.amazon.com/imagebuilder/latest/userguide/what-is-image-builder.html"
+    },
+    {
+      "label": "Microsoft Learn: Azure VM Image Builder overview (built on HashiCorp Packer)",
+      "url": "https://learn.microsoft.com/en-us/azure/virtual-machines/image-builder-overview"
+    },
+    {
+      "label": "IBM: IBM completes acquisition of HashiCorp",
+      "url": "https://newsroom.ibm.com/2025-02-27-ibm-completes-acquisition-of-hashicorp,-creates-comprehensive,-end-to-end-hybrid-cloud-platform"
+    }
+  ],
+  "checked": "2026-10-05"
+}

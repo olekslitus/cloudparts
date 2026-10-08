@@ -1,0 +1,156 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "QuestDB",
+  "concepts": ["tsdb"],
+  "provider": "oss",
+  "vendor": "QuestDB Inc.",
+  "license": "Apache 2.0 (open source; AGPLv3 from 2016 to 2019); QuestDB Enterprise is proprietary",
+  "website": "https://questdb.com/",
+  "repo": "https://github.com/questdb/questdb",
+  "summary": "A columnar time-series database in Java, C++ and Rust that ingests millions of rows a second and answers time-series SQL, with old partitions kept as Parquet.",
+  "intro": [
+    "QuestDB is one server process, written in garbage-free Java with C++ and Rust on the hot paths. Each table is a set of column files split into time partitions and physically sorted by one designated timestamp column. Clients write rows over QuestDB’s own binary protocol (QWP), the InfluxDB Line Protocol (ILP) or SQL over the PostgreSQL wire protocol. Rows land first in a write-ahead log (WAL) and are acknowledged; a background job then merges them into the partitions, sorting late rows into place and, if the table asks for it, replacing rows with the same keys. Queries run SQL with time-series extensions on a vectorized engine with JIT-compiled filters over memory-mapped files. Port 9000 also serves a REST API and a web console.",
+    "Storage has three tiers: the WAL, native column partitions, and Apache Parquet. In the open-source build you convert old partitions to Parquet with `ALTER TABLE`, or create a table in Parquet from the start. The open-source edition is Apache 2.0 and runs as a single instance with basic authentication. QuestDB Enterprise adds replication with read replicas and failover, role-based access control, TLS, SSO and automated backups, and converts cold partitions on a schedule and moves them to S3, Azure Blob or Google Cloud Storage, where they stay queryable. You run it yourself, or QuestDB operates it inside your AWS or Azure account (Bring Your Own Cloud). Enterprise prices aren’t published. Version 10.0 shipped in August 2026, alongside Enterprise 4.0."
+  ],
+  "strengths": [
+    "Time-series SQL: `SAMPLE BY` time buckets, `LATEST ON` for the newest row per key, and `ASOF JOIN` or `WINDOW JOIN` to line up trades with the quotes in force at the time",
+    "Built for heavy, messy ingest: out-of-order rows and deduplication are handled on write, and many clients can write to one table at once through the WAL",
+    "Existing tools work: Telegraf and other ILP senders write unchanged, and PostgreSQL drivers, Grafana and BI tools query over port 8812",
+    "Open formats: partitions can become Parquet files, and the Python client receives query results as Apache Arrow",
+    "Permissive Apache 2.0 licence, with finance-friendly types such as n-dimensional arrays, `DECIMAL` and nanosecond timestamps"
+  ],
+  "limits": [
+    "The open-source build is a single instance: replication, failover, TLS, RBAC and SSO are Enterprise only, and Enterprise prices are by quote",
+    "The designated timestamp and the partitioning scheme can’t be changed after a table is created; changing either means rebuilding the table",
+    "Writes are acknowledged once they are in the WAL and applied in the background, so freshly committed rows can take a moment to show up in queries",
+    "Parquet partitions can’t be updated, and late rows landing on one rewrite the whole partition; moving cold partitions to object storage automatically needs Enterprise",
+    "Headline numbers in the README (19 million rows a second, a TSBS table where QuestDB wins) come from QuestDB’s own benchmarks on hardware it chose"
+  ],
+  "worksWith": [
+    { "id": "telegraf", "how": "takes metrics via line protocol from" },
+    { "id": "kafka", "how": "ingests topics, via a connector, from" },
+    { "id": "flink", "how": "receives streams, via a sink connector, from" },
+    { "id": "grafana", "how": "is queried, through a plugin, by" },
+    { "id": "spark", "how": "is read and written over JDBC by" },
+    { "id": "parquet", "how": "can store old partitions as" },
+    { "id": "arrow", "how": "streams query results as" },
+    { "id": "s3", "how": "tiers cold partitions (Enterprise) to" },
+    { "id": "kubernetes", "how": "runs, with a Helm chart, on" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "A deduplicated trades table, OHLC bars, and Parquet for old data",
+    "source": [
+      "-- partitioned by day, written through the WAL; same timestamp + symbol = upsert",
+      "CREATE TABLE trades (",
+      "  timestamp TIMESTAMP,",
+      "  symbol    SYMBOL,",
+      "  price     DOUBLE,",
+      "  amount    DOUBLE",
+      ") TIMESTAMP(timestamp)",
+      "PARTITION BY DAY WAL",
+      "TTL 90 DAYS",
+      "DEDUP UPSERT KEYS (timestamp, symbol);",
+      "",
+      "-- 15-minute OHLC bars for today",
+      "SELECT timestamp, symbol,",
+      "  first(price) AS open, max(price) AS high,",
+      "  min(price) AS low, last(price) AS close,",
+      "  sum(amount) AS volume",
+      "FROM trades",
+      "WHERE symbol = 'EURUSD' AND timestamp IN '$today'",
+      "SAMPLE BY 15m;",
+      "",
+      "-- the newest row for every symbol",
+      "SELECT * FROM trades LATEST ON timestamp PARTITION BY symbol;",
+      "",
+      "-- keep partitions older than a week as Parquet files",
+      "ALTER TABLE trades CONVERT PARTITION TO PARQUET",
+      "WHERE timestamp < dateadd('d', -7, now());"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Open source or Enterprise",
+      "intro": "The same engine in both columns. Enterprise adds what a production deployment needs around it, under a commercial licence. Checked 2026-10-06; QuestDB doesn’t publish Enterprise prices.",
+      "corner": "Feature",
+      "columns": ["Open source", "Enterprise"],
+      "rows": [
+        { "label": "Who runs it", "values": ["You: binaries, containers or source", "You, or QuestDB inside your AWS or Azure account (BYOC)"] },
+        { "label": "Price", "values": ["Free, Apache 2.0", "By quote; free trial available"] },
+        { "label": "Instances", "values": ["One instance, no high availability", "Replication, read replicas, primary failover"] },
+        { "label": "Users and security", "values": ["Admin plus an optional read-only user; basic auth over unencrypted connections", "Unlimited users, groups and service accounts; RBAC down to columns; TLS; SSO via OAuth, OIDC or Entra ID"] },
+        { "label": "Storage", "values": ["Local disk; convert partitions to Parquet by hand", "Automatic Parquet conversion and tiering to S3, Azure Blob or GCS, queryable in place"] },
+        { "label": "Backups", "values": ["Manual full backups to local storage", "Automated incremental snapshots to object storage, point-in-time recovery"] },
+        { "label": "Support", "values": ["Community", "QuestDB engineers with response-time SLAs"] }
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Ways in and out",
+      "intro": "One server speaks several protocols, so you can keep the clients you have and move to the native one where speed matters.",
+      "items": [
+        { "name": "QuestDB Wire Protocol (QWP)", "tag": "port 9000", "text": "Binary and columnar, over WebSocket. One connection writes rows and streams query results back as columns; the Python client returns Apache Arrow. New in 10.0 and the recommended path for QuestDB’s own clients, which QuestDB measured at about 3.6 times faster than ILP for network ingestion." },
+        { "name": "InfluxDB Line Protocol (ILP)", "tag": "port 9000", "text": "The text format Telegraf and InfluxDB clients already send. Still fully supported in 10.0, so existing collectors can write without changes." },
+        { "name": "PostgreSQL wire protocol", "tag": "port 8812", "text": "Run queries from psycopg, JDBC, pgx, Grafana and BI tools. Inserts work too, but slower than QWP." },
+        { "name": "REST API and web console", "tag": "port 9000", "text": "HTTP queries for scripts and cURL, CSV import and export, and a browser console with a SQL editor, charts and notebooks." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Vlad Ilyushchenko spent years building low-latency trading systems. In 2012 an energy trading company hired him to rebuild its vessel-tracking system; the proposed database needed a week of downtime to load the data, and options such as OpenTSDB didn’t fit the data model. Peter Lawrey’s Java Chronicle library loaded the same data in two minutes using memory-mapped files, which showed him how fast garbage-free Java could be.",
+      "He started QuestDB as a side project in 2014, first released as NFSdb, and built it on nights and weekends while contracting for six years, rewriting the engine when the first design couldn’t keep readers and writers apart. The core code moved to AGPLv3 in 2016 and to Apache 2.0 in November 2019, the year he and Nicolas Hourcard founded the company.",
+      "A $2 million seed round in March 2020 and Y Combinator’s Summer 2020 batch followed, then a $12.5 million Series A in 2021. Version 6.0 began accepting out-of-order rows, 7.0 put a write-ahead log in front of the column store, and Enterprise added replication and tiering to object storage."
+    ],
+    "choices": [
+      { "choice": "Garbage-free Java over memory-mapped column files", "why": "The Chronicle experience showed memory-mapped files could load in minutes what a database took a week to ingest. Managing memory off-heap, instead of relying on libraries that create garbage, keeps the garbage collector from pausing queries and writes." },
+      { "choice": "One designated timestamp that orders every table", "why": "Time-series questions ask for time ranges. Storing rows physically sorted by one timestamp lets queries binary-search into a range and makes partitions, retention and deduplication cheap; the price is that it can’t be changed later." },
+      { "choice": "Speak protocols people already use", "why": "The PostgreSQL wire protocol arrived in 4.0 (2019) so existing drivers and BI tools could query it, and ILP lets collectors built for InfluxDB, such as Telegraf, write to it unchanged." },
+      { "choice": "A write-ahead log in front of the column store", "why": "Heavy out-of-order data slowed ingestion when rows went straight into sorted partitions. The WAL in 7.0 made ingest speed consistent, allowed concurrent writers, and became the basis for replication." }
+    ],
+    "timeline": [
+      { "year": "2014", "text": "First release, under the name NFSdb" },
+      { "year": "2016", "text": "Core code relicensed under AGPLv3" },
+      { "year": "2019", "text": "Company founded; 4.0 switches the licence to Apache 2.0" },
+      { "year": "2020", "text": "$2 million seed and Y Combinator’s Summer 2020 batch" },
+      { "year": "2021", "text": "6.0 accepts out-of-order rows; $12.5 million Series A" },
+      { "year": "2023", "text": "7.0 adds the write-ahead log, in beta" },
+      { "year": "2026", "text": "10.0 adds the QuestDB Wire Protocol and live views" }
+    ],
+    "sources": [
+      { "label": "QuestDB blog: My journey writing QuestDB, Vlad Ilyushchenko (Aug 2020)", "url": "https://questdb.com/blog/2020/08/06/my-journey-writing-questdb/" },
+      { "label": "QuestDB: About us (founders, side project from 2014, founded 2019)", "url": "https://questdb.com/about-us/" },
+      { "label": "QuestDB blog: Our two-year journey raising $15m of venture capital (Jan 2022)", "url": "https://questdb.com/blog/2022/01/03/two-year-journey-raising-15m-venture-capital/" },
+      { "label": "GitHub: QuestDB 1.0, first release of NFSdb (May 2014)", "url": "https://github.com/questdb/questdb/releases/tag/1.0" },
+      { "label": "GitHub: commit changing the licence to Apache 2.0 (Nov 2019)", "url": "https://github.com/questdb/questdb/commit/7560895ee400c82b0e5e39440eaf6c55bbbb7d7d" },
+      { "label": "GitHub: QuestDB 7.0.0 release notes, WAL beta (Feb 2023)", "url": "https://github.com/questdb/questdb/releases/tag/7.0.0" }
+    ]
+  },
+  "sources": [
+    { "label": "QuestDB README (architecture, protocols, ports, Enterprise, TSBS table)", "url": "https://github.com/questdb/questdb" },
+    { "label": "QuestDB LICENSE.txt (Apache 2.0)", "url": "https://github.com/questdb/questdb/blob/master/LICENSE.txt" },
+    { "label": "GitHub: commit moving core code to AGPLv3 (Apr 2016)", "url": "https://github.com/questdb/questdb/commit/d828c23fe5048d1aa55fd7ba8502301082919224" },
+    { "label": "QuestDB docs: Architecture", "url": "https://questdb.com/docs/architecture/questdb-architecture/" },
+    { "label": "QuestDB docs: Write-ahead log", "url": "https://questdb.com/docs/concepts/write-ahead-log/" },
+    { "label": "QuestDB docs: Designated timestamp", "url": "https://questdb.com/docs/concepts/designated-timestamp/" },
+    { "label": "QuestDB docs: CREATE TABLE (WAL, TTL, DEDUP UPSERT KEYS)", "url": "https://questdb.com/docs/query/sql/create-table/" },
+    { "label": "QuestDB docs: Parquet (conversion, limitations, Enterprise storage policies)", "url": "https://questdb.com/docs/concepts/parquet/" },
+    { "label": "QuestDB docs: InfluxDB Line Protocol overview", "url": "https://questdb.com/docs/connect/compatibility/ilp/overview/" },
+    { "label": "QuestDB: Enterprise (feature comparison with open source)", "url": "https://questdb.com/enterprise/" },
+    { "label": "QuestDB: Bring Your Own Cloud", "url": "https://questdb.com/byoc/" },
+    { "label": "QuestDB blog: QuestDB 10.0 release (QWP, live views, Parquet, Enterprise 4.0)", "url": "https://questdb.com/blog/questdb-10-release/" },
+    { "label": "GitHub: QuestDB 10.0.0 release (Aug 2026)", "url": "https://github.com/questdb/questdb/releases/tag/10.0.0" },
+    { "label": "QuestDB blog: 2025 year in review (arrays, TIMESTAMP_NS, DECIMAL, materialized views)", "url": "https://questdb.com/blog/questdb-2025-year-in-review/" },
+    { "label": "GitHub: QuestDB 6.0.0 release notes (out-of-order ingestion)", "url": "https://github.com/questdb/questdb/releases/tag/6.0.0" },
+    { "label": "GitHub: QuestDB 4.0.0 release notes (PostgreSQL wire protocol, beta)", "url": "https://github.com/questdb/questdb/releases/tag/4.0.0" },
+    { "label": "QuestDB docs: Kafka", "url": "https://questdb.com/docs/connect/message-brokers/kafka/" },
+    { "label": "QuestDB docs: Apache Flink sink connector", "url": "https://questdb.com/docs/connect/message-brokers/flink/" },
+    { "label": "QuestDB docs: Telegraf", "url": "https://questdb.com/docs/connect/message-brokers/telegraf/" },
+    { "label": "QuestDB docs: Grafana plugin", "url": "https://questdb.com/docs/integrations/visualization/grafana/" },
+    { "label": "QuestDB docs: Apache Spark (JDBC over PostgreSQL wire protocol)", "url": "https://questdb.com/docs/integrations/data-processing/spark/" },
+    { "label": "QuestDB docs: Kubernetes (Helm chart, Enterprise operator)", "url": "https://questdb.com/docs/deployment/kubernetes/" }
+  ],
+  "checked": "2026-10-06"
+}

@@ -1,0 +1,185 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Kaitai Struct",
+  "concepts": ["file-formats"],
+  "kinds": ["format-description"],
+  "provider": "oss",
+  "vendor": "Kaitai Project (community, funded in part by the NLnet Foundation)",
+  "license": "GPLv3+ (compiler, Web IDE and console visualizer); runtime libraries MIT, except JavaScript (Apache 2.0); each spec in the format gallery carries its own licence",
+  "website": "https://kaitai.io/",
+  "repo": "https://github.com/kaitai-io/kaitai_struct",
+  "summary": "A YAML language for describing binary formats that already exist, compiled into ready-to-use parsers for a dozen programming languages.",
+  "intro": [
+    "You describe a binary format in a `.ksy` file, which is YAML. `meta` names the format and its byte order. `seq` lists the fields in the order they sit in the bytes, each with a type such as `u4` (a 4-byte unsigned integer) or `str`, and a size that can be an expression over earlier fields. `types` defines nested structures, `switch-on` picks a type from a tag field, `repeat` reads arrays until the end of the stream, a count or a condition, and `instances` describe fields at computed offsets that are parsed lazily, only when something asks for them. `process` can unpack zlib or undo XOR before parsing. The compiler, `kaitai-struct-compiler` (`ksc`), is written in Scala and runs on Java. It turns the spec into source code for C++, C#, Go, Java, JavaScript, Lua, Nim, Perl, PHP, Python, Ruby or Rust, plus Graphviz diagrams. The generated class reads fields with calls such as `_io.readU2be()` into a small runtime library for that language, and gives you typed accessors: `Gif.from_file(\"a.gif\").logical_screen.image_width`.",
+    "That is the opposite job to Protocol Buffers or Cap’n Proto. Those start from data in your program and define their own wire format; Kaitai Struct starts from bytes someone else designed (a GIF, a ZIP archive, an ELF binary, a game save, a device protocol) and describes them as they are. So it shows up in reverse engineering, forensics and digital preservation, and inside tools such as mitmproxy, Kismet and OWASP ZAP. The format gallery holds 189 ready specs, from PNG and SQLite to pcap and ext2. The Web IDE at ide.kaitai.io runs the compiler’s JavaScript build in your browser and shows a hex dump next to the parsed tree; your files stay in browser storage. Everything is free: there is no company or paid edition, and the compiler is GPLv3+ while the runtimes your product ships with are MIT or Apache 2.0."
+  ],
+  "strengths": [
+    "Describe a format once and get parsers for 12 languages, with generated code that reads like hand-written code",
+    "189 ready specs in the format gallery (archives, executables, file systems, images, network packets, databases), each with docs, a diagram and generated parsers",
+    "The browser-based Web IDE links each parsed field to its bytes in a hex view, and since 2024 shows the partial tree up to the point where parsing failed",
+    "Handles messy real-world formats: offsets computed from earlier fields, lazy `instances`, tagged unions with `switch-on`, bit-sized integers, imports between specs and zlib or XOR preprocessing",
+    "Runtime libraries are small and permissively licensed (MIT, Apache 2.0 for JavaScript), so a generated parser can ship inside closed-source software"
+  ],
+  "limits": [
+    "Mostly read-only: writing (serialization) arrived only in 0.11, in September 2025, and only for Java and Python; every other language can parse but not write",
+    "Still at version 0.x after ten years, with years between releases (0.10 in 2022, 0.11 in 2025) and breaking changes in 0.11 for Java and JavaScript users",
+    "Language support is uneven: Go and Nim are marked entry-level, Rust first shipped in 0.11, and Swift is still a work in progress",
+    "It builds the whole object tree, then you use it; the FAQ points to event-based parsers for streams you need to act on chunk by chunk",
+    "The command-line compiler needs Java (8 or later, 21 recommended); the npm build has only a programmatic API"
+  ],
+  "worksWith": [
+    { "id": "sqlite", "how": "ships a parser for the file format of" },
+    { "id": "protobuf", "how": "can parse raw wire-format messages of" }
+  ],
+  "snippet": {
+    "lang": "yaml",
+    "title": "png_chunks.ksy: the PNG signature, its chunks and the IHDR header",
+    "source": [
+      "meta:",
+      "  id: png_chunks",
+      "  file-extension: png",
+      "  endian: be                      # PNG stores integers big-endian",
+      "seq:",
+      "  - id: magic",
+      "    contents: [0x89, \"PNG\", 0x0d, 0x0a, 0x1a, 0x0a]   # parsing fails if these bytes differ",
+      "  - id: chunks",
+      "    type: chunk",
+      "    repeat: until",
+      "    repeat-until: _.type == \"IEND\" or _io.eof",
+      "types:",
+      "  chunk:",
+      "    seq:",
+      "      - id: len",
+      "        type: u4",
+      "      - id: type",
+      "        type: str",
+      "        size: 4",
+      "        encoding: ASCII",
+      "      - id: body",
+      "        size: len                   # the size comes from the field just read",
+      "        type:",
+      "          switch-on: type",
+      "          cases:",
+      "            '\"IHDR\"': ihdr          # other chunk types stay raw bytes",
+      "      - id: crc",
+      "        size: 4",
+      "  ihdr:",
+      "    seq:",
+      "      - id: width",
+      "        type: u4",
+      "      - id: height",
+      "        type: u4",
+      "      - id: bit_depth",
+      "        type: u1",
+      "      - id: color_type",
+      "        type: u1",
+      "        enum: color_type",
+      "      - id: compression_method",
+      "        type: u1",
+      "      - id: filter_method",
+      "        type: u1",
+      "      - id: interlace_method",
+      "        type: u1",
+      "enums:",
+      "  color_type:",
+      "    0: greyscale",
+      "    2: truecolor",
+      "    3: indexed",
+      "    4: greyscale_alpha",
+      "    6: truecolor_alpha"
+    ]
+  },
+  "sections": [
+    {
+      "type": "code",
+      "title": "Compile the spec and parse a file",
+      "intro": "The same `.ksy` compiles to any supported language. Here it becomes a Python module; the runtime library is a separate small package.",
+      "lang": "bash",
+      "source": [
+        "brew install kaitai-struct-compiler        # or the .deb, .msi or universal .zip; needs Java",
+        "kaitai-struct-compiler -t python png_chunks.ksy   # writes png_chunks.py",
+        "kaitai-struct-compiler -t graphviz png_chunks.ksy # writes a .dot diagram of the format",
+        "pip install kaitaistruct                   # the Python runtime (MIT)",
+        "",
+        "python3 - <<'EOF'",
+        "from png_chunks import PngChunks",
+        "png = PngChunks.from_file(\"image.png\")",
+        "ihdr = png.chunks[0].body",
+        "print(ihdr.width, ihdr.height, ihdr.color_type.name)  # 3 2 truecolor_alpha",
+        "print([c.type for c in png.chunks])                   # ['IHDR', 'IDAT', 'IEND']",
+        "EOF"
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Kaitai Struct, Protocol Buffers or Cap’n Proto?",
+      "intro": "All three compile a schema into code, but they solve opposite problems. Kaitai Struct’s FAQ puts it as “have binary protocol, need data in memory” versus “have data in memory, need binary protocol”.",
+      "corner": "",
+      "columns": ["Kaitai Struct", "Protocol Buffers", "Cap’n Proto"],
+      "rows": [
+        { "label": "Starting point", "values": ["Bytes in a format someone else designed", "Messages you define in a `.proto` file", "Structs you define in a `.capnp` file"] },
+        { "label": "Who decides the bytes", "values": ["The format’s author; the spec describes them as they are", "Protobuf’s own encoding: field numbers and varints", "Cap’n Proto’s own layout: 8-byte words and pointers"] },
+        { "label": "Writing", "values": ["Java and Python only, since 0.11", "Every supported language", "Every supported language"] },
+        { "label": "Schema evolution", "values": ["None built in: you describe each version, e.g. with `switch-on`", "Rules for adding and reserving field numbers", "Rules for adding fields at the end of a struct"] },
+        { "label": "Typical use", "values": ["Reverse engineering, forensics, reading legacy and media files", "RPC payloads, events, telemetry", "Zero-copy messages and RPC"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Anyone who reads binary files they didn’t design ends up writing the same code again and again: read four bytes, check the magic number, branch on a type field, jump to an offset. Advanced hex editors such as 010 Editor have template languages for describing such structures, but a template only drives that one editor. The code still has to be rewritten for every program and language that needs it.",
+      "Mikhail Yakshin made the first commit to the Kaitai Struct compiler in February 2016, a “semi-working first POC” written in Scala. Releases came quickly that year: C# in 0.4, then PHP, Perl and Graphviz diagrams in 0.5, along with a debug mode that made the Web IDE possible. Lua and Go followed in 0.8 in 2018, and the project began working with Construct, the Python library its FAQ calls its closest analogue.",
+      "After that, releases slowed to one every two or three years, with Yakshin and Petr Pučil the most active committers. NLnet Foundation money paid for the 2024 Web IDE improvements and much of 0.11 in September 2025, which finally added writing, for Java and Python, and a Rust target."
+    ],
+    "choices": [
+      { "choice": "Compile specs into source code instead of interpreting them", "why": "Unlike per-editor templates, a compiled `.ksy` becomes ordinary code in your own project, readable and about as fast as a parser written by hand." },
+      { "choice": "Write the compiler in Scala", "why": "Scala compiles for the JVM and for JavaScript, so the same compiler runs as a desktop tool and inside the browser-based Web IDE." },
+      { "choice": "Parse into an object tree, with lazy instances", "why": "Most programs want to parse a file and then use it through an API. Lazy `instances` let a spec point at data elsewhere in the file without reading it until it is needed." },
+      { "choice": "Reading first, writing much later", "why": "Writing a format back out is a far bigger change than reading it, so the project shipped parsing for years and added serialization for two languages only in 0.11." }
+    ],
+    "timeline": [
+      { "year": "2016", "text": "First compiler commit in February; 0.4 adds C#; 0.5 adds PHP, Perl, Graphviz" },
+      { "year": "2017", "text": "0.7 lets `.ksy` files import types from each other" },
+      { "year": "2018", "text": "0.8 adds Lua and early Go; collaboration with Construct begins" },
+      { "year": "2020", "text": "0.9 adds a C++11 target and Nim" },
+      { "year": "2024", "text": "NLnet-funded Web IDE shows partial results when parsing fails" },
+      { "year": "2025", "text": "0.11 adds writing for Java and Python, and a Rust target" }
+    ],
+    "sources": [
+      { "label": "Kaitai Struct compiler: first commit, “Initial import: semi-working first POC” (Feb 2016)", "url": "https://github.com/kaitai-io/kaitai_struct_compiler/commit/63f83afbff8f4afde3bebb47aa2774224b204bf6" },
+      { "label": "Kaitai Struct v0.4 released (Aug 2016)", "url": "https://kaitai.io/news/2016/08/09/kaitai-struct-v0.4-released.html" },
+      { "label": "Kaitai Struct v0.5 released (Nov 2016)", "url": "https://kaitai.io/news/2016/11/09/kaitai-struct-v0.5-released.html" },
+      { "label": "Kaitai Struct v0.7 released (Mar 2017)", "url": "https://kaitai.io/news/2017/03/22/kaitai-struct-v0.7-released.html" },
+      { "label": "Kaitai Struct v0.8 released (Feb 2018)", "url": "https://kaitai.io/news/2018/02/05/kaitai-struct-v0.8-released.html" },
+      { "label": "Kaitai Struct v0.9 released (Oct 2020)", "url": "https://kaitai.io/news/2020/10/16/kaitai-struct-v0.9-released.html" },
+      { "label": "Kaitai Struct: Web IDE improvements (Feb 2024)", "url": "https://kaitai.io/news/2024/02/21/web-ide-improvements.html" },
+      { "label": "Kaitai Struct v0.11 released (Sep 2025)", "url": "https://kaitai.io/news/2025/09/07/kaitai-struct-v0.11-released.html" },
+      { "label": "Kaitai Struct FAQ (comparisons with 010 Editor, Construct, Protobuf)", "url": "https://doc.kaitai.io/faq.html" },
+      { "label": "GitHub: kaitai_struct_compiler contributors", "url": "https://github.com/kaitai-io/kaitai_struct_compiler/graphs/contributors" }
+    ]
+  },
+  "sources": [
+    { "label": "Kaitai Struct home page (languages, licensing, projects using it, Java requirement)", "url": "https://kaitai.io/" },
+    { "label": "Kaitai Struct User Guide", "url": "https://doc.kaitai.io/user_guide.html" },
+    { "label": "Kaitai Struct FAQ", "url": "https://doc.kaitai.io/faq.html" },
+    { "label": "Kaitai Struct v0.11 released (serialization, Rust, breaking changes)", "url": "https://kaitai.io/news/2025/09/07/kaitai-struct-v0.11-released.html" },
+    { "label": "Kaitai Struct v0.10 released (Jul 2022)", "url": "https://kaitai.io/news/2022/07/08/kaitai-struct-v0.10-released.html" },
+    { "label": "Kaitai Struct: Web IDE improvements (Feb 2024)", "url": "https://kaitai.io/news/2024/02/21/web-ide-improvements.html" },
+    { "label": "Kaitai Struct Format Gallery", "url": "https://formats.kaitai.io/" },
+    { "label": "kaitai_struct_formats on GitHub (189 specs; per-file licences)", "url": "https://github.com/kaitai-io/kaitai_struct_formats" },
+    { "label": "kaitai_struct_formats: png.ksy", "url": "https://github.com/kaitai-io/kaitai_struct_formats/blob/master/image/png.ksy" },
+    { "label": "kaitai_struct_formats: sqlite3.ksy", "url": "https://github.com/kaitai-io/kaitai_struct_formats/blob/master/database/sqlite3.ksy" },
+    { "label": "kaitai_struct_formats: google_protobuf.ksy", "url": "https://github.com/kaitai-io/kaitai_struct_formats/blob/master/serialization/google_protobuf.ksy" },
+    { "label": "Kaitai Struct compiler on GitHub (GPLv3+, Scala)", "url": "https://github.com/kaitai-io/kaitai_struct_compiler" },
+    { "label": "Kaitai Struct compiler: command-line options (JavaMain.scala)", "url": "https://github.com/kaitai-io/kaitai_struct_compiler/blob/master/jvm/src/main/scala/io/kaitai/struct/JavaMain.scala" },
+    { "label": "Kaitai Struct compiler: JavaScript build README (Scala.js, used by the Web IDE, programmatic API only)", "url": "https://github.com/kaitai-io/kaitai_struct_compiler/blob/master/js/README.md" },
+    { "label": "Kaitai Struct compiler releases", "url": "https://github.com/kaitai-io/kaitai_struct_compiler/releases" },
+    { "label": "Kaitai Struct Web IDE: Features (files kept in browser storage)", "url": "https://github.com/kaitai-io/kaitai_struct_webide/wiki/Features" },
+    { "label": "Kaitai Struct Web IDE on GitHub (GPLv3)", "url": "https://github.com/kaitai-io/kaitai_struct_webide" },
+    { "label": "Kaitai Struct console visualizer ksv on GitHub (GPLv3)", "url": "https://github.com/kaitai-io/kaitai_struct_visualizer" },
+    { "label": "Kaitai Struct JavaScript runtime on GitHub (Apache 2.0)", "url": "https://github.com/kaitai-io/kaitai_struct_javascript_runtime" },
+    { "label": "Kaitai Struct Python runtime on GitHub (MIT)", "url": "https://github.com/kaitai-io/kaitai_struct_python_runtime" },
+    { "label": "PyPI: kaitaistruct", "url": "https://pypi.org/project/kaitaistruct/" }
+  ],
+  "checked": "2026-10-06"
+}

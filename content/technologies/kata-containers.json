@@ -1,0 +1,103 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Kata Containers",
+  "concepts": ["microvm", "containers"],
+  "provider": "oss",
+  "vendor": "OpenInfra Foundation (part of the Linux Foundation since July 2025)",
+  "license": "Apache 2.0",
+  "website": "https://katacontainers.io/",
+  "repo": "https://github.com/kata-containers/kata-containers",
+  "summary": "A container runtime that starts each pod inside its own lightweight VM, so Kubernetes and Docker keep working but every pod gets its own kernel.",
+  "intro": [
+    "Kata Containers looks like an ordinary container runtime from the outside and runs a virtual machine on the inside. When containerd or CRI-O asks it to start a pod, Kata boots a small VM with its own Linux kernel, and an agent inside the VM (`kata-agent`) creates the pod’s containers there. All containers of one pod share that VM, so the hardware boundary sits between pods rather than between a container and its host. Kata implements containerd’s shim v2 API: one `containerd-shim-kata-v2` process per pod talks to the container manager over a socket, instead of the separate shim and proxy processes the 1.x design needed. In Kubernetes you register it as a `RuntimeClass` and set `runtimeClassName: kata` on the pods that should be isolated; everything else keeps the default runtime.",
+    "Kata doesn’t include one hypervisor; it drives several. QEMU is the best supported, and the one to use for NVIDIA GPUs and confidential computing (Intel TDX, AMD SEV-SNP). Cloud Hypervisor and Firecracker are smaller Rust monitors, and Dragonball, written by Ant Group, is built into the Rust shim process itself. Version 4.0 (July 2026) made that Rust runtime (`runtime-rs`) the default and deprecated the original Go runtime. Microsoft’s AKS Pod Sandboxing and Google’s GKE Sandbox microVMs both run Kata with Cloud Hypervisor. The project began in December 2017 as a merger of Intel Clear Containers and Hyper’s runV, under what is now the OpenInfra Foundation."
+  ],
+  "strengths": [
+    "A separate guest kernel per pod, while images, `kubectl` and container tooling stay the same",
+    "Pick the hypervisor per runtime class: QEMU for GPUs and confidential computing, Cloud Hypervisor, Firecracker or the built-in Dragonball for a small footprint",
+    "Privileged containers become safer: on GKE they get root only inside the pod’s VM, not on the node",
+    "Offered as a managed option by AKS (Pod Sandboxing) and GKE (Sandbox microVMs)"
+  ],
+  "limits": [
+    "Needs KVM: bare metal, or cloud VMs with nested virtualisation (GKE microVMs run only on node types that support it)",
+    "A fixed cost per pod: GKE documents 250 mCPU and 130 MiB of overhead and about one to two seconds to start, against under 200 ms for gVisor",
+    "Some container features don’t cross the VM boundary: no host networking, no Kubernetes `subPath` volume mounts, and Kata’s docs list Podman as unsupported",
+    "Each hypervisor has its own gaps: GPUs and TDX/SEV-SNP only with QEMU, and Firecracker needs a block-device storage driver (containerd’s devmapper snapshotter)"
+  ],
+  "worksWith": [
+    { "id": "kubernetes", "how": "runs each pod in its own VM for" },
+    { "id": "firecracker", "how": "can boot its pod VMs with" },
+    { "id": "docker", "how": "plugs in as a runtime for" }
+  ],
+  "snippet": {
+    "lang": "yaml",
+    "title": "Register Kata as a RuntimeClass and opt one pod in",
+    "source": [
+      "apiVersion: node.k8s.io/v1",
+      "kind: RuntimeClass",
+      "metadata:",
+      "  name: kata",
+      "handler: kata          # the runtime name in containerd's config",
+      "---",
+      "apiVersion: v1",
+      "kind: Pod",
+      "metadata:",
+      "  name: nginx-kata",
+      "spec:",
+      "  runtimeClassName: kata   # this pod gets its own VM and kernel",
+      "  containers:",
+      "    - name: nginx",
+      "      image: nginx"
+    ]
+  },
+  "history": {
+    "story": [
+      "By 2017 two projects were running containers inside small virtual machines to get a hardware boundary without giving up container workflows: Intel’s Clear Containers and Hyper’s runV. JD.com already sold a container service built on runV. On December 5, 2017 the OpenStack Foundation announced Kata Containers, which combined the two code bases under open governance. Intel contributed Clear Containers, Hyper contributed runV, and companies including Google, Huawei, Red Hat, Canonical and SUSE backed the launch. The name is meant to suggest a Greek word for “trust something to someone”.",
+      "The first design had six parts: an agent, a runtime, a proxy, a shim, a guest kernel and a QEMU 2.9 package. Version 1.0 shipped in May 2018, and 1.5 (January 2019) added Firecracker as a hypervisor and a new way to integrate with containerd. Kata 2.0 (October 2020) rewrote the in-VM agent in Rust and kept only the containerd shim v2 interface, dropping the per-container shim and proxy processes.",
+      "Kata 3.0 (October 2022) added a runtime written in Rust with an optional built-in VMM, Dragonball. In 2025 the foundation behind Kata, by then called the Open Infrastructure Foundation, became part of the Linux Foundation. Kata 4.0 (July 2026) made the Rust runtime the default and deprecated the Go one."
+    ],
+    "choices": [
+      { "choice": "One VM per pod, not per container", "why": "Containers in a Kubernetes pod already share network and storage, so the pod is the natural unit to wall off. Kata represents a pod as a VM and runs its containers inside it." },
+      { "choice": "Speak the existing container interfaces", "why": "From the start Kata targeted the OCI runtime spec and Kubernetes’ CRI, so containerd, CRI-O and Docker could use it without new tooling. Users switch per pod with a `RuntimeClass` instead of adopting a new platform." },
+      { "choice": "Hypervisor-agnostic", "why": "No single monitor fits every workload: QEMU emulates the devices GPUs and confidential computing need, while Firecracker and Cloud Hypervisor trade features for size. Kata configures each runtime class for one hypervisor and lets operators choose." },
+      { "choice": "A single shim v2 process per pod", "why": "The 1.x design called the runtime binary repeatedly and needed a shim per container plus a proxy, which was slow and made it hard to track state. With containerd’s shim v2 API one long-lived process serves the whole pod over a gRPC socket." }
+    ],
+    "timeline": [
+      { "year": "2017", "text": "Announced December 5, merging Intel Clear Containers and Hyper runV" },
+      { "year": "2018", "text": "Kata Containers 1.0 released in May" },
+      { "year": "2019", "text": "1.5 adds Firecracker as a hypervisor" },
+      { "year": "2020", "text": "2.0: Rust agent, shim v2 only, virtio-fs by default" },
+      { "year": "2022", "text": "3.0 adds a Rust runtime and the built-in Dragonball VMM" },
+      { "year": "2025", "text": "The OpenInfra Foundation joins the Linux Foundation" },
+      { "year": "2026", "text": "4.0 makes the Rust runtime the default" }
+    ],
+    "sources": [
+      { "label": "OpenStack Foundation: Kata Containers project launches (Dec 2017)", "url": "https://www.openstack.org/news/view/365/kata-containers-project-launches-to-build-secure-container-infrastructure", "archive": "https://web.archive.org/web/20250814203554/https://www.openstack.org/news/view/365/kata-containers-project-launches-to-build-secure-container-infrastructure" },
+      { "label": "Kata Containers runtime 1.0.0 release on GitHub (May 2018)", "url": "https://github.com/kata-containers/runtime/releases/tag/1.0.0" },
+      { "label": "Kata Containers runtime 1.5.0 release on GitHub: Firecracker support (Jan 2019)", "url": "https://github.com/kata-containers/runtime/releases/tag/1.5.0" },
+      { "label": "Kata Containers 2.0.0 release on GitHub (Oct 2020)", "url": "https://github.com/kata-containers/kata-containers/releases/tag/2.0.0" },
+      { "label": "Kata Containers 3.0.0 release on GitHub (Oct 2022)", "url": "https://github.com/kata-containers/kata-containers/releases/tag/3.0.0" },
+      { "label": "Kata Containers 4.0.0 release on GitHub (Jul 2026)", "url": "https://github.com/kata-containers/kata-containers/releases/tag/4.0.0" },
+      { "label": "Kata Containers docs: Architecture history (1.x vs shim v2)", "url": "https://github.com/kata-containers/kata-containers/blob/main/docs/design/architecture/history.md" },
+      { "label": "Kata Containers docs: Kubernetes support (a pod is a VM)", "url": "https://github.com/kata-containers/kata-containers/blob/main/docs/design/architecture/kubernetes.md" },
+      { "label": "Linux Foundation: OpenInfra Foundation board announces intent to join the Linux Foundation (Mar 2025)", "url": "https://www.linuxfoundation.org/press/open-infrastructure-foundation-board-announces-intent-to-join-the-linux-foundation" },
+      { "label": "OpenInfra blog: Inside Open Infrastructure, July 2025 (officially joined the Linux Foundation)", "url": "https://openinfra.org/blog/openinfra-newsletter-july-2025" }
+    ]
+  },
+  "sources": [
+    { "label": "Kata Containers: About (merger, hypervisors, OpenInfra stewardship, Apache 2 licence)", "url": "https://katacontainers.io/" },
+    { "label": "Kata Containers docs: Architecture (OCI, CRI, shim v2)", "url": "https://github.com/kata-containers/kata-containers/blob/main/docs/design/architecture/README.md" },
+    { "label": "Kata Containers docs: Kubernetes support (a pod is a VM)", "url": "https://github.com/kata-containers/kata-containers/blob/main/docs/design/architecture/kubernetes.md" },
+    { "label": "Kata Containers docs: Hypervisors (QEMU for GPUs, TDX and SEV-SNP; Dragonball by Ant Group)", "url": "https://github.com/kata-containers/kata-containers/blob/main/docs/hypervisors.md" },
+    { "label": "Kata Containers docs: runtime-rs README (supported hypervisors, built-in Dragonball)", "url": "https://github.com/kata-containers/kata-containers/blob/main/src/runtime-rs/README.md" },
+    { "label": "Kata Containers docs: Use Kubernetes with containerd and Kata (RuntimeClass)", "url": "https://github.com/kata-containers/kata-containers/blob/main/docs/how-to/how-to-use-k8s-with-containerd-and-kata.md" },
+    { "label": "Kata Containers docs: Configure Kata Containers to use Firecracker (devmapper snapshotter)", "url": "https://github.com/kata-containers/kata-containers/blob/main/docs/how-to/how-to-use-kata-containers-with-firecracker.md" },
+    { "label": "Kata Containers docs: Limitations (host network, subPath, Podman, Docker since 22.06)", "url": "https://github.com/kata-containers/kata-containers/blob/main/docs/Limitations.md" },
+    { "label": "Kata Containers 4.0.0 release notes: runtime-rs default, Go runtime deprecated (Jul 2026)", "url": "https://github.com/kata-containers/kata-containers/releases/tag/4.0.0" },
+    { "label": "Kubernetes docs: Runtime Class", "url": "https://kubernetes.io/docs/concepts/containers/runtime-class/" },
+    { "label": "GKE docs: About GKE Sandbox (gVisor vs Kata microVMs: overhead, start time, nested virtualisation)", "url": "https://docs.cloud.google.com/kubernetes-engine/docs/concepts/sandbox-pods" },
+    { "label": "AKS docs: Pod Sandboxing with Kata Containers (Cloud Hypervisor, kata-vm-isolation)", "url": "https://learn.microsoft.com/en-us/azure/aks/use-pod-sandboxing" },
+    { "label": "OpenInfra Foundation: part of the Linux Foundation", "url": "https://openinfra.org/" }
+  ],
+  "checked": "2026-10-06"
+}

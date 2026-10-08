@@ -1,0 +1,202 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "IoT device messaging",
+  "category": "messaging",
+  "order": 70,
+  "summary": "A broker that keeps a connection open to every device in a fleet, knows who each one is, and copes with devices that keep dropping offline.",
+  "howItWorks": "Each device keeps one long-lived connection to a broker, usually MQTT over TLS on port 8883, or over WebSockets on port 443 where firewalls block anything else. Because the device dials out, the cloud can reach it behind NAT. The device proves who it is with its own X.509 client certificate or a token, and the broker checks a policy that says which topics that identity may use, typically only its own, such as `devices/pump-7/#`. Telemetry goes up as small messages on topics; commands come down on topics the device subscribes to. Each message has a quality of service: QoS 0 is sent once and may be lost, QoS 1 is resent until acknowledged and may arrive twice, and QoS 2 adds a handshake for exactly once, though AWS IoT Core, Azure IoT Hub and Event Grid stop at QoS 1. Devices on cellular or satellite links drop off all the time, so MQTT has tools for that. A persistent session keeps an offline device’s subscriptions and queues its QoS 1 messages until it returns. A retained message is the last value on a topic, handed to anyone who subscribes later. A last will is a message the device registers when it connects, which the broker publishes if the connection dies without a clean goodbye. Platforms add a device shadow or twin: a JSON document in the cloud with the state the device last reported and the state an app wants, so apps can read and change a device that is asleep. A rules engine subscribes to topics and forwards matching messages, filtered with SQL, into queues, streams, databases and functions. On the device, client libraries can hold outgoing QoS 1 messages in memory while the link is down and send them after reconnecting.",
+  "analogy": "A harbour master’s radio desk for a fishing fleet. Every boat has its own call sign, checks in on the radio, and reports its catch on its own channel. Messages for a boat that’s out of range wait on the desk until it calls in again, a board shows each boat’s last known position to anyone who walks in, and if a boat goes silent without signing off, the desk raises the alarm.",
+  "useWhen": [
+    "Thousands or millions of small devices sending telemetry over cellular, satellite or patchy Wi-Fi",
+    "Sending commands or configuration to devices that are often asleep or out of coverage",
+    "Knowing which devices are online, from last wills and connect and disconnect events",
+    "Each device needs its own identity that can be revoked when it is stolen or retired"
+  ],
+  "avoidWhen": [
+    "Servers talking to servers in one data centre; a queue, a stream or plain HTTP is simpler",
+    "Large files such as firmware images: brokers cap message size (IoT Hub at 256 KB), so send a link instead",
+    "Replaying history for analytics; a broker isn’t a log, so route device data into a stream",
+    "You need exactly-once delivery from a managed cloud broker; the big three stop at QoS 1, so make handlers idempotent"
+  ],
+  "example": "A water utility has 4,000 pumps on cellular modems. Each pump has its own certificate and may only publish to `devices/<its id>/telemetry` and subscribe to `devices/<its id>/commands`. Pressure readings go out every five seconds at QoS 0, since the next reading is never far behind. A rule sends readings above 80 psi to an alerting function and everything else to a time-series database. When an operator lowers a pump’s speed, the command goes out at QoS 1 to the pump’s persistent session, so a pump that is out of coverage gets it when it reconnects. Each pump’s last will publishes `offline` to its status topic, so the dashboard learns within one and a half keep-alive periods that a modem has died.",
+  "providers": {
+    "aws": "AWS IoT Core (MQTT 3.1.1 and 5, QoS 0 and 1, Device Shadow, rules engine)",
+    "gcp": "No managed broker: Cloud IoT Core was retired on 16 August 2023. Google points to partner IoT platforms (such as ClearBlade, EMQ and KORE), a self-run MQTT broker on GKE or Compute Engine, or devices publishing straight to Pub/Sub",
+    "azure": "IoT Hub (device twins, fixed topics, a subset of MQTT 3.1.1); Event Grid’s MQTT broker (MQTT 3.1.1 and 5, custom topics)",
+    "oss": "Eclipse Mosquitto (EPL/EDL), HiveMQ Community Edition (Apache 2.0), EMQX (Business Source License from 5.9), RabbitMQ’s MQTT plugin; Eclipse Zenoh for peer-to-peer and robotics"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "# A device on any MQTT 5 broker: certificate identity, last will, retained status,",
+      "# a persistent session for commands, and QoS 0 telemetry (paho-mqtt 2.x)",
+      "import json, time",
+      "import paho.mqtt.client as mqtt",
+      "from paho.mqtt.properties import Properties",
+      "from paho.mqtt.packettypes import PacketTypes",
+      "",
+      "DEVICE = \"pump-7\"",
+      "client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=DEVICE, protocol=mqtt.MQTTv5)",
+      "client.tls_set(ca_certs=\"ca.pem\", certfile=f\"{DEVICE}.crt\", keyfile=f\"{DEVICE}.key\")",
+      "# if the connection dies without a DISCONNECT, the broker publishes this for us",
+      "client.will_set(f\"devices/{DEVICE}/status\", \"offline\", qos=1, retain=True)",
+      "",
+      "def on_connect(client, userdata, flags, reason_code, properties):",
+      "    client.publish(f\"devices/{DEVICE}/status\", \"online\", qos=1, retain=True)",
+      "    client.subscribe(f\"devices/{DEVICE}/commands\", qos=1)",
+      "",
+      "def on_message(client, userdata, msg):",
+      "    print(\"command:\", msg.payload.decode())",
+      "",
+      "client.on_connect = on_connect",
+      "client.on_message = on_message",
+      "",
+      "props = Properties(PacketTypes.CONNECT)",
+      "props.SessionExpiryInterval = 24 * 3600  # broker keeps queued commands for a day",
+      "client.connect(\"broker.example.com\", 8883, keepalive=60, clean_start=False, properties=props)",
+      "client.loop_start()",
+      "",
+      "while True:",
+      "    reading = {\"psi\": 61.2, \"ts\": int(time.time())}",
+      "    client.publish(f\"devices/{DEVICE}/telemetry\", json.dumps(reading), qos=0)",
+      "    time.sleep(5)"
+    ]
+  },
+  "related": ["pubsub", "queue", "stream", "stream-processing"],
+  "diagram": {
+    "caption": "Sensors and trucks publish telemetry; the broker hands it to a rules engine that sends each kind to its own store. Commands for Pump 7 go into its persistent session, which holds them while the pump is offline and delivers them when it reconnects.",
+    "h": 290,
+    "nodes": [
+      {
+        "id": "sensors",
+        "x": 95,
+        "y": 55,
+        "label": "Sensors",
+        "sub": "telemetry · QoS 0",
+        "emit": { "every": 700, "jitter": 0.3, "color": 0, "type": "temp" },
+        "out": ["broker"]
+      },
+      {
+        "id": "trucks",
+        "x": 95,
+        "y": 145,
+        "label": "Trucks",
+        "sub": "location · QoS 1",
+        "emit": { "every": 1100, "jitter": 0.3, "color": 1, "type": "gps" },
+        "out": ["broker"]
+      },
+      {
+        "id": "ops",
+        "x": 95,
+        "y": 235,
+        "label": "Ops app",
+        "sub": "commands · QoS 1",
+        "emit": { "every": 1500, "jitter": 0.3, "color": 3, "type": "cmd" },
+        "out": ["broker"]
+      },
+      {
+        "id": "broker",
+        "x": 310,
+        "y": 145,
+        "label": "MQTT broker",
+        "sub": "a certificate per device",
+        "route": "type",
+        "rules": { "temp": ["rules"], "gps": ["rules"], "cmd": ["sess"] }
+      },
+      {
+        "id": "rules",
+        "x": 500,
+        "y": 80,
+        "label": "Rules engine",
+        "sub": "SQL on topics",
+        "route": "type",
+        "rules": { "temp": ["tsdb"], "gps": ["stream"] }
+      },
+      {
+        "id": "sess",
+        "x": 500,
+        "y": 225,
+        "kind": "queue",
+        "cap": 8,
+        "gap": 150,
+        "label": "Session: pump-7",
+        "sub": "persistent · holds QoS 1",
+        "out": ["pump"]
+      },
+      { "id": "tsdb", "x": 670, "y": 45, "label": "Time-series DB", "sub": "pressure readings", "mode": "sink", "concept": "tsdb" },
+      { "id": "stream", "x": 670, "y": 120, "label": "Stream", "sub": "truck locations", "mode": "sink", "concept": "stream" },
+      { "id": "pump", "x": 670, "y": 225, "label": "Pump 7", "sub": "subscribed to its commands", "mode": "sink" }
+    ],
+    "events": [{ "node": "pump", "at": 2500, "every": 11000, "dur": 4500, "text": "out of coverage", "back": "reconnected" }]
+  },
+  "history": {
+    "story": [
+      "Remote equipment was watched over costly links long before anyone said “IoT”. In 1999 Andy Stanford-Clark of IBM and Arlen Nipper of Arcom designed MQTT to monitor oil pipelines over satellite, where every byte cost money and batteries had to last. IBM used it internally for about ten years, published MQTT 3.1 royalty-free in 2010, and OASIS approved 3.1.1 as a standard in October 2014.",
+      "The clouds then built managed brokers around it. AWS IoT launched in beta in October 2015 with an MQTT broker, a rules engine that routed messages with SQL, and Thing Shadows: cloud copies of each device’s reported and desired state, so apps could work with devices that were offline. Azure IoT Hub offered device twins, and Google’s Cloud IoT Core entered public beta in September 2017 and became generally available in February 2018.",
+      "Not every attempt lasted. Google retired Cloud IoT Core on 16 August 2023 and pointed customers to partners such as ClearBlade and EMQ. Microsoft, which says IoT Hub isn’t a full-featured MQTT broker, made an MQTT 3.1.1 and 5 broker in Event Grid generally available in November 2023. Open-source brokers such as Mosquitto, EMQX and HiveMQ remain the way to run it yourself."
+    ],
+    "choices": [
+      {
+        "choice": "One identity per device",
+        "why": "A shared password means one stolen device exposes the fleet. A client certificate per device lets the broker limit each device to its own topics and revoke just that one."
+      },
+      {
+        "choice": "Keep each device’s state in the cloud",
+        "why": "Apps can’t wait for a sleeping device to answer. A shadow or twin stores the reported and desired state, and the device catches up on the difference when it reconnects."
+      },
+      {
+        "choice": "Route with rules, not custom consumers",
+        "why": "Writing a service that subscribes to every topic and forwards data is repetitive. AWS’s rules engine let a SQL `SELECT` on a topic send matching messages straight to DynamoDB, S3, Lambda or Kinesis."
+      },
+      {
+        "choice": "Build disconnection into the protocol",
+        "why": "Devices on poor links vanish without warning, so MQTT includes keep-alives, persistent sessions, retained messages and last wills rather than leaving each application to invent them."
+      }
+    ],
+    "timeline": [
+      { "year": "1999", "text": "MQTT designed to monitor oil pipelines over satellite" },
+      { "year": "2010", "text": "IBM publishes MQTT 3.1 royalty-free" },
+      { "year": "2014", "text": "OASIS approves MQTT 3.1.1 as a standard" },
+      { "year": "2015", "text": "AWS IoT launches with Thing Shadows and a rules engine" },
+      { "year": "2018", "text": "Google Cloud IoT Core becomes generally available" },
+      { "year": "2019", "text": "MQTT 5.0 becomes an OASIS Standard" },
+      { "year": "2023", "text": "Google retires Cloud IoT Core; Event Grid’s MQTT broker reaches GA" }
+    ],
+    "sources": [
+      { "label": "MQTT.org FAQ: who invented MQTT (1999)", "url": "https://mqtt.org/faq/" },
+      { "label": "HiveMQ: MQTT Essentials part 1 (oil pipelines over satellite, 3.1 royalty-free in 2010)", "url": "https://www.hivemq.com/blog/mqtt-essentials-part-1-introducing-mqtt/" },
+      { "label": "OASIS: MQTT Version 3.1.1 becomes an OASIS Standard (Oct 2014)", "url": "https://www.oasis-open.org/news/announcements/mqtt-version-3-1-1-becomes-an-oasis-standard/" },
+      { "label": "OASIS: MQTT Version 5.0 specification (OASIS Standard, 7 March 2019)", "url": "https://docs.oasis-open.org/mqtt/mqtt/v5.0/mqtt-v5.0.html" },
+      { "label": "AWS News Blog: AWS IoT, cloud services for connected devices (Oct 2015; Thing Shadows, rules engine)", "url": "https://aws.amazon.com/blogs/aws/aws-iot-cloud-services-for-connected-devices/" },
+      { "label": "Google Cloud: Cloud IoT Core release notes (beta Sept 2017, GA Feb 2018, retirement notice)", "url": "https://cloud.google.com/iot/docs/release-notes", "archive": "https://web.archive.org/web/20230119085529/https://cloud.google.com/iot/docs/release-notes" },
+      { "label": "Google Cloud: Cloud IoT Core product page (retired 16 August 2023; migration partners)", "url": "https://cloud.google.com/iot-core", "archive": "https://web.archive.org/web/20230601145100/https://cloud.google.com/iot-core" },
+      { "label": "Microsoft Learn: What’s new in Azure Event Grid (MQTT broker preview May 2023, GA Nov 2023)", "url": "https://learn.microsoft.com/en-us/azure/event-grid/whats-new" },
+      { "label": "Microsoft Learn: Communicate with an IoT hub using MQTT (IoT Hub isn’t a full-featured MQTT broker)", "url": "https://learn.microsoft.com/en-us/azure/iot/iot-mqtt-connect-to-iot-hub" }
+    ]
+  },
+  "sources": [
+    { "label": "AWS docs: What is AWS IoT? (MQTT, MQTT over WSS, HTTPS, LoRaWAN)", "url": "https://docs.aws.amazon.com/iot/latest/developerguide/what-is-aws-iot.html" },
+    { "label": "AWS docs: MQTT in AWS IoT Core (QoS 0 and 1, persistent sessions, retained messages, LWT, differences from the spec)", "url": "https://docs.aws.amazon.com/iot/latest/developerguide/mqtt.html" },
+    { "label": "AWS docs: AWS IoT Device Shadow service", "url": "https://docs.aws.amazon.com/iot/latest/developerguide/iot-device-shadows.html" },
+    { "label": "AWS docs: Rules for AWS IoT", "url": "https://docs.aws.amazon.com/iot/latest/developerguide/iot-rules.html" },
+    { "label": "AWS News Blog: AWS IoT launch (bidirectional messaging through NAT and firewalls)", "url": "https://aws.amazon.com/blogs/aws/aws-iot-cloud-services-for-connected-devices/" },
+    { "label": "Microsoft Learn: What is Azure IoT Hub? (identity registry, X.509 and SAS, routing)", "url": "https://learn.microsoft.com/en-us/azure/iot-hub/iot-concepts-and-iot-hub" },
+    { "label": "Microsoft Learn: Communicate with an IoT hub using MQTT (8883, WebSockets on 443, no QoS 2, retain not stored, 256 KB)", "url": "https://learn.microsoft.com/en-us/azure/iot/iot-mqtt-connect-to-iot-hub" },
+    { "label": "Microsoft Learn: Understand and use device twins in IoT Hub", "url": "https://learn.microsoft.com/en-us/azure/iot-hub/iot-hub-devguide-device-twins" },
+    { "label": "Microsoft Learn: Overview of the MQTT broker feature in Azure Event Grid", "url": "https://learn.microsoft.com/en-us/azure/event-grid/mqtt-overview" },
+    { "label": "Google Cloud Architecture Center: Connected device architectures on Google Cloud", "url": "https://docs.cloud.google.com/architecture/connected-devices" },
+    { "label": "Google Cloud Architecture Center: Standalone MQTT broker architecture", "url": "https://docs.cloud.google.com/architecture/connected-devices/mqtt-broker-architecture" },
+    { "label": "Google Cloud Architecture Center: IoT platform product architecture (device credentials, X.509, rules engines)", "url": "https://docs.cloud.google.com/architecture/connected-devices/iot-platform-product-architecture" },
+    { "label": "Google Cloud: Cloud IoT Core product page (retired 16 August 2023; migration partners)", "url": "https://cloud.google.com/iot-core", "archive": "https://web.archive.org/web/20230601145100/https://cloud.google.com/iot-core" },
+    { "label": "OASIS: MQTT Version 3.1.1 specification (QoS levels, Will Message, WebSocket transport)", "url": "https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/mqtt-v3.1.1.html" },
+    { "label": "OASIS: MQTT Version 5.0 specification (session expiry, Clean Start)", "url": "https://docs.oasis-open.org/mqtt/mqtt/v5.0/mqtt-v5.0.html" },
+    { "label": "MQTT.org FAQ: ports 1883 and 8883", "url": "https://mqtt.org/faq/" },
+    { "label": "aws-crt-python: MQTT 5 client operation queue behaviour while disconnected", "url": "https://github.com/awslabs/aws-crt-python/blob/main/awscrt/mqtt5.py" },
+    { "label": "Eclipse Paho MQTT Python client (2.x API)", "url": "https://github.com/eclipse-paho/paho.mqtt.python" },
+    { "label": "Eclipse Mosquitto: an open-source MQTT broker (EPL/EDL)", "url": "https://mosquitto.org/" },
+    { "label": "HiveMQ Community Edition repository (Apache 2.0)", "url": "https://github.com/hivemq/hivemq-community-edition" },
+    { "label": "EMQX LICENSE (Business Source License 1.1 for 5.9.0 and later)", "url": "https://github.com/emqx/emqx/blob/master/LICENSE" },
+    { "label": "RabbitMQ docs: MQTT plugin", "url": "https://www.rabbitmq.com/docs/mqtt" },
+    { "label": "Eclipse Zenoh: What is Zenoh?", "url": "https://zenoh.io/docs/overview/what-is-zenoh/" }
+  ]
+}

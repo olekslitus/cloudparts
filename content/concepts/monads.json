@@ -1,0 +1,290 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Monads",
+  "category": "code",
+  "order": 40,
+  "summary": "A wrapper type plus one rule for chaining steps, so the plumbing (missing values, errors, waiting, state) is written once instead of after every step.",
+  "howItWorks": "Many steps return more than a plain value: maybe nothing (`Option`), a value or an error (`Result`), a value later (a future), or several values (a list). Chaining such steps by hand means writing the same check after each one: is it null, did it fail, has it arrived? A monad moves that check into the type. It needs two operations. One wraps a plain value (`Some(x)`, `Ok(x)`, Haskell’s `return`). The other chains: given a wrapped value and a function from a plain value to a new wrapped value, it returns the next wrapped value. It is called `bind` or `>>=` in Haskell, `flatMap` in Java and JavaScript, `and_then` in Rust, `SelectMany` in C#. The chaining function is where the plumbing lives, written once: for `Option` it stops at the first empty step, for `Result` at the first error, for a list it runs the next step on every element and flattens the results. Three laws say that wrapping a value adds nothing and that it doesn’t matter how you group a chain, so steps can be refactored freely. Languages add sugar so chains read like ordinary code: Haskell’s `do` blocks, Rust’s `?`, C#’s query syntax. The name comes from category theory, but you can use one without knowing any.",
+  "analogy": "An assembly line with a reject chute. Each station does its job on the part; a part that fails a check drops into the chute, and the stations after it never see it. The chute is built into the conveyor once, not into every station.",
+  "useWhen": [
+    "Chains of steps where any step can fail or come back empty: parsing, validation, lookups",
+    "Replacing nested null checks or try/catch blocks with one straight chain",
+    "Libraries for async work, parsers or state, where one combinator (`flatMap`) works across many types"
+  ],
+  "avoidWhen": [
+    "Languages without the sugar, where hand-written `flatMap` pyramids read worse than early returns",
+    "Teaching a team through category theory; start from `Option` and `Result`",
+    "Generic code that assumes every `then` or `flatMap` obeys the laws; JavaScript promises don’t"
+  ],
+  "example": "Signing up a user takes three steps that can each fail: read the email from the request body, validate it, and insert it into the database, which refuses a duplicate. Each step returns `Ok(value)` or `Err(reason)`. In Rust each call ends with `?`, so the first `Err` returns from the function and later steps never run, and no error check is written between the lines. `signup(\"email=nope\")` returns `Err(BadEmail)` without touching the database.",
+  "snippet": {
+    "lang": "rust",
+    "source": [
+      "#[derive(Debug)]",
+      "enum SignupError { BadBody, BadEmail, Taken }",
+      "",
+      "fn parse(body: &str) -> Result<String, SignupError> {",
+      "    body.strip_prefix(\"email=\").map(str::to_owned).ok_or(SignupError::BadBody)",
+      "}",
+      "fn validate(email: String) -> Result<String, SignupError> {",
+      "    if email.contains('@') { Ok(email) } else { Err(SignupError::BadEmail) }",
+      "}",
+      "fn insert(email: String) -> Result<u64, SignupError> {",
+      "    if email == \"taken@example.com\" { Err(SignupError::Taken) } else { Ok(42) }",
+      "}",
+      "",
+      "// `?` unwraps an Ok, or returns the Err from signup right away",
+      "fn signup(body: &str) -> Result<u64, SignupError> {",
+      "    let email = parse(body)?;",
+      "    let email = validate(email)?;",
+      "    insert(email)",
+      "}",
+      "",
+      "// the same chain written with and_then, the flatMap of Result",
+      "fn signup_chained(body: &str) -> Result<u64, SignupError> {",
+      "    parse(body).and_then(validate).and_then(insert)",
+      "}",
+      "",
+      "fn main() {",
+      "    println!(\"{:?}\", signup(\"email=ada@example.com\"));   // Ok(42)",
+      "    println!(\"{:?}\", signup(\"email=nope\"));              // Err(BadEmail): insert never ran",
+      "    println!(\"{:?}\", signup_chained(\"name=ada\"));        // Err(BadBody)",
+      "}"
+    ]
+  },
+  "related": [
+    "functional",
+    "oop",
+    "event-loop"
+  ],
+  "sections": [
+    {
+      "type": "table",
+      "title": "Monads you may already use",
+      "intro": "Few languages say “monad”, but the pattern is everywhere under other names.",
+      "corner": "Type",
+      "columns": [
+        "Wraps",
+        "Chain with",
+        "Sugar",
+        "Plumbing it hides"
+      ],
+      "rows": [
+        {
+          "label": "Option, Optional, Maybe",
+          "values": [
+            "A value or nothing",
+            "Rust `and_then`, Java `Optional.flatMap`, Haskell `>>=`",
+            "Rust `?`, Haskell `do`",
+            "Stop at the first missing value"
+          ]
+        },
+        {
+          "label": "Result, Either",
+          "values": [
+            "A value or an error",
+            "Rust `and_then`, Haskell `>>=`",
+            "Rust `?`, Haskell `do`",
+            "Stop at the first error and carry it out"
+          ]
+        },
+        {
+          "label": "List, sequence",
+          "values": [
+            "Any number of values",
+            "JavaScript `flatMap`, C# `SelectMany`, Haskell `>>=`",
+            "C# query syntax (each extra `from`), Haskell `do`",
+            "Run the next step for every element and flatten"
+          ]
+        },
+        {
+          "label": "IO (Haskell)",
+          "values": [
+            "An action that will touch the outside world",
+            "`>>=`",
+            "`do`",
+            "Keeps effects in order and out of pure code"
+          ]
+        },
+        {
+          "label": "Promise (JavaScript)",
+          "values": [
+            "A value that will arrive later",
+            "`then`",
+            "`async` / `await`",
+            "Waiting; close to a monad, but not a lawful one"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "The laws, and why a Promise is only nearly a monad",
+      "body": [
+        "Haskell’s standard library states three laws. Left identity: wrapping a value and chaining a function is the same as calling the function (`return a >>= k` equals `k a`). Right identity: chaining the wrap function changes nothing. Associativity: chaining `f` then `g` is the same as chaining one function that does `f` then `g`. Together they mean you can extract or inline steps of a chain without changing what it does. Haskell does not check them; it trusts each type’s author.",
+        "JavaScript’s `then` behaves like both `map` and `flatMap`: if your callback returns a promise, or any object with a `then` method, the Promises/A+ resolution procedure adopts it instead of wrapping it. That is convenient (you never see a promise of a promise) but it breaks left identity. If `x` is an object with a `then` method, `Promise.resolve(x).then(f)` hands `f` whatever `x` resolves to, while `f(x)` gets `x` itself. In April 2013 a request to give the spec a strictly monadic interface was closed without being adopted. For everyday code this rarely matters; for libraries that treat all monads alike, it does."
+      ]
+    },
+    {
+      "type": "code",
+      "title": "Build one in TypeScript",
+      "intro": "A tiny `Result` with a `flatMap`. The check for failure is written once, in `flatMap`, and every step after a failure is skipped.",
+      "lang": "ts",
+      "source": [
+        "type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };",
+        "",
+        "const ok = <T>(value: T): Result<T, never> => ({ ok: true, value });",
+        "const err = <E>(error: E): Result<never, E> => ({ ok: false, error });",
+        "",
+        "// the whole trick: the \"did it fail?\" check is written once, here",
+        "const flatMap = <T, U, E>(r: Result<T, E>, f: (t: T) => Result<U, E>): Result<U, E> =>",
+        "  r.ok ? f(r.value) : r;",
+        "",
+        "const parseAge = (s: string): Result<number, string> =>",
+        "  /^\\d+$/.test(s) ? ok(Number(s)) : err(\"not a number\");",
+        "const adult = (n: number): Result<number, string> =>",
+        "  n >= 18 ? ok(n) : err(\"under 18\");",
+        "",
+        "console.log(flatMap(parseAge(\"42\"), adult)); // { ok: true, value: 42 }",
+        "console.log(flatMap(parseAge(\"x\"), adult));  // { ok: false, error: \"not a number\" }: adult never ran",
+        "console.log(flatMap(parseAge(\"12\"), adult)); // { ok: false, error: \"under 18\" }"
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Monads came into computing from semantics, not from programming practice. In 1989, at the LICS conference, Eugenio Moggi showed how monads from category theory could describe features of programming languages such as state and exceptions in one uniform way; the full version, “Notions of computation and monads”, appeared in 1991. His goal was a correct basis for proving programs equivalent across many “notions of computation”.",
+      "Philip Wadler saw that the same structure could organise ordinary functional programs. In “The essence of functional programming” (POPL 1992) and “Comprehending monads”, he used monads to hide the plumbing: a counter, error handling or other state threaded through a computation without being passed by hand at every call. This mattered to Haskell, a pure, lazy language whose input and output were awkward: Haskell 1.0 (1990) described I/O as streams of requests and responses, or as continuations. Simon Peyton Jones and Wadler’s “Imperative functional programming” (1993) showed monadic I/O working, and the Haskell 1.3 report of May 1996 adopted it, together with `do` notation.",
+      "Haskell’s `Monad` type class turned the idea into reusable code: functions like `sequence` are written once and work for every monad. From there the pattern spread under friendlier names. Java 8 (2014) shipped `Optional.flatMap`, C#’s LINQ query syntax translates nested `from` clauses into `SelectMany`, and Rust’s `Option` and `Result` offer `and_then` and the `?` operator. JavaScript went the other way: in 2013 the Promises/A+ community discussed and declined a strictly monadic design, keeping a `then` that unwraps anything promise-like."
+    ],
+    "choices": [
+      {
+        "choice": "Borrow a structure from category theory",
+        "why": "Moggi wanted one modular way to describe many notions of computation (state, exceptions, nondeterminism) instead of building a special semantics for each feature."
+      },
+      {
+        "choice": "Make it a type class",
+        "why": "With a `Monad` class, combinators like `sequence` are written once and work for every monad. Intellectual reuse became code reuse, and the need drove extensions to Haskell’s type classes."
+      },
+      {
+        "choice": "I/O as a value that describes an action",
+        "why": "A value of type `IO a` is a computation that, when performed, may do input and output and then deliver an `a`. That kept Haskell pure while giving it ordinary-looking I/O, replacing the stream and continuation designs."
+      },
+      {
+        "choice": "Laws by convention, not checked",
+        "why": "The compiler cannot verify the three laws, so Haskell trusts each instance’s author. In practice some types are used monadically even where the laws don’t hold."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "1989",
+        "text": "Moggi presents monads for describing computation at LICS"
+      },
+      {
+        "year": "1991",
+        "text": "Moggi’s “Notions of computation and monads” published"
+      },
+      {
+        "year": "1992",
+        "text": "Wadler’s “The essence of functional programming” applies monads to everyday programs"
+      },
+      {
+        "year": "1993",
+        "text": "Peyton Jones and Wadler’s “Imperative functional programming” shows monadic I/O"
+      },
+      {
+        "year": "1996",
+        "text": "Haskell 1.3 adopts monadic I/O and do notation"
+      },
+      {
+        "year": "2013",
+        "text": "Promises/A+ declines a strictly monadic promise design"
+      },
+      {
+        "year": "2014",
+        "text": "Java 8 ships Optional.flatMap"
+      }
+    ],
+    "sources": [
+      {
+        "label": "Hudak, Hughes, Peyton Jones and Wadler: A History of Haskell: Being Lazy With Class (HOPL III, 2007), sections 7.2 and 7.3",
+        "url": "https://www.research.ed.ac.uk/en/publications/a-history-of-haskell-being-lazy-with-class/"
+      },
+      {
+        "label": "Eugenio Moggi: Notions of computation and monads (Information and Computation, 1991)",
+        "url": "https://person.dibris.unige.it/moggi-eugenio/ftp/ic91.pdf",
+        "archive": "https://web.archive.org/web/20240112124506/https://person.dibris.unige.it/moggi-eugenio/ftp/ic91.pdf"
+      },
+      {
+        "label": "Philip Wadler: Monads (list of his papers: The essence of functional programming, POPL 1992; Monads for functional programming, 1992)",
+        "url": "https://homepages.inf.ed.ac.uk/wadler/topics/monads.html"
+      },
+      {
+        "label": "promises-aplus/promises-spec issue #94: Incorporate monads and category theory (Apr 2013, closed)",
+        "url": "https://github.com/promises-aplus/promises-spec/issues/94"
+      },
+      {
+        "label": "Java SE 21 API: Optional (flatMap; since 1.8)",
+        "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/Optional.html"
+      },
+      {
+        "label": "OpenJDK: JDK 8 (General Availability on 18 March 2014)",
+        "url": "https://openjdk.org/projects/jdk8/"
+      },
+      {
+        "label": "Microsoft Learn: Enumerable.SelectMany (each extra from clause translates to SelectMany)",
+        "url": "https://learn.microsoft.com/en-us/dotnet/api/system.linq.enumerable.selectmany"
+      },
+      {
+        "label": "The Rust Programming Language: Recoverable Errors with Result (the ? operator on Result and Option)",
+        "url": "https://doc.rust-lang.org/book/ch09-02-recoverable-errors-with-result.html"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "Haskell base library: Control.Monad (the three monad laws)",
+      "url": "https://hackage.haskell.org/package/base/docs/Control-Monad.html"
+    },
+    {
+      "label": "Haskell 2010 Report: Expressions, section 3.14 Do Expressions",
+      "url": "https://www.haskell.org/onlinereport/haskell2010/haskellch3.html"
+    },
+    {
+      "label": "Hudak, Hughes, Peyton Jones and Wadler: A History of Haskell: Being Lazy With Class (HOPL III, 2007), sections 7.2 and 7.3",
+      "url": "https://www.research.ed.ac.uk/en/publications/a-history-of-haskell-being-lazy-with-class/"
+    },
+    {
+      "label": "The Rust Programming Language: Recoverable Errors with Result (the ? operator on Result and Option)",
+      "url": "https://doc.rust-lang.org/book/ch09-02-recoverable-errors-with-result.html"
+    },
+    {
+      "label": "Rust std docs: Option::and_then (“Some languages call this operation flatmap”)",
+      "url": "https://doc.rust-lang.org/std/option/enum.Option.html#method.and_then"
+    },
+    {
+      "label": "Java SE 21 API: Optional (flatMap; since 1.8)",
+      "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/Optional.html"
+    },
+    {
+      "label": "Microsoft Learn: Enumerable.SelectMany (each extra from clause translates to SelectMany)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/api/system.linq.enumerable.selectmany"
+    },
+    {
+      "label": "MDN: Array.prototype.flatMap()",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/flatMap"
+    },
+    {
+      "label": "Promises/A+ specification: the Promise Resolution Procedure (thenables are adopted)",
+      "url": "https://promisesaplus.com/"
+    },
+    {
+      "label": "MDN: Promise.prototype.then() (thenables returned by handlers are always resolved)",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/then"
+    },
+    {
+      "label": "promises-aplus/promises-spec issue #94: Incorporate monads and category theory (Apr 2013, closed)",
+      "url": "https://github.com/promises-aplus/promises-spec/issues/94"
+    }
+  ]
+}

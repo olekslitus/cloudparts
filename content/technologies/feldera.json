@@ -1,0 +1,168 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Feldera",
+  "concepts": ["stream-processing"],
+  "provider": "oss",
+  "vendor": "Feldera, Inc.",
+  "license": "MIT for the open-source edition (the Rust crates are published as MIT OR Apache-2.0); since May 2026 the repository also contains Enterprise-only code, behind a `feldera-enterprise` feature flag, that needs a paid licence. The engine began at VMware Research, also under MIT",
+  "website": "https://www.feldera.com/",
+  "repo": "https://github.com/feldera/feldera",
+  "summary": "An incremental view maintenance engine in Rust: you write SQL tables and views, and it keeps every view up to date by processing only the changes, based on the award-winning DBSP theory.",
+  "intro": [
+    "A Feldera pipeline is a SQL program: `CREATE TABLE` statements are the inputs and `CREATE VIEW` statements the outputs, and views can build on views. Feldera’s compiler, written in Java on Apache Calcite, turns the program into a Rust program on DBSP (Database Stream Processor), compiles it and runs it as one process. Connectors attached to each table in a `WITH` clause feed it changes, meaning inserts and deletes (an update is both): Kafka topics, HTTP, Debezium or PostgreSQL CDC, Delta Lake, Iceberg, S3 files, Pub/Sub and others. DBSP represents each batch of changes as a Z-set, rows with a weight of +1 or -1, and computes exactly how every view changes, using indexes it keeps for joins and aggregates; that state can grow larger than memory and spill to disk. The result is the same as rerunning every query in a batch engine, but the work is proportional to the change, not to the data. View changes go out through sink connectors (Kafka, Delta Lake, PostgreSQL, Snowflake, Redis, DynamoDB); Iceberg output goes through Kafka Connect. Feldera keeps a view’s full contents only if it is declared `MATERIALIZED`, and those can be queried ad hoc through Apache DataFusion. `LATENESS` on a timestamp column tells it how late events may arrive, so it can drop state it will never need again.",
+    "The open-source edition, free under MIT, runs a pipeline on a single node in a single container, with full SQL and every connector. Feldera Enterprise runs in your Kubernetes cluster with one pod per pipeline and adds checkpoints, fault tolerance and disaster recovery, changing a running program without losing its state, multi-host pipelines (in preview), SSO and role-based access, at custom prices. The engine comes from VMware Research, where Mihai Budiu and Leonid Ryzhyk developed DBSP; their paper won a Best Paper award at VLDB 2023, the year they and three colleagues founded Feldera."
+  ],
+  "strengths": [
+    "Evaluates whole SQL programs incrementally, including joins, aggregates, correlated subqueries, window functions, recursive queries and stacks of views, with results that match a batch run on the same input",
+    "Work is proportional to the size of each change, so the same SQL can backfill history and then keep up with live data",
+    "Built on a peer-reviewed theory: DBSP won a VLDB 2023 Best Paper award, and its maths has been formalised in the Lean theorem prover",
+    "A single Rust process with state that can exceed memory, and connectors for Kafka, CDC, Delta Lake, Iceberg, warehouses and databases"
+  ],
+  "limits": [
+    "The free edition has no checkpoints or fault tolerance: after a crash or restart a pipeline must re-ingest its inputs, and changing a program while keeping its state is Enterprise-only too",
+    "Not a database: no transactions or concurrency control, views aren’t stored unless materialized, and applications usually read results from a sink",
+    "Every change to the SQL compiles a new Rust program before the pipeline can start; Enterprise offers parallel compilation to speed this up",
+    "Licensing is now mixed: the MIT core shares the repository with Enterprise code under Feldera’s terms (GitHub shows the licence as NOASSERTION), and Enterprise prices aren’t published",
+    "Some connectors are experimental, such as PostgreSQL CDC and Iceberg input, and recursive queries use Feldera’s own syntax rather than standard SQL"
+  ],
+  "worksWith": [
+    { "id": "kafka", "how": "reads inputs from and writes views to" },
+    { "id": "postgresql", "how": "reads CDC from and writes view changes to" },
+    { "id": "delta-lake", "how": "reads and writes tables in" },
+    { "id": "iceberg", "how": "reads tables (experimental) from" },
+    { "id": "s3", "how": "reads input files from" },
+    { "id": "snowflake", "how": "writes view changes to" },
+    { "id": "redis", "how": "writes view changes to" },
+    { "id": "datafusion", "how": "answers ad-hoc queries with" },
+    { "id": "kubernetes", "how": "runs each pipeline as a pod (Enterprise) on" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "A Feldera program: two input tables, a materialized join, and a view streamed to Kafka",
+    "source": [
+      "CREATE TABLE purchases (",
+      "  purchase_id BIGINT NOT NULL,",
+      "  customer_id BIGINT NOT NULL,",
+      "  amount DECIMAL(12, 2) NOT NULL,",
+      "  ts TIMESTAMP NOT NULL LATENESS INTERVAL 1 HOURS  -- at most an hour out of order",
+      ") WITH ('connectors' = '[{",
+      "  \"transport\": {",
+      "    \"name\": \"kafka_input\",",
+      "    \"config\": {\"bootstrap.servers\": \"kafka-1:9092\", \"topic\": \"purchases\", \"start_from\": \"earliest\"}",
+      "  },",
+      "  \"format\": {\"name\": \"json\", \"config\": {\"update_format\": \"insert_delete\", \"array\": false}}",
+      "}]');",
+      "",
+      "-- filled through the REST API, a file or a CDC connector",
+      "CREATE TABLE customers (",
+      "  customer_id BIGINT NOT NULL PRIMARY KEY,",
+      "  country VARCHAR NOT NULL",
+      ");",
+      "",
+      "-- kept up to date from changes only; a customer moving country updates both rows",
+      "CREATE MATERIALIZED VIEW revenue_by_country AS",
+      "SELECT c.country, COUNT(*) AS purchases, SUM(p.amount) AS revenue",
+      "FROM purchases p JOIN customers c ON p.customer_id = c.customer_id",
+      "GROUP BY c.country;",
+      "",
+      "-- each change to this view is sent to Kafka as an insert or a delete",
+      "CREATE VIEW big_spenders",
+      "WITH ('connectors' = '[{",
+      "  \"transport\": {\"name\": \"kafka_output\", \"config\": {\"bootstrap.servers\": \"kafka-1:9092\", \"topic\": \"big-spenders\"}},",
+      "  \"format\": {\"name\": \"json\", \"config\": {\"update_format\": \"insert_delete\", \"array\": false}}",
+      "}]')",
+      "AS SELECT customer_id, SUM(amount) AS total",
+      "FROM purchases",
+      "GROUP BY customer_id",
+      "HAVING SUM(amount) > 10000;"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Open-source and Enterprise editions",
+      "intro": "From Feldera’s pricing page and docs, checked 2026-10-06.",
+      "corner": "",
+      "columns": ["Open source (MIT)", "Enterprise"],
+      "rows": [
+        { "label": "Where it runs", "values": ["A single container on one node (Docker, or from source)", "Your Kubernetes cluster, cloud or on premises; one pod per pipeline"] },
+        { "label": "SQL and connectors", "values": ["Full SQL, all connectors, state larger than memory", "The same"] },
+        { "label": "Checkpoints and fault tolerance", "values": ["No", "Checkpoints every 60 seconds by default, at-least-once or exactly-once recovery, sync to S3 for disaster recovery"] },
+        { "label": "Change the SQL, keep the state", "values": ["No: a modified program starts from scratch", "Yes: only new or modified views are recomputed"] },
+        { "label": "Scale-out", "values": ["No", "Multi-host pipelines (preview) and parallel compilation"] },
+        { "label": "Security extras", "values": ["Not included", "OIDC and SSO, roles, Kubernetes secrets and IAM roles for service accounts"] },
+        { "label": "Price", "values": ["Free; community support on Slack", "Custom pricing"] }
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Other engines that keep SQL results fresh",
+      "items": [
+        { "name": "RisingWave", "tag": "Apache 2.0", "text": "A streaming database that speaks the PostgreSQL wire protocol and keeps tables, views and internal state in object storage, so applications query materialized views directly. Premium features need a licence key." },
+        { "name": "Materialize", "tag": "BSL 1.1", "text": "Strongly consistent views over PostgreSQL, MySQL and Kafka sources, queried over the PostgreSQL protocol. Free use is limited to installations under 24 GiB of memory and 48 GiB of disk." },
+        { "name": "Flink SQL", "tag": "Apache 2.0", "text": "Continuous queries over dynamic tables in Apache Flink, also equivalent to batch results on a snapshot. A distributed framework that writes results to other systems rather than serving them." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In 2018 Leonid Ryzhyk and Mihai Budiu at VMware Research started Differential Datalog, a library for computing over continuously changing data. By around 2020 it ran in VMware Skyline’s cloud service for thousands of customers, but watching developers write their rules convinced the team they needed a better experience, and SQL was familiar. Budiu and Ryzhyk went back to the theory and, in 2022, defined DBSP, a small algebra of streams that can turn any query into one that processes only changes, with proofs that the result matches recomputing from scratch.",
+      "Their paper with Tej Chajed, Frank McSherry and Val Tannen won a Best Paper award at VLDB 2023. In August 2023 they announced Feldera, the company, with Lalith Suresh, Ben Pfaff and Gerd Zellweger from VMware and seed funding led by Costanoa; the MIT-licensed code moved from VMware to the new company, by then with a SQL compiler built on Apache Calcite and an engine in Rust.",
+      "Feldera has since moved from streaming toward replacing batch jobs that rerun over mostly unchanged data. In May 2026 it began keeping Enterprise code in the same repository under separate terms, and in September 2026 it announced $21.5 million in Series A and seed funding led by Inovia Capital."
+    ],
+    "choices": [
+      { "choice": "A theory first, then the engine", "why": "The team had seen general incremental engines fail through engineering alone. DBSP gives provably correct rules for each operator and a recipe for adding new ones without breaking correctness." },
+      { "choice": "SQL instead of Datalog", "why": "Differential Datalog worked in production, but the team wanted a better developer experience and SQL was familiar and well understood, so DBSP was built to evaluate full SQL, including recursion." },
+      { "choice": "Compile each program to Rust", "why": "Translating SQL into a specialised Rust program, rather than interpreting a plan, gives native speed and memory safety without a garbage collector." },
+      { "choice": "Consistency over approximation", "why": "Feldera guarantees that view contents always equal what a batch system would compute on the same input, so incremental results can replace batch jobs." }
+    ],
+    "timeline": [
+      { "year": "2018", "text": "Differential Datalog starts at VMware Research" },
+      { "year": "2021", "text": "Database Stream Processor repository started at VMware in December" },
+      { "year": "2022", "text": "Budiu and Ryzhyk define the DBSP theory" },
+      { "year": "2023", "text": "Best Paper award at VLDB in August; Feldera, Inc. announced with seed funding" },
+      { "year": "2026", "text": "Enterprise code joins the repository under separate terms in May" },
+      { "year": "2026", "text": "$21.5 million Series A and seed announced in September" }
+    ],
+    "sources": [
+      { "label": "Feldera blog: Announcing Feldera, the company (26 August 2023)", "url": "https://www.feldera.com/blog/announcing-feldera-the-company" },
+      { "label": "Feldera blog: DBSP wins Best Research Paper, VLDB 2023 (28 August 2023)", "url": "https://www.feldera.com/blog/best-research-paper-vldb-2023" },
+      { "label": "Budiu, Chajed, McSherry, Ryzhyk, Tannen: DBSP, Automatic Incremental View Maintenance for Rich Query Languages (PVLDB 16, 2023)", "url": "https://www.vldb.org/pvldb/vol16/p1601-budiu.pdf" },
+      { "label": "Feldera: About us (founders, VMware since 2018)", "url": "https://www.feldera.com/about-us" },
+      { "label": "GitHub: feldera/feldera LICENSE history (VMware 2021, Enterprise section added May 2026)", "url": "https://github.com/feldera/feldera/commits/main/LICENSE" },
+      { "label": "Feldera blog: Announcing our Series A and Seed (21 September 2026)", "url": "https://www.feldera.com/blog/announcing-our-series-a-and-seed" }
+    ]
+  },
+  "sources": [
+    { "label": "Feldera docs: What is Feldera? (pipelines, features)", "url": "https://docs.feldera.com/" },
+    { "label": "Feldera docs: SQL introduction (DBSP, compiled to Rust, not a database)", "url": "https://docs.feldera.com/sql/intro/" },
+    { "label": "Feldera docs: Materialized tables and views", "url": "https://docs.feldera.com/sql/materialized/" },
+    { "label": "Feldera docs: Ad-hoc queries (Apache DataFusion)", "url": "https://docs.feldera.com/sql/ad-hoc/" },
+    { "label": "Feldera docs: Recursive queries", "url": "https://docs.feldera.com/sql/recursion/" },
+    { "label": "Feldera docs: Time-series extensions (LATENESS)", "url": "https://docs.feldera.com/sql/streaming/" },
+    { "label": "Feldera docs: Time series analysis guide (LATENESS syntax and state cleanup)", "url": "https://docs.feldera.com/tutorials/time-series/" },
+    { "label": "Feldera docs: Connectors", "url": "https://docs.feldera.com/connectors/" },
+    { "label": "Feldera docs: Kafka input connector", "url": "https://docs.feldera.com/connectors/sources/kafka/" },
+    { "label": "Feldera docs: Kafka output connector", "url": "https://docs.feldera.com/connectors/sinks/kafka/" },
+    { "label": "Feldera docs: PostgreSQL CDC input connector (experimental)", "url": "https://docs.feldera.com/connectors/sources/postgresql-cdc/" },
+    { "label": "Feldera docs: Iceberg input connector (experimental)", "url": "https://docs.feldera.com/connectors/sources/iceberg/" },
+    { "label": "Feldera docs: Delta Lake output connector", "url": "https://docs.feldera.com/connectors/sinks/delta/" },
+    { "label": "Feldera docs: Iceberg output through Kafka Connect (no direct Iceberg sink)", "url": "https://docs.feldera.com/connectors/sinks/iceberg/" },
+    { "label": "Feldera docs: Fault tolerance and disaster recovery (Enterprise-only)", "url": "https://docs.feldera.com/pipelines/fault-tolerance-overview/" },
+    { "label": "Feldera docs: Modifying a pipeline while preserving its state (Enterprise-only)", "url": "https://docs.feldera.com/pipelines/modifying/" },
+    { "label": "Feldera docs: Enterprise edition architecture (pod per pipeline, multi-pod preview)", "url": "https://docs.feldera.com/architecture/enterprise/" },
+    { "label": "Feldera docs: Parallel compilation (Enterprise)", "url": "https://docs.feldera.com/get-started/enterprise/parallel-compilation/" },
+    { "label": "Feldera docs: Publications and awards (VLDB 2023 Best Paper, Lean formalisation)", "url": "https://docs.feldera.com/literature/papers/" },
+    { "label": "Feldera blog: Z-sets, representing database changes", "url": "https://www.feldera.com/blog/z-sets-representing-database-changes" },
+    { "label": "Feldera pricing (open source MIT, Enterprise custom pricing)", "url": "https://www.feldera.com/pricing" },
+    { "label": "GitHub: feldera/feldera README", "url": "https://github.com/feldera/feldera" },
+    { "label": "GitHub: feldera/feldera LICENSE (MIT open-source edition, Enterprise section)", "url": "https://github.com/feldera/feldera/blob/main/LICENSE" },
+    { "label": "GitHub: feldera/feldera Cargo.toml (crates licensed MIT OR Apache-2.0)", "url": "https://github.com/feldera/feldera/blob/main/Cargo.toml" },
+    { "label": "GitHub: Feldera releases (v0.361.0, October 2026)", "url": "https://github.com/feldera/feldera/releases" },
+    { "label": "GitHub: RisingWave README (Postgres protocol, state in object storage, Apache 2.0)", "url": "https://github.com/risingwavelabs/risingwave" },
+    { "label": "GitHub: Materialize LICENSE (BSL 1.1, 24 GiB memory and 48 GiB disk grant)", "url": "https://github.com/MaterializeInc/materialize/blob/main/LICENSE" },
+    { "label": "GitHub: Materialize README (consistency, sources, PostgreSQL protocol)", "url": "https://github.com/MaterializeInc/materialize" },
+    { "label": "Flink docs: Dynamic tables and continuous queries", "url": "https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/concepts/sql-table-concepts/dynamic_tables/" }
+  ],
+  "checked": "2026-10-06"
+}

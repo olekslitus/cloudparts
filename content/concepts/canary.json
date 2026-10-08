@@ -1,0 +1,146 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Canary releases",
+  "category": "delivery",
+  "order": 80,
+  "summary": "Send a small share of real traffic to the new version, compare it with the old one, and widen the share only while it looks healthy.",
+  "howItWorks": "The new version (the canary) runs next to the current one (the control, or stable version). A router splits traffic by weight: perhaps 1% or 5% to the canary at first, the rest to stable. Then you wait and compare the two: error rate, latency, CPU, and business numbers such as checkouts per minute. If the canary is no worse, the weight goes up in steps, say 5%, 25%, 50%, 100%; if it is worse, the weight goes back to 0% and only that small slice of users ever saw the problem. The split can happen at a load balancer or API gateway, in a service mesh, in a function alias, or simply by running 1 new instance out of 10. Comparing by eye is slow and unreliable, so larger teams automate it: tools such as Kayenta, Argo Rollouts and Flagger query the metrics, score the canary against the control, and promote or roll back on their own. Two versions serve at once for the whole rollout, so the same backward-compatibility rules as a rolling deployment apply. Canaries are not A/B tests: a canary looks for regressions and should finish in minutes or hours, while an A/B test compares variants to test a hypothesis and can take days to reach statistical significance. Feature flags can run a canary too, by turning code on for a 1% cohort of users instead of routing requests to different servers.",
+  "analogy": "Miners carried a canary in a cage down the pit. If toxic gas leaked in, the bird fell ill long before the miners did, and everyone got out. The small slice of traffic is the bird.",
+  "useWhen": [
+    "High-traffic services where even a few minutes of a bad release would hurt many users",
+    "Changes whose real behaviour only shows under production load and real data",
+    "You have metrics good enough to tell a healthy version from a sick one within minutes"
+  ],
+  "avoidWhen": [
+    "Low traffic: 1% of a few requests a minute gives no signal; use blue-green with good tests instead",
+    "No way to split traffic or compare versions; without measurement a canary is just a slow rollout",
+    "Software installed on users’ devices, where you don’t control when each copy upgrades"
+  ],
+  "example": "A payments API on Lambda publishes version 58 and points its `live` alias 95% at version 57 and 5% at 58. After 10 minutes the dashboards show the canary’s p99 latency at 310 ms against 120 ms for stable, so the deploy job sets the canary weight back to 0. About 5% of requests for 10 minutes saw slow responses, instead of everyone. The next attempt, with the fix, goes 5%, 25% and then 100% over half an hour.",
+  "providers": {
+    "aws": "Lambda weighted aliases; CodeDeploy canary configurations (e.g. `LambdaCanary10Percent5Minutes`, `ECSCanary10Percent5Minutes`); API Gateway canary release on a stage; Amazon ECS canary and linear deployments",
+    "gcp": "Cloud Run traffic splitting between revisions (`gcloud run services update-traffic --to-revisions LATEST=5`)",
+    "azure": "App Service slot traffic routing (Traffic %); Container Apps traffic splitting between revisions",
+    "oss": "Argo Rollouts (`setWeight` steps, analysis), Flagger, Spinnaker with Kayenta automated canary analysis"
+  },
+  "snippet": {
+    "lang": "yaml",
+    "source": [
+      "# Argo Rollouts: the canary gets more traffic step by step",
+      "apiVersion: argoproj.io/v1alpha1",
+      "kind: Rollout",
+      "metadata:",
+      "  name: payments",
+      "spec:",
+      "  replicas: 20",
+      "  selector:",
+      "    matchLabels: { app: payments }",
+      "  template:",
+      "    metadata:",
+      "      labels: { app: payments }",
+      "    spec:",
+      "      containers:",
+      "        - name: payments",
+      "          image: registry.example.com/payments:58",
+      "  strategy:",
+      "    canary:",
+      "      steps:",
+      "        - setWeight: 5          # 1 of 20 pods without a traffic router",
+      "        - pause: { duration: 10m }",
+      "        - setWeight: 25",
+      "        - pause: { duration: 10m }",
+      "        - setWeight: 50",
+      "        - pause: {}             # wait for a human to promote",
+      "# kubectl argo rollouts abort payments    # send everything back to stable"
+    ]
+  },
+  "related": ["blue-green", "rolling-deployments", "lb", "observability", "apigw"],
+  "diagram": {
+    "caption": "The router sends one request in ten to the canary (orange) and the rest to the stable version. Real canaries often start smaller, at 1% or 5%, and the share grows only while the canary’s metrics match the stable version’s.",
+    "h": 260,
+    "nodes": [
+      {
+        "id": "users",
+        "x": 100,
+        "y": 130,
+        "label": "Users",
+        "sub": "requests",
+        "emit": {
+          "every": 320,
+          "jitter": 0.3,
+          "req": true,
+          "types": ["v1", "v1", "v1", "v1", "v1", "v1", "v1", "v1", "v1", "v2"],
+          "colorByType": {"v1": 0, "v2": 1}
+        },
+        "out": ["router"]
+      },
+      {
+        "id": "router",
+        "x": 340,
+        "y": 130,
+        "label": "Router",
+        "sub": "weights 90 / 10",
+        "concept": "lb",
+        "route": "type",
+        "rules": {"v1": ["stable"], "v2": ["canary"]}
+      },
+      {"id": "stable", "x": 610, "y": 70, "label": "Stable", "sub": "v1 · 90% of traffic", "mode": "reply", "delay": 120},
+      {"id": "canary", "x": 610, "y": 195, "label": "Canary", "sub": "v2 · 10% of traffic", "mode": "reply", "delay": 120}
+    ]
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "Canary, feature flag, A/B test or blue-green?",
+      "intro": "They use similar plumbing, so they get mixed up. The question each answers is different.",
+      "items": [
+        { "name": "Canary release", "tag": "is the new version safe?", "text": "Route a small, growing share of requests to a new deployment and compare its health with the old one. Done in minutes or hours, then everyone is on the new version." },
+        { "name": "Feature flag rollout", "tag": "is this feature safe?", "text": "Ship the code to everyone, switched off, and turn it on for a cohort such as 1% of users. Works per feature rather than per deployment, and needs no traffic routing, at the cost of flags to clean up later." },
+        { "name": "A/B test", "tag": "which variant is better?", "text": "Show two variants to comparable groups and measure behaviour, such as sign-ups. An experiment that can run for days until the result is statistically significant." },
+        { "name": "Blue-green deployment", "tag": "can we switch back instantly?", "text": "Move all traffic from one full environment to another at once. No gradual exposure, but rollback is a single switch." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "The name comes from coal mining, where miners carried a caged canary underground as an early warning: toxic gas would kill the bird before it killed the miners. In software it means exposing a new version to a small part of production first, so problems show up before they reach everyone.",
+      "IMVU, a company practising continuous deployment, automated this early. In 2009 Timothy Fitz described its push script: the new code went live on a small subset of machines, and a minute later the script compared load, errors and other metrics across the cluster, rolling back automatically on a statistically significant regression before pushing to 100%. Jez Humble and David Farley covered canary releasing in Continuous Delivery (2010), and in 2014 Danilo Sato’s entry on Martin Fowler’s site gave the general recipe and warned against mixing canaries with A/B tests.",
+      "The comparison step was the hard part to do by hand. In April 2018 Netflix and Google open-sourced Kayenta, which pulls metrics for the canary and the control, runs statistical tests and returns a score, as part of Spinnaker. That August, RedMonk’s James Governor proposed the name progressive delivery for canarying, feature flags and A/B testing at scale; Kubernetes tools such as Argo Rollouts and Flagger now automate weighted traffic shifting and metric analysis under that banner."
+    ],
+    "choices": [
+      { "choice": "Expose a small, random share first", "why": "With a small random sample, most users never see a bad version, and no single user is affected all the time. It also tests the new version under real production load instead of in a separate capacity-testing environment." },
+      { "choice": "Compare against a control running at the same time", "why": "Comparing with last week’s numbers mixes in time of day and traffic changes. Running stable and canary side by side, and comparing the two, isolates the effect of the release." },
+      { "choice": "Automate the judgement", "why": "Teams like Google and Netflix compare deployments many times a day, which manual analysis can’t keep up with. Statistical tests on chosen metrics give a consistent pass or fail that can promote or roll back without a human." }
+    ],
+    "timeline": [
+      { "year": "2009", "text": "IMVU describes automatic canary pushes with statistical rollback" },
+      { "year": "2010", "text": "Humble and Farley describe canary releasing in Continuous Delivery" },
+      { "year": "2014", "text": "Danilo Sato’s CanaryRelease entry on martinfowler.com" },
+      { "year": "2018", "text": "Netflix and Google open-source Kayenta in April; “progressive delivery” is coined in August" }
+    ],
+    "sources": [
+      { "label": "Danilo Sato: CanaryRelease, on martinfowler.com (Jun 2014)", "url": "https://martinfowler.com/bliki/CanaryRelease.html" },
+      { "label": "Timothy Fitz: Continuous deployment at IMVU, doing the impossible fifty times a day (Feb 2009)", "url": "http://timothyfitz.com/2009/02/10/continuous-deployment-at-imvu-doing-the-impossible-fifty-times-a-day/" },
+      { "label": "InformIT: Continuous Delivery by Jez Humble and David Farley (Jul 2010)", "url": "https://www.informit.com/store/continuous-delivery-reliable-software-releases-through-9780321601919" },
+      { "label": "Google Cloud blog: Introducing Kayenta, an open automated canary analysis tool from Google and Netflix (Apr 2018)", "url": "https://cloud.google.com/blog/products/gcp/introducing-kayenta-an-open-automated-canary-analysis-tool-from-google-and-netflix" },
+      { "label": "James Governor, RedMonk: Towards Progressive Delivery (Aug 2018)", "url": "https://redmonk.com/jgovernor/towards-progressive-delivery/" },
+      { "label": "Argo Rollouts docs: Overview (progressive delivery controller)", "url": "https://argoproj.github.io/argo-rollouts/" }
+    ]
+  },
+  "sources": [
+    { "label": "Danilo Sato: CanaryRelease (canaries vs A/B testing, coal-mine origin)", "url": "https://martinfowler.com/bliki/CanaryRelease.html" },
+    { "label": "Google SRE Workbook: Canarying releases (canary and control)", "url": "https://sre.google/workbook/canarying-releases/" },
+    { "label": "Pete Hodgson: Feature Toggles (aka Feature Flags), canary releasing with a 1% cohort (Oct 2017)", "url": "https://martinfowler.com/articles/feature-toggles.html" },
+    { "label": "AWS Lambda docs: Implement canary deployments using a weighted alias", "url": "https://docs.aws.amazon.com/lambda/latest/dg/configuring-alias-routing.html" },
+    { "label": "CodeDeploy docs: Deployment configurations (canary and linear for Lambda and ECS)", "url": "https://docs.aws.amazon.com/codedeploy/latest/userguide/deployment-configurations.html" },
+    { "label": "API Gateway docs: Set up a canary release deployment", "url": "https://docs.aws.amazon.com/apigateway/latest/developerguide/canary-release.html" },
+    { "label": "Amazon ECS docs: Canary deployments", "url": "https://docs.aws.amazon.com/AmazonECS/latest/developerguide/canary-deployment.html" },
+    { "label": "Amazon ECS docs: Linear deployments", "url": "https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-type-linear.html" },
+    { "label": "Google Cloud docs: Cloud Run rollbacks, gradual rollouts and traffic migration", "url": "https://cloud.google.com/run/docs/rollouts-rollbacks-traffic-migration" },
+    { "label": "Microsoft Learn: Azure App Service deployment slots (route production traffic automatically)", "url": "https://learn.microsoft.com/en-us/azure/app-service/deploy-staging-slots" },
+    { "label": "Microsoft Learn: Revisions in Azure Container Apps (traffic splitting)", "url": "https://learn.microsoft.com/en-us/azure/container-apps/revisions" },
+    { "label": "Argo Rollouts docs: Canary deployment strategy (setWeight, pause, weights without traffic routing)", "url": "https://argoproj.github.io/argo-rollouts/features/canary/" },
+    { "label": "Flagger on GitHub (CNCF graduated, part of Flux)", "url": "https://github.com/fluxcd/flagger" },
+    { "label": "spinnaker/kayenta on GitHub (now maintained in the Spinnaker monorepo)", "url": "https://github.com/spinnaker/kayenta" }
+  ]
+}

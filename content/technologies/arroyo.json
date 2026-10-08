@@ -1,0 +1,149 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Arroyo",
+  "concepts": ["stream-processing"],
+  "provider": "oss",
+  "vendor": "Cloudflare (acquired Arroyo Systems in April 2025)",
+  "license": "MIT or Apache 2.0, at your choice (dual-licensed since the first open-source release in 2023)",
+  "website": "https://www.arroyo.dev/",
+  "repo": "https://github.com/ArroyoSystems/arroyo",
+  "summary": "A stream processing engine in Rust: you write the pipeline as SQL, and it keeps windows and joins running with checkpointed state.",
+  "intro": [
+    "An Arroyo pipeline is a SQL script. `CREATE TABLE` statements describe the sources and sinks (Kafka topics, Kinesis streams, Parquet or JSON files in object storage, Iceberg tables), and an `INSERT INTO … SELECT` describes the work. The planner, built on Apache DataFusion, turns the query into a graph of operators, and workers run copies of each operator in parallel, sending batches of Apache Arrow records to each other over TCP. Operators that need memory, such as a window aggregate or a join, keep state, and Arroyo regularly writes a consistent checkpoint of that state and the source offsets to S3, GCS, Azure or R2, so a failed pipeline restarts from its last checkpoint. A `WATERMARK` on a timestamp column tells it when no older events are expected, which is when a window’s result is emitted.",
+    "A cluster is one binary playing several roles: a stateless API server and web UI, a controller that keeps each pipeline in its desired state, and workers started as local processes, on `arroyo node` machines or as Kubernetes pods. Configuration lives in SQLite on a single machine or in PostgreSQL for a production cluster. The engine is free to self-host. Cloudflare bought Arroyo in April 2025; the same team keeps developing the engine in the open and runs it as Cloudflare’s managed Pipelines service, renamed Basin Pipelines in October 2026, which today runs only stateless SQL on data headed for R2."
+  ],
+  "strengths": [
+    "Pipelines are plain SQL with streaming extensions: `TUMBLE`, `HOP` and `SESSION` windows, stream joins, updating (CDC-style) tables, and user-defined functions in Rust or Python",
+    "Exactly-once output to Kafka (offsets kept in checkpointed state, transactional writes) and to object storage (multipart uploads tracked in state), plus two-phase commits to Iceberg",
+    "One Rust binary with no JVM: runs on a laptop with SQLite, and on Kubernetes with PostgreSQL through a Helm chart",
+    "Columnar execution on Arrow and DataFusion; the move to them in 0.10 gave three times the throughput and twenty times faster pipeline start-up, by Arroyo’s own benchmarks",
+    "A managed path exists: Basin Pipelines on Cloudflare runs the same engine, billed per GB"
+  ],
+  "limits": [
+    "Still pre-1.0, and the last tagged GitHub release is 0.15.0 (December 2025), even though commits continue (over 130 in 2026); since the acquisition it is built by the Arroyo team inside Cloudflare",
+    "The managed Basin Pipelines service runs only stateless SQL for now; windows, joins and aggregations mean running Arroyo yourself",
+    "A production cluster needs PostgreSQL, object storage for checkpoints and a scheduler such as Kubernetes; the single-node mode is meant for testing only",
+    "A smaller connector list than Flink or Kafka Connect: PostgreSQL and MySQL are reached only through Debezium over Kafka, not directly",
+    "Session windows are capped at 24 hours"
+  ],
+  "worksWith": [
+    { "id": "datafusion", "how": "plans and runs its SQL with" },
+    { "id": "kafka", "how": "reads and writes topics exactly once in" },
+    { "id": "redpanda", "how": "reads and writes topics via a connector in" },
+    { "id": "s3", "how": "stores checkpoints and Parquet files in" },
+    { "id": "r2", "how": "writes Parquet files and checkpoints to" },
+    { "id": "iceberg", "how": "commits streaming writes into" },
+    { "id": "postgresql", "how": "keeps its cluster configuration in" },
+    { "id": "kubernetes", "how": "schedules pipeline workers as pods on" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "Revenue per customer per minute, from one Kafka topic to another, exactly once",
+    "source": [
+      "CREATE TABLE orders (",
+      "  customer_id TEXT,",
+      "  amount DOUBLE,",
+      "  created_at TIMESTAMP,",
+      "  -- events may arrive up to 10 seconds late",
+      "  WATERMARK FOR created_at AS created_at - INTERVAL '10 seconds'",
+      ") WITH (",
+      "  connector = 'kafka',",
+      "  bootstrap_servers = 'kafka-1:9092',",
+      "  topic = 'orders',",
+      "  type = 'source',",
+      "  format = 'json',",
+      "  'source.offset' = 'earliest'",
+      ");",
+      "",
+      "CREATE TABLE revenue_per_minute WITH (",
+      "  connector = 'kafka',",
+      "  bootstrap_servers = 'kafka-1:9092',",
+      "  topic = 'revenue-per-minute',",
+      "  type = 'sink',",
+      "  format = 'json',",
+      "  'sink.commit_mode' = 'exactly_once'",
+      ");",
+      "",
+      "-- one row per customer and minute, emitted once the watermark passes the minute",
+      "INSERT INTO revenue_per_minute",
+      "SELECT window.end AS minute_end, customer_id, orders, revenue",
+      "FROM (",
+      "  SELECT TUMBLE(INTERVAL '1 minute') AS window, customer_id,",
+      "         count(*) AS orders, sum(amount) AS revenue",
+      "  FROM orders",
+      "  GROUP BY window, customer_id",
+      ");"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Self-hosted Arroyo or Basin Pipelines",
+      "intro": "The same engine, two ways to run it. Prices checked 2026-10-05.",
+      "columns": ["Arroyo (self-hosted)", "Basin Pipelines (Cloudflare)"],
+      "rows": [
+        { "label": "Who runs it", "values": ["You: binary, Docker image or Helm chart, plus PostgreSQL and object storage", "Cloudflare; needs a Workers Paid plan"] },
+        { "label": "SQL", "values": ["Stateful: windows, joins, updating tables, Rust and Python UDFs", "Stateless transforms (filter, reshape, unnest, cast); stateful operations announced for later"] },
+        { "label": "Inputs", "values": ["Kafka, Redpanda, Kinesis, NATS, MQTT, RabbitMQ, files, polling HTTP, WebSocket and more", "Streams fed over HTTP or from Workers"] },
+        { "label": "Outputs", "values": ["Kafka, Kinesis, Parquet or JSON files on S3, GCS, Azure or R2, Iceberg, Delta Lake, webhooks, Redis", "Iceberg tables, or Parquet and JSON files, in R2"] },
+        { "label": "Price", "values": ["Free (MIT or Apache 2.0); you pay for machines and storage", "Ingest free; SQL $0.04/GB after 50 GB a month; delivery $0.03/GB (JSON) or $0.06/GB (Parquet, Iceberg) after 50 GB; plus R2 storage"] }
+      ],
+      "notes": ["Basin Pipelines bills delivery on uncompressed data, and Cloudflare says stateful operations may be priced separately when they arrive."]
+    }
+  ],
+  "history": {
+    "story": [
+      "Micah Wylde led the streaming platform teams at Lyft and Splunk, where they built two real-time data platforms on Apache Flink. Flink worked, but he found it too complex for the people who wanted streaming results, such as data scientists and product engineers, and keeping many user-written pipelines running reliably was hard.",
+      "In 2022 he and Jackson Newhouse founded Arroyo, which joined Y Combinator’s Winter 2023 batch. They launched a hosted service first and open-sourced the engine in April 2023: written in Rust, with SQL as the main interface. Early versions turned each query into Rust code and compiled it, which needed a compiler service and minutes-long cold builds. Arroyo 0.10, in 2024, replaced that with Apache Arrow and DataFusion, so one prebuilt binary could run any query.",
+      "In April 2025 Cloudflare acquired Arroyo. The engine stayed open source and self-hostable, and the team built it into Cloudflare Pipelines, which loads event streams into R2. Cloudflare made that service generally available as Basin Pipelines in October 2026."
+    ],
+    "choices": [
+      { "choice": "Rust instead of the JVM", "why": "Wylde argued that stream processors are hard cases for garbage collectors, because they create many objects quickly and keep some for unpredictable lengths of time. Rust’s borrow checker manages memory at compile time, with no collector pauses." },
+      { "choice": "SQL as the main interface, for non-experts", "why": "The Flink pipelines he had supported were written by people who weren’t streaming specialists. Keeping the user-facing SQL separate from the engine’s internals lets them build real-time pipelines without learning those internals." },
+      { "choice": "Arrow and DataFusion instead of generating Rust code", "why": "Compiling every pipeline needed a Rust compiler and a build service that was costly to run and slow to start. Interpreting queries on Arrow batches with DataFusion removed both and, by Arroyo’s measurements, tripled throughput." }
+    ],
+    "timeline": [
+      { "year": "2022", "text": "Micah Wylde and Jackson Newhouse found Arroyo" },
+      { "year": "2023", "text": "Y Combinator Winter 2023 batch; engine open-sourced in April" },
+      { "year": "2024", "text": "Arroyo 0.10 rebuilds the engine on Arrow and DataFusion" },
+      { "year": "2025", "text": "Cloudflare acquires Arroyo in April; its engine goes into Cloudflare Pipelines" },
+      { "year": "2026", "text": "Cloudflare Pipelines becomes Basin Pipelines and is generally available" }
+    ],
+    "sources": [
+      { "label": "Arroyo blog: Open-sourcing the Arroyo streaming engine (Apr 2023)", "url": "https://www.arroyo.dev/blog/open-sourcing-the-arroyo-streaming-engine" },
+      { "label": "Y Combinator: Arroyo (Winter 2023, founded 2022, founders)", "url": "https://www.ycombinator.com/companies/arroyo" },
+      { "label": "Arroyo blog: We built a new SQL engine on Arrow and DataFusion (Mar 2024)", "url": "https://www.arroyo.dev/blog/why-arrow-and-datafusion" },
+      { "label": "Arroyo blog: Rust is the best language for data infra (Sep 2023)", "url": "https://www.arroyo.dev/blog/rust-for-data-infra" },
+      { "label": "Arroyo blog: Arroyo is joining Cloudflare (Apr 2025)", "url": "https://www.arroyo.dev/blog/arroyo-is-joining-cloudflare" },
+      { "label": "Cloudflare changelog: Cloudflare Basin is now generally available (Oct 2026)", "url": "https://developers.cloudflare.com/changelog/post/2026-10-01-basin-ga/" }
+    ]
+  },
+  "sources": [
+    { "label": "Arroyo README (features, single binary, Cloudflare Pipelines, dual licence)", "url": "https://github.com/ArroyoSystems/arroyo" },
+    { "label": "Arroyo LICENSE-APACHE", "url": "https://github.com/ArroyoSystems/arroyo/blob/master/LICENSE-APACHE" },
+    { "label": "Arroyo LICENSE-MIT", "url": "https://github.com/ArroyoSystems/arroyo/blob/master/LICENSE-MIT" },
+    { "label": "Arroyo: initial open source release commit (Mar 31, 2023)", "url": "https://github.com/ArroyoSystems/arroyo/commit/a0e39f80" },
+    { "label": "Arroyo releases on GitHub (latest tagged: v0.15.0, Dec 2025)", "url": "https://github.com/ArroyoSystems/arroyo/releases" },
+    { "label": "Arroyo commit history", "url": "https://github.com/ArroyoSystems/arroyo/commits/master" },
+    { "label": "Arroyo docs: Architecture", "url": "https://doc.arroyo.dev/architecture/" },
+    { "label": "Arroyo docs: Concepts (dataflow, watermarks, checkpoints)", "url": "https://doc.arroyo.dev/concepts/" },
+    { "label": "Arroyo docs: Deployment (SQLite or Postgres, checkpoint storage, single node not for production)", "url": "https://doc.arroyo.dev/deployment/" },
+    { "label": "Arroyo docs: Kubernetes (Helm chart)", "url": "https://doc.arroyo.dev/deployment/kubernetes/" },
+    { "label": "Arroyo docs: SQL overview", "url": "https://doc.arroyo.dev/sql/" },
+    { "label": "Arroyo docs: DDL (connection tables, WATERMARK FOR)", "url": "https://doc.arroyo.dev/sql/ddl/" },
+    { "label": "Arroyo docs: Streaming windows (session windows capped at 24 hours)", "url": "https://doc.arroyo.dev/sql/windows/" },
+    { "label": "Arroyo docs: UDFs", "url": "https://doc.arroyo.dev/udfs/" },
+    { "label": "Arroyo docs: Connectors", "url": "https://doc.arroyo.dev/connectors/" },
+    { "label": "Arroyo docs: Kafka connector (exactly-once source and sink)", "url": "https://doc.arroyo.dev/connectors/kafka/" },
+    { "label": "Arroyo docs: Filesystem connector (S3, GCS, R2, Azure; exactly-once multipart uploads)", "url": "https://doc.arroyo.dev/connectors/filesystem/" },
+    { "label": "Arroyo docs: Postgres connector (via Debezium)", "url": "https://doc.arroyo.dev/connectors/postgres/" },
+    { "label": "Arroyo docs: Redpanda connector", "url": "https://doc.arroyo.dev/connectors/redpanda/" },
+    { "label": "Arroyo blog: Arroyo 0.15.0 (Iceberg sink, R2 support, Dec 2025)", "url": "https://www.arroyo.dev/blog/arroyo-0-15-0" },
+    { "label": "Arroyo blog: We built a new SQL engine on Arrow and DataFusion (0.10 benchmarks)", "url": "https://www.arroyo.dev/blog/why-arrow-and-datafusion" },
+    { "label": "Cloudflare blog: Cloudflare acquires Arroyo and launches Pipelines in beta (Apr 2025)", "url": "https://blog.cloudflare.com/cloudflare-acquires-arroyo-pipelines-streaming-ingestion-beta/" },
+    { "label": "Cloudflare docs: Basin Pipelines overview", "url": "https://developers.cloudflare.com/basin-pipelines/" },
+    { "label": "Cloudflare docs: Basin Pipelines pricing", "url": "https://developers.cloudflare.com/basin-pipelines/platform/pricing/" },
+    { "label": "Cloudflare changelog: Cloudflare Basin is now generally available (Oct 2026)", "url": "https://developers.cloudflare.com/changelog/post/2026-10-01-basin-ga/" }
+  ],
+  "checked": "2026-10-05"
+}

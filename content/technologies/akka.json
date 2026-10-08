@@ -1,0 +1,205 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Akka",
+  "concepts": ["actors"],
+  "provider": "vendor",
+  "vendor": "Akka (Lightbend, Inc., doing business as Akka)",
+  "license": "Business Source License 1.1 since 2.7 (October 2022): free outside production, and each release becomes Apache 2.0 three years after it ships; Apache 2.0 up to 2.6.x",
+  "website": "https://akka.io/",
+  "repo": "https://github.com/akka/akka-core",
+  "summary": "The JVM toolkit that brought Erlang-style actors, clustering and sharding to Java and Scala; source-available since 2022, with a paid licence for most production use.",
+  "intro": [
+    "An Akka application is one or more JVMs, each running an `ActorSystem`: a thread pool that drives many lightweight actors, each with a mailbox and a behavior that handles one message at a time. Actors form a tree, and a parent supervises its children, restarting or stopping one that fails. Akka Cluster joins the JVMs into one membership group, and Cluster Sharding spreads entity actors by ID over the nodes, so `cart-4812` runs in exactly one place and every message for it is routed there. Akka Persistence stores each entity’s events or state in a database (PostgreSQL through R2DBC, Cassandra, DynamoDB, JDBC) and replays them when the entity starts on another node. Around the core sit Akka Streams, Akka HTTP, Akka gRPC, Projections and the Alpakka connectors, including Kafka. Messages between actors are delivered at most once, in order per sender and receiver.",
+    "Every module has been under the BSL 1.1 since Akka 2.7: you may read, change and run the code outside production, but production needs a commercial licence. Since 2.10 (and patch releases 2.9.6, 2.8.7 and 2.7.1) that is enforced by a licence key: without one, the `ActorSystem` shuts itself down after 15 minutes. Keys are free for evaluation (45 days), open-source projects, academia and organisations under $25 million in annual revenue or operating budget; everyone else needs a subscription. There’s no public price list; the licence FAQ, checked October 2026, says paid subscriptions start at $0.25 per core hour. Since Akka 23.10 the jars come from Akka’s own repository through a tokenized URL rather than Maven Central. In November 2024 Lightbend renamed itself Akka and added the Akka SDK and managed hosting; the open-source fork of Akka 2.6, with a side-by-side comparison, is on the Apache Pekko page."
+  ],
+  "strengths": [
+    "Over 15 years of production use, with typed actor APIs for both Java and Scala and thorough documentation",
+    "Cluster Sharding, Persistence and Projections give each entity one writer, in-memory state and a durable event log, without hand-built locking",
+    "Features added since the 2022 fork, such as Replicated Event Sourcing over gRPC for active-active entities across regions and Akka Edge, aren’t in any released Pekko 1.x version; Pekko ports Akka code only once it turns Apache 2.0",
+    "A wide set of modules from one vendor: Streams with backpressure, HTTP, gRPC, Kafka and other connectors, Kubernetes cluster bootstrap",
+    "Commercial support, security patches and an optional higher-level SDK with managed hosting"
+  ],
+  "limits": [
+    "Not open source by the OSI definition until each release turns three years old; production use needs a licence key, organisations above $25 million in revenue must pay, and prices aren’t published",
+    "A missing or expired key stops the `ActorSystem` after 15 minutes, and builds need Akka’s tokenized repository, so CI, mirrors and air-gapped builds need extra setup",
+    "The actor model is a steep climb: at-most-once delivery, versioned serialization of messages and events, cluster membership and split-brain handling all need care",
+    "JVM only; other languages talk to it over HTTP, gRPC or Kafka",
+    "Apps built on the libraries can’t move to Akka’s managed Serverless or BYOC environments, which run only Akka SDK services; the company now markets itself as an agentic AI platform"
+  ],
+  "worksWith": [
+    { "id": "pekko", "how": "was forked at version 2.6.x as" },
+    { "id": "kafka", "how": "consumes and produces via Alpakka Kafka" },
+    { "id": "postgresql", "how": "persists entity events (R2DBC) in" },
+    { "id": "dynamodb", "how": "persists entity events and snapshots in" },
+    { "id": "grpc", "how": "serves and calls services over" },
+    { "id": "kubernetes", "how": "forms clusters by discovering pods in" }
+  ],
+  "snippet": {
+    "lang": "yaml",
+    "title": "A three-node Akka Cluster on Kubernetes that finds its peers through the Kubernetes API",
+    "source": [
+      "# application.conf (HOCON) in the image sets:",
+      "#   akka.management.cluster.bootstrap.contact-point-discovery.discovery-method = kubernetes-api",
+      "#   akka.license-key = ${?AKKA_LICENSE_KEY}",
+      "apiVersion: apps/v1",
+      "kind: Deployment",
+      "metadata:",
+      "  name: carts",
+      "spec:",
+      "  replicas: 3",
+      "  selector:",
+      "    matchLabels: { app: carts }",
+      "  strategy:",
+      "    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }  # one node at a time; shards move off it",
+      "  template:",
+      "    metadata:",
+      "      labels: { app: carts }",
+      "    spec:",
+      "      containers:",
+      "        - name: carts",
+      "          image: registry.example.com/carts:1.8.0",
+      "          ports:",
+      "            - { name: management, containerPort: 8558 }  # Akka Management: bootstrap, health",
+      "            - { name: remoting, containerPort: 25520 }   # Artery: messages between nodes",
+      "            - { name: http, containerPort: 8080 }",
+      "          readinessProbe: { httpGet: { path: /ready, port: management } }",
+      "          livenessProbe: { httpGet: { path: /alive, port: management } }",
+      "          env:",
+      "            - name: AKKA_CLUSTER_BOOTSTRAP_SERVICE_NAME  # peers are pods with the same app label",
+      "              valueFrom: { fieldRef: { fieldPath: \"metadata.labels['app']\" } }",
+      "            - name: AKKA_LICENSE_KEY",
+      "              valueFrom: { secretKeyRef: { name: akka-license, key: key } }",
+      "---",
+      "# let the pods list each other through the API server",
+      "apiVersion: rbac.authorization.k8s.io/v1",
+      "kind: Role",
+      "metadata: { name: pod-reader }",
+      "rules:",
+      "  - { apiGroups: [\"\"], resources: [pods], verbs: [get, watch, list] }",
+      "---",
+      "apiVersion: rbac.authorization.k8s.io/v1",
+      "kind: RoleBinding",
+      "metadata: { name: read-pods }",
+      "subjects: [{ kind: ServiceAccount, name: default }]",
+      "roleRef: { kind: Role, name: pod-reader, apiGroup: rbac.authorization.k8s.io }"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Akka libraries or the Akka SDK",
+      "intro": "Since Akka 3 (November 2024) the company sells two ways to build on Akka. The SDK is built on the libraries, and services made with either can exchange events and messages.",
+      "columns": ["Akka libraries", "Akka SDK"],
+      "rows": [
+        { "label": "What you write", "values": ["Actors, streams, cluster and persistence setup, with full control over each", "A fixed set of components: event-sourced and key-value entities, views, workflows, HTTP, gRPC and MCP endpoints, consumers, timed actions and AI agents"] },
+        { "label": "Languages", "values": ["Java and Scala", "Java"] },
+        { "label": "Where it runs", "values": ["Wherever you deploy it; you operate it", "Locally, self-hosted on Kubernetes, or in Akka’s managed Serverless or BYOC (your VPC on AWS, Google Cloud or Azure) environments"] },
+        { "label": "Licence", "values": ["BSL 1.1 with a licence key in production", "BSL 1.1"] },
+        { "label": "Suits", "values": ["Custom protocols, embedded actors, existing Akka code, fine control over clustering", "New services where the opinionated structure and managed operations are worth the lock-in"] }
+      ],
+      "notes": ["Akka recommends the SDK for new projects; there is no automated way to convert a libraries app to it."]
+    },
+    {
+      "type": "table",
+      "title": "When each Akka release becomes Apache 2.0",
+      "intro": "Each release’s `LICENSE` file names its own change date, three years after that release shipped. Later patch releases of the same line get later dates.",
+      "corner": "Release",
+      "columns": ["Released", "Apache 2.0 from"],
+      "rows": [
+        { "label": "2.6.x", "values": ["2019 to June 2023 (2.6.21)", "Always Apache 2.0"] },
+        { "label": "2.7.0", "values": ["October 2022", "October 2025"] },
+        { "label": "2.8.0", "values": ["March 2023", "16 March 2026"] },
+        { "label": "2.8.4", "values": ["August 2023", "15 August 2026"] },
+        { "label": "2.9.0", "values": ["October 2023", "23 October 2026"] },
+        { "label": "2.10.0", "values": ["October 2024", "16 October 2027"] },
+        { "label": "2.10.23 (latest)", "values": ["September 2026", "30 September 2029"] }
+      ],
+      "notes": ["Akka checks the build date at startup and skips the licence-key check for builds more than three years old."]
+    }
+  ],
+  "history": {
+    "story": [
+      "By 2009 Scala was attracting server developers, but concurrency on the JVM still meant threads sharing memory behind locks. Jonas Bonér, a Swedish programmer, wanted the Erlang approach on the JVM: lightweight actors, asynchronous messages and supervisors that restart what fails. He started Akka in February 2009 and tagged version 0.5 that July. The name comes from a mountain in Swedish Lapland and a Sámi goddess, and the letters also stand for Actor Kernel.",
+      "Akka 1.0 arrived in February 2011 with location-transparent actors for Scala and Java. That May, Bonér and Scala’s creator Martin Odersky launched Typesafe to sell support for both; it was renamed Lightbend in 2016. Akka grew clustering, persistence, streams and HTTP, and projects such as Play and Apache Flink built on it.",
+      "In September 2022 Lightbend moved Akka from Apache 2.0 to the BSL, starting with 2.7, arguing that large companies relied on it while a small company carried the maintenance. Users who wanted to stay on open source forked 2.6 as Apache Pekko. In November 2024 Lightbend renamed itself Akka and launched Akka 3, adding an SDK and managed hosting."
+    ],
+    "choices": [
+      {
+        "choice": "Erlang’s actors and supervisors, on the JVM",
+        "why": "Bonér saw actors as one abstraction for both concurrency and distribution. Supervisors restart a crashed actor while its mailbox is left untouched, which is how Erlang systems stay up."
+      },
+      {
+        "choice": "Location-transparent actor references",
+        "why": "In Bonér’s words, “it doesn’t matter if the actor reference you hold on to represents an actor in-process or on another physical machine”, which lets the runtime rebalance a cluster and move actors around."
+      },
+      {
+        "choice": "At-most-once delivery by default",
+        "why": "A message that is being processed when an actor crashes is lost “by design”, as in Erlang. Guaranteed delivery costs extra round trips and storage, so Akka leaves it to explicit acknowledgements and persistence where it’s needed."
+      },
+      {
+        "choice": "A source-available licence that turns into Apache 2.0",
+        "why": "Bonér said Apache 2.0 had become “increasingly risky when a small company solely carries the maintenance effort”. The BSL makes larger production users pay while every release still becomes Apache-licensed three years later."
+      }
+    ],
+    "timeline": [
+      { "year": "2009", "text": "Bonér starts Akka in February and tags 0.5 in July" },
+      { "year": "2011", "text": "Akka 1.0 in February; Bonér and Odersky launch Typesafe in May" },
+      { "year": "2012", "text": "Akka 2.0 released in March" },
+      { "year": "2016", "text": "Typesafe is renamed Lightbend" },
+      { "year": "2022", "text": "Akka 2.7 ships in October under the Business Source License" },
+      { "year": "2024", "text": "Licence keys required in production; Lightbend renames itself Akka" },
+      { "year": "2025", "text": "Akka 2.7 code converts to Apache 2.0 in October" }
+    ],
+    "sources": [
+      { "label": "akka/akka-core on GitHub (repository created February 2009)", "url": "https://github.com/akka/akka-core" },
+      { "label": "akka/akka-core on GitHub: tag v0.5 (July 2009)", "url": "https://github.com/akka/akka-core/releases/tag/v0.5" },
+      { "label": "Akka docs: FAQ, where does the name Akka come from?", "url": "https://doc.akka.io/libraries/akka-core/current/additional/faq.html" },
+      { "label": "InfoQ: Akka reaches 1.0 status, brings the actor model to Java and Scala (Feb 2011)", "url": "https://www.infoq.com/news/2011/02/akka10" },
+      { "label": "akka/akka-core on GitHub: tag v1.0 (February 2011)", "url": "https://github.com/akka/akka-core/releases/tag/v1.0" },
+      { "label": "InfoQ: Scala and Akka creators launch Typesafe (May 2011)", "url": "https://www.infoq.com/news/2011/05/typesafe/" },
+      { "label": "akka/akka-core on GitHub: tag v2.0 (March 2012)", "url": "https://github.com/akka/akka-core/releases/tag/v2.0" },
+      { "label": "Wikipedia: Akka.io, the company (renamed from Typesafe to Lightbend in February 2016)", "url": "https://en.wikipedia.org/wiki/Akka.io" },
+      { "label": "Apache Flink blog: Flink 1.18 release (Flink used Akka, switches to Pekko)", "url": "https://flink.apache.org/2023/10/24/announcing-the-release-of-apache-flink-1.18/" },
+      { "label": "Akka blog: Why we are changing the license for Akka (Jonas Bonér, Sep 2022)", "url": "https://akka.io/blog/why-we-are-changing-the-license-for-akka" },
+      { "label": "Akka blog: Lightbend changes its software licensing model for Akka technology (press release, Sep 2022)", "url": "https://akka.io/blog/lightbend-changes-its-software-licensing-model-for-akka-technology" },
+      { "label": "akka/akka-core on GitHub: LICENSE at v2.7.0 (change date three years after the 2.7.0 release)", "url": "https://github.com/akka/akka-core/blob/v2.7.0/LICENSE" },
+      { "label": "Akka blog: Akka license keys and a no spam promise (Tyler Jewell, Oct 2024)", "url": "https://akka.io/blog/akka-license-keys-and-no-spam-promise" },
+      { "label": "Akka blog: Lightbend is now Akka (Tyler Jewell, Nov 2024)", "url": "https://akka.io/blog/lightbend-is-now-akka" }
+    ]
+  },
+  "sources": [
+    { "label": "Akka docs: What problems does the actor model solve? (mailboxes, behaviors)", "url": "https://doc.akka.io/libraries/akka-core/current/typed/guide/actors-intro.html" },
+    { "label": "Akka docs: Fault tolerance (supervision)", "url": "https://doc.akka.io/libraries/akka-core/current/typed/fault-tolerance.html" },
+    { "label": "Akka docs: Cluster Sharding", "url": "https://doc.akka.io/libraries/akka-core/current/typed/cluster-sharding.html" },
+    { "label": "Akka docs: Message delivery reliability (at-most-once, per-pair ordering)", "url": "https://doc.akka.io/libraries/akka-core/current/general/message-delivery-reliability.html" },
+    { "label": "Akka docs: Akka Persistence R2DBC (PostgreSQL, Yugabyte, H2)", "url": "https://doc.akka.io/libraries/akka-persistence-r2dbc/current/" },
+    { "label": "Akka docs: Akka Persistence DynamoDB", "url": "https://doc.akka.io/libraries/akka-persistence-dynamodb/current/" },
+    { "label": "Akka docs: Alpakka Kafka", "url": "https://doc.akka.io/libraries/alpakka-kafka/current/" },
+    { "label": "Akka docs: Akka gRPC", "url": "https://doc.akka.io/libraries/akka-grpc/current/" },
+    { "label": "Akka docs: Cluster bootstrap with the Kubernetes API", "url": "https://doc.akka.io/libraries/akka-management/current/bootstrap/kubernetes-api.html" },
+    { "label": "Akka docs: Configuration, licence key (system terminates without a key)", "url": "https://doc.akka.io/libraries/akka-core/current/general/configuration.html" },
+    { "label": "akka/akka-core on GitHub: ActorSystem.scala (15-minute shutdown without a key, check skipped after three years)", "url": "https://github.com/akka/akka-core/blob/main/akka-actor/src/main/scala/akka/actor/ActorSystem.scala" },
+    { "label": "Akka: Business Source License 1.1 (licence text, change date, Play Framework grant)", "url": "https://akka.io/bsl/license" },
+    { "label": "Akka: BSL licence FAQ ($25M threshold, subscriptions from $0.25 per core hour)", "url": "https://akka.io/bsl-license-faq" },
+    { "label": "Akka: Get an Akka license key (free 45-day evaluation, free keys for academia and OSS)", "url": "https://account.akka.io/key" },
+    { "label": "Akka blog: Akka license keys and a no spam promise (Oct 2024)", "url": "https://akka.io/blog/akka-license-keys-and-no-spam-promise" },
+    { "label": "Akka: Subscription request form", "url": "https://akka.io/subscription" },
+    { "label": "Akka docs: Akka 23.05 released (Distributed Cluster, Replicated Event Sourcing over gRPC)", "url": "https://doc.akka.io/reference/release-notes/2023-05-16-akka-23.5-released.html" },
+    { "label": "Akka docs: Akka 23.10 released (Akka Edge, own repository)", "url": "https://doc.akka.io/reference/release-notes/2023-10-31-akka-23.10-released.html" },
+    { "label": "Akka docs: Akka 24.10 released (Akka core 2.10.0, DynamoDB persistence)", "url": "https://doc.akka.io/reference/release-notes/2024-10-30-akka-24.10-released.html" },
+    { "label": "akka/akka-dependencies on GitHub (tokenized library repository, 25.10 BOM)", "url": "https://github.com/akka/akka-dependencies" },
+    { "label": "akka/akka-core on GitHub: releases (2.10.23, September 2026)", "url": "https://github.com/akka/akka-core/releases" },
+    { "label": "akka/akka-core on GitHub: LICENSE at v2.8.0", "url": "https://github.com/akka/akka-core/blob/v2.8.0/LICENSE" },
+    { "label": "akka/akka-core on GitHub: LICENSE at v2.8.4", "url": "https://github.com/akka/akka-core/blob/v2.8.4/LICENSE" },
+    { "label": "akka/akka-core on GitHub: LICENSE at v2.9.0", "url": "https://github.com/akka/akka-core/blob/v2.9.0/LICENSE" },
+    { "label": "akka/akka-core on GitHub: LICENSE at v2.10.0", "url": "https://github.com/akka/akka-core/blob/v2.10.0/LICENSE" },
+    { "label": "akka/akka-core on GitHub: LICENSE on main (2.10.23)", "url": "https://github.com/akka/akka-core/blob/main/LICENSE" },
+    { "label": "Akka docs: Akka SDK (components)", "url": "https://doc.akka.io/sdk/index.html" },
+    { "label": "akka/akka-sdk on GitHub (BSL 1.1 licence)", "url": "https://github.com/akka/akka-sdk" },
+    { "label": "Akka blog: Akka 3 FAQ (libraries vs SDK, Serverless, BYOC and self-hosted)", "url": "https://akka.io/blog/akka-3-frequently-asked-questions" },
+    { "label": "Akka blog: Lightbend launches Akka 3, rebrands company as Akka (Nov 2024)", "url": "https://akka.io/blog/lightbend-launches-akka-3-rebrands-company-as-akka" },
+    { "label": "Akka: home page (agentic AI platform)", "url": "https://akka.io/" },
+    { "label": "Apache Pekko: migration guide from Akka (default Artery port 25520 in Akka)", "url": "https://pekko.apache.org/docs/pekko/current/migration/migration-guide-akka-1.0.x.html" }
+  ],
+  "checked": "2026-10-06"
+}

@@ -1,0 +1,203 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Alerting",
+  "category": "observe",
+  "order": 70,
+  "summary": "Rules that watch your metrics and logs and wake a human only when users are, or are about to be, hurt.",
+  "howItWorks": "An alerting rule is a query plus a condition, evaluated on a schedule, typically every minute: “the share of checkout requests that fail is above 5%”. To ignore blips, the condition must hold for a while before the alert fires: a `for: 10m` clause in Prometheus, or “3 out of 5 data points” in a CloudWatch alarm. Until then the alert is pending. A firing alert carries labels such as `service` and `severity`, and a notification layer decides what happens next. It groups related alerts into one message (fifty instances losing their database become one page, not fifty), routes by label (`severity=page` to the on-call phone, `severity=ticket` to a team channel), inhibits alerts that follow from a bigger one (no per-service pages while the whole cluster is unreachable) and honours silences during planned work. What to alert on matters more than how. Alert on symptoms users feel, such as errors, latency and unavailability, rather than causes like high CPU, which may be harmless. A stronger form alerts on the error budget of a service level objective (SLO): with a 99.9% target, failing at 14.4 times the allowed rate for an hour burns 2% of a 30-day budget and pages someone, while a slow burn opens a ticket. Every page should be urgent and actionable; alerts people learn to ignore are worse than none.",
+  "analogy": "A smoke detector, not a thermometer on every wall. It stays quiet through toast and steam, sounds only when there is a real fire, and the whole building hears one alarm rather than a beep from every room.",
+  "useWhen": [
+    "Anything users depend on outside office hours",
+    "Catching symptoms: error rate, latency, failed checks, an SLO burning too fast",
+    "Slow-building problems (a disk filling, a certificate expiring) routed to tickets, not pages"
+  ],
+  "avoidWhen": [
+    "Paging on causes such as CPU, memory or one failed pod when users aren’t affected",
+    "Alerts nobody can act on, or that are routinely acknowledged and ignored",
+    "Thresholds copied from a template without looking at the service’s normal behaviour"
+  ],
+  "example": "A checkout service has a 99.9% availability SLO over 30 days. A bad deploy makes 10% of requests fail, 100 times the allowed rate. The burn-rate alert needs both the 1-hour and the 5-minute error ratios above 1.44% (14.4 × 0.1%); the 1-hour average crosses that about nine minutes in, and the on-call engineer gets one page. A separate rule saw a database disk at 91% that morning; it opened a ticket in the team channel and paged nobody.",
+  "providers": {
+    "aws": "CloudWatch alarms (metric, log and composite alarms) with SNS notifications",
+    "gcp": "Cloud Monitoring alerting policies (metric, log and PromQL conditions) with notification channels",
+    "azure": "Azure Monitor alerts (metric, log search and activity log alert rules) with action groups",
+    "oss": "Prometheus alerting rules with Alertmanager, Grafana Alerting; hosted: Datadog monitors, Better Stack, Sentry alerts"
+  },
+  "snippet": {
+    "lang": "yaml",
+    "source": [
+      "# Prometheus alerting rules (rules.yml)",
+      "groups:",
+      "  - name: checkout",
+      "    rules:",
+      "      # symptom, sustained: users see errors for 10 minutes",
+      "      - alert: CheckoutHighErrorRate",
+      "        expr: |",
+      "          sum(rate(http_requests_total{job=\"checkout\", code=~\"5..\"}[5m]))",
+      "            / sum(rate(http_requests_total{job=\"checkout\"}[5m])) > 0.05",
+      "        for: 10m",
+      "        labels:",
+      "          severity: page",
+      "        annotations:",
+      "          summary: More than 5% of checkout requests are failing",
+      "          runbook_url: https://wiki.example.com/runbooks/checkout-errors",
+      "",
+      "      # SLO burn rate: 99.9% target, 2% of a 30-day budget gone in an hour",
+      "      - alert: CheckoutErrorBudgetBurn",
+      "        expr: |",
+      "          job:slo_errors_per_request:ratio_rate1h{job=\"checkout\"} > (14.4 * 0.001)",
+      "          and",
+      "          job:slo_errors_per_request:ratio_rate5m{job=\"checkout\"} > (14.4 * 0.001)",
+      "        labels:",
+      "          severity: page"
+    ]
+  },
+  "related": ["metrics", "on-call", "incidents", "synthetics"],
+  "diagram": {
+    "caption": "Services send metric samples to Prometheus, which evaluates two rules. Most evaluations pass quietly; now and then one fires, and Alertmanager routes it by severity: the user-facing error rate pages the on-call phone, the filling disk goes to the team channel.",
+    "w": 820,
+    "h": 280,
+    "nodes": [
+      {
+        "id": "svc",
+        "x": 90,
+        "y": 80,
+        "label": "Checkout service",
+        "sub": "request metrics",
+        "emit": { "every": 320, "jitter": 0.3, "type": "err", "color": 0 },
+        "out": ["prom"]
+      },
+      {
+        "id": "db",
+        "x": 90,
+        "y": 200,
+        "label": "Database host",
+        "sub": "node metrics",
+        "emit": { "every": 520, "jitter": 0.3, "type": "disk", "color": 1 },
+        "out": ["prom"]
+      },
+      {
+        "id": "prom",
+        "x": 275,
+        "y": 140,
+        "label": "Prometheus",
+        "sub": "evaluates rules",
+        "tech": "prometheus",
+        "route": "type",
+        "rules": { "err": ["r1"], "disk": ["r2"] }
+      },
+      {
+        "id": "r1",
+        "x": 455,
+        "y": 80,
+        "label": "Error rate > 5%",
+        "sub": "for: 10m",
+        "mode": "gate",
+        "p": 0.05,
+        "quiet": true,
+        "allowText": "firing",
+        "out": ["am"]
+      },
+      {
+        "id": "r2",
+        "x": 455,
+        "y": 200,
+        "label": "Disk > 90% full",
+        "sub": "for: 30m",
+        "mode": "gate",
+        "p": 0.06,
+        "quiet": true,
+        "allowText": "firing",
+        "out": ["am"]
+      },
+      {
+        "id": "am",
+        "x": 615,
+        "y": 140,
+        "label": "Alertmanager",
+        "sub": "group, route",
+        "route": "type",
+        "rules": { "err": ["pager"], "disk": ["chat"] }
+      },
+      { "id": "pager", "x": 750, "y": 80, "label": "Pager", "sub": "severity=page", "mode": "sink", "concept": "on-call" },
+      { "id": "chat", "x": 750, "y": 200, "label": "Team chat", "sub": "severity=ticket", "mode": "sink" }
+    ]
+  },
+  "sections": [
+    {
+      "type": "code",
+      "title": "Grouping, routing and inhibition in Alertmanager",
+      "intro": "Rules decide when an alert fires; Alertmanager decides who hears about it and how often. This config sends pages to PagerDuty, everything else to Slack, and mutes per-service alerts while their whole cluster is unreachable.",
+      "lang": "yaml",
+      "source": [
+        "route:",
+        "  receiver: team-chat",
+        "  group_by: [alertname, cluster]   # one message per alert name and cluster",
+        "  group_wait: 30s                  # wait for related alerts before the first message",
+        "  group_interval: 5m",
+        "  repeat_interval: 4h              # remind while it is still firing",
+        "  routes:",
+        "    - receiver: on-call-pager",
+        "      matchers:",
+        "        - severity=\"page\"",
+        "",
+        "inhibit_rules:",
+        "  - source_matchers: [alertname=\"ClusterUnreachable\"]",
+        "    target_matchers: [severity=~\"page|ticket\"]",
+        "    equal: [cluster]",
+        "",
+        "receivers:",
+        "  - name: on-call-pager",
+        "    pagerduty_configs:",
+        "      - routing_key: <secret>",
+        "  - name: team-chat",
+        "    slack_configs:",
+        "      - channel: \"#checkout-alerts\""
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Early monitoring tools such as Nagios ran a check per host or service and sent a notification whenever one failed. As systems grew to hundreds of instances, one network problem could mean hundreds of messages. When SoundCloud described Prometheus publicly in 2015, alerting was split in two: rules written in the query language decided when something was wrong, and a separate Alertmanager handled notifications, aggregated them and let people silence alerts by any set of labels before paging through a service like PagerDuty.",
+      "What deserves a page was argued out at Google. Rob Ewaschuk, after seven years on call there as a Site Reliability Engineer, wrote “My Philosophy on Alerting”, widely shared in 2014: pages should be “urgent, important, actionable, and real”, symptoms beat causes, and he could react with urgency only “a few times a day before I get fatigued”. The ideas became the “Monitoring Distributed Systems” chapter of Google’s 2016 Site Reliability Engineering book, which he wrote.",
+      "The 2018 Site Reliability Workbook tied alerts to service level objectives. Its “Alerting on SLOs” chapter walks through simple thresholds and their flaws before recommending burn-rate alerts over several windows: page when 2% of a 30-day error budget is spent in an hour (a burn rate of 14.4) or 5% in six hours, and open a ticket when 10% goes in three days. Cloud monitoring services and Grafana now offer the same building blocks: rules, pending periods, routing and silences."
+    ],
+    "choices": [
+      { "choice": "Alert on symptoms, not causes", "why": "Users feel errors and latency, not CPU. A symptom rule catches many different causes, including ones nobody predicted, and doesn’t fire when a busy CPU is harmless." },
+      { "choice": "Wait before firing", "why": "A `for` duration or an M-out-of-N rule ignores brief spikes that fix themselves, trading a few minutes of detection time for far fewer false pages." },
+      { "choice": "Separate evaluation from notification", "why": "Rules only say what is wrong. Grouping, routing, inhibition and silences in a separate layer turn a storm of related alerts into one message to the right person." },
+      { "choice": "Spend an error budget instead of a fixed threshold", "why": "A burn-rate alert asks how fast the service is using up its allowed failures, so a short sharp outage and a long slow leak both get caught, at the urgency each deserves." }
+    ],
+    "timeline": [
+      { "year": "1999", "text": "NetSaint, later Nagios, sends a notification per failed check" },
+      { "year": "2014", "text": "Rob Ewaschuk’s “My Philosophy on Alerting” circulates widely" },
+      { "year": "2015", "text": "SoundCloud describes Prometheus and its separate Alertmanager" },
+      { "year": "2016", "text": "Google’s SRE book argues for symptom-based alerting" },
+      { "year": "2018", "text": "The SRE Workbook recommends multiwindow burn-rate alerts on SLOs" }
+    ],
+    "sources": [
+      { "label": "Nagios: History (NetSaint, 1999)", "url": "https://www.nagios.org/about/history/" },
+      { "label": "Nagios Core docs: Notifications", "url": "https://assets.nagios.com/downloads/nagioscore/docs/nagioscore/4/en/notifications.html" },
+      { "label": "SoundCloud: Prometheus, monitoring at SoundCloud (Alertmanager, silencing) (2015)", "url": "https://developers.soundcloud.com/blog/prometheus-monitoring-at-soundcloud" },
+      { "label": "Rob Ewaschuk: My Philosophy on Alerting (Google Doc)", "url": "https://docs.google.com/document/d/199PqyG3UsyXlwieHaqbGiWVa8eMWi8zzAn0YfcApr8Q/edit" },
+      { "label": "Google SRE book: Monitoring Distributed Systems, by Rob Ewaschuk", "url": "https://sre.google/sre-book/monitoring-distributed-systems/" },
+      { "label": "Google SRE book: Preface (copyright 2016)", "url": "https://sre.google/sre-book/preface/" },
+      { "label": "Google SRE Workbook: Alerting on SLOs (2018)", "url": "https://sre.google/workbook/alerting-on-slos/" }
+    ]
+  },
+  "sources": [
+    { "label": "Prometheus docs: Alerting rules (for, keep_firing_for, labels, annotations)", "url": "https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/" },
+    { "label": "Prometheus docs: Alertmanager (grouping, inhibition, silences)", "url": "https://prometheus.io/docs/alerting/latest/alertmanager/" },
+    { "label": "Prometheus docs: Alertmanager configuration (route, inhibit_rules, receivers)", "url": "https://prometheus.io/docs/alerting/latest/configuration/" },
+    { "label": "Google SRE Workbook: Alerting on SLOs (burn rates 14.4, 6 and 1)", "url": "https://sre.google/workbook/alerting-on-slos/" },
+    { "label": "Google SRE book: Monitoring Distributed Systems (symptoms versus causes)", "url": "https://sre.google/sre-book/monitoring-distributed-systems/" },
+    { "label": "AWS docs: Using Amazon CloudWatch alarms (metric and composite alarms)", "url": "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Alarms.html" },
+    { "label": "AWS docs: Alarm evaluation (datapoints to alarm, M out of N)", "url": "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/alarm-evaluation.html" },
+    { "label": "Google Cloud docs: Alerting overview (alerting policies, notification channels)", "url": "https://cloud.google.com/monitoring/alerts" },
+    { "label": "Microsoft Learn: Azure Monitor alerts overview (alert rules, action groups)", "url": "https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/alerts-overview" },
+    { "label": "Grafana docs: Grafana Alerting", "url": "https://grafana.com/docs/grafana/latest/alerting/" },
+    { "label": "Datadog docs: Monitors", "url": "https://docs.datadoghq.com/monitors/" },
+    { "label": "Sentry docs: Alerts", "url": "https://docs.sentry.io/product/alerts/" },
+    { "label": "Better Stack docs: Escalation policies", "url": "https://betterstack.com/docs/uptime/escalation-policies/" }
+  ]
+}

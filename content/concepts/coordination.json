@@ -1,0 +1,173 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Coordination services",
+  "category": "data",
+  "order": 60,
+  "summary": "A small, strongly consistent store, usually three or five servers, that a distributed system uses to agree on who leads, who holds a lock and what the configuration is.",
+  "howItWorks": "When many machines share a job, they keep needing to agree on small facts: which copy is the leader, who holds a lock, which servers are alive, what the current settings are. A coordination service is a dedicated cluster, usually three or five servers, that answers those questions so that every client sees the same answer. The servers run a consensus protocol (Paxos in Google’s Chubby, Zab in ZooKeeper, Raft in etcd and Consul). One server is elected leader and every write goes through it. The leader adds the write to a replicated log and counts it as committed only once a majority, called a quorum, has stored it. Any two majorities share at least one server, so a committed write is never lost, and a minority cut off by a network split stops accepting writes instead of disagreeing. That is why clusters have an odd number of members: five servers survive two failures, and a sixth adds nothing. On top of the log sit a few primitives. Watches tell a client when a key changes, so it doesn’t poll. Leases and sessions tie a key to a client’s heartbeats, so an ephemeral key, such as a lock or an “I’m alive” record, disappears when its owner dies. Compare-and-set and sequential keys let many clients race for a lock and exactly one win. Every write is replicated through one leader and synced to disk, so these systems hold kilobytes to a few gigabytes of metadata, never your application’s data: etcd defaults to a 2 GiB quota and suggests 8 GiB at most, and ZooKeeper keeps everything in memory with each node capped just under 1 MB.",
+  "analogy": "A club committee keeping the official minute book. A decision counts only once most members have signed it, so losing one or two members changes nothing, and two halves of a split committee can never both pass rules. The committee doesn’t store the club’s belongings, only who holds which key.",
+  "useWhen": [
+    "Electing one active leader among several copies of a service: a database primary, a scheduler, a controller",
+    "Locks and leases for work that must happen in exactly one place at a time",
+    "Small shared configuration and membership lists that many machines watch for changes",
+    "Metadata for a bigger system, like Kubernetes objects in etcd or Vitess’s shard map"
+  ],
+  "avoidWhen": [
+    "Application data, large values or heavy write traffic: a few GB at most, and every write goes through one leader",
+    "Caches and counters that can live with stale reads; a key-value store or cache is faster and scales out",
+    "Lock-protected writes without a fencing token: a paused client can outlive its lease, so pass the lock’s revision (or ZooKeeper’s `zxid`) to the storage and have it reject older ones"
+  ],
+  "example": "Three copies of a billing scheduler must never charge customers twice in one night. Each starts by trying to create the key `/billing/leader` in etcd, attached to a 10-second lease it keeps renewing. The one whose transaction succeeds runs the jobs; the other two watch the key. If the leader’s machine dies, its renewals stop, the lease expires within 10 seconds, the key disappears, and the watchers race again until one wins. The five-member etcd cluster underneath keeps working through the loss of any two members.",
+  "providers": {
+    "aws": "No general-purpose coordination service. Amazon EKS runs etcd (three instances across three Availability Zones) inside each cluster’s control plane; Amazon MSK runs ZooKeeper for ZooKeeper-mode Kafka clusters; AWS Cloud Map for service discovery",
+    "gcp": "No standalone service. GKE keeps each cluster’s state in etcd on the control plane or in Spanner, managed for you; Service Directory for service discovery",
+    "azure": "No standalone service. AKS manages etcd in its control plane, and HDInsight uses ZooKeeper to elect the active head node",
+    "oss": "etcd (Apache 2.0, CNCF), Apache ZooKeeper with the Apache Curator client library, Consul (Business Source License since 1.17); Google’s Chubby is internal only"
+  },
+  "snippet": {
+    "lang": "bash",
+    "source": [
+      "# every write gets a new cluster-wide revision number",
+      "etcdctl put /config/feature-x on",
+      "etcdctl get /config/feature-x -w json        # shows mod_revision",
+      "",
+      "# be told about changes instead of polling",
+      "etcdctl watch /config/ --prefix",
+      "",
+      "# a key that vanishes when its owner stops renewing the lease",
+      "etcdctl lease grant 10                        # lease 694d7bc81a3c5e2f granted with TTL(10s)",
+      "etcdctl put /members/worker-7 10.0.3.7 --lease=694d7bc81a3c5e2f",
+      "etcdctl lease keep-alive 694d7bc81a3c5e2f",
+      "",
+      "# hold a named lock while a command runs",
+      "etcdctl lock nightly-billing ./charge-customers.sh"
+    ]
+  },
+  "related": ["key-value", "service-mesh", "orchestration", "relational"],
+  "diagram": {
+    "caption": "A five-member cluster. Services send every write to the leader, which copies it to all four followers; a write is committed once a majority (three of five, counting the leader) has it. Two followers can go down and writes still succeed. When the leader itself fails, writes stop until the others elect a new one, about a second with etcd’s defaults (the model reuses the same box for the new leader).",
+    "w": 760,
+    "h": 300,
+    "nodes": [
+      {
+        "id": "clients",
+        "x": 100,
+        "y": 150,
+        "label": "Services",
+        "sub": "locks, leaders, config",
+        "emit": { "every": 900, "jitter": 0.3, "req": true, "cycle": true },
+        "out": ["leader"]
+      },
+      {
+        "id": "leader",
+        "x": 330,
+        "y": 150,
+        "label": "Leader",
+        "sub": "orders every write",
+        "route": "fanout",
+        "out": ["f1", "f2", "f3", "f4"]
+      },
+      {
+        "id": "f1",
+        "x": 610,
+        "y": 45,
+        "label": "Follower A",
+        "sub": "log + key-value state",
+        "mode": "reply",
+        "delay": 30
+      },
+      {
+        "id": "f2",
+        "x": 610,
+        "y": 115,
+        "label": "Follower B",
+        "sub": "log + key-value state",
+        "mode": "reply",
+        "delay": 40
+      },
+      {
+        "id": "f3",
+        "x": 610,
+        "y": 185,
+        "label": "Follower C",
+        "sub": "log + key-value state",
+        "mode": "reply",
+        "delay": 35
+      },
+      {
+        "id": "f4",
+        "x": 610,
+        "y": 255,
+        "label": "Follower D",
+        "sub": "log + key-value state",
+        "mode": "reply",
+        "delay": 45
+      }
+    ],
+    "events": [
+      { "node": "f4", "at": 3000, "every": 16000, "dur": 5000, "text": "member down", "back": "back, catching up" },
+      { "node": "f2", "at": 4500, "every": 16000, "dur": 3000, "text": "member down: 3 of 5 left", "back": "back, catching up" },
+      { "node": "leader", "at": 11000, "every": 16000, "dur": 1800, "text": "leader lost: electing", "back": "new leader elected" }
+    ]
+  },
+  "history": {
+    "story": [
+      "In the late 1980s Leslie Lamport set out to prove that Echo, a fault-tolerant file system built at the SRC research lab, was trying to do the impossible: stay consistent through failures and keep working while any majority of its machines was up. Instead he found an algorithm that does exactly that, and described it as the parliament of an imaginary Greek island, Paxos. The paper, first submitted in 1990, appeared only in 1998. For years consensus stayed mostly academic, and each distributed system improvised its own failure handling.",
+      "In 2006 Google’s Mike Burrows described Chubby. Rather than ask every team to build Paxos into its programs, Google ran a small lock service, typically five replicas per cell, that also stored small files. GFS used a Chubby lock to appoint its master; Bigtable used Chubby to elect a master, find its servers and let clients find the master. Engineers at Yahoo built ZooKeeper for the same needs but chose a lower-level API: a tree of small data nodes with watches, “Chubby without the lock methods”, from which clients build their own locks, queues and elections. It came to Apache in 2008, was described in a 2010 paper, and became the coordination layer of the Hadoop generation, from HBase to Kafka.",
+      "In 2013 CoreOS announced etcd, a key-value store for shared configuration and service discovery, built on Raft, a consensus algorithm Diego Ongaro and John Ousterhout designed at Stanford to be easier to understand than Paxos and published in 2014. HashiCorp’s Consul, released in 2014, used Raft too. Kubernetes made etcd the store for all of its cluster state. Since then, some systems have absorbed consensus instead of depending on a separate service: Kafka 4.0 (2025) replaced ZooKeeper with its own Raft quorum."
+    ],
+    "choices": [
+      { "choice": "A separate service instead of a consensus library in every program", "why": "Chubby’s designers found that systems usually start as prototypes and need high availability only later. Taking a lock to become master took a couple of statements; restructuring an existing server to take part in a consensus protocol was far harder." },
+      { "choice": "Majority quorums and odd cluster sizes", "why": "Any two majorities overlap, so a committed write survives failures and two halves of a split cluster can never both accept writes. Four members tolerate no more failures than three, so clusters run three, five or at most seven members." },
+      { "choice": "Watches and invalidations instead of polling or timeouts", "why": "Chubby pushed invalidations to clients that cached data, and its developers liked not having to pick a cache timeout like DNS’s time-to-live. ZooKeeper’s watches let a client cache, say, the current leader and hear the moment it changes." },
+      { "choice": "Keys tied to a client’s heartbeats", "why": "If a lock holder crashes, someone must notice and free the lock. Chubby sessions, ZooKeeper’s ephemeral nodes and etcd’s leases all delete a client’s keys when its keep-alives stop, which turns failure detection into a key disappearing." }
+    ],
+    "timeline": [
+      { "year": "1990", "text": "Lamport submits “The Part-Time Parliament”, describing Paxos; it is published in 1998" },
+      { "year": "2006", "text": "Google describes Chubby at OSDI" },
+      { "year": "2008", "text": "ZooKeeper, built at Yahoo, comes to the Apache Software Foundation" },
+      { "year": "2010", "text": "ZooKeeper paper at USENIX ATC; it becomes a top-level Apache project" },
+      { "year": "2013", "text": "CoreOS announces etcd, built on Raft" },
+      { "year": "2014", "text": "Raft paper at USENIX ATC; HashiCorp releases Consul" },
+      { "year": "2020", "text": "etcd graduates in the CNCF" },
+      { "year": "2025", "text": "Kafka 4.0 runs without ZooKeeper, on its own Raft quorum" }
+    ],
+    "sources": [
+      { "label": "Leslie Lamport: The Part-Time Parliament (ACM TOCS, May 1998), with his note on its history", "url": "https://lamport.azurewebsites.net/pubs/pubs.html#lamport-paxos" },
+      { "label": "Mike Burrows: The Chubby lock service for loosely-coupled distributed systems (OSDI 2006)", "url": "https://research.google/pubs/the-chubby-lock-service-for-loosely-coupled-distributed-systems/" },
+      { "label": "Hunt, Konar, Junqueira, Reed: ZooKeeper, wait-free coordination for Internet-scale systems (USENIX ATC 2010)", "url": "https://www.usenix.org/conference/usenix-atc-10/zookeeper-wait-free-coordination-internet-scale-systems" },
+      { "label": "ASF Milestones: ZooKeeper arrives in 2008 and becomes a top-level project in 2010", "url": "https://apache.org/press/highlights" },
+      { "label": "CoreOS blog: Distributed configuration data with etcd (Brandon Philips, July 2013)", "url": "https://coreos.com/blog/distributed-configuration-with-etcd/", "archive": "https://web.archive.org/web/20140226172030/http://coreos.com/blog/distributed-configuration-with-etcd/" },
+      { "label": "Ongaro and Ousterhout: In search of an understandable consensus algorithm (USENIX ATC 2014)", "url": "https://www.usenix.org/conference/atc14/technical-sessions/presentation/ongaro" },
+      { "label": "HashiCorp blog: Consul announcement (Armon Dadgar, Apr 2014)", "url": "https://www.hashicorp.com/en/blog/consul-announcement" },
+      { "label": "CNCF: Cloud Native Computing Foundation announces etcd graduation (Nov 2020)", "url": "https://www.cncf.io/announcements/2020/11/24/cloud-native-computing-foundation-announces-etcd-graduation/" },
+      { "label": "Apache Kafka 4.0.0 release announcement (Mar 2025)", "url": "https://kafka.apache.org/blog/2025/03/18/apache-kafka-4.0.0-release-announcement/" },
+      { "label": "etcd docs: FAQ (odd cluster sizes, at most seven members)", "url": "https://etcd.io/docs/v3.7/faq/" }
+    ]
+  },
+  "sources": [
+    { "label": "Mike Burrows: The Chubby lock service (OSDI 2006 paper, PDF): five-replica cells, master leases, GFS and Bigtable", "url": "https://storage.googleapis.com/gweb-research2023-media/pubtools/4444.pdf" },
+    { "label": "ZooKeeper docs: Overview (leader, followers, majority, in-memory data)", "url": "https://zookeeper.apache.org/doc/current/zookeeperOver.html" },
+    { "label": "ZooKeeper docs: Programmer’s guide (ephemeral and sequential znodes, watches, data under 1 MB)", "url": "https://zookeeper.apache.org/doc/current/zookeeperProgrammers.html" },
+    { "label": "ZooKeeper docs: Recipes (locks and leader election)", "url": "https://zookeeper.apache.org/doc/current/recipes.html" },
+    { "label": "ZooKeeper docs: Administrator’s guide (odd ensembles, jute.maxbuffer)", "url": "https://zookeeper.apache.org/doc/current/zookeeperAdmin.html" },
+    { "label": "etcd docs: FAQ (quorum, failure tolerance by cluster size)", "url": "https://etcd.io/docs/v3.7/faq/" },
+    { "label": "etcd docs: System limits (2 GiB default quota, 8 GiB suggested maximum)", "url": "https://etcd.io/docs/v3.7/dev-guide/limit/" },
+    { "label": "etcd docs: Why etcd (comparison with ZooKeeper and Consul)", "url": "https://etcd.io/docs/v3.7/learning/why/" },
+    { "label": "etcd docs: Tuning (100 ms heartbeat, 1000 ms election timeout)", "url": "https://etcd.io/docs/v3.7/tuning/" },
+    { "label": "etcdctl README: put, get, watch, lease and lock commands", "url": "https://github.com/etcd-io/etcd/blob/main/etcdctl/README.md" },
+    { "label": "Consul docs: Consensus (Raft)", "url": "https://developer.hashicorp.com/consul/docs/concept/consensus" },
+    { "label": "Consul docs: Sessions and distributed locks (inspired by Chubby)", "url": "https://developer.hashicorp.com/consul/docs/automate/session" },
+    { "label": "GitHub: hashicorp/consul LICENSE (BUSL 1.1 for Consul 1.17.0 and later)", "url": "https://github.com/hashicorp/consul/blob/main/LICENSE" },
+    { "label": "Martin Kleppmann: How to do distributed locking (Feb 2016), on fencing tokens", "url": "https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html" },
+    { "label": "Kubernetes docs: Cluster components (etcd holds all API server data)", "url": "https://kubernetes.io/docs/concepts/overview/components/" },
+    { "label": "Vitess docs: Topology service (etcd, ZooKeeper or Consul)", "url": "https://vitess.io/docs/24.0/reference/features/topology-service/" },
+    { "label": "Amazon EKS User Guide: Architecture (three etcd instances across three Availability Zones)", "url": "https://docs.aws.amazon.com/eks/latest/userguide/eks-architecture.html" },
+    { "label": "Amazon MSK Developer Guide: Metadata management (ZooKeeper and KRaft modes)", "url": "https://docs.aws.amazon.com/msk/latest/developerguide/metadata-management.html" },
+    { "label": "AWS Cloud Map docs: What is AWS Cloud Map?", "url": "https://docs.aws.amazon.com/cloud-map/latest/dg/what-is-cloud-map.html" },
+    { "label": "Google Cloud: GKE cluster architecture (cluster state in etcd or Spanner)", "url": "https://cloud.google.com/kubernetes-engine/docs/concepts/cluster-architecture" },
+    { "label": "Google Cloud: Service Directory overview", "url": "https://docs.cloud.google.com/service-directory/docs/overview" },
+    { "label": "Microsoft Learn: Core concepts for AKS (etcd in the control plane)", "url": "https://learn.microsoft.com/en-us/azure/aks/core-aks-concepts" },
+    { "label": "Microsoft Learn: HDInsight high availability components (ZooKeeper head node election)", "url": "https://learn.microsoft.com/en-us/azure/hdinsight/hdinsight-high-availability-components" }
+  ]
+}

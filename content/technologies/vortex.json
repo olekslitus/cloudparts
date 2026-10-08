@@ -1,0 +1,138 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Vortex",
+  "concepts": ["file-formats"],
+  "kinds": ["columnar-files"],
+  "provider": "oss",
+  "vendor": "LF AI & Data (Linux Foundation), started at SpiralDB",
+  "license": "Apache 2.0",
+  "website": "https://vortex.dev/",
+  "repo": "https://github.com/vortex-data/vortex",
+  "summary": "A columnar file format and toolkit that keeps data compressed with modern encodings, reads single rows fast and runs filters directly on the compressed data, pitched as a faster successor to Parquet.",
+  "intro": [
+    "Parquet encodes each column and then usually squeezes every page with a general-purpose codec such as Snappy or Zstd, so a reader has to decompress a whole page before it can filter it or fetch one row. Vortex stores columns with lightweight encodings from recent database research instead: FastLanes for integers, FSST for strings, ALP for floating-point numbers, plus dictionary and run-length encoding, layered on top of each other by a sampling compressor modelled on BtrBlocks. Many of these encodings can be read at a single position, and Vortex’s compute functions can work on them directly. A comparison on dictionary-encoded data, for example, runs once over the small set of unique values instead of every row. In memory, every encoded array can be converted to a canonical form, which for almost every type matches Apache Arrow.",
+    "A file is a tree of layouts: struct layouts split a table into columns, chunked layouts split columns into row ranges, zone maps store statistics for blocks of rows, and flat layouts hold the encoded data in segments. The footer is small FlatBuffer metadata, so a reader can find one column among 100,000 without parsing the rest. The project claims 100× faster random access, 10 to 20× faster scans and 5× faster writes than Parquet at similar compression; those are its own benchmarks. Readers and writers exist for Rust, Python, Java and C/C++, with integrations for DataFusion, DuckDB, Spark, Trino, Polars and Ray. The library is still pre-1.0 (0.87 in October 2026), but the file format has been stable since 0.36.0 in May 2025: newer readers can read any file written since then."
+  ],
+  "strengths": [
+    "Fast reads of individual rows by position, so lookups and shuffled sampling don’t require reading whole pages",
+    "Filters and other compute can run on compressed data, saving decompression work and memory bandwidth",
+    "Encodings, layouts and compression strategies are plug-ins, so new compression research can be added without a new format",
+    "Zero-copy conversion to and from Apache Arrow, and native readers in DataFusion, DuckDB and Spark",
+    "Neutral governance: an Apache 2.0 project in the Linux Foundation’s LF AI & Data, not owned by one company"
+  ],
+  "limits": [
+    "Young: library APIs still change between releases, and far fewer engines and warehouses read it than Parquet",
+    "Table-format support is limited; the project lists Apache Iceberg integration as “coming soon”",
+    "Small files carry a lot of overhead: the docs’ 71 KiB example is twice the size of the Parquet original, and Vortex only matches Parquet from tens of megabytes up",
+    "The headline speedups come from the project’s own benchmarks, and SpiralDB, which started it, builds a commercial product on it",
+    "Newer readers can read old files, but a writer using new encodings has to target an older “edition” for older readers to keep up"
+  ],
+  "worksWith": [
+    { "id": "arrow", "how": "converts zero-copy to and from" },
+    { "id": "parquet", "how": "converts data from" },
+    { "id": "datafusion", "how": "is a native file format for" },
+    { "id": "duckdb", "how": "is read and written, via an extension, by" },
+    { "id": "spark", "how": "is read and written, via a connector, by" },
+    { "id": "polars", "how": "opens files as LazyFrames in" },
+    { "id": "s3", "how": "reads and writes files in" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Convert Parquet to Vortex and fetch three rows",
+    "source": [
+      "import pyarrow.parquet as pq",
+      "import vortex as vx   # pip install vortex-data",
+      "",
+      "vx.io.write(pq.read_table(\"trips.parquet\"), \"trips.vortex\")",
+      "",
+      "vf = vx.open(\"trips.vortex\")",
+      "everything = vf.scan().read_all()",
+      "",
+      "# random access: read only these rows (ordered, unique)",
+      "rows = vf.scan(indices=vx.array([1, 2, 10])).read_all()",
+      "",
+      "lf = vf.to_polars()   # a Polars LazyFrame with pushdown (experimental)"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Vortex or Parquet?",
+      "corner": "",
+      "columns": ["Parquet", "Vortex"],
+      "rows": [
+        { "label": "Compression", "values": ["Encodings plus general-purpose codecs (Snappy, Zstd and others) on each page", "Lightweight encodings (FastLanes, FSST, ALP, dictionary, run-length), cascaded and chosen by sampling"] },
+        { "label": "Reading one row", "values": ["Decompress and decode the page that holds it", "Jump to the position inside the encoded data"] },
+        { "label": "Filtering", "values": ["Skip row groups and pages by statistics, then decompress the rest", "Skip by zone maps, then evaluate many filters on the compressed data"] },
+        { "label": "Metadata", "values": ["A Thrift footer (FileMetaData) with offsets for every column chunk", "A FlatBuffer footer that can be read lazily, column by column, for very wide tables"] },
+        { "label": "Extending it", "values": ["New encodings need every reader to change", "Encodings and layouts are plug-ins, versioned through editions"] },
+        { "label": "Maturity", "values": ["Read by nearly every engine and warehouse", "Format stable since May 2025; library still 0.x; Iceberg support coming"] }
+      ]
+    },
+    {
+      "type": "code",
+      "title": "Read and write Vortex from DuckDB",
+      "intro": "DuckDB’s `vortex` extension (DuckDB 1.4.2 and later, Linux and macOS) reads and writes the files with SQL.",
+      "lang": "sql",
+      "source": [
+        "INSTALL vortex;",
+        "LOAD vortex;",
+        "",
+        "COPY (FROM 'trips.parquet') TO 'trips.vortex' (FORMAT vortex);",
+        "",
+        "SELECT passenger_count, avg(fare_amount)",
+        "FROM read_vortex('trips.vortex')",
+        "GROUP BY passenger_count;"
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "SpiralDB built Vortex while designing Spiral, an object-store native data system for AI workloads. The founders’ question was where storage ends and compute begins. Modern GPUs can take in terabits per second, but formats like Parquet need a CPU in the middle to decompress everything first. They wanted a format that stays compressed as long as possible, through memory, disk and the network, and that could one day be decoded straight from object storage onto a GPU.",
+      "The repository started in February 2024. Rather than invent new compression, the team built on published database research such as FastLanes, FSST, ALP and BtrBlocks, and wrote about several of them on Spiral’s blog as they went. One of the first things they built was a logical type system kept separate from the physical encoding, unlike Arrow, where the type also fixes the memory layout. In April 2025 they described the file format planned for 1.0, and release 0.36.0 in May 2025 froze its first edition.",
+      "In August 2025 SpiralDB donated Vortex to the Linux Foundation as an LF AI & Data incubation project, backed by Microsoft, Snowflake, Palantir and NVIDIA; Microsoft reported 30% shorter Spark runtimes using Vortex inside Apache Iceberg. Arrow co-creator Wes McKinney sits on its technical steering committee. The project now lives in its own vortex-data GitHub organization, under a Linux Foundation technical charter."
+    ],
+    "choices": [
+      { "choice": "Separate logical types from physical encodings", "why": "Arrow ties each type to one memory layout. Vortex needed a column of strings to be held as FSST-compressed buffers, a dictionary or plain Arrow, while still meaning “a column of strings” to every function." },
+      { "choice": "Compute on compressed data", "why": "Pruning by statistics only skips data. Vortex has a registry of compute kernels that encodings can override, so a comparison can run on dictionary codes or on ALP’s integer form instead of decompressing first; Spiral reported an 80% speedup for float comparisons this way." },
+      { "choice": "Layouts are separate from the file", "why": "A layout only says which segments exist, not where they live, so the same structure can sit in a Vortex file, in a cache, or even in Postgres block storage, which ParadeDB explored." },
+      { "choice": "Editions instead of a frozen feature list", "why": "To keep adding encodings without breaking readers, writers target a dated edition. Readers can always read older editions, and a writer can be held back to an edition that older readers understand." }
+    ],
+    "timeline": [
+      { "year": "2024", "text": "The Vortex repository starts at SpiralDB (February)" },
+      { "year": "2025", "text": "“Towards Vortex 1.0” describes the file format (April)" },
+      { "year": "2025", "text": "Release 0.36.0 freezes the first edition; files stay readable from here on (May)" },
+      { "year": "2025", "text": "Donated to the Linux Foundation as an LF AI & Data incubation project (August)" },
+      { "year": "2026", "text": "Release 0.87.0, with DuckDB, DataFusion, Spark and Trino integrations (October)" }
+    ],
+    "sources": [
+      { "label": "Nicholas Gates and Will Manning: Vortex, a Linux Foundation Project (Aug 2025)", "url": "https://spiraldb.com/blog/vortex-a-linux-foundation-project" },
+      { "label": "Linux Foundation press release: LF AI & Data Foundation Hosts Vortex Project (Aug 2025)", "url": "https://www.linuxfoundation.org/press/lf-ai-data-foundation-hosts-vortex-project-to-power-high-performance-data-access-for-ai-and-analytics" },
+      { "label": "Spiral: Towards Vortex 1.0 (Apr 2025)", "url": "https://spiraldb.com/blog/towards-vortex-10" },
+      { "label": "Spiral: Life in the FastLanes (June 2024)", "url": "https://spiraldb.com/blog/life-in-the-fastlanes" },
+      { "label": "Spiral: Compressing strings with FSST (Nov 2024)", "url": "https://spiraldb.com/blog/compressing-strings-with-fsst" },
+      { "label": "Spiral: What if we just didn’t decompress it? (Mar 2025)", "url": "https://spiraldb.com/blog/what-if-we-just-didnt-decompress-it" },
+      { "label": "Vortex 0.36.0 release on GitHub (May 2025)", "url": "https://github.com/vortex-data/vortex/releases/tag/0.36.0" },
+      { "label": "vortex-data/vortex on GitHub (repository created February 2024; governance and research acknowledgements)", "url": "https://github.com/vortex-data/vortex" }
+    ]
+  },
+  "sources": [
+    { "label": "vortex-data/vortex README: performance claims, integrations, format stability from 0.36.0, Apache 2.0, LF AI & Data", "url": "https://github.com/vortex-data/vortex" },
+    { "label": "Vortex documentation: compressed arrays (FastLanes, FSST, ALP), FlatBuffer metadata, engine integrations", "url": "https://docs.vortex.dev/" },
+    { "label": "Vortex docs: Versioning and compatibility (editions; first frozen edition core2025.05.0)", "url": "https://docs.vortex.dev/specs/versioning.html" },
+    { "label": "Vortex docs: Python quickstart (small-file overhead, random access by row indices)", "url": "https://docs.vortex.dev/getting-started/python.html" },
+    { "label": "Vortex docs: Convert (BtrBlocks compression by default)", "url": "https://docs.vortex.dev/getting-started/convert.html" },
+    { "label": "Vortex docs: DataFusion integration (native FileFormat, pushdown)", "url": "https://docs.vortex.dev/user-guide/datafusion.html" },
+    { "label": "Vortex docs: DuckDB extension (DuckDB 1.4.2+)", "url": "https://docs.vortex.dev/user-guide/duckdb.html" },
+    { "label": "Vortex docs: Spark DataSource V2 connector", "url": "https://docs.vortex.dev/user-guide/spark.html" },
+    { "label": "Vortex docs: Polars integration (experimental)", "url": "https://docs.vortex.dev/user-guide/polars.html" },
+    { "label": "Vortex docs: Roadmap (CUDA, Scan API, tensor and variant types)", "url": "https://docs.vortex.dev/project/roadmap.html" },
+    { "label": "Apache Parquet docs: Compression codecs for data pages", "url": "https://parquet.apache.org/docs/file-format/data-pages/compression/" },
+    { "label": "Apache Parquet docs: File metadata (Thrift FileMetaData)", "url": "https://parquet.apache.org/docs/file-format/metadata/" },
+    { "label": "DuckDB docs: Vortex extension", "url": "https://duckdb.org/docs/current/core_extensions/vortex" },
+    { "label": "Nicholas Gates and Will Manning: Vortex, a Linux Foundation Project (architecture, compute push-down, wide schemas) (Aug 2025)", "url": "https://spiraldb.com/blog/vortex-a-linux-foundation-project" },
+    { "label": "Spiral: Towards Vortex 1.0 (layouts, file structure, default write strategy) (Apr 2025)", "url": "https://spiraldb.com/blog/towards-vortex-10" },
+    { "label": "Vortex 0.87.0 release on GitHub (Oct 2026)", "url": "https://github.com/vortex-data/vortex/releases/tag/0.87.0" }
+  ],
+  "checked": "2026-10-06"
+}

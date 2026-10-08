@@ -1,0 +1,102 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Turso",
+  "concepts": ["relational"],
+  "provider": "oss",
+  "vendor": "Turso (acquisition by Supabase announced October 2026)",
+  "license": "MIT (Turso Database and libSQL); Turso Cloud is a proprietary hosted service",
+  "website": "https://turso.tech/",
+  "repo": "https://github.com/tursodatabase/turso",
+  "summary": "A from-scratch Rust rewrite of SQLite with concurrent writes, plus libSQL (an open-contribution SQLite fork) and Turso Cloud, which hosts many small databases on S3.",
+  "intro": [
+    "Turso is three things from one company. libSQL (2022) is an MIT-licensed fork of SQLite that accepts outside contributions, which SQLite itself doesn’t, and adds a server for remote access and “embedded replicas”. Turso Database, announced in December 2024 under the codename Limbo, is a new implementation of SQLite in Rust: an in-process library, like SQLite, that reads and writes the same file format, speaks the same SQL dialect and offers the same C API, so existing SQLite files open as they are. Turso Cloud is the hosted service. The company now develops the Rust engine and keeps libSQL maintained, but recommends the rewrite for new projects.",
+    "The main thing the rewrite changes is writing. SQLite lets one writer commit at a time per file; a second writer gets `database is locked`. In Turso’s MVCC journal mode, `BEGIN CONCURRENT` transactions each read a snapshot and write new versions of rows, tracked in an in-memory index, instead of taking a lock. At commit Turso checks for conflicts row by row: transactions that touched different rows all commit, and one that changed a row another transaction changed first fails with `SQLITE_BUSY` and must be retried. In the company’s own benchmark for version 0.8 (September 2026), 64 connections committed about 9,500 transactions per second, against about 1,370 for SQLite. The engine also uses asynchronous I/O (`io_uring` on Linux), runs in browsers through WebAssembly, and has an experimental Postgres front end that speaks the Postgres dialect and wire protocol.",
+    "Turso Cloud gives each user unlimited databases, queried over HTTP or synced into an application. Each database is split into 128 kB segments stored durably in S3; the server’s local disk is only a cache. A write is acknowledged once the newest write-ahead log has reached S3 Express, which takes single-digit milliseconds. Embedded replicas keep a local copy of a cloud database: reads come from the local file in microseconds, while writes go to the cloud primary and are synced back. The newer Turso Sync, built on the Rust engine, adds local-first writes with explicit `push()` and `pull()`."
+  ],
+  "strengths": [
+    "Drop-in for SQLite at the file and SQL level, still embedded in the process with no server to run",
+    "Concurrent writers with row-level conflict detection, past SQLite’s one-writer-per-file limit",
+    "MIT licence and an open contribution model, tested with deterministic simulation and Antithesis",
+    "Cheap per-tenant or per-agent databases in the cloud, durable on S3, with local replicas for microsecond reads"
+  ],
+  "limits": [
+    "Pre-1.0 and still moving: compatibility isn’t 100% yet (the project tracks gaps in COMPAT.md), several features are experimental, and the manual still marks the MVCC journal mode as not production-ready in one place while calling it supported in another",
+    "Concurrent transactions that change the same row fail at commit, so applications need retry logic; multi-process access to one file is still experimental",
+    "The product has changed course often: edge replicas ended for new users in 2025, the original libSQL SDKs gave way to Turso-native ones, and the company announced its sale to Supabase in October 2026",
+    "libSQL keeps SQLite’s single-writer model, and the published speed-ups of the rewrite are the vendor’s own benchmarks on one desktop machine"
+  ],
+  "worksWith": [
+    { "id": "sqlite", "how": "is a fork and a Rust rewrite of" },
+    { "id": "s3", "how": "keeps cloud databases durable in" },
+    { "id": "cloudflare-workers", "how": "is a third-party database for" },
+    { "id": "spice-ai", "how": "is a query acceleration engine in" },
+    { "id": "postgresql", "how": "speaks, experimentally, the wire protocol of" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "Concurrent writers on a SQLite-format file, in the `tursodb app.db` shell",
+    "source": [
+      "PRAGMA journal_mode = mvcc;   -- switch from WAL to multi-version concurrency",
+      "",
+      "CREATE TABLE events (id INTEGER PRIMARY KEY, kind TEXT NOT NULL);",
+      "",
+      "-- run on several connections at once: none of them waits for a lock",
+      "BEGIN CONCURRENT;",
+      "INSERT INTO events (kind) VALUES ('signup');",
+      "COMMIT;   -- SQLITE_BUSY only if another transaction changed the same row: retry"
+    ]
+  },
+  "history": {
+    "story": [
+      "SQLite is public domain, but it is open source without being open contribution: to keep it in the public domain and free of proprietary code, the project doesn’t accept patches from “random people on the internet”. In 2022 Glauber Costa and his cofounder Pekka Enberg forked it as libSQL, under the MIT licence, and invited the community to build it with them. To fund the work they launched a cloud service, announced in January 2023 as ChiselStrike Turso, which promised to bring “a SQLite-compatible embedded database to the edge”. Embedded replicas, local copies of a cloud database inside the application, followed that September.",
+      "libSQL gathered more than 13,000 GitHub stars, but by the founders’ own account few people used it as a SQLite replacement; most came for SQLite over the network, and deep contributions to the core were rare. Meanwhile Enberg had quietly started rewriting SQLite in Rust in his personal GitHub account. Turso announced the experiment as Limbo in December 2024, it passed 8,000 stars within a week, and in January 2025 the company went “all-in”: it renamed the rewrite Turso, stopped offering edge replicas (geographic copies) to new users because 70% of users had never created one, and began moving its cloud to AWS.",
+      "The rewrite reached its first alpha in July 2025 and a beta in October 2025, which added browser support, sync, encryption, concurrent writes and live materialized views. In 2026 the company pitched it for AI agents that each need their own small database, opened concurrent writes on Turso Cloud as an early preview in August, and released version 0.8 in September. On October 2, 2026 it announced that Supabase is acquiring it, saying the platform keeps running and Turso Database stays open source."
+    ],
+    "choices": [
+      { "choice": "Fork first, rewrite later", "why": "A fork was the fastest way to ship features such as replication and vector search on SQLite’s proven code. But invasive changes, such as the vector-search syntax they wanted or asynchronous I/O, were hard to make in a fork that tracks SQLite, which is what pushed the team to try a clean rewrite." },
+      { "choice": "Rust plus deterministic simulation testing", "why": "SQLite’s reputation rests on its reliability, so a rewrite had to match it. Rust brings memory safety, and building deterministic simulation into the engine from the start, plus Antithesis’s deterministic hypervisor, is meant to catch even the most obscure edge cases." },
+      { "choice": "Row-level MVCC instead of SQLite’s page-level approach", "why": "SQLite’s experimental `BEGIN CONCURRENT` branch, never merged, detects conflicts per page, so writers updating unrelated rows on the same B-tree page still collide. Turso kept the syntax but tracks row versions, so only true row conflicts abort." },
+      { "choice": "Keep cloud data in S3, with local disk as a cache", "why": "Splitting each database into segments in object storage, and fetching only what is hot, lets one server host huge numbers of small databases cheaply, which is what per-user and per-agent databases need." }
+    ],
+    "timeline": [
+      { "year": "2022", "text": "libSQL, an open-contribution fork of SQLite, created under the MIT licence" },
+      { "year": "2023", "text": "ChiselStrike Turso announced in January; public beta in April; embedded replicas in September" },
+      { "year": "2024", "text": "Limbo, a rewrite of SQLite in Rust, announced December 10" },
+      { "year": "2025", "text": "Rewrite renamed Turso in January; edge replicas end for new users; alpha in July, beta in October" },
+      { "year": "2026", "text": "Concurrent writes preview on Turso Cloud (Aug); version 0.8 (Sep); Supabase acquisition announced (Oct)" }
+    ],
+    "sources": [
+      { "label": "SQLite: Open-source, not open-contribution (copyright page)", "url": "https://www.sqlite.org/copyright.html" },
+      { "label": "tursodatabase/libsql on GitHub (created September 2022, MIT)", "url": "https://github.com/tursodatabase/libsql" },
+      { "label": "Turso blog: Announcing ChiselStrike Turso (Jan 2023, with later editor’s note)", "url": "https://turso.tech/blog/announcing-chiselstrike-turso-164472456b29" },
+      { "label": "Turso blog: Start free today, Turso public beta (Apr 2023)", "url": "https://turso.tech/blog/start-free-today-turso-public-beta-welcomes-you-to-the-data-edge-34f284474147" },
+      { "label": "Turso blog: Introducing embedded replicas (Sep 2023)", "url": "https://turso.tech/blog/introducing-embedded-replicas-deploy-turso-anywhere-2085aa0dc242" },
+      { "label": "Turso blog: Introducing Limbo, a complete rewrite of SQLite in Rust (Dec 2024)", "url": "https://turso.tech/blog/introducing-limbo-a-complete-rewrite-of-sqlite-in-rust" },
+      { "label": "Turso blog: We will rewrite SQLite. And we are going all-in (Jan 2025)", "url": "https://turso.tech/blog/we-will-rewrite-sqlite-and-we-are-going-all-in" },
+      { "label": "Turso blog: Upcoming changes to the Turso platform and roadmap (Jan 2025)", "url": "https://turso.tech/blog/upcoming-changes-to-the-turso-platform-and-roadmap" },
+      { "label": "Turso blog: Introducing the first alpha of Turso (Jul 2025)", "url": "https://turso.tech/blog/turso-the-next-evolution-of-sqlite" },
+      { "label": "Turso blog: Reviewing the Turso beta week (Oct 2025)", "url": "https://turso.tech/blog/turso-beta-week-why-we-did-it" },
+      { "label": "Turso blog: The next generation of Turso Cloud, now in private beta (Apr 2026)", "url": "https://turso.tech/blog/turso-cloud-new-generation-private-beta" },
+      { "label": "Turso blog: SQLite concurrent writes are here, early preview on Turso Cloud (Aug 2026)", "url": "https://turso.tech/blog/concurrent-writes-on-turso-cloud" },
+      { "label": "Turso blog: Turso 0.8, concurrent writes without SQLite’s single-writer bottleneck (Sep 2026)", "url": "https://turso.tech/blog/turso-0.8.0" },
+      { "label": "Turso blog: Turso is joining Supabase (Oct 2026)", "url": "https://turso.tech/blog/turso-is-joining-supabase" }
+    ]
+  },
+  "sources": [
+    { "label": "Turso Database README: features, experimental features, FAQ on 1.0 and libSQL, MIT licence", "url": "https://github.com/tursodatabase/turso/blob/main/README.md" },
+    { "label": "Turso Database manual: transactions, MVCC, journal modes", "url": "https://github.com/tursodatabase/turso/blob/main/docs/manual.md" },
+    { "label": "Turso Database COMPAT.md: SQLite compatibility status", "url": "https://github.com/tursodatabase/turso/blob/main/COMPAT.md" },
+    { "label": "libSQL README: open-contribution fork, embedded replicas, Turso recommended for new projects", "url": "https://github.com/tursodatabase/libsql/blob/main/README.md" },
+    { "label": "Turso blog: Turso 0.8, concurrent writes benchmark (Sep 2026)", "url": "https://turso.tech/blog/turso-0.8.0" },
+    { "label": "Turso blog: SQLite concurrent writes are here, early preview on Turso Cloud (Aug 2026)", "url": "https://turso.tech/blog/concurrent-writes-on-turso-cloud" },
+    { "label": "Turso blog: How does Turso Cloud keep your data durable and safe? (May 2025)", "url": "https://turso.tech/blog/how-does-the-turso-cloud-keep-your-data-durable-and-safe" },
+    { "label": "Turso blog: The next generation of Turso Cloud, now in private beta (Apr 2026)", "url": "https://turso.tech/blog/turso-cloud-new-generation-private-beta" },
+    { "label": "Turso docs: Embedded replicas (and Turso Sync)", "url": "https://docs.turso.tech/features/embedded-replicas/introduction" },
+    { "label": "Turso blog: Upcoming changes to the Turso platform and roadmap (Jan 2025)", "url": "https://turso.tech/blog/upcoming-changes-to-the-turso-platform-and-roadmap" },
+    { "label": "Turso blog: Announcing ChiselStrike Turso (editor’s note: no more edge replication, Turso-native SDKs)", "url": "https://turso.tech/blog/announcing-chiselstrike-turso-164472456b29" },
+    { "label": "Turso blog: Turso is joining Supabase (Oct 2026)", "url": "https://turso.tech/blog/turso-is-joining-supabase" },
+    { "label": "Cloudflare Workers docs: Turso integration", "url": "https://developers.cloudflare.com/workers/databases/third-party-integrations/turso/" },
+    { "label": "Spice.ai docs: Turso data accelerator", "url": "https://spiceai.org/docs/components/data-accelerators/turso" }
+  ],
+  "checked": "2026-10-06"
+}

@@ -1,0 +1,123 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Wide-column stores",
+  "category": "data",
+  "order": 22,
+  "summary": "Huge tables split into partitions by key, with rows kept sorted inside each one, built for heavy writes.",
+  "howItWorks": "A wide-column store keeps tables of rows, but it isn’t relational. Each row belongs to a partition, chosen by hashing its partition key (Cassandra, ScyllaDB) or by ranges of sorted row keys (Bigtable, HBase), and rows are stored in sorted order, by a clustering column such as a timestamp in Cassandra or by row key in Bigtable. That makes two things cheap: writing, and reading one partition or a slice of it, such as “the last hour of readings from sensor 7”. Rows don’t need the same columns, and a row can have a huge number of them, which is where “wide” comes from. Writes go to a commit log and an in-memory table, which is later flushed to immutable sorted files on disk, so even a delete is a write, called a tombstone. Filtering on other columns or joining tables is slow or unsupported, so you design one table per query and often write the same data to several. The name is loose: Google describes Bigtable as a sorted key-value map, and DB-Engines calls these databases two-dimensional key-value stores.",
+  "analogy": "A filing drawer per customer, with pages kept in date order. Adding a page at the back is instant, and so is pulling last week’s pages; finding every page that mentions a refund means emptying every drawer.",
+  "useWhen": [
+    "Time series, event logs, messages and IoT readings: lots of writes, read back by key and time range",
+    "Very large datasets that must keep accepting writes across racks or regions",
+    "Access patterns you know well enough to design tables around"
+  ],
+  "avoidWhen": [
+    "Ad-hoc queries, filters on arbitrary columns, or joins",
+    "Small datasets, where the operational work doesn’t pay off",
+    "Updates that need transactions across many rows or partitions"
+  ],
+  "example": "A fleet-tracking company writes each truck’s GPS position every few seconds to Cassandra, in a table partitioned by truck and day and sorted by time, newest first. Drawing a truck’s route for today reads one partition in order. Finding every truck that passed through a given town, though, needs a second table written with that question in mind.",
+  "providers": {
+    "aws": "Amazon Keyspaces (Cassandra-compatible); HBase on Amazon EMR",
+    "gcp": "Bigtable, which also offers an HBase-compatible API",
+    "azure": "Azure Managed Instance for Apache Cassandra; Azure Cosmos DB for Apache Cassandra",
+    "oss": "Apache Cassandra, ScyllaDB (source-available since 2025), Apache HBase"
+  },
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "-- CQL: Cassandra, ScyllaDB, Amazon Keyspaces",
+      "CREATE TABLE positions (",
+      "  truck_id text,",
+      "  day      date,",
+      "  ts       timestamp,",
+      "  lat      double,",
+      "  lon      double,",
+      "  PRIMARY KEY ((truck_id, day), ts)   -- partition key, then clustering column",
+      ") WITH CLUSTERING ORDER BY (ts DESC);",
+      "",
+      "INSERT INTO positions (truck_id, day, ts, lat, lon)",
+      "VALUES ('tr-118', '2026-10-06', '2026-10-06 09:30:05', 59.91, 10.75);",
+      "",
+      "-- one partition, already sorted newest first",
+      "SELECT ts, lat, lon FROM positions",
+      "WHERE truck_id = 'tr-118' AND day = '2026-10-06'",
+      "LIMIT 100;"
+    ]
+  },
+  "related": ["key-value","document","tsdb","relational","wide-tables"],
+  "diagram": {
+    "caption": "In Cassandra and ScyllaDB, any node can coordinate a write and sends it to every replica of the partition, here three. At consistency level QUORUM it can answer the client once two have acknowledged, so when replica C goes down, writes keep succeeding and C catches up after it returns.",
+    "w": 760,
+    "h": 270,
+    "nodes": [
+      {
+        "id": "sensors",
+        "x": 100,
+        "y": 135,
+        "label": "Sensors",
+        "sub": "write readings",
+        "emit": {"every":650,"jitter":0.3,"req":true,"cycle":true},
+        "out": ["coord"]
+      },
+      {"id":"coord","x":330,"y":135,"label":"Coordinator","sub":"any node · 3 replicas","route":"fanout","out":["r1","r2","r3"]},
+      {"id":"r1","x":600,"y":55,"label":"Replica A","sub":"log → memtable → SSTables","mode":"reply","delay":30},
+      {"id":"r2","x":600,"y":135,"label":"Replica B","sub":"log → memtable → SSTables","mode":"reply","delay":40},
+      {"id":"r3","x":600,"y":215,"label":"Replica C","sub":"log → memtable → SSTables","mode":"reply","delay":50}
+    ],
+    "events": [
+      { "node": "r3", "at": 4000, "every": 12000, "dur": 3500, "text": "node down", "back": "back, catching up" }
+    ]
+  },
+  "history": {
+    "story": [
+      "In 2006 Google described Bigtable, the storage system behind web indexing, Google Earth and Google Finance. Its data model was “a sparse, distributed, persistent multi-dimensional sorted map”, indexed by row key, column key and timestamp. Rows were kept in key order and split into ranges called tablets, each served by one machine, with the data files stored in Google’s distributed file system.",
+      "Open-source versions followed quickly. HBase, begun at Powerset in 2007, rebuilt Bigtable on Hadoop’s HDFS. Cassandra, built at Facebook for inbox search and open-sourced in 2008, took Bigtable’s column families and log-structured storage but spread data the way Amazon’s Dynamo did, with no master, keys hashed around a ring and every replica accepting writes. One of its two authors, Avinash Lakshman, had co-written the Dynamo paper. Both projects became top-level Apache projects in 2010.",
+      "Cassandra’s interface then moved closer to SQL. CQL, a SQL-like language, gave tables declared columns, a partition key and clustering columns, so a partition holds many rows sorted by the clustering columns. ScyllaDB rewrote Cassandra in C++ from 2015, and the clouds now sell managed versions: Bigtable itself, Amazon Keyspaces since 2020, and Azure’s managed Cassandra."
+    ],
+    "choices": [
+      { "choice": "Keep rows sorted by key", "why": "Bigtable stored rows in key order so related data sat together and could be read as a range. Web pages were stored under reversed host names, such as `com.google.maps/index.html`, so one domain’s pages were neighbours." },
+      { "choice": "Append writes, sort them later", "why": "Writing to a commit log and memory, then flushing immutable sorted files, turns random writes into sequential ones, so heavy write loads stay cheap. Reads and background compaction pay for it later." },
+      { "choice": "Every replica accepts writes (Cassandra)", "why": "Facebook’s inbox search had to take billions of writes a day and replicate across data centers where, at that scale, components fail continuously. So Cassandra borrowed Dynamo’s masterless replication instead of Bigtable’s single server per range." }
+    ],
+    "timeline": [
+      { "year": "2006", "text": "Google publishes the Bigtable paper" },
+      { "year": "2007", "text": "HBase code is posted and ships with Hadoop 0.15.0" },
+      { "year": "2008", "text": "Facebook open-sources Cassandra" },
+      { "year": "2010", "text": "Cassandra and HBase become top-level Apache projects" },
+      { "year": "2015", "text": "ScyllaDB’s first release, a C++ rewrite of Cassandra" },
+      { "year": "2020", "text": "Amazon Keyspaces (for Apache Cassandra) becomes generally available" },
+      { "year": "2024", "text": "Cassandra 5.0 adds Storage Attached Indexes for non-key columns" }
+    ],
+    "sources": [
+      { "label": "Chang et al.: Bigtable, a distributed storage system for structured data (OSDI 2006)", "url": "https://research.google/pubs/bigtable-a-distributed-storage-system-for-structured-data/" },
+      { "label": "Apache JIRA: HADOOP-1045, Code for HBase (Mike Cafarella, February 2007)", "url": "https://issues.apache.org/jira/browse/HADOOP-1045" },
+      { "label": "Wikipedia: Apache HBase (began at Powerset)", "url": "https://en.wikipedia.org/wiki/Apache_HBase" },
+      { "label": "Hadoop 0.15.0 release (October 2007)", "url": "https://hadoop.apache.org/release/0.15.0.html" },
+      { "label": "Avinash Lakshman, Engineering at Meta: Cassandra, a structured storage system on a P2P network (Aug 2008)", "url": "https://engineering.fb.com/2008/08/25/core-infra/cassandra-a-structured-storage-system-on-a-p2p-network/" },
+      { "label": "Lakshman and Malik: Cassandra, a decentralized structured storage system (LADIS 2009)", "url": "https://www.cs.cornell.edu/projects/ladis2009/papers/lakshman-ladis2009.pdf" },
+      { "label": "Werner Vogels: Amazon’s Dynamo (authors of the 2007 paper)", "url": "https://www.allthingsdistributed.com/2007/10/amazons_dynamo.html" },
+      { "label": "ASF board minutes, February 17, 2010: Establish the Apache Cassandra Project", "url": "https://www.apache.org/foundation/records/minutes/2010/board_minutes_2010_02_17.txt" },
+      { "label": "ASF board minutes, April 21, 2010: Establish the Apache HBase Project", "url": "https://www.apache.org/foundation/records/minutes/2010/board_minutes_2010_04_21.txt" },
+      { "label": "scylladb/scylladb on GitHub: tag scylla-0.10 (October 2015)", "url": "https://github.com/scylladb/scylladb/tree/scylla-0.10" },
+      { "label": "AWS What’s New: Amazon Keyspaces (for Apache Cassandra) is now generally available (Apr 2020)", "url": "https://aws.amazon.com/about-aws/whats-new/2020/04/amazon-keyspaces-for-apache-cassandra-is-now-generally-available/" },
+      { "label": "Apache Cassandra blog: Announcing Apache Cassandra 5.0 (Sept 2024)", "url": "https://cassandra.apache.org/_/blog/Apache-Cassandra-5.0-Announcement.html" }
+    ]
+  },
+  "sources": [
+    { "label": "DB-Engines: Wide column stores (two-dimensional key-value stores)", "url": "https://db-engines.com/en/article/Wide+Column+Stores" },
+    { "label": "Google Cloud: Bigtable overview (each table is a sorted key-value map)", "url": "https://cloud.google.com/bigtable/docs/overview" },
+    { "label": "Google Cloud: Bigtable and the HBase API", "url": "https://cloud.google.com/bigtable/docs/hbase-bigtable" },
+    { "label": "Apache Cassandra: Cassandra basics (partitions and tokens)", "url": "https://cassandra.apache.org/_/cassandra-basics.html" },
+    { "label": "Cassandra docs: CQL data definition (partition key, clustering columns, CLUSTERING ORDER)", "url": "https://cassandra.apache.org/doc/latest/cassandra/developing/cql/ddl.html" },
+    { "label": "Cassandra docs: Dynamo (replication, consistency levels, hinted handoff)", "url": "https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html" },
+    { "label": "Cassandra docs: Storage engine (commit log, memtables, SSTables)", "url": "https://cassandra.apache.org/doc/latest/cassandra/architecture/storage-engine.html" },
+    { "label": "Cassandra docs: Tombstones", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/tombstones.html" },
+    { "label": "Amazon Keyspaces Developer Guide: What is Amazon Keyspaces?", "url": "https://docs.aws.amazon.com/keyspaces/latest/devguide/what-is-keyspaces.html" },
+    { "label": "Amazon EMR Release Guide: Apache HBase", "url": "https://docs.aws.amazon.com/emr/latest/ReleaseGuide/emr-hbase.html" },
+    { "label": "Microsoft Learn: Azure Managed Instance for Apache Cassandra", "url": "https://learn.microsoft.com/en-us/azure/managed-instance-apache-cassandra/introduction" },
+    { "label": "Microsoft Learn: What is Azure Cosmos DB for Apache Cassandra?", "url": "https://learn.microsoft.com/en-us/azure/cosmos-db/cassandra/introduction" },
+    { "label": "Dor Laor, ScyllaDB blog: Why we’re moving to a source available license (Dec 2024)", "url": "https://www.scylladb.com/2024/12/18/why-were-moving-to-a-source-available-license/" },
+    { "label": "Hadoop docs: HDFS architecture", "url": "https://hadoop.apache.org/docs/stable/hadoop-project-dist/hadoop-hdfs/HdfsDesign.html" }
+  ]
+}

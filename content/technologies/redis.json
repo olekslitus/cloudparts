@@ -1,0 +1,119 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Redis",
+  "concepts": ["cache", "key-value", "queue"],
+  "provider": "oss",
+  "vendor": "Redis Ltd.",
+  "license": "AGPLv3, RSALv2 or SSPLv1 (Redis 8+)",
+  "website": "https://redis.io/",
+  "repo": "https://github.com/redis/redis",
+  "summary": "An in-memory data-structure server: the default cache, and also queues, counters and leaderboards.",
+  "intro": [
+    "Redis keeps its whole dataset in RAM and answers commands over a simple TCP protocol, which is why reads and writes take well under a millisecond. Values aren’t just strings: there are hashes, lists, sets, sorted sets, streams and more, each with atomic commands such as `INCR`, `ZADD` or `XADD`. So one server can be a cache, a rate limiter, a leaderboard and a job queue. Redis 8 also folded JSON, time series, probabilistic types, the query engine and a new vector-set type into the core.",
+    "Durability is optional. RDB writes periodic snapshots. The append-only file (AOF) logs every write and, with the default once-a-second `fsync`, can lose about one second of data in a crash. Redis Cluster shards keys across nodes using 16,384 hash slots. Licensing has changed twice. Up to 7.2 Redis was BSD. In March 2024 version 7.4 moved to a choice of RSALv2 or SSPLv1, and the Linux Foundation forked 7.2.4 as Valkey, which stays BSD and is backed by AWS, Google, Oracle and others. Redis 8, released in May 2025, added the OSI-approved AGPLv3 as a third option."
+  ],
+  "strengths": [
+    "Sub-millisecond reads and writes from memory",
+    "Rich data structures with atomic operations cover caching, counters, queues and rankings",
+    "Simple to run, with client libraries for most languages and managed services such as Amazon ElastiCache and Google Cloud Memorystore",
+    "Redis Cluster shards data and fails over automatically"
+  ],
+  "limits": [
+    "The dataset has to fit in RAM, which costs far more per GB than disk",
+    "Even with AOF, the default setting can lose about a second of writes, and Redis Cluster can lose acknowledged writes during failover",
+    "Multi-key commands in a cluster work only when all keys share a hash slot, which means designing keys with hash tags",
+    "The licence history is complicated; teams that avoid AGPL often pick the BSD-licensed Valkey fork"
+  ],
+  "worksWith": [],
+  "snippet": {
+    "lang": "bash",
+    "title": "A rate limiter, a leaderboard and a work queue with redis-cli",
+    "source": [
+      "# rate limit: count requests per API key per minute; the key expires on its own",
+      "redis-cli INCR rate:key_8812:202610050931",
+      "redis-cli EXPIRE rate:key_8812:202610050931 60 NX",
+      "",
+      "# leaderboard: a sorted set ranks members by score",
+      "redis-cli ZADD leaderboard 3120 player:17 2890 player:42",
+      "redis-cli ZREVRANGE leaderboard 0 9 WITHSCORES",
+      "",
+      "# work queue: a stream with a consumer group",
+      "redis-cli XADD orders '*' order_id 1042 total 59.90",
+      "redis-cli XGROUP CREATE orders billing 0",
+      "redis-cli XREADGROUP GROUP billing worker-1 COUNT 10 STREAMS orders '>'"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Using Redis as a queue",
+      "intro": "Redis has no queue type, but three of its features behave like one, with different answers to what happens when a consumer crashes. Job-queue libraries such as RQ for Python and Bull for Node.js build on them.",
+      "corner": "Pattern",
+      "columns": ["Commands", "If a consumer crashes mid-job", "Who gets each message"],
+      "rows": [
+        { "label": "List", "values": ["`LPUSH` to add; `RPOP`, or `BRPOP` to block until something arrives", "The message is lost: it left the list when it was popped", "One consumer"] },
+        { "label": "List with a processing list", "values": ["`LMOVE` (or blocking `BLMOVE`) pops it and pushes it onto a processing list in one step; `LREM` removes it when done", "It stays in the processing list; a separate monitor pushes items that sit there too long back onto the queue", "One consumer"] },
+        { "label": "Stream with a consumer group", "values": ["`XADD` to append; `XREADGROUP … >` to read new entries; `XACK` when done", "It stays in the group’s pending entries list; the consumer rereads it from ID `0`, or another takes it over with `XAUTOCLAIM` (at least once)", "One consumer in each group; every group gets every entry, and entries stay until the stream is trimmed"] },
+        { "label": "Pub/sub", "values": ["`PUBLISH` and `SUBSCRIBE`", "The message is lost: delivery is at most once and nothing is stored", "Every subscriber connected at that moment"] }
+      ],
+      "notes": ["`LMOVE` arrived in Redis 6.2 and replaces the deprecated `RPOPLPUSH`."]
+    }
+  ],
+  "history": {
+    "story": [
+      "In 2009, Salvatore Sanfilippo (known as antirez) was trying to scale LLOOGG, a real-time web log analyzer run by his Italian startup. Every read and write in its MySQL backend went to disk, and as traffic grew the database couldn’t keep up. He prototyped a small in-memory server in Tcl, the “LLOOGG Memory DB”, which already stored strings and lists, then rewrote it in C. He called it Redis, for REmote DIctionary Server.",
+      "Once it worked, he decided to share it, and when it was posted to Hacker News in February 2009 it drew only a few comments, half of them his own replies. Developers caught on anyway: in November 2009 GitHub announced Resque, its Redis-backed job queue. VMware hired Sanfilippo in March 2010 to work on Redis full time. Pivotal later took over as sponsor, and in July 2015 Sanfilippo moved to Redis Labs (now Redis Ltd.). Redis 3.0, released that April, added Redis Cluster.",
+      "In June 2020 Sanfilippo stepped back as maintainer, writing that he “never wanted to be a software maintainer”. In March 2024 Redis Ltd. moved the core from the BSD licence to RSALv2 and SSPLv1, and eight days later the Linux Foundation forked the last BSD version as Valkey. Sanfilippo rejoined the company in December 2024, argued for the AGPLv3, and Redis 8 added it as a third licence option in May 2025."
+    ],
+    "choices": [
+      { "choice": "Keep the whole dataset in memory", "why": "Serving everything from RAM gives very fast reads and writes, at the cost of datasets no bigger than memory. Structures in memory are also much simpler to manipulate than on disk, so Redis does a lot with little internal complexity. An early experiment with virtual memory for bigger datasets was dropped." },
+      { "choice": "Expose data structures, not just strings", "why": "Sanfilippo preferred working with lists and hash tables directly. Values are lists, sets, hashes and sorted sets with atomic commands on each, so a counter or a queue needs no locking in the application." },
+      { "choice": "One thread runs every command", "why": "Redis is usually limited by memory or network, not CPU, and a single instance can serve around a million requests per second with pipelining. A single thread makes every command atomic; to use more cores, you run more instances." },
+      { "choice": "Snapshots by `fork`, logs by appending", "why": "To save, Redis forks a child that shares memory pages copy-on-write and writes them out while the parent keeps serving. The on-disk formats never need random access, so they’re compact and always written append-only." }
+    ],
+    "timeline": [
+      { "year": "2009", "text": "Built to scale LLOOGG; released as open source in February" },
+      { "year": "2010", "text": "VMware hires Sanfilippo to work on Redis full time" },
+      { "year": "2015", "text": "Redis 3.0 ships Redis Cluster; Redis Labs becomes sponsor" },
+      { "year": "2020", "text": "Sanfilippo steps down as maintainer" },
+      { "year": "2024", "text": "Core moves to RSALv2/SSPLv1; Linux Foundation forks Valkey" },
+      { "year": "2025", "text": "Redis 8 adds the AGPLv3 option and vector sets" }
+    ],
+    "sources": [
+      { "label": "Redis FAQ: why Redis keeps data in memory, the name, and LLOOGG", "url": "https://redis.io/docs/latest/develop/get-started/faq/" },
+      { "label": "antirez on GitHub: LMDB, the first version of Redis written in Tcl", "url": "https://gist.github.com/antirez/6ca04dd191bdb82aad9fb241013e88a8" },
+      { "label": "Hacker News: Redis (Feb 2009)", "url": "https://news.ycombinator.com/item?id=494649" },
+      { "label": "GitHub blog: Introducing Resque (Nov 2009)", "url": "https://github.blog/news-insights/the-library/introducing-resque/" },
+      { "label": "antirez: VMware, the new Redis home (Mar 2010)", "url": "https://oldblog.antirez.com/post/vmware-the-new-redis-home.html" },
+      { "label": "antirez: Thanks Pivotal, hello Redis Labs (Jul 2015)", "url": "http://antirez.com/news/91" },
+      { "label": "Redis 3.0 release notes (Apr 2015)", "url": "https://github.com/redis/redis/blob/3.0/00-RELEASENOTES" },
+      { "label": "antirez: The end of the Redis adventure (Jun 2020)", "url": "http://antirez.com/news/133" },
+      { "label": "antirez: From where I left (Dec 2024)", "url": "http://antirez.com/news/144" },
+      { "label": "antirez: Redis is open source again (May 2025)", "url": "https://antirez.com/news/151" },
+      { "label": "Brachiosoft: Story of Redis and its creator antirez", "url": "https://blog.brachiosoft.com/en/posts/redis/" }
+    ]
+  },
+  "sources": [
+    { "label": "Redis docs: Data types", "url": "https://redis.io/docs/latest/develop/data-types/" },
+    { "label": "Redis docs: Diagnosing latency issues", "url": "https://redis.io/docs/latest/operate/oss_and_stack/management/optimization/latency/" },
+    { "label": "Redis docs: Persistence", "url": "https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/" },
+    { "label": "Redis docs: Scale with Redis Cluster", "url": "https://redis.io/docs/latest/operate/oss_and_stack/management/scaling/" },
+    { "label": "Redis docs: Client libraries", "url": "https://redis.io/docs/latest/develop/clients/" },
+    { "label": "Redis docs: EXPIRE", "url": "https://redis.io/docs/latest/commands/expire/" },
+    { "label": "Redis licenses", "url": "https://redis.io/legal/licenses/" },
+    { "label": "Redis blog: Redis adopts dual source-available licensing (Mar 2024)", "url": "https://redis.io/blog/redis-adopts-dual-source-available-licensing/" },
+    { "label": "Redis blog: Redis is now available under the AGPLv3 open source license (May 2025)", "url": "https://redis.io/blog/agplv3/" },
+    { "label": "Linux Foundation: Launches open source Valkey community (Mar 2024)", "url": "https://www.linuxfoundation.org/press/linux-foundation-launches-open-source-valkey-community" },
+    { "label": "Amazon ElastiCache", "url": "https://aws.amazon.com/elasticache/" },
+    { "label": "Google Cloud Memorystore", "url": "https://cloud.google.com/memorystore" },
+    { "label": "Redis glossary: Redis queue", "url": "https://redis.io/glossary/redis-queue/" },
+    { "label": "Redis docs: BRPOP", "url": "https://redis.io/docs/latest/commands/brpop/" },
+    { "label": "Redis docs: LMOVE (pattern: reliable queue)", "url": "https://redis.io/docs/latest/commands/lmove/" },
+    { "label": "Redis docs: Redis Streams", "url": "https://redis.io/docs/latest/develop/data-types/streams/" },
+    { "label": "Redis docs: XREADGROUP", "url": "https://redis.io/docs/latest/commands/xreadgroup/" },
+    { "label": "Redis docs: XACK", "url": "https://redis.io/docs/latest/commands/xack/" },
+    { "label": "Redis docs: XAUTOCLAIM", "url": "https://redis.io/docs/latest/commands/xautoclaim/" },
+    { "label": "Redis docs: Pub/sub (delivery semantics)", "url": "https://redis.io/docs/latest/develop/pubsub/" }
+  ],
+  "checked": "2026-10-05"
+}

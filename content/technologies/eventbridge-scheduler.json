@@ -1,0 +1,146 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Amazon EventBridge Scheduler",
+  "concepts": ["eventbus", "workflow"],
+  "provider": "aws",
+  "vendor": "Amazon Web Services",
+  "license": "Proprietary",
+  "website": "https://aws.amazon.com/eventbridge/scheduler/",
+  "summary": "EventBridge’s serverless scheduler: millions of one-time or recurring schedules, each of which calls an AWS API at a set time in any time zone.",
+  "intro": [
+    "A schedule is a small stored resource with three parts: when, what and how. “When” is a schedule expression: `rate(15 minutes)` for a fixed interval, a six-field `cron(...)` expression for calendar patterns such as the last Friday of each month, or `at(2026-11-02T09:00:00)` for a single run. Cron and one-time schedules are evaluated in any IANA time zone, with daylight saving time handled for you. “What” is a target: Scheduler assumes an IAM execution role you give it and calls one AWS API with your input as the request. “How” covers the delivery settings: an optional flexible window, a retry policy and a dead-letter queue.",
+    "Targets come in two forms. Templated targets cover a short list of common calls, such as Lambda `Invoke`, SQS `SendMessage`, SNS `Publish`, Step Functions `StartExecution`, EventBridge `PutEvents` and ECS `RunTask`, so you only pass the resource’s ARN. The universal target takes an ARN like `arn:aws:scheduler:::aws-sdk:ec2:stopInstances` and a JSON request body, which reaches more than 270 services and 6,000 API operations without a glue function in between. Read-only calls (anything starting with `get`, `list`, `describe`, `query` and similar) are excluded.",
+    "Schedules fire with one-minute precision: a run set for 1:00 happens between 1:00:00 and 1:00:59, or anywhere inside a flexible window of up to 1,440 minutes if you set one. Delivery is at least once. If the target fails, Scheduler retries with exponential backoff, by default for up to 24 hours and 185 attempts, then drops the event or sends it to an SQS dead-letter queue with the error attached."
+  ],
+  "strengths": [
+    "Built for per-user timers: 10 million schedules per Region by default, adjustable to billions, so a reminder or trial expiry per customer needs no polling table",
+    "Real time zones: cron and one-time schedules follow IANA zones and daylight saving time, where the legacy scheduled rules run only in UTC",
+    "Calls almost any AWS API directly, with retries, a dead-letter queue and flexible windows to spread load on the target",
+    "Pay per call: 14 million invocations a month free, then $1.00 per million in US East, US West (Oregon) and Ireland"
+  ],
+  "limits": [
+    "One-minute precision at best, so it isn’t a fit for sub-minute timing",
+    "At-least-once delivery: a target can run twice, so it should be idempotent",
+    "Targets are AWS API calls only, with a 256 KB input; an outside HTTPS endpoint has to be reached through an event bus or a function",
+    "Finished one-time schedules still count against the quota unless you set `ActionAfterCompletion` to `DELETE`; invocations above the default 1,000 per second (500 in other Regions) are delayed, not dropped"
+  ],
+  "worksWith": [
+    { "id": "eventbridge", "how": "is part of" },
+    { "id": "lambda", "how": "invokes functions in" },
+    { "id": "step-functions", "how": "starts workflows in" },
+    { "id": "sqs", "how": "sends messages and failed runs to" },
+    { "id": "sns", "how": "publishes messages to topics in" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "A self-deleting reminder, and a weekday job that calls the EC2 API",
+    "source": [
+      "aws scheduler create-schedule-group --name billing",
+      "",
+      "# one run at 9:00 Berlin time; retried for up to an hour, then sent to a DLQ; deleted after it runs",
+      "aws scheduler create-schedule --name invoice-42-reminder --group-name billing \\",
+      "  --schedule-expression 'at(2026-11-02T09:00:00)' \\",
+      "  --schedule-expression-timezone 'Europe/Berlin' \\",
+      "  --flexible-time-window '{\"Mode\": \"OFF\"}' \\",
+      "  --action-after-completion DELETE \\",
+      "  --target '{\"Arn\": \"arn:aws:lambda:us-east-1:111122223333:function:send-reminder\",",
+      "    \"RoleArn\": \"arn:aws:iam::111122223333:role/scheduler-invoke\",",
+      "    \"Input\": \"{\\\"invoiceId\\\": 42}\",",
+      "    \"RetryPolicy\": {\"MaximumRetryAttempts\": 10, \"MaximumEventAgeInSeconds\": 3600},",
+      "    \"DeadLetterConfig\": {\"Arn\": \"arn:aws:sqs:us-east-1:111122223333:reminder-dlq\"}}'",
+      "",
+      "# universal target: stop dev instances at 19:00 New York time on weekdays, within a 10-minute window",
+      "aws scheduler create-schedule --name stop-dev-instances \\",
+      "  --schedule-expression 'cron(0 19 ? * MON-FRI *)' \\",
+      "  --schedule-expression-timezone 'America/New_York' \\",
+      "  --flexible-time-window '{\"Mode\": \"FLEXIBLE\", \"MaximumWindowInMinutes\": 10}' \\",
+      "  --target '{\"Arn\": \"arn:aws:scheduler:::aws-sdk:ec2:stopInstances\",",
+      "    \"RoleArn\": \"arn:aws:iam::111122223333:role/scheduler-ec2\",",
+      "    \"Input\": \"{\\\"InstanceIds\\\": [\\\"i-0abc123def4567890\\\"]}\"}'"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Scheduler or a scheduled rule?",
+      "intro": "EventBridge still has the older way to run things on a timer: a rule on the default event bus with a schedule instead of an event pattern. AWS’s docs now call these rules a legacy feature and recommend Scheduler.",
+      "columns": ["EventBridge Scheduler", "Scheduled rule (legacy)"],
+      "rows": [
+        { "label": "Lives on", "values": ["Its own API; no event bus needed", "The default event bus only"] },
+        { "label": "Expressions", "values": ["`rate()`, `cron()` and one-time `at()`", "`rate()` and `cron()`"] },
+        { "label": "Time zone", "values": ["Any IANA zone, with daylight saving time", "UTC only"] },
+        { "label": "How many", "values": ["10 million schedules per Region by default", "Shares the bus’s rule quota: 300 rules by default in most Regions"] },
+        { "label": "Targets", "values": ["One per schedule: a templated target or any non-read AWS API", "Up to five per rule from the event bus target list, including API destinations (HTTPS endpoints)"] },
+        { "label": "Precision", "values": ["Within the minute, or a flexible window", "One minute, with a possible delay of several seconds"] }
+      ],
+      "notes": [
+        "A scheduled rule is still the simpler choice when the job is a single cron entry that needs to call an outside HTTPS API, because rules can target API destinations directly."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Delivery settings",
+      "intro": "Each schedule carries its own delivery settings, so a nightly report and a payment reminder can fail in different ways.",
+      "items": [
+        { "name": "Flexible time window", "tag": "1 to 1,440 min", "text": "Set `Mode` to `FLEXIBLE` and a maximum window, and Scheduler invokes the target somewhere inside it. Thousands of schedules set for the same minute then spread out instead of hitting the target at once. `OFF` means fire within the scheduled minute." },
+        { "name": "Retry policy", "tag": "default 24 h, 185 tries", "text": "`MaximumRetryAttempts` (0 to 185) and `MaximumEventAgeInSeconds` (60 to 86,400) bound how long Scheduler keeps retrying a failed call with exponential backoff." },
+        { "name": "Dead-letter queue", "tag": "SQS standard", "text": "When retries run out, Scheduler sends a JSON record of the attempt, with the error code and message, to a standard SQS queue (FIFO queues aren’t supported). Without one, the event is dropped." },
+        { "name": "Context attributes", "text": "Placeholders such as `<aws.scheduler.scheduled-time>`, `<aws.scheduler.execution-id>` and `<aws.scheduler.attempt-number>` in the input are filled in at each run, so a target can tell a retry from a first attempt." },
+        { "name": "Action after completion", "tag": "since Aug 2023", "text": "`DELETE` removes a one-time schedule after its run, or a recurring one after its last run before `EndDate`. Without it, finished schedules pile up against the quota." },
+        { "name": "Schedule groups", "tag": "500 per Region", "text": "Every account has a `default` group. Groups carry tags for access control and cost allocation, and deleting a group deletes all its schedules." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "AWS has let you run things on a timer since January 2016, when CloudWatch Events launched and could “emit events on a schedule”. Those scheduled events became EventBridge scheduled rules: a rate or cron expression evaluated in UTC, on the default bus only, each one using up a rule from a quota of a few hundred. That suited a handful of cron jobs. It didn’t suit applications that needed a timer per user or per order, so, as AWS put it, many customers bought off-the-shelf tools or built their own schedulers.",
+      "On November 10, 2022 AWS launched EventBridge Scheduler in nine Regions as a separate API inside EventBridge. Schedules were their own resources rather than rules, with one-time `at()` expressions, time zones and daylight saving time, flexible windows, retries, dead-letter queues and a universal target that could call thousands of AWS APIs. The launch post, by Marcia Villalba, compared 1 million schedules per account with 300 scheduled rules, and gave examples such as task reminders sent through SNS, starting and stopping thousands of EC2 instances around store hours in each time zone, and ending a SaaS customer’s access when a subscription lapses.",
+      "Since then AWS has added 18 more Regions (March 2023), automatic deletion of finished schedules (August 2023) and PrivateLink access (March 2025). By 2026 the default had grown to 10 million schedules per Region, CreateSchedule allowed 5,000 requests per second in 11 large Regions, and a May 2026 update added 619 more SDK API actions as targets. EventBridge’s docs now call scheduled rules a legacy feature."
+    ],
+    "choices": [
+      { "choice": "Schedules as their own resources, not rules on a bus", "why": "A scheduled rule uses up the bus’s rule quota and lives on the default bus. Making each schedule a separate resource, with no bus involved, let one account hold millions of them, which per-user timers need." },
+      { "choice": "A universal target instead of a fixed target list", "why": "AWS noted that home-grown schedulers were often limited in what they could trigger. Calling any AWS SDK action with an execution role means a schedule can stop an instance or start a pipeline without a Lambda function in between." },
+      { "choice": "Flexible time windows", "why": "Many schedules set for the same minute would hit a target at once. Letting a schedule run anywhere in a window disperses the calls and reduces the load on downstream services." },
+      { "choice": "At-least-once delivery with long retries", "why": "Scheduler retries for up to a day by default and can hand failures to a dead-letter queue, so a target that is briefly down or throttling still gets the call. The price is that the target may see it twice." }
+    ],
+    "timeline": [
+      { "year": "2016", "text": "CloudWatch Events launches with events on a schedule, later EventBridge scheduled rules" },
+      { "year": "2022", "text": "EventBridge Scheduler launches on November 10 in nine Regions" },
+      { "year": "2023", "text": "18 more Regions in March; automatic deletion after completion in August" },
+      { "year": "2025", "text": "AWS PrivateLink support for calling Scheduler from a VPC" },
+      { "year": "2026", "text": "Default CreateSchedule rate rises to 5,000 per second; 619 more SDK actions as targets" }
+    ],
+    "sources": [
+      { "label": "AWS What’s New: Introducing CloudWatch Events (Jan 2016)", "url": "https://aws.amazon.com/about-aws/whats-new/2016/01/introducing-cloudwatch-events-monitor-and-rapidly-react-to-changes-in-your-amazon-web-services-resources/" },
+      { "label": "AWS What’s New: Amazon EventBridge launches new Scheduler (Nov 2022)", "url": "https://aws.amazon.com/about-aws/whats-new/2022/11/amazon-eventbridge-launches-new-scheduler/" },
+      { "label": "AWS Compute Blog: Introducing Amazon EventBridge Scheduler, by Marcia Villalba (Nov 2022)", "url": "https://aws.amazon.com/blogs/compute/introducing-amazon-eventbridge-scheduler/" },
+      { "label": "AWS What’s New: EventBridge Scheduler is now available in 18 additional Regions (Mar 2023)", "url": "https://aws.amazon.com/about-aws/whats-new/2023/03/amazon-eventbridge-scheduler-18-regions/" },
+      { "label": "AWS What’s New: EventBridge Scheduler adds schedule deletion after completion (Aug 2023)", "url": "https://aws.amazon.com/about-aws/whats-new/2023/08/amazon-eventbridge-scheduler-deletion-completion/" },
+      { "label": "AWS What’s New: EventBridge Scheduler now supports AWS PrivateLink (Mar 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/03/amazon-eventbridge-scheduler-privatelink/" },
+      { "label": "AWS What’s New: EventBridge Scheduler adds resource count metrics for quota monitoring (Feb 2026)", "url": "https://aws.amazon.com/about-aws/whats-new/2026/02/amazon-eventbridge-scheduler-resource-metrics/" },
+      { "label": "AWS What’s New: EventBridge Scheduler provides a higher default quota for CreateSchedule (Mar 2026)", "url": "https://aws.amazon.com/about-aws/whats-new/2026/2/eventbridge-default-quota-increase/" },
+      { "label": "AWS What’s New: EventBridge Scheduler adds 619 new SDK API actions (May 2026)", "url": "https://aws.amazon.com/about-aws/whats-new/2026/05/amazon-eventbridge-sdk-integrations/" },
+      { "label": "AWS docs: Creating a scheduled rule (legacy) in Amazon EventBridge", "url": "https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-create-rule-schedule.html" }
+    ]
+  },
+  "sources": [
+    { "label": "AWS docs: What is Amazon EventBridge Scheduler?", "url": "https://docs.aws.amazon.com/scheduler/latest/UserGuide/what-is-scheduler.html" },
+    { "label": "AWS docs: Schedule types (rate, cron, one-time, time zones, daylight saving time)", "url": "https://docs.aws.amazon.com/scheduler/latest/UserGuide/schedule-types.html" },
+    { "label": "AWS docs: Configuring flexible time windows", "url": "https://docs.aws.amazon.com/scheduler/latest/UserGuide/managing-schedule-flexible-time-windows.html" },
+    { "label": "AWS API reference: FlexibleTimeWindow", "url": "https://docs.aws.amazon.com/scheduler/latest/APIReference/API_FlexibleTimeWindow.html" },
+    { "label": "AWS API reference: RetryPolicy", "url": "https://docs.aws.amazon.com/scheduler/latest/APIReference/API_RetryPolicy.html" },
+    { "label": "AWS docs: Configuring a schedule’s dead-letter queue", "url": "https://docs.aws.amazon.com/scheduler/latest/UserGuide/configuring-schedule-dlq.html" },
+    { "label": "AWS docs: Using templated targets", "url": "https://docs.aws.amazon.com/scheduler/latest/UserGuide/managing-targets-templated.html" },
+    { "label": "AWS docs: Using universal targets", "url": "https://docs.aws.amazon.com/scheduler/latest/UserGuide/managing-targets-universal.html" },
+    { "label": "AWS docs: Adding context attributes", "url": "https://docs.aws.amazon.com/scheduler/latest/UserGuide/managing-schedule-context-attributes.html" },
+    { "label": "AWS docs: Deleting a schedule (deletion after completion)", "url": "https://docs.aws.amazon.com/scheduler/latest/UserGuide/managing-schedule-delete.html" },
+    { "label": "AWS docs: Managing a schedule group", "url": "https://docs.aws.amazon.com/scheduler/latest/UserGuide/managing-schedule-group.html" },
+    { "label": "AWS docs: Quotas for Amazon EventBridge Scheduler", "url": "https://docs.aws.amazon.com/scheduler/latest/UserGuide/scheduler-quotas.html" },
+    { "label": "AWS docs: Creating a scheduled rule (legacy) in Amazon EventBridge", "url": "https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-create-rule-schedule.html" },
+    { "label": "AWS docs: Amazon EventBridge quotas (rules per event bus)", "url": "https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-quota.html" },
+    { "label": "Amazon EventBridge pricing: Scheduler free tier and invocation price", "url": "https://aws.amazon.com/eventbridge/pricing/" },
+    { "label": "AWS Compute Blog: Introducing Amazon EventBridge Scheduler (Nov 2022)", "url": "https://aws.amazon.com/blogs/compute/introducing-amazon-eventbridge-scheduler/" },
+    { "label": "AWS What’s New: EventBridge Scheduler adds resource count metrics for quota monitoring (Feb 2026)", "url": "https://aws.amazon.com/about-aws/whats-new/2026/02/amazon-eventbridge-scheduler-resource-metrics/" }
+  ],
+  "checked": "2026-10-06"
+}

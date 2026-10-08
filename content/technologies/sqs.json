@@ -1,0 +1,92 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Amazon SQS",
+  "concepts": ["queue"],
+  "provider": "aws",
+  "vendor": "Amazon Web Services",
+  "license": "Proprietary",
+  "website": "https://aws.amazon.com/sqs/",
+  "summary": "AWS’s fully managed message queue: no brokers to run, billed per request.",
+  "intro": [
+    "An SQS queue is an HTTPS endpoint with three main calls: `SendMessage`, `ReceiveMessage` and `DeleteMessage`. There are no brokers, partitions or capacity to size. A received message is hidden for the visibility timeout (30 seconds by default, up to 12 hours); if the consumer doesn’t delete it in time, it becomes visible again for another worker. After a set number of receives, a redrive policy moves it to a dead-letter queue. Messages are kept for 4 days by default and up to 14 days, and each can be up to 1 MiB.",
+    "Standard queues have nearly unlimited throughput but deliver at least once and only roughly in order. FIFO queues, whose names end in `.fifo`, keep strict order within each message group and drop duplicate sends within a five-minute window. They allow 300 API calls per second per partition (3,000 messages with batches of 10), or far more in high-throughput mode."
+  ],
+  "strengths": [
+    "Nothing to operate: queues scale from idle to very high throughput, and you pay per request",
+    "Dead-letter queues, per-message delays of up to 15 minutes and long polling of up to 20 seconds are built in",
+    "Lambda can poll a queue for you and scale the number of consumers with the backlog",
+    "Fair queues: tag messages in a standard queue with a `MessageGroupId` per tenant, and one noisy tenant no longer delays the others"
+  ],
+  "limits": [
+    "Standard queues can deliver a message twice, so consumers must be idempotent",
+    "A deleted message is gone: no replay, and at most 14 days of retention",
+    "Each message goes to one consumer; fanning out to several needs SNS or EventBridge in front",
+    "Payloads over 1 MiB must go to S3, with only a pointer in the message"
+  ],
+  "worksWith": [
+    { "id": "s3", "how": "offloads payloads over 1 MiB to" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Create a queue, send a job, then receive and delete it",
+    "source": [
+      "aws sqs create-queue --queue-name thumbnails \\",
+      "  --attributes VisibilityTimeout=120,MessageRetentionPeriod=1209600",
+      "QUEUE_URL=$(aws sqs get-queue-url --queue-name thumbnails --query QueueUrl --output text)",
+      "",
+      "aws sqs send-message --queue-url \"$QUEUE_URL\" \\",
+      "  --message-body '{\"image\": \"s3://acme-uploads/cat.jpg\"}'",
+      "",
+      "# long-poll for up to 20 s; each message stays hidden for 120 s",
+      "aws sqs receive-message --queue-url \"$QUEUE_URL\" \\",
+      "  --wait-time-seconds 20 --max-number-of-messages 10",
+      "",
+      "# delete it once the work is done, or it comes back",
+      "aws sqs delete-message --queue-url \"$QUEUE_URL\" --receipt-handle \"$RECEIPT_HANDLE\""
+    ]
+  },
+  "history": {
+    "story": [
+      "In 2002 the whole Amazon.com website still ran as a single program that took 45 minutes to link after each change, and Amazon was splitting it into separate services. Services that called each other directly failed together: if one was slow or down, every caller stalled. As AWS later put it, Amazon had “learned firsthand that distributed systems need a reliable way to pass messages between components without creating tight dependencies.” Maxim Fateev’s team (he later co-founded Temporal) built the internal messaging that grew into SQS.",
+      "Amazon offered that queue to outside developers before almost anything else. SQS opened for beta testing in November 2004, more than a year before S3, which makes it the first AWS infrastructure service, and became generally available in July 2006 as one of AWS’s first three services, with S3 and EC2. Messages could be 8 KB, and you paid for what you sent. Behind the small API, SQS keeps three copies of each message, spread across Availability Zones.",
+      "SQS set the template for cloud messaging: no broker to install or size, billing per request, and an API any program can call over HTTPS. The same basic calls carried a record 47.7 million messages per second during Prime Day 2021."
+    ],
+    "choices": [
+      { "choice": "Three calls over HTTP: send, receive, delete", "why": "Any program that could make a web request could use a queue, with no client library, broker protocol or server to run." },
+      { "choice": "A visibility timeout instead of locks or sessions", "why": "A received message is only hidden until the consumer deletes it. If a worker crashes, the message reappears for another worker, so the service never has to track which consumers are alive." },
+      { "choice": "At-least-once, roughly ordered delivery in standard queues", "why": "Keeping several copies of each message on many servers keeps queues available through failures, but means a message can occasionally arrive twice or out of order. Strict order and deduplication came later as a separate FIFO queue type with lower throughput." },
+      { "choice": "Delete on success, no history", "why": "A queue exists to move work, not to store it, so a processed message is gone. That keeps the model simple; fan-out and replay are left to SNS, EventBridge and Kinesis." }
+    ],
+    "timeline": [
+      { "year": "2004", "text": "Beta opens in November, the first AWS infrastructure service" },
+      { "year": "2006", "text": "Generally available in July, with messages of up to 8 KB" },
+      { "year": "2014", "text": "Dead-letter queues catch messages that keep failing" },
+      { "year": "2016", "text": "FIFO queues add strict ordering and deduplication" },
+      { "year": "2018", "text": "Lambda can consume SQS queues directly" },
+      { "year": "2021", "text": "High-throughput mode for FIFO queues" },
+      { "year": "2025", "text": "Fair queues for multi-tenant workloads; messages grow to 1 MiB" }
+    ],
+    "sources": [
+      { "label": "AWS News Blog: Amazon SQS turns 20 (Jul 2026)", "url": "https://aws.amazon.com/blogs/aws/amazon-sqs-turns-20-two-decades-of-reliable-messaging-at-scale/" },
+      { "label": "AWS What’s New: Introducing the Amazon Simple Queue Service (2004)", "url": "https://aws.amazon.com/about-aws/whats-new/2004/11/03/introducing-the-amazon-simple-queue-service" },
+      { "label": "AWS News Blog: Amazon SQS, 15 years and still queueing (Jul 2021)", "url": "https://aws.amazon.com/blogs/aws/amazon-sqs-15-years-and-still-queueing" },
+      { "label": "Temporal: from Amazon to Azure to Cadence to Temporal", "url": "https://temporal.io/blog/building-resilient-workflows-from-azure-to-cadence-to-temporal" },
+      { "label": "Peakscale: What was the first AWS service?", "url": "https://www.peakscale.com/what-was-the-first-aws-service/" }
+    ]
+  },
+  "sources": [
+    { "label": "AWS docs: Amazon SQS message quotas", "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-messages.html" },
+    { "label": "AWS docs: Amazon SQS FIFO queue quotas", "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-fifo.html" },
+    { "label": "AWS docs: Amazon SQS visibility timeout", "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html" },
+    { "label": "AWS docs: Amazon SQS standard queues", "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues.html" },
+    { "label": "AWS docs: Amazon SQS FIFO queues", "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-fifo-queues.html" },
+    { "label": "AWS docs: Exactly-once processing in Amazon SQS", "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/FIFO-queues-exactly-once-processing.html" },
+    { "label": "AWS docs: Amazon SQS dead-letter queues", "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html" },
+    { "label": "AWS docs: Amazon SQS fair queues", "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-fair-queues.html" },
+    { "label": "AWS Lambda docs: Using Lambda with Amazon SQS", "url": "https://docs.aws.amazon.com/lambda/latest/dg/with-sqs.html" },
+    { "label": "AWS Lambda docs: Scaling behavior for SQS event source mappings", "url": "https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-scaling.html" },
+    { "label": "Amazon SQS pricing", "url": "https://aws.amazon.com/sqs/pricing/" },
+    { "label": "AWS Compute Blog: Serverless services now support payloads up to 1 MB (Jan 2026)", "url": "https://aws.amazon.com/blogs/compute/more-room-to-build-serverless-services-now-support-payloads-up-to-1-mb/" }
+  ],
+  "checked": "2026-10-05"
+}

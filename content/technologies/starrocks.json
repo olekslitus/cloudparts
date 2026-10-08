@@ -1,0 +1,120 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "StarRocks",
+  "concepts": ["olap", "query-engines"],
+  "provider": "oss",
+  "vendor": "StarRocks Project (Linux Foundation), led by CelerData, now PhoenixAI",
+  "license": "Apache 2.0 (Elastic License 2.0 until December 2022)",
+  "website": "https://www.starrocks.io/",
+  "repo": "https://github.com/StarRocks/starrocks",
+  "summary": "An open-source MPP analytical database with a vectorized engine that serves fast joins and real-time updates on its own tables, and also queries Iceberg, Hudi, Delta Lake and Hive tables in place.",
+  "intro": [
+    "A StarRocks cluster has only two kinds of node. Frontends (FEs, written in Java) hold the metadata, accept MySQL-protocol connections and plan queries; one leader writes metadata and replicates it to followers, which elect a new leader if it fails. Backends (BEs, written in C++) store data in columns and run the plans. It is a massively parallel processing (MPP) engine: a query is split into fragments that run on every backend at once, and for big joins or `GROUP BY` on high-cardinality columns the rows are shuffled between nodes so the merge work is shared, instead of gathering everything on one node. Operators are vectorized: they process columns in batches with SIMD instructions, and a cost-based optimizer written from scratch picks join orders and distributed join strategies. Primary Key tables apply updates as delete-and-insert with a primary key index, so upserts from a database or a Kafka topic are queryable within seconds.",
+    "Since version 3.0 (April 2023) you choose between two layouts. In shared-nothing mode each BE keeps part of the data on local disk, with replicas, for the lowest latency. In shared-data mode the BEs are replaced by stateless compute nodes (CNs): tables live in S3, Google Cloud Storage, Azure Blob Storage, MinIO or HDFS, each CN caches hot data in memory and on local disk, and CNs can be added or removed in seconds without moving data. On a cache hit, queries run about as fast as in shared-nothing mode; on a miss, data is fetched from object storage first.",
+    "StarRocks also works as a lake query engine. External catalogs point it at Hive, Iceberg, Hudi, Delta Lake and Paimon tables (plus JDBC databases and Elasticsearch) through their metastores, such as Hive Metastore, AWS Glue or an Iceberg REST catalog, and every node scans the files in parallel. It can also write back to Iceberg and Hive tables with `INSERT INTO`, and asynchronous materialized views can be built over lake tables, with queries rewritten to use them automatically. Kafka topics stream in through Routine Load with exactly-once delivery, and a Flink connector loads data in batches through Stream Load. StarRocks is Apache 2.0 licensed and hosted by the Linux Foundation. CelerData, which rebranded as PhoenixAI in 2026, created it, still leads development and sells managed and self-managed versions with extra security and support. Version 4.1 came out in April 2026."
+  ],
+  "strengths": [
+    "Built for joins: MPP shuffles plus a cost-based optimizer let it query star and snowflake schemas without first flattening them into wide tables",
+    "Fresh, updatable data: Primary Key tables take upserts and deletes, and Routine Load ingests Kafka topics exactly once",
+    "One engine for its own tables and for Iceberg, Hudi, Delta Lake and Hive tables, with materialized views to speed up slow lake queries",
+    "Simple to run for a distributed database: only FE and BE or CN processes, no ZooKeeper or other external services, and any MySQL client or BI tool can connect"
+  ],
+  "limits": [
+    "Shared-data mode still lags shared-nothing: backup and restore is not available there (cluster snapshots instead), and row store, vector indexes and column-mode partial updates are not yet supported",
+    "Lake support is uneven: it writes back only to Iceberg and Hive tables, not to Hudi, Delta Lake or Paimon, and the Paimon catalog is still a beta",
+    "Materialized views over lake tables aren’t guaranteed consistent: StarRocks can’t see changes made to external tables, so a rewritten query may read stale results",
+    "One company does much of the development, and the similarly named Apache Doris is a separate fork that has diverged, so features, docs and advice don’t carry over between the two"
+  ],
+  "worksWith": [
+    { "id": "iceberg", "how": "queries and writes tables in" },
+    { "id": "hudi", "how": "queries tables in" },
+    { "id": "delta-lake", "how": "queries tables in" },
+    { "id": "paimon", "how": "queries tables (beta) in" },
+    { "id": "hive", "how": "queries and writes tables in" },
+    { "id": "s3", "how": "keeps shared-data tables in" },
+    { "id": "gcs", "how": "can keep shared-data tables in" },
+    { "id": "azure-blob", "how": "can keep shared-data tables in" },
+    { "id": "hadoop", "how": "can keep tables in HDFS, part of" },
+    { "id": "kafka", "how": "ingests topics, exactly once, from" },
+    { "id": "flink", "how": "receives streams, via a connector, from" },
+    { "id": "kubernetes", "how": "runs, via an operator, on" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "Point StarRocks at an Iceberg catalog in AWS Glue, query it, and cache a rollup",
+    "source": [
+      "CREATE EXTERNAL CATALOG lake",
+      "PROPERTIES (",
+      "    \"type\" = \"iceberg\",",
+      "    \"iceberg.catalog.type\" = \"glue\",",
+      "    \"aws.glue.use_instance_profile\" = \"true\",",
+      "    \"aws.glue.region\" = \"us-west-2\",",
+      "    \"aws.s3.use_instance_profile\" = \"true\",",
+      "    \"aws.s3.region\" = \"us-west-2\"",
+      ");",
+      "",
+      "SELECT country, count(*) AS orders",
+      "FROM lake.sales.orders",
+      "WHERE order_date >= '2026-10-01'",
+      "GROUP BY country;",
+      "",
+      "CREATE MATERIALIZED VIEW daily_orders",
+      "REFRESH ASYNC EVERY (INTERVAL 1 HOUR)",
+      "AS SELECT order_date, country, count(*) AS orders",
+      "FROM lake.sales.orders",
+      "GROUP BY order_date, country;"
+    ]
+  },
+  "history": {
+    "story": [
+      "Apache Doris grew out of code first developed at Baidu and became an Apache incubator project. In 2020 a team took Doris 0.13, released early that year, and built a commercial product on it, first called DorisDB. They kept Doris’s overall framework and columnar storage engine but added the parts they thought it lacked for interactive analytics: a fully vectorized execution engine, a new cost-based optimizer, and a storage engine that could apply real-time updates by primary key. By version 1.19 it was called StarRocks; the code still reads a metadata key named `dorisDBVersion` that clusters used before 1.19.",
+      "The code went up on GitHub in September 2021 under the Elastic License 2.0, a source-available licence that, unlike Apache 2.0, didn’t allow building a hosted StarRocks service; the roughly 40% of code still identical to Doris stayed under Apache 2.0. In December 2022 the project switched entirely to Apache 2.0, saying it wanted a more open, community-driven project, and in February 2023 the company, by then called CelerData, contributed StarRocks to the Linux Foundation.",
+      "Later releases pushed it from a fast warehouse toward a lakehouse engine. Version 3.0 (April 2023) separated storage from compute so tables could live in object storage, and later versions added Paimon catalogs, writes to Iceberg and Hive tables, and Iceberg compaction. CelerData rebranded as PhoenixAI in 2026 and still leads development."
+    ],
+    "choices": [
+      { "choice": "Start from Apache Doris, then rewrite the hot paths", "why": "Doris already had a working distributed framework and columnar storage, so the team kept those and spent its effort on the vectorized engine, the optimizer and real-time updates. By September 2021 only about 40% of the roughly 700,000 lines were still identical to Doris." },
+      { "choice": "MPP with shuffles instead of scatter-gather", "why": "In a scatter-gather design one node merges every partial result, which chokes on large joins and high-cardinality aggregations. Shuffling data between nodes lets every node share the merge work, so a single query keeps getting faster as the cluster grows." },
+      { "choice": "Only frontends and backends, with no external services", "why": "Frontends keep a full copy of the metadata themselves, in Berkeley DB Java Edition, and elect a leader among followers. So a cluster needs no ZooKeeper, metadata database or separate deep storage to deploy and keep running." },
+      { "choice": "Add shared-data mode without changing the file format", "why": "Shared-data tables use the same segment files and indexes as local tables, with a disk cache in front of object storage. That let users trade a little latency on cold data for cheap storage and elastic compute, without a second engine." }
+    ],
+    "timeline": [
+      { "year": "2020", "text": "Built on Apache Doris 0.13 as a commercial product, first called DorisDB" },
+      { "year": "2021", "text": "Code published on GitHub in September under the Elastic License 2.0" },
+      { "year": "2022", "text": "Relicensed to Apache 2.0 in December" },
+      { "year": "2023", "text": "Contributed to the Linux Foundation in February; version 3.0 adds shared-data mode in April" },
+      { "year": "2025", "text": "Version 4.0 released in October" },
+      { "year": "2026", "text": "Version 4.1 in April; CelerData rebrands as PhoenixAI" }
+    ],
+    "sources": [
+      { "label": "StarRocks 1.19.0 README on GitHub: upstream Apache Doris 0.13, code statistics, Elastic License 2.0 (Sept 2021)", "url": "https://github.com/StarRocks/starrocks/blob/1.19.0/README.md" },
+      { "label": "StarRocks NOTICE: Apache Doris, based on code originally developed by Baidu", "url": "https://github.com/StarRocks/starrocks/blob/main/NOTICE.txt" },
+      { "label": "StarRocks source: MetaVersion.java, the `dorisDBVersion` key used before 1.19", "url": "https://github.com/StarRocks/starrocks/blob/main/fe/fe-core/src/main/java/com/starrocks/catalog/MetaVersion.java" },
+      { "label": "StarRocks blog: StarRocks is now under Apache License 2.0 (Dec 2022)", "url": "https://www.starrocks.io/blog/starrocks-is-now-under-apache-license-2.0.html" },
+      { "label": "DBTA: StarRocks project by CelerData moves to the Linux Foundation (Feb 2023)", "url": "https://www.dbta.com/Editorial/News-Flashes/StarRocks-Project-by-CelerData-Moves-to-the-Linux-Foundation-for-Continued-Open-Source-Development-157223.aspx" },
+      { "label": "Open Source For You: The Linux Foundation takes over the StarRocks project from CelerData (Feb 2023)", "url": "https://www.opensourceforu.com/2023/02/the-linux-foundation-receives-assistance-from-celerdata-for-the-starrocks-project/" },
+      { "label": "StarRocks docs: version 3.0 release notes (3.0.0, April 2023, storage and compute separated)", "url": "https://docs.starrocks.io/releasenotes/release-3.0/" },
+      { "label": "StarRocks docs: version 4.0 release notes (4.0.0, October 2025)", "url": "https://docs.starrocks.io/releasenotes/release-4.0/" },
+      { "label": "StarRocks docs: version 4.1 release notes (4.1.0, April 2026)", "url": "https://docs.starrocks.io/releasenotes/release-4.1/" },
+      { "label": "StarRocks docs: Database features (MPP, vectorized engine, optimizer)", "url": "https://docs.starrocks.io/docs/introduction/Features/" },
+      { "label": "StarRocks docs: Architecture (FE metadata in BDB JE, no external components, shared-data segment files)", "url": "https://docs.starrocks.io/docs/introduction/Architecture/" },
+      { "label": "PhoenixAI: About (CelerData founded 2022, rebranded as PhoenixAI in 2026)", "url": "https://www.phoenixdata.ai/about" }
+    ]
+  },
+  "sources": [
+    { "label": "StarRocks docs: Architecture (FE, BE and CN nodes; shared-nothing and shared-data)", "url": "https://docs.starrocks.io/docs/introduction/Architecture/" },
+    { "label": "StarRocks docs: Database features (MPP, vectorized engine, optimizer, Primary Key tables, materialized views)", "url": "https://docs.starrocks.io/docs/introduction/Features/" },
+    { "label": "StarRocks docs: What is StarRocks? (MySQL protocol, no external components, Apache 2.0)", "url": "https://docs.starrocks.io/docs/introduction/what_is_starrocks/" },
+    { "label": "StarRocks docs: Feature differences between shared-nothing and shared-data clusters", "url": "https://docs.starrocks.io/docs/introduction/feature_difference/" },
+    { "label": "StarRocks docs: Catalog overview (Hive, Iceberg, Hudi, Delta Lake, Paimon, JDBC, Elasticsearch)", "url": "https://docs.starrocks.io/docs/data_source/catalog/catalog_overview/" },
+    { "label": "StarRocks docs: Iceberg catalog (Glue and REST metastores, sink to Parquet Iceberg tables)", "url": "https://docs.starrocks.io/docs/data_source/catalog/iceberg/" },
+    { "label": "StarRocks docs: Hive catalog (sink to Parquet, ORC and text Hive tables)", "url": "https://docs.starrocks.io/docs/data_source/catalog/hive_catalog/" },
+    { "label": "StarRocks docs: Paimon catalog (beta)", "url": "https://docs.starrocks.io/docs/data_source/catalog/paimon_catalog/" },
+    { "label": "StarRocks docs: Asynchronous materialized views (external catalogs, query rewrite, consistency)", "url": "https://docs.starrocks.io/docs/using_starrocks/async_mv/Materialized_view/" },
+    { "label": "StarRocks docs: Load data using Routine Load (Kafka, exactly-once)", "url": "https://docs.starrocks.io/docs/loading/kafka/RoutineLoad/" },
+    { "label": "StarRocks docs: Continuously load data from Apache Flink", "url": "https://docs.starrocks.io/docs/loading/Flink-connector-starrocks/" },
+    { "label": "StarRocks docs: version 4.1 release notes", "url": "https://docs.starrocks.io/releasenotes/release-4.1/" },
+    { "label": "StarRocks repository on GitHub: languages and licence", "url": "https://github.com/StarRocks/starrocks" },
+    { "label": "PhoenixAI: About StarRocks (created by PhoenixAI, still leads development; Linux Foundation, Apache 2.0)", "url": "https://www.phoenixdata.ai/starrocks" }
+  ],
+  "checked": "2026-10-06"
+}

@@ -1,0 +1,137 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Entity-attribute-value (EAV)",
+  "category": "modeling",
+  "order": 30,
+  "summary": "Store each fact as its own row of entity, attribute and value, so adding an attribute never changes the schema.",
+  "howItWorks": "Instead of one column per attribute, an EAV table has three: which thing (the entity), which property (the attribute) and its value. A laptop with a colour, a weight and a screen size becomes three rows; a book with a page count becomes one. Adding an attribute means inserting a row into an attribute catalog, not running `ALTER TABLE`, and nothing is stored for attributes a thing doesn’t have. The price is that the database no longer knows your schema. One `value` column can’t be both a number and a date, so real systems keep typed value columns (`value_num`, `value_text`, `value_date`) or one value table per type, as Magento does. A rule like “weight is required and positive” can’t be a column constraint any more, so it moves into metadata tables and application code or triggers. Reading a whole record means pivoting rows back into columns, with one `CASE` or one join per attribute, and filtering on three attributes means three self-joins. An index on `(attribute, value)` helps one attribute at a time, and the planner keeps statistics per column, so every attribute’s values are lumped into one histogram.",
+  "analogy": "A shop receipt. It lists only what you bought, one line per item, instead of a form with a box for every product in the shop. It’s easy to print and never runs out of boxes, but answering “who bought milk and eggs but not bread?” means reading every line of every receipt.",
+  "useWhen": [
+    "Very sparse data: thousands of possible attributes and a handful per entity, such as lab tests per patient",
+    "Attributes that users or admins define at runtime, like custom product fields or a form builder",
+    "Many small classes of things with a few instances each, where a table per class would mean hundreds of tables"
+  ],
+  "avoidWhen": [
+    "The attributes are known and mostly filled in; use ordinary columns",
+    "You need the database to enforce types, required fields and foreign keys for each attribute",
+    "Reporting and ad-hoc filters across many attributes; try a JSON column first"
+  ],
+  "example": "A marketplace lets sellers in 2,000 categories define their own product attributes, 15,000 in all, and a typical listing fills 12 of them. A table with a column per attribute would blow past PostgreSQL’s limit of 1,600 columns. In EAV, 5 million listings are 60 million narrow rows, and a new “battery life” attribute is one insert into the attribute catalog. The listing page reads 12 rows by `product_id` and is fast. The category filter “red, under 2 kg” needs a self-join per condition and gets slow, so the team copies the filterable attributes into a search index.",
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "-- The attribute catalog: the metadata EAV can’t live without",
+      "CREATE TABLE attribute (",
+      "  id        int  PRIMARY KEY,",
+      "  name      text NOT NULL UNIQUE,              -- 'color', 'weight_kg', ...",
+      "  data_type text NOT NULL CHECK (data_type IN ('num', 'text', 'date'))",
+      ");",
+      "",
+      "-- One row per fact, with typed value columns (one is filled per row)",
+      "CREATE TABLE product_attr (",
+      "  product_id   bigint NOT NULL,",
+      "  attribute_id int    NOT NULL REFERENCES attribute (id),",
+      "  value_num    numeric,",
+      "  value_text   text,",
+      "  value_date   date,",
+      "  PRIMARY KEY (product_id, attribute_id)",
+      ");",
+      "",
+      "-- Pivot back to one row per product: one MAX(CASE ...) per attribute",
+      "SELECT p.product_id,",
+      "       MAX(CASE WHEN a.name = 'color'     THEN p.value_text END) AS color,",
+      "       MAX(CASE WHEN a.name = 'weight_kg' THEN p.value_num  END) AS weight_kg,",
+      "       MAX(CASE WHEN a.name = 'pages'     THEN p.value_num  END) AS pages",
+      "FROM product_attr p",
+      "JOIN attribute a ON a.id = p.attribute_id",
+      "GROUP BY p.product_id;",
+      "",
+      "-- “Red and under 2 kg”: one self-join per condition",
+      "SELECT c.product_id",
+      "FROM product_attr c",
+      "JOIN product_attr w ON w.product_id = c.product_id",
+      "WHERE c.attribute_id = 1 AND c.value_text = 'red'",
+      "  AND w.attribute_id = 2 AND w.value_num  < 2;"
+    ]
+  },
+  "related": ["emergent-schema","wide-tables","narrow-tables","hybrid-tables","document","key-value","graph"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "Three products as ordinary columns",
+      "intro": "A laptop, a book and a T-shirt share one table with a column per attribute. Six facts take twelve cells; the other six are NULL.",
+      "corner": "product_id",
+      "columns": ["color","weight_kg","screen_in","pages"],
+      "rows": [
+        { "label": "101 (laptop)", "values": ["red","1.4","14","NULL"] },
+        { "label": "102 (book)", "values": ["NULL","0.3","NULL","320"] },
+        { "label": "103 (T-shirt)", "values": ["blue","NULL","NULL","NULL"] }
+      ],
+      "notes": ["Adding `battery_h` for the laptop means `ALTER TABLE` and a new column that is NULL for everything else."]
+    },
+    {
+      "type": "table",
+      "title": "The same products in EAV",
+      "intro": "Each fact is one row, and absent attributes take no space. Adding `battery_h` is one more row.",
+      "corner": "product_id",
+      "columns": ["attribute","value"],
+      "rows": [
+        { "label": "101", "values": ["color","red"] },
+        { "label": "101", "values": ["weight_kg","1.4"] },
+        { "label": "101", "values": ["screen_in","14"] },
+        { "label": "102", "values": ["weight_kg","0.3"] },
+        { "label": "102", "values": ["pages","320"] },
+        { "label": "103", "values": ["color","blue"] }
+      ],
+      "notes": [
+        "Each row repeats the product ID and attribute ID, and in PostgreSQL carries a row header of about 23 bytes, so EAV only saves space when data is really sparse.",
+        "Most analysis tools expect the column layout, so EAV data is usually pivoted into views, materialized views or exports before anyone reports on it."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "The idea of describing anything as a list of attribute-value pairs is old: Dinu and Nadkarni trace it to LISP’s association lists and to SIMULA 67. It reached databases through medicine. A hospital can run thousands of different tests, but each patient gets a few, and new tests appear every year, so a column per test was hopeless. The HELP system, described by Warner and colleagues in 1972, and the TMR medical record built by Stead and Hammond at Duke in the late 1970s stored clinical facts as rows instead. The earliest HELP versions kept every value as a string, which made numeric range searches slow; later repositories such as Columbia-Presbyterian’s added typed value columns.",
+      "Web software rediscovered the pattern wherever users define their own fields. WordPress keeps custom data for posts, users and comments in meta tables with four columns, `meta_id`, `post_id` (or `user_id`), `meta_key` and `meta_value`. Magento stores product attributes in separate value tables per type, `catalog_product_entity_int`, `_decimal`, `_varchar`, `_text` and `_datetime`. RDF triple stores push the idea to the whole web: every fact is a (subject, property, object) row, and a query needs one self-join per pattern.",
+      "The costs became the textbook warning. Bill Karwin’s SQL Antipatterns (2010) calls EAV “use a generic attribute table” and recommends modelling the subtypes instead, while listing legitimate uses. WooCommerce, which stored orders as WordPress posts and post meta, built dedicated order tables (High-Performance Order Storage) and made them the default for new stores in version 8.2 in October 2023. Since PostgreSQL added `jsonb` in 2014, a JSON column has replaced EAV for many of the jobs it used to do."
+    ],
+    "choices": [
+      { "choice": "Rows instead of columns", "why": "Clinical data is sparse (each patient has a few of thousands of possible facts) and volatile (new tests keep appearing). A row per fact stores only what exists and needs no schema change for a new attribute." },
+      { "choice": "Metadata tables that describe every attribute", "why": "Once the physical schema is three generic columns, the logical schema has to live somewhere. Dinu and Nadkarni put it bluntly: an EAV system without a significant metadata component is like an automobile without an engine. Forms, validation and pivots are generated from it." },
+      { "choice": "Typed value columns or a value table per type", "why": "Storing everything as text breaks range searches and indexing on numbers and dates. Columbia’s repository used several typed columns with an indicator; TrialDB and Magento use a separate table per data type." },
+      { "choice": "Constraints enforced by metadata and code, not the schema", "why": "Column constraints can’t say “weight must be positive” when one column holds thousands of attributes. Rules move to triggers that read the metadata, or to the application, which the database can no longer guarantee." }
+    ],
+    "timeline": [
+      { "year": "1972", "text": "Warner, Olmsted and Rutherford describe the HELP medical decision system" },
+      { "year": "1983", "text": "Stead and Hammond describe TMR’s “chartless” medical record from Duke" },
+      { "year": "2007", "text": "Dinu and Nadkarni publish guidelines on when EAV is and isn’t appropriate" },
+      { "year": "2010", "text": "Bill Karwin’s SQL Antipatterns lists EAV as a logical design antipattern" },
+      { "year": "2014", "text": "PostgreSQL 9.4 adds indexable `jsonb`, an alternative for sparse attributes" },
+      { "year": "2015", "text": "Pham, Boncz and colleagues show most RDF triples fit an emergent relational schema" },
+      { "year": "2023", "text": "WooCommerce 8.2 moves new stores’ orders out of post meta into dedicated tables" }
+    ],
+    "sources": [
+      { "label": "Dinu and Nadkarni: Guidelines for the effective use of entity-attribute-value modeling for biomedical databases (Int J Med Inform, 2007)", "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC2110957/" },
+      { "label": "WordPress Common APIs Handbook: Metadata (meta table structure)", "url": "https://developer.wordpress.org/apis/metadata/" },
+      { "label": "Magento 2 source: Catalog module db_schema.xml (typed catalog_product_entity value tables)", "url": "https://github.com/magento/magento2/blob/2.4-develop/app/code/Magento/Catalog/etc/db_schema.xml" },
+      { "label": "Pham, Passing, Erling and Boncz: Deriving an Emergent Relational Schema from RDF Data (WWW 2015)", "url": "https://ir.cwi.nl/pub/23379/23379B.pdf" },
+      { "label": "Pragmatic Bookshelf: SQL Antipatterns by Bill Karwin (first edition, June 2010)", "url": "https://pragprog.com/titles/bksqla/sql-antipatterns/" },
+      { "label": "Pragmatic Bookshelf: SQL Antipatterns, Volume 1 (2022), chapter list with Entity-Attribute-Value", "url": "https://pragprog.com/titles/bksap1/sql-antipatterns-volume-1/" },
+      { "label": "WooCommerce developer docs: High Performance Order Storage (HPOS)", "url": "https://developer.woocommerce.com/docs/features/high-performance-order-storage/" },
+      { "label": "PostgreSQL 9.4 release notes: add jsonb (Dec 2014)", "url": "https://www.postgresql.org/docs/9.4/release-9-4.html" }
+    ]
+  },
+  "sources": [
+    { "label": "Dinu and Nadkarni: Guidelines for the effective use of entity-attribute-value modeling for biomedical databases (Int J Med Inform, 2007)", "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC2110957/" },
+    { "label": "Adobe Commerce docs: EAV and extension attributes", "url": "https://developer.adobe.com/commerce/php/development/components/attributes" },
+    { "label": "Magento 2 source: Catalog module db_schema.xml (typed catalog_product_entity value tables)", "url": "https://github.com/magento/magento2/blob/2.4-develop/app/code/Magento/Catalog/etc/db_schema.xml" },
+    { "label": "WordPress Common APIs Handbook: Metadata (meta table structure)", "url": "https://developer.wordpress.org/apis/metadata/" },
+    { "label": "PostgreSQL docs: Appendix K, PostgreSQL limits (1,600 columns per table)", "url": "https://www.postgresql.org/docs/current/limits.html" },
+    { "label": "PostgreSQL docs: Database page layout (23-byte row header, null bitmap)", "url": "https://www.postgresql.org/docs/current/storage-page-layout.html" },
+    { "label": "PostgreSQL docs: Statistics used by the planner (per-column statistics)", "url": "https://www.postgresql.org/docs/current/planner-stats.html" },
+    { "label": "PostgreSQL docs: tablefunc, crosstab functions for pivoting", "url": "https://www.postgresql.org/docs/current/tablefunc.html" },
+    { "label": "Pham, Passing, Erling and Boncz: Deriving an Emergent Relational Schema from RDF Data (WWW 2015), on triple-store self-joins", "url": "https://ir.cwi.nl/pub/23379/23379B.pdf" },
+    { "label": "Pragmatic Bookshelf: SQL Antipatterns, Volume 1 by Bill Karwin (2022), chapter list", "url": "https://pragprog.com/titles/bksap1/sql-antipatterns-volume-1/" },
+    { "label": "WooCommerce developer docs: High Performance Order Storage (HPOS)", "url": "https://developer.woocommerce.com/docs/features/high-performance-order-storage/" }
+  ]
+}

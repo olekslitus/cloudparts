@@ -1,0 +1,94 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Apache Hudi",
+  "concepts": ["table-formats", "lakehouse"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://hudi.apache.org/",
+  "repo": "https://github.com/apache/hudi",
+  "summary": "A table format built for upserts and incremental pulls, with record-level indexes and built-in table services.",
+  "intro": [
+    "Uber built Hudi in 2016 to apply database changes to its Hadoop data lake within minutes instead of rewriting whole partitions every night. Every record has a key. On each write, Hudi looks the incoming keys up in an index to find the file group that holds them, then either rewrites that file (copy-on-write) or appends the changes to a row-based log file next to it (merge-on-read). A later compaction folds the logs into new Parquet base files. A timeline in the table’s `.hoodie` folder records every commit, compaction and clean.",
+    "Incremental queries are the other half: a downstream job asks for “every record changed since commit X” and gets only those rows, so pipelines can chain table to table without rescanning. Table services for compaction, clustering and cleaning can run inline with writes or as separate jobs. Uber open-sourced Hudi in 2017 and gave it to the Apache Software Foundation in 2019; the current release is 1.2.1."
+  ],
+  "strengths": [
+    "Efficient upserts and deletes by record key, which suits change-data capture from databases",
+    "Incremental queries turn any table into a change stream for the next job",
+    "Merge-on-read keeps write latency low for tables with heavy updates",
+    "Ingestion, compaction, clustering and cleaning services come built in"
+  ],
+  "limits": [
+    "More knobs than Iceberg or Delta Lake: table type, index type and compaction and cleaning policies all need choosing",
+    "Engine support is narrower: Trino’s connector is read-only and sees merge-on-read tables only as of the last compaction",
+    "Merge-on-read queries slow down when compaction falls behind",
+    "Writes are mostly Spark or Flink jobs"
+  ],
+  "worksWith": [
+    { "id": "parquet", "how": "stores base files as" },
+    { "id": "avro", "how": "writes merge-on-read log files in" },
+    { "id": "kafka", "how": "can ingest streams from" },
+    { "id": "s3", "how": "commonly keeps tables in" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "A merge-on-read table and an incremental read (Spark SQL)",
+    "source": [
+      "CREATE TABLE orders (",
+      "  order_id BIGINT, amount DOUBLE, updated_at BIGINT, order_date STRING",
+      ") USING HUDI",
+      "TBLPROPERTIES (type = 'mor', primaryKey = 'order_id', orderingFields = 'updated_at')",
+      "PARTITIONED BY (order_date)",
+      "LOCATION 's3://acme-lake/orders';",
+      "",
+      "MERGE INTO orders t USING order_changes c ON t.order_id = c.order_id",
+      "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *;",
+      "",
+      "-- only rows changed since a given commit",
+      "SELECT * FROM hudi_table_changes('orders', 'latest_state', '20261004000000');"
+    ]
+  },
+  "history": {
+    "story": [
+      "By 2016 Uber kept petabytes of data in Hadoop, and much of it changed constantly. HDFS files can’t be edited, so applying updates meant batch jobs that rewrote whole partitions every few hours, and late-arriving data forced rewrites of older partitions too. The usual alternative, a lambda architecture, ran a separate streaming layer next to the batch one, and its approximate results drifted from the batch numbers. Fast serving stores could take record-level updates, but they cost more to scale and usually kept only 30 to 90 days or a few terabytes of data.",
+      "Uber engineers including Vinoth Chandar and Prasanna Rajaperumal built Hudi in 2016 under the codename “Hoodie”. It applied changes to HDFS tables within minutes and let downstream jobs pull only the records that had changed. Uber described it publicly in March 2017, open-sourced it that year, and submitted it to the Apache Incubator in January 2019. By then it managed over 4,000 tables and several petabytes at Uber, and had cut warehouse data latency from several hours to under 30 minutes. Hudi graduated to a top-level Apache project in May 2020.",
+      "Recent releases have widened its scope: 1.0 in December 2024 added secondary indexes and non-blocking concurrency control, and 1.2 in June 2026 added vector search and Lance files for AI data."
+    ],
+    "choices": [
+      { "choice": "Record keys and a pluggable index", "why": "To update a record, Hudi must know which file holds it. An index (Bloom filters by default, HBase as an option) maps incoming keys to file groups, so only those files are touched." },
+      { "choice": "Avro logs for writes, Parquet for reads", "why": "Appending changes to row-based Avro log files is cheap; Parquet is fast to scan. Merge-on-read writes to the logs first and compacts them into Parquet later, trading some query cost for low write latency." },
+      { "choice": "A timeline of every commit", "why": "Recording each commit, clean and compaction with its time lets a reader pick file versions as of a commit and ask for only the records changed since one, which is what makes incremental pulls work." },
+      { "choice": "Minutes, not seconds, on plain Hadoop", "why": "Rather than add a fast serving store, Uber targeted workloads that could tolerate about 10 minutes of latency, keeping data in HDFS where storage is cheap and scans are fast." }
+    ],
+    "timeline": [
+      { "year": "2016", "text": "Built at Uber under the codename Hoodie" },
+      { "year": "2017", "text": "Uber describes it publicly in March and open-sources it" },
+      { "year": "2019", "text": "Enters the Apache Incubator in January" },
+      { "year": "2020", "text": "Graduates to a top-level Apache project in May" },
+      { "year": "2024", "text": "Hudi 1.0 adds secondary indexes and non-blocking concurrency control" },
+      { "year": "2026", "text": "Hudi 1.2 adds vector search, `variant`, blobs and Lance file support" }
+    ],
+    "sources": [
+      { "label": "Uber Engineering: Hudi, an incremental processing framework on Apache Hadoop (March 2017)", "url": "https://www.uber.com/us/en/blog/hoodie/" },
+      { "label": "Uber Engineering: Apache Hudi submitted to the ASF (April 2019)", "url": "https://www.uber.com/us/en/blog/apache-hudi/" },
+      { "label": "Apache Incubator: Hudi proposal (2019)", "url": "https://cwiki.apache.org/confluence/display/INCUBATOR/HudiProposal" },
+      { "label": "Apache Incubator: Hudi incubation status (graduated May 2020)", "url": "https://incubator.apache.org/projects/hudi.html" },
+      { "label": "Announcing Apache Hudi 1.0 (December 2024)", "url": "https://hudi.apache.org/blog/2024/12/16/announcing-hudi-1-0-0/" },
+      { "label": "Apache Hudi 1.2 announcement (June 2026)", "url": "https://hudi.apache.org/blog/2026/06/07/apache-hudi-release-1-2-announcement/" }
+    ]
+  },
+  "sources": [
+    { "label": "Hudi docs: Overview", "url": "https://hudi.apache.org/docs/overview" },
+    { "label": "Hudi docs: Table and query types (copy-on-write, merge-on-read, row-based log files)", "url": "https://hudi.apache.org/docs/table_types" },
+    { "label": "Hudi docs: Indexes", "url": "https://hudi.apache.org/docs/indexes" },
+    { "label": "Hudi docs: Timeline (the .hoodie directory)", "url": "https://hudi.apache.org/docs/timeline" },
+    { "label": "Hudi docs: Compaction (inline and async)", "url": "https://hudi.apache.org/docs/compaction" },
+    { "label": "Hudi docs: SQL DDL (type, primaryKey, orderingFields)", "url": "https://hudi.apache.org/docs/sql_ddl" },
+    { "label": "Hudi docs: Spark quick start (MERGE INTO, hudi_table_changes)", "url": "https://hudi.apache.org/docs/quick-start-guide" },
+    { "label": "Hudi downloads: release 1.2.1", "url": "https://hudi.apache.org/releases/download" },
+    { "label": "Uber Engineering: Hudi, an incremental processing framework (March 2017)", "url": "https://www.uber.com/us/en/blog/hoodie/" },
+    { "label": "Uber: Apache Hudi submitted to the ASF (2016 start, 2017 open source, 2019 ASF)", "url": "https://www.uber.com/us/en/blog/apache-hudi/" },
+    { "label": "Trino docs: Hudi connector (read access; merge-on-read as read-optimized queries)", "url": "https://trino.io/docs/current/connector/hudi.html" }
+  ],
+  "checked": "2026-10-05"
+}

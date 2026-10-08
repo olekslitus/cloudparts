@@ -1,0 +1,282 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Amazon S3 Tables",
+  "concepts": ["lakehouse", "table-formats"],
+  "provider": "aws",
+  "vendor": "Amazon Web Services",
+  "license": "Proprietary (the S3 Tables Catalog for Apache Iceberg client library is Apache 2.0)",
+  "website": "https://aws.amazon.com/s3/features/tables/",
+  "summary": "A bucket type for Apache Iceberg tables: S3 stores them, acts as their catalog, and compacts and cleans them up for you.",
+  "intro": [
+    "A table bucket is a third kind of S3 bucket, next to general purpose and directory buckets. It holds tables instead of loose objects, grouped into one level of namespaces. Every table is an Apache Iceberg table: Parquet, Avro or ORC data files plus Iceberg metadata files, stored as objects under a location S3 generates for that table. The bucket is also the catalog. It records each table’s current metadata file, and a writer commits by asking S3 Tables to swap that pointer. Engines reach the tables through an Iceberg REST endpoint at `https://s3tables.<region>.amazonaws.com/iceberg`, through AWS’s open-source client catalog for Spark, or through the AWS Glue Data Catalog, which lists every table bucket so Athena, Redshift, EMR, Glue and Quick can query it. In the background, S3 compacts small files, expires old snapshots and deletes files that no snapshot references.",
+    "Table buckets and tables are AWS resources with their own ARNs under a separate IAM namespace, `s3tables`, so one policy can grant access to a single table, a namespace or a whole bucket. Files can only be reached through the part of the S3 API that Iceberg needs (`GetObject`, `HeadObject`, `PutObject` and multipart uploads): you can’t overwrite or delete a file by hand, and a table bucket can never be made public. In us-east-1, storage costs $0.0265 per GB-month for the first 50 TB, about 15% more than S3 Standard. On top come the usual request fees, a monitoring fee of $0.025 per 1,000 objects a month, and compaction charges per object and per GB processed (list prices checked 2026-10-06)."
+  ],
+  "strengths": [
+    "Compaction, snapshot expiry and removal of unreferenced files run by default, so there are no Spark maintenance jobs or schedules to own",
+    "A standard Iceberg REST catalog: Spark, PyIceberg, Trino, DuckDB and other clients connect with SigV4 and a bucket ARN, and AWS analytics services see the same tables through Glue",
+    "Permissions per table or namespace instead of per object prefix, Block Public Access that can’t be turned off, and a KMS key per table if you want one",
+    "Storage features that understand tables: Intelligent-Tiering whose tier changes aren’t triggered by maintenance, and replication of whole tables, snapshot history included, across Regions and accounts"
+  ],
+  "limits": [
+    "The catalog is AWS’s own. The files are open Iceberg and Parquet, but only S3 Tables can commit to a table, the files sit under an S3-generated location, and maintenance fails on tables that point at files outside it. Bringing tables in, or moving them out, means copying data",
+    "Costs beyond storage: a 15% premium over S3 Standard, a per-object monitoring fee ten times the one for Intelligent-Tiering in general purpose buckets, and compaction billed per object and per GB every time data is rewritten",
+    "Engines lag behind the tables: Athena can’t read Iceberg v3 tables, and tables or columns with capital letters are invisible to Glue, Lake Formation and Athena",
+    "The S3 Tables REST endpoint covers only basic catalog calls: one namespace level, no views, no OAuth, no staged create (so no CTAS through it), drops must purge, and tables with a `metadata.json` over 50 MB are rejected",
+    "Automatic snapshot expiry stops for a whole table if it has Iceberg tags or branches or Iceberg’s own retention properties, and files that maintenance deletes are gone for good once the noncurrent period ends"
+  ],
+  "worksWith": [
+    { "id": "s3", "how": "is a bucket type of" },
+    { "id": "iceberg", "how": "stores every table in the format of" },
+    { "id": "parquet", "how": "compacts data files into" },
+    { "id": "athena", "how": "is queried and written by" },
+    { "id": "spark", "how": "is read and written by" },
+    { "id": "trino", "how": "is queried over Iceberg REST by" },
+    { "id": "duckdb", "how": "is attached as an Iceberg catalog by" },
+    { "id": "snowflake", "how": "is read through Glue’s REST catalog by" },
+    { "id": "kinesis", "how": "receives streaming tables from" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Create a table bucket, a namespace and a sorted, partitioned table, then tune compaction",
+    "source": [
+      "aws s3tables create-table-bucket --region us-east-1 --name acme-lake",
+      "BUCKET=arn:aws:s3tables:us-east-1:111122223333:bucket/acme-lake",
+      "",
+      "aws s3tables create-namespace --table-bucket-arn $BUCKET --namespace sales",
+      "",
+      "# Iceberg schema, daily partitions and a sort order; stored in Intelligent-Tiering",
+      "aws s3tables create-table --table-bucket-arn $BUCKET \\",
+      "  --namespace sales --name orders --format ICEBERG \\",
+      "  --storage-class-configuration storageClass=INTELLIGENT_TIERING \\",
+      "  --metadata '{\"iceberg\": {",
+      "    \"schema\": {\"fields\": [",
+      "      {\"id\": 1, \"name\": \"order_id\", \"type\": \"long\", \"required\": true},",
+      "      {\"id\": 2, \"name\": \"customer_id\", \"type\": \"long\"},",
+      "      {\"id\": 3, \"name\": \"amount\", \"type\": \"double\"},",
+      "      {\"id\": 4, \"name\": \"ts\", \"type\": \"timestamp\"}]},",
+      "    \"partitionSpec\": {\"fields\": [",
+      "      {\"sourceId\": 4, \"transform\": \"day\", \"name\": \"ts_day\"}]},",
+      "    \"writeOrder\": {\"orderId\": 1, \"fields\": [",
+      "      {\"sourceId\": 2, \"transform\": \"identity\", \"direction\": \"asc\", \"nullOrder\": \"nulls-last\"}]}}}'",
+      "",
+      "# compact by the sort order into 256 MB files (default: auto strategy, 512 MB)",
+      "aws s3tables put-table-maintenance-configuration --table-bucket-arn $BUCKET \\",
+      "  --namespace sales --name orders --type icebergCompaction \\",
+      "  --value '{\"status\":\"enabled\",\"settings\":{\"icebergCompaction\":{\"strategy\":\"sort\",\"targetFileSizeMB\":256}}}'",
+      "",
+      "# did compaction, snapshot expiry and file removal succeed?",
+      "aws s3tables get-table-maintenance-job-status --table-bucket-arn $BUCKET \\",
+      "  --namespace sales --name orders"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Table bucket or general purpose bucket?",
+      "intro": "Both are S3, with the same durability. The difference is what S3 knows about the objects inside.",
+      "columns": ["General purpose bucket", "Table bucket"],
+      "rows": [
+        { "label": "Holds", "values": ["Objects under keys you choose", "Iceberg tables in namespaces; their files are objects under a location S3 generates"] },
+        { "label": "IAM resources", "values": ["The bucket, and objects by key or prefix (`s3:` actions)", "The table bucket and each table (`s3tables:` actions); bucket policies can also name namespaces"] },
+        { "label": "Object API", "values": ["The whole S3 API", "`GetObject`, `HeadObject`, `PutObject` and multipart uploads; no manual overwrites or deletes, no presigned URLs"] },
+        { "label": "Public access", "values": ["Possible if Block Public Access is turned off", "Never"] },
+        { "label": "Catalog", "values": ["None; bring Glue, Polaris or another", "Built in, with an Iceberg REST endpoint"] },
+        { "label": "Maintenance", "values": ["Yours, or Glue table optimizers", "Compaction, snapshot expiry and unreferenced file removal, on by default"] },
+        { "label": "Storage classes", "values": ["All S3 classes, with lifecycle rules", "S3 Standard or Intelligent-Tiering (three instant tiers), fixed when the table is created"] },
+        { "label": "Storage, us-east-1, first 50 TB", "values": ["$0.023 per GB-month (Standard)", "$0.0265 per GB-month"] },
+        { "label": "Per-object fee", "values": ["None in Standard; $0.0025 per 1,000 objects in Intelligent-Tiering", "$0.025 per 1,000 objects a month, for every object"] }
+      ],
+      "notes": [
+        "Default quotas: 100 table buckets per Region per account (raised from 10 in October 2026), and 10,000 namespaces and 10,000 tables per table bucket. Support can raise them.",
+        "Prices are us-east-1 list prices from the AWS price list, checked 2026-10-06. Request prices are the same in both: $0.005 per 1,000 PUT, COPY, POST or LIST requests and $0.0004 per 1,000 GETs."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Four ways to reach the tables",
+      "intro": "All four use the same tables. AWS recommends the Glue route for most uses and the S3 Tables endpoint for custom or partner catalogs, or for simple reads and writes in one bucket.",
+      "items": [
+        { "name": "S3 Tables Iceberg REST endpoint", "tag": "direct · one bucket", "text": "`https://s3tables.<region>.amazonaws.com/iceberg`, signed with SigV4 (signing name `s3tables`), with the table bucket ARN as the warehouse. Each REST call maps to an `s3tables:` IAM action, so table and bucket policies decide access. It sees one bucket and supports only the core table and namespace calls." },
+        { "name": "AWS Glue Iceberg REST endpoint", "tag": "recommended · whole account", "text": "`https://glue.<region>.amazonaws.com/iceberg`, signing name `glue`, warehouse `<account-id>:s3tablescatalog/<bucket>`. One catalog for all table buckets and other Glue tables. With Lake Formation, external engines get temporary credentials once you allow full table access for them." },
+        { "name": "S3 Tables Catalog for Apache Iceberg", "tag": "Java library · Apache 2.0", "text": "An AWS Labs JAR (`s3-tables-catalog-for-iceberg`) that you plug into Spark as a `catalog-impl`. It turns Iceberg catalog calls into S3 Tables API calls. It came first, at launch; AWS now recommends the REST endpoint because it needs no engine-specific code." },
+        { "name": "AWS analytics services", "tag": "via Glue Data Catalog", "text": "Turning on the integration, once per Region, adds a federated catalog called `s3tablescatalog` to Glue: each table bucket becomes a subcatalog and each namespace a database. Athena, Redshift, EMR, Glue ETL, Quick, Data Firehose and SageMaker Unified Studio then see the tables. Names must be lowercase." }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "S3 Tables or self-managed Iceberg in a general purpose bucket",
+      "intro": "The same Iceberg tables can live in an ordinary bucket with a catalog you choose. What changes is who does the chores and what you pay for.",
+      "columns": ["S3 Tables", "Iceberg in a general purpose bucket"],
+      "rows": [
+        { "label": "Maintenance", "values": ["S3 runs it automatically, billed per object and per GB processed", "You run Iceberg procedures in Spark or EMR, or turn on Glue table optimizers at $0.44 per DPU-hour"] },
+        { "label": "Tuning", "values": ["Fixed knobs: target file size (64 to 512 MB), strategy (auto, binpack, sort, z-order), snapshot count and age, days before unreferenced files go", "Any Iceberg procedure, any schedule, any engine"] },
+        { "label": "Catalog", "values": ["The table bucket itself; Glue mirrors it", "Your choice: Glue Data Catalog, Polaris, Nessie, a JDBC database and others"] },
+        { "label": "Access control", "values": ["IAM per table or namespace; Lake Formation optional in most Regions", "IAM on bucket and prefixes, plus Lake Formation or your catalog’s grants"] },
+        { "label": "Storage price", "values": ["$0.0265 per GB-month plus $0.025 per 1,000 objects", "$0.023 per GB-month in S3 Standard, no per-object fee"] },
+        { "label": "Performance claims", "values": ["AWS quotes up to 10x more transactions per second and up to 3x faster queries", "The baseline AWS compares against"] },
+        { "label": "Iceberg tags and branches", "values": ["Allowed, but they stop automatic snapshot expiry and replication for that table", "Fully under your control"] },
+        { "label": "Portability", "values": ["Any Iceberg engine can read the files, but only S3 Tables commits, so moving to another catalog means copying", "Files and metadata are yours; another catalog can register them"] }
+      ],
+      "notes": [
+        "Glue table optimizers have compacted Iceberg tables in general purpose buckets since November 2023, and expired snapshots and removed orphan files since September 2024."
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Pricing in us-east-1",
+      "intro": "List prices from the AWS price list, checked 2026-10-06. Queries are billed by the engine you use, and the Glue integration can add Glue request and storage fees.",
+      "columns": ["S3 Tables", "General purpose bucket, for comparison"],
+      "rows": [
+        { "label": "Storage, S3 Standard", "values": ["$0.0265 per GB-month (first 50 TB), $0.0253 (next 450 TB), $0.0242 (over 500 TB)", "$0.023, $0.022, $0.021"] },
+        { "label": "Storage, Intelligent-Tiering", "values": ["Frequent $0.0265, Infrequent $0.0144, Archive Instant $0.0046 per GB-month", "Frequent $0.023, Infrequent $0.0125, Archive Instant $0.004"] },
+        { "label": "Requests", "values": ["$0.005 per 1,000 PUT, COPY, POST or LIST; $0.0004 per 1,000 GET and others", "The same"] },
+        { "label": "Object monitoring", "values": ["$0.025 per 1,000 objects a month", "$0.0025 per 1,000 objects, Intelligent-Tiering only"] },
+        { "label": "Compaction, binpack", "values": ["$0.002 per 1,000 objects plus $0.005 per GB processed", "Not applicable"] },
+        { "label": "Compaction, sort or z-order", "values": ["$0.002 per 1,000 objects plus $0.01 per GB processed", "Not applicable"] },
+        { "label": "Replication", "values": ["$0.01 per 1,000 table updates, plus PUTs, inter-Region transfer, and storage of the replica", "Not compared here"] }
+      ],
+      "notes": [
+        "AWS’s own example: a 1 TB table in US West (Oregon), with 1,000 new 5 MB files a day and 500,000 GETs a month, costs $28.54 a month. Storage is $27.14 of that and compaction $0.79.",
+        "Compaction prices fell on 1 July 2025: 50% per object, 90% per GB for binpack and 80% per GB for sort and z-order."
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Where the bill grows",
+      "body": [
+        "Compaction is billed for every GB it rewrites, each time it rewrites it. New data is compacted at least once, and compaction also applies row-level deletes, so a table that takes frequent updates, deletes or `MERGE`s spread across many files has the same data rewritten again and again. Rewriting a 10 TB table once costs about $51 with binpack or $102 with sort compaction, against $271 a month to store it. If a table doesn’t need it, compaction can be turned off per table, and CloudWatch reports the bytes and objects compaction processes each day.",
+        "The monitoring fee is per object, whatever its size, so small files cost twice: 100 million objects add $2,500 a month before any storage. Compaction cuts the count, but the old small files don’t vanish at once. They stay while older snapshots still reference them (120 hours by default), then for 10 more days as noncurrent objects before S3 deletes them.",
+        "Intelligent-Tiering lowers storage for cold data, but compaction only runs on files in the Frequent Access tier. Deletes on colder data leave delete files that aren’t compacted until the data is read again, and AWS suggests running compaction yourself in EMR for such tables. Files under 128 KB never leave the Frequent Access tier."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "What came after launch",
+      "intro": "S3 Tables launched in December 2024 in three US Regions with a Spark client library and a preview Glue integration. Much of what it offers today came later.",
+      "items": [
+        { "name": "Iceberg REST endpoint", "tag": "March 2025", "text": "Any Iceberg REST client can create, list, update and drop tables in a bucket. The Glue and SageMaker Lakehouse integration became generally available the same day." },
+        { "name": "Streaming ingest", "tag": "March 2025 to August 2026", "text": "Data Firehose delivers into tables (March 2025), with routing by record and row-level updates and deletes. MSK Express brokers (July 2026) and Kinesis Data Streams (August 2026) gained streaming tables with compaction as data arrives." },
+        { "name": "Customer-managed KMS keys", "tag": "April 2025", "text": "A default key per bucket, a key per table, or both. Before, everything used S3-managed keys." },
+        { "name": "More compaction options, lower prices", "tag": "June and July 2025", "text": "Sort and z-order strategies, compaction of Avro and ORC files, and the July 2025 price cut." },
+        { "name": "Observability and tags", "tag": "June to November 2025", "text": "Per-table costs in Cost Explorer, CloudTrail events for maintenance runs, CloudWatch metrics per bucket, namespace and table, and tags for cost allocation and attribute-based access control." },
+        { "name": "Intelligent-Tiering and replication", "tag": "December 2025", "text": "Tables can be created in Intelligent-Tiering. Replication keeps read-only copies of tables, with all snapshots, in other Regions or accounts, and replicas can keep snapshots longer than the source." },
+        { "name": "Iceberg v3", "tag": "November 2025 to September 2026", "text": "Deletion vectors and row lineage first, then `variant`, then geometry, geography, nanosecond timestamps and column default values. Check your engines first: Athena can’t read v3 tables." },
+        { "name": "Simpler permissions", "tag": "March 2026", "text": "The Glue integration can use plain IAM policies across storage, catalog and engine, with Lake Formation optional. Regions not on AWS’s list still need Lake Formation." },
+        { "name": "Tables that AWS writes for you", "tag": "AWS managed buckets", "text": "S3 Metadata journal and live inventory tables, Storage Lens metrics exports and S3 server access logs land in read-only tables in AWS managed table buckets. Record expiration, which deletes rows older than a set number of days, works only on some of these managed tables, not on your own." }
+      ]
+    },
+    {
+      "type": "code",
+      "title": "Query from DuckDB",
+      "intro": "DuckDB’s Iceberg extension connects to the S3 Tables REST endpoint with nothing but the bucket ARN and your usual AWS credentials.",
+      "lang": "sql",
+      "source": [
+        "INSTALL aws; INSTALL iceberg;",
+        "LOAD aws; LOAD iceberg;",
+        "",
+        "-- AWS credentials from the default profile, environment or role",
+        "CREATE SECRET (TYPE s3, PROVIDER credential_chain);",
+        "",
+        "ATTACH 'arn:aws:s3tables:us-east-1:111122223333:bucket/acme-lake' AS lake (",
+        "  TYPE iceberg,",
+        "  ENDPOINT_TYPE s3_tables",
+        ");",
+        "",
+        "SELECT customer_id, sum(amount) AS revenue",
+        "FROM lake.sales.orders",
+        "WHERE ts >= TIMESTAMP '2026-09-01'",
+        "GROUP BY customer_id",
+        "ORDER BY revenue DESC",
+        "LIMIT 10;"
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "People kept tables in S3 for over a decade before S3 knew about them. Parquet, launched in 2013, became the usual format; by 2025 S3 stored exabytes of it and served hundreds of petabytes a day. Apache Iceberg, started in 2017, added a metadata layer that turned those files into real tables with row updates, schema changes and snapshots. But Iceberg keeps its structure outside the storage: the customer’s code tracks which objects belong to which snapshot, compacts the small files that frequent commits create and garbage-collects the rest.",
+      "Andy Warfield, VP and Distinguished Engineer of S3, wrote that customers running multi-petabyte Iceberg tables told AWS they were really “building their own table primitive over S3 objects”, and asked why S3 couldn’t do more of the work. S3 features built for single objects, such as Intelligent-Tiering and replication, also didn’t behave as expected on tables made of thousands of related objects.",
+      "AWS launched S3 Tables at re:Invent on 3 December 2024, in three US Regions, treating each table as an S3 resource with its own endpoint and policy. Warfield called it a “simplicity versus velocity decision”: it shipped early, and within months gained a full Iceberg REST catalog, a generally available Glue integration and cheaper compaction, followed by tiering and replication for tables."
+    ],
+    "choices": [
+      { "choice": "A new bucket type, with tables as resources", "why": "Policies written for thousands of objects don’t map onto a table. Making each table a resource with an ARN and its own policy lets you grant access to the table, not to whichever files it is made of today." },
+      { "choice": "Apache Iceberg instead of a new format", "why": "Iceberg was already the most popular way to manage Parquet files on AWS, used by thousands of customers, so existing engines could read and write the tables from day one." },
+      { "choice": "Maintenance inside the storage service", "why": "Compaction, snapshot expiry and orphan cleanup were jobs every Iceberg user wrote and scheduled. Running them in S3 also lets storage features like tiering and replication know which files belong to a live table." },
+      { "choice": "No manual overwrites or deletes", "why": "To keep tables from being corrupted or breaking downstream readers, table buckets support only the subset of the S3 API that Iceberg needs, and data is deleted through snapshot expiry and unreferenced file removal." }
+    ],
+    "timeline": [
+      { "year": "2013", "text": "Apache Parquet launches and becomes the common way to keep tables in S3" },
+      { "year": "2017", "text": "Apache Iceberg starts, adding table metadata on top of Parquet files" },
+      { "year": "2024", "text": "S3 Tables launches at re:Invent on 3 December, in three US Regions" },
+      { "year": "2025", "text": "Iceberg REST endpoint (March), compaction price cut (July), tiering and replication (December)" },
+      { "year": "2026", "text": "IAM-only Glue integration, all Iceberg v3 types, 100 table buckets per Region" }
+    ],
+    "sources": [
+      { "label": "All Things Distributed: In S3 simplicity is table stakes, by Andy Warfield (March 2025)", "url": "https://www.allthingsdistributed.com/2025/03/in-s3-simplicity-is-table-stakes.html" },
+      { "label": "AWS News Blog: New Amazon S3 Tables, storage optimized for analytics workloads (December 2024)", "url": "https://aws.amazon.com/blogs/aws/new-amazon-s3-tables-storage-optimized-for-analytics-workloads/" },
+      { "label": "AWS What’s New: Announcing Amazon S3 Tables (December 2024)", "url": "https://aws.amazon.com/about-aws/whats-new/2024/12/amazon-s3-tables-apache-iceberg-tables-analytics-workloads/" },
+      { "label": "AWS What’s New: Amazon S3 Tables add Apache Iceberg REST Catalog APIs (March 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/03/amazon-s3-tables-apache-iceberg-rest-catalog-apis" },
+      { "label": "AWS What’s New: Amazon S3 Tables reduce compaction costs by up to 90% (July 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/07/amazon-s3-tables-reduce-compaction-costs/" },
+      { "label": "AWS What’s New: Up to 100 table buckets per Region (October 2026)", "url": "https://aws.amazon.com/about-aws/whats-new/2026/10/amazon-s3-tables-table-bucket-increase" }
+    ]
+  },
+  "sources": [
+    { "label": "Amazon S3 Tables product page (engines, partners, performance claims)", "url": "https://aws.amazon.com/s3/features/tables/" },
+    { "label": "Amazon S3 FAQs: S3 Tables (no manual overwrites or deletes, formats, pricing components)", "url": "https://aws.amazon.com/s3/faqs/" },
+    { "label": "Amazon S3 pricing: Tables tab and pricing examples", "url": "https://aws.amazon.com/s3/pricing/" },
+    { "label": "AWS Price List: Amazon S3 offer file for us-east-1 (Tables usage types)", "url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/current/us-east-1/index.json" },
+    { "label": "AWS Glue pricing: Data Catalog table optimization at $0.44 per DPU-hour", "url": "https://aws.amazon.com/glue/pricing/" },
+    { "label": "Amazon S3 docs: Working with S3 Tables and table buckets", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html" },
+    { "label": "Amazon S3 docs: Table buckets (ARNs, always private, managed buckets)", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-buckets.html" },
+    { "label": "Amazon S3 docs: Table namespaces", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-namespace.html" },
+    { "label": "Amazon S3 docs: Tables in S3 table buckets (warehouse location, table ARNs)", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-tables.html" },
+    { "label": "Amazon S3 docs: Access management for S3 Tables (actions and the object APIs they allow)", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-setting-up.html" },
+    { "label": "Amazon S3 docs: Security considerations and limitations for S3 Tables", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-restrictions.html" },
+    { "label": "Amazon S3 docs: S3 Tables maintenance", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-maintenance-overview.html" },
+    { "label": "Amazon S3 docs: Maintenance for tables (compaction strategies, snapshot management)", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-maintenance.html" },
+    { "label": "Amazon S3 docs: Maintenance for table buckets (unreferenced file removal)", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-table-buckets-maintenance.html" },
+    { "label": "Amazon S3 docs: Considerations and limitations for maintenance jobs", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-considerations.html" },
+    { "label": "Amazon S3 docs: S3 Tables maintenance job status (failure messages)", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-maintenance-status.html" },
+    { "label": "Amazon S3 docs: Record expiration for tables", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-record-expiration.html" },
+    { "label": "Amazon S3 docs: Cost optimization for tables with Intelligent-Tiering", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/tables-intelligent-tiering.html" },
+    { "label": "Amazon S3 docs: Working with Apache Iceberg V3 (engine support)", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/working-with-apache-iceberg-v3.html" },
+    { "label": "Amazon S3 docs: Accessing table data", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-access.html" },
+    { "label": "Amazon S3 docs: S3 Tables integration with AWS analytics services overview", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-integration-overview.html" },
+    { "label": "Amazon S3 docs: Integrating S3 Tables with AWS analytics services (lowercase names)", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-integrating-aws.html" },
+    { "label": "Amazon S3 docs: Accessing tables using the S3 Tables Iceberg REST endpoint", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-integrating-open-source.html" },
+    { "label": "Amazon S3 docs: Accessing tables using the AWS Glue Iceberg REST endpoint", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-integrating-glue-endpoint.html" },
+    { "label": "Amazon S3 docs: Accessing tables with the S3 Tables Catalog for Apache Iceberg", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-client-catalog.html" },
+    { "label": "Amazon S3 docs: Querying S3 tables with Athena", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-integrating-athena.html" },
+    { "label": "Amazon S3 docs: How S3 Tables replication works", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-replication-how-replication-works.html" },
+    { "label": "Amazon S3 docs: S3 Tables Regions, endpoints and quotas", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-regions-quotas.html" },
+    { "label": "AWS CLI reference: s3tables create-table (metadata, storage class)", "url": "https://docs.aws.amazon.com/cli/latest/reference/s3tables/create-table.html" },
+    { "label": "GitHub: awslabs/s3-tables-catalog (Apache 2.0)", "url": "https://github.com/awslabs/s3-tables-catalog" },
+    { "label": "DuckDB docs: Iceberg catalogs, Amazon S3 Tables", "url": "https://duckdb.org/docs/current/core_extensions/iceberg/catalogs.html" },
+    { "label": "Trino docs: Metastores (Iceberg REST catalog with SigV4)", "url": "https://trino.io/docs/current/object-storage/metastores.html" },
+    { "label": "AWS Storage Blog: Connect Snowflake to S3 Tables using the SageMaker Lakehouse Iceberg REST endpoint (March 2025)", "url": "https://aws.amazon.com/blogs/storage/connect-snowflake-to-s3-tables-using-the-sagemaker-lakehouse-iceberg-rest-endpoint/" },
+    { "label": "AWS What’s New: S3 Tables support 10,000 tables per table bucket (January 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/01/amazon-s3-tables-10000-tables-bucket" },
+    { "label": "AWS What’s New: S3 Tables integration with SageMaker Lakehouse GA (March 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/03/amazon-sagemaker-lakehouse-integration-s3-tables-generally-available" },
+    { "label": "AWS What’s New: Data Firehose delivers into S3 Tables (March 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/03/amazon-data-firehose-real-time-streaming-data-s3-tables/" },
+    { "label": "AWS What’s New: S3 Tables support SSE-KMS with customer-managed keys (April 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/04/amazon-s3-tables-server-side-encryption-aws-kms-customer-managed-keys" },
+    { "label": "AWS What’s New: S3 Tables storage cost visibility per table (June 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/06/amazon-s3-tables-storage-cost-visibility-individual-tables/" },
+    { "label": "AWS What’s New: Sort and z-order compaction (June 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/06/amazon-s3-sort-z-order-compaction-apache-iceberg-tables/" },
+    { "label": "AWS What’s New: Compaction of Avro and ORC files (July 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/07/amazon-s3-compaction-apache-avro-orc-formats-iceberg-tables" },
+    { "label": "AWS What’s New: Athena CREATE TABLE AS SELECT with S3 Tables (August 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/08/amazon-athena-create-table-select-amazon-s3-tables/" },
+    { "label": "AWS What’s New: CloudTrail events for S3 Tables maintenance (October 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/10/amazon-s3-generates-aws-cloudtrail-events" },
+    { "label": "AWS What’s New: Tags on S3 Tables (November 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/11/amazon-s3-tags-s3-tables/" },
+    { "label": "AWS What’s New: CloudWatch metrics for S3 Tables (November 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/11/amazon-s3-tables-cloudwatch-metrics" },
+    { "label": "AWS What’s New: Iceberg V3 deletion vectors and row lineage (November 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/11/aws-apache-iceberg-v3-deletion-vectors-row-lineage" },
+    { "label": "AWS What’s New: S3 Tables Intelligent-Tiering storage class (December 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/12/s3-tables-intelligent-tiering-storage-class/" },
+    { "label": "AWS What’s New: S3 Tables replication (December 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/12/s3-tables-automatic-replication-apache-iceberg-tables/" },
+    { "label": "AWS What’s New: Simplified IAM permissions for S3 Tables in the Glue Data Catalog (March 2026)", "url": "https://aws.amazon.com/about-aws/whats-new/2026/03/gdc-simplified-permissions-s3tables-iceberg-views/" },
+    { "label": "AWS What’s New: MSK Express brokers deliver to streaming tables (July 2026)", "url": "https://aws.amazon.com/about-aws/whats-new/2026/07/aws-msk-streaming-tables-for-apache-iceberg" },
+    { "label": "AWS What’s New: S3 Tables support the Variant type (July 2026)", "url": "https://aws.amazon.com/about-aws/whats-new/2026/07/amazon-s3-tables-variant-iceberg-v3/" },
+    { "label": "AWS What’s New: Kinesis Data Streams streaming tables on S3 Tables (August 2026)", "url": "https://aws.amazon.com/about-aws/whats-new/2026/08/kinesis/data-delivery-s3-tables" },
+    { "label": "AWS What’s New: S3 Tables support all Iceberg V3 data types (September 2026)", "url": "https://aws.amazon.com/about-aws/whats-new/2026/09/amazon-s3-tables-iceberg-v3-data-types" },
+    { "label": "AWS What’s New: S3 Metadata live inventory tables (July 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/07/amazon-s3-metadata-existing-objects-reduces-price" },
+    { "label": "AWS What’s New: Storage Lens export to S3 Tables (December 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/12/amazon-s3-storage-lens-performance-metrics-prefixes-export-tables" },
+    { "label": "AWS What’s New: S3 server access logs delivered to S3 Tables (June 2026)", "url": "https://aws.amazon.com/about-aws/whats-new/2026/06/amazon-s3-cloudwatch-logs-tables/" },
+    { "label": "AWS What’s New: Glue Data Catalog automatic compaction for Iceberg (November 2023)", "url": "https://aws.amazon.com/about-aws/whats-new/2023/11/aws-glue-data-catalog-compaction-iceberg-tables/" },
+    { "label": "AWS What’s New: Glue Data Catalog storage optimization for Iceberg (September 2024)", "url": "https://aws.amazon.com/about-aws/whats-new/2024/09/aws-glue-data-catalog-optimization-apache-iceberg-tables/" }
+  ],
+  "checked": "2026-10-06"
+}

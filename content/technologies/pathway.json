@@ -1,0 +1,174 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Pathway",
+  "concepts": ["stream-processing"],
+  "provider": "vendor",
+  "vendor": "Pathway Technology Inc. (with its French affiliate NavAlgo SAS)",
+  "license": "Business Source License 1.1 (source-available, not OSI open source) since the first public release in July 2023; each version becomes Apache 2.0 four years after merge, and no earlier than July 2027. Scale features need a licence key; Enterprise is under a separate commercial licence",
+  "website": "https://pathway.com/framework",
+  "repo": "https://github.com/pathwaycom/pathway",
+  "summary": "A Python framework for streaming ETL and live RAG pipelines: you write table transformations in Python, and a Rust engine built on Differential Dataflow keeps the results up to date.",
+  "intro": [
+    "A Pathway program is an ordinary Python script. Input connectors such as `pw.io.kafka.read` or `pw.io.s3.read` turn sources into tables with a schema, and operations like `filter`, `join`, `groupby().reduce()` and time windows describe how to derive new tables. None of this runs anything: it only builds a dataflow graph. When the script calls `pw.run()`, a Rust engine built on Pathway’s own forks of Timely and Differential Dataflow takes over and runs until the process is stopped. Every change to an input is an insertion or a deletion, and only the parts of the graph that change are recomputed: a running sum is adjusted, not re-added. Output connectors send results on as a stream of changes, applied as upserts in PostgreSQL or appended with `diff` and `time` columns to a file. Tables and operator state live in memory; `pathway spawn --threads 4` runs the same script on several worker threads, and the same code processes a fixed data set in static (batch) mode. For restarts, Pathway can save snapshots of its state and the input offsets to local disk or S3, which gives at-least-once recovery after a crash.",
+    "Pathway is source-available under the Business Source License, not open source. The free Community edition may run in production on one machine, up to 8 GB of RAM and 4 CPU cores per node, by anyone except companies offering it as a hosted service to others. A licence key set with `pw.set_license_key` unlocks the Scale tier: 16 GB per node on the free key, larger paid tiers, and extra connectors (Iceberg, Delta Lake, Kinesis, SharePoint, PostgreSQL change capture), full persistence and monitoring. Enterprise, under a separate commercial licence, adds multi-node scaling, hot failover and exactly-once consistency. Much of the marketing is about AI: the LLM extension pack parses, splits and embeds documents into a live vector index, so a RAG application’s answers follow changes in sources such as Google Drive or SharePoint."
+  ],
+  "strengths": [
+    "Python all the way: `pip install pathway`, type-hinted schemas, any Python library in user-defined functions, and notebooks for development",
+    "Built-in operators run in Rust on several threads, outside Python’s global interpreter lock",
+    "The same code runs as a batch job over historical data or as a live stream, and late events update earlier results instead of being dropped",
+    "Ready-made LLM tooling: document parsers, splitters, embedders, a live vector and hybrid index, RAG question answerers, and LangChain and LlamaIndex integrations",
+    "Many connectors in the free tier, including Kafka, S3, files, Google Drive and PostgreSQL output, plus an Airbyte connector for hundreds more sources"
+  ],
+  "limits": [
+    "Not open source: free production use stops at one machine with 8 GB of RAM and 4 cores per node; past that you need a key or a commercial licence, and hosting it for others is excluded",
+    "Iceberg, Delta Lake, Kinesis, SharePoint and PostgreSQL change-capture connectors, full persistence and monitoring need a Scale key, and using one sends anonymized usage data to Pathway",
+    "Recovery after a crash is at-least-once, so outputs can repeat; exactly-once consistency is an Enterprise feature",
+    "State is held in memory, and a window keeps every row it has seen unless you set a `cutoff` for late data",
+    "Linux and macOS only (Windows through a VM), and without an Enterprise licence new instances can’t be launched automatically"
+  ],
+  "worksWith": [
+    { "id": "timely-dataflow", "how": "runs its Rust engine on a fork of" },
+    { "id": "kafka", "how": "reads and writes topics in" },
+    { "id": "s3", "how": "reads files and saves state snapshots in" },
+    { "id": "postgresql", "how": "writes results to (CDC reads need a key)" },
+    { "id": "iceberg", "how": "reads and writes tables (Scale key) in" },
+    { "id": "delta-lake", "how": "reads and writes tables (Scale key) in" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Flag IP addresses with five or more failed logins in a minute, from one Kafka topic to another",
+    "source": [
+      "import pathway as pw",
+      "",
+      "rdkafka_settings = {",
+      "    \"bootstrap.servers\": \"localhost:9092\",",
+      "    \"group.id\": \"login-monitor\",",
+      "    \"auto.offset.reset\": \"earliest\",",
+      "}",
+      "",
+      "class Login(pw.Schema):",
+      "    username: str",
+      "    ip_address: str",
+      "    successful: bool",
+      "    time: int  # Unix seconds: when the attempt happened",
+      "",
+      "logins = pw.io.kafka.read(rdkafka_settings, topic=\"logins\", format=\"json\", schema=Login)",
+      "failed = logins.filter(~pw.this.successful)",
+      "",
+      "# one-minute windows by event time, per IP; a window stops changing 30 s after it ends",
+      "per_minute = failed.windowby(",
+      "    failed.time,",
+      "    window=pw.temporal.tumbling(duration=60),",
+      "    instance=pw.this.ip_address,",
+      "    behavior=pw.temporal.common_behavior(cutoff=30),",
+      ").reduce(",
+      "    ip_address=pw.this._pw_instance,",
+      "    window_end=pw.this._pw_window_end,",
+      "    failures=pw.reducers.count(),",
+      ")",
+      "",
+      "suspicious = per_minute.filter(pw.this.failures >= 5)",
+      "pw.io.kafka.write(suspicious, rdkafka_settings, topic_name=\"suspicious-ips\", format=\"json\")",
+      "",
+      "pw.run()  # nothing runs before this; then the Rust engine processes updates until stopped",
+      "# on 4 worker threads:  pathway spawn --threads 4 python monitor.py"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Community, Scale or Enterprise",
+      "intro": "One package, three sets of rights. Limits and features as listed by Pathway on 2026-10-06; it publishes no prices.",
+      "columns": ["Community", "Scale", "Enterprise"],
+      "rows": [
+        { "label": "Licence", "values": ["BSL 1.1", "BSL 1.1, activated with a licence key", "Separate commercial licence"] },
+        { "label": "Resources", "values": ["8 GB RAM and 4 CPU cores per node", "16 GB RAM and 4 cores per node on the free key; larger paid tiers", "Listed up to 24 TB RAM and 128 cores across 40 nodes"] },
+        {
+          "label": "What it adds",
+          "values": [
+            "Core transformations, most connectors (Kafka, S3, files, Google Drive, PostgreSQL output), LLM extension pack",
+            "Iceberg, Delta Lake, Kinesis, SharePoint and PostgreSQL change-capture connectors; full persistence; monitoring",
+            "Horizontal scaling across nodes, hot failover, Helm chart, exactly-once consistency, managed hosting"
+          ]
+        },
+        {
+          "label": "Conditions",
+          "values": [
+            "One machine per installation; not for providers offering it as a service to third parties",
+            "Anonymized usage data sent to Pathway through OpenTelemetry; scaling up or down must be done by hand",
+            "Negotiated with Pathway"
+          ]
+        }
+      ],
+      "notes": ["Under the BSL, each version of the code becomes Apache 2.0 four years after it was merged, and in no case before July 20, 2027."]
+    }
+  ],
+  "history": {
+    "story": [
+      "Pathway was founded in Paris by a team led by Zuzanna Stamirowska, a complexity scientist, with Jan Chorowski, a machine learning researcher, as CTO and Adrian Kosowski, a computer scientist, as chief scientific officer. They had been building the framework since 2020 for a specific problem: streaming data keeps changing, and developers had to handle those updates by hand, keep separate code for real-time and historical data, and debug against data they couldn’t see. Their answer was to let people write pipelines in Python as if the data were static, and let the engine propagate the changes.",
+      "Pathway opened a beta to all developers in December 2022, together with a $4.5 million funding round, and published its source on GitHub with release 0.2.0 in July 2023, under the Business Source License. The engine was built on forked copies of Frank McSherry’s Timely and Differential Dataflow. From January 2024 the framework added an LLM extension pack, and Pathway pitched it for live RAG pipelines. A May 2024 licence update put enterprise features in the same source tree behind a licence key, and in December 2024 the company raised a $10 million seed round to grow in the United States; it is now headquartered in Palo Alto.",
+      "In October 2025 Pathway introduced BDH, a “post-Transformer” AI architecture, and its website now presents the company as an AI lab. The framework was renamed Pathway Live Data Framework in 2026 and is still released regularly."
+    ],
+    "choices": [
+      {
+        "choice": "Python on top, Rust underneath",
+        "why": "Python is what data scientists and ML engineers already use, but it is slow and its global interpreter lock limits parallelism. Python only describes the typed pipeline; the Rust engine stores the tables and runs most operators."
+      },
+      {
+        "choice": "Building on Differential Dataflow",
+        "why": "Differential Dataflow already maintained results incrementally under insertions and deletions, including loops. Forking it gave Pathway consistent updates and iteration without writing an incremental engine from scratch."
+      },
+      {
+        "choice": "Updates instead of append-only streams",
+        "why": "Treating every change as an insertion or deletion lets late or corrected data revise earlier results, so the same code gives the same answer on a live stream and on a batch replay."
+      },
+      {
+        "choice": "Business Source License with a licence key",
+        "why": "Pathway wanted the core free for production use while keeping cloud providers from reselling it, and charging for scale and enterprise features. The licence key enforces resource limits in the code itself."
+      }
+    ],
+    "timeline": [
+      { "year": "2020", "text": "Work on the framework starts at the Paris-founded start-up" },
+      { "year": "2022", "text": "Open beta and a $4.5 million funding round in December" },
+      { "year": "2023", "text": "Source published on GitHub under BSL 1.1 with release 0.2.0 in July" },
+      { "year": "2024", "text": "LLM extension pack in January; licence keys in May; $10 million seed in December" },
+      { "year": "2025", "text": "Pathway introduces its BDH AI architecture" },
+      { "year": "2026", "text": "Renamed Pathway Live Data Framework; 0.33.0 released in September" }
+    ],
+    "sources": [
+      { "label": "Pathway: Flink alternative (framework developed since 2020)", "url": "https://pathway.com/flink-alternative" },
+      { "label": "Pathway: Media kit (founders and roles, Palo Alto headquarters)", "url": "https://pathway.com/media-kit" },
+      { "label": "Pathway blog: Open beta announced, with a $4.5M funding round (Dec 2022)", "url": "https://pathway.com/framework/blog/pathway-open-beta-announced" },
+      { "label": "Pathway on GitHub: release v0.2.0 (July 2023)", "url": "https://github.com/pathwaycom/pathway/releases/tag/v0.2.0" },
+      { "label": "Pathway CHANGELOG (LLM xpack wrappers and vector store in 0.7.10, January 2024)", "url": "https://github.com/pathwaycom/pathway/blob/main/CHANGELOG.md" },
+      { "label": "Pathway commit: LICENSE.txt updates, adding enterprise features as source-available (May 2024)", "url": "https://github.com/pathwaycom/pathway/commit/945e7a24b1" },
+      { "label": "Pathway, in the press: Sifted on the $10M seed round and US move (Dec 2024)", "url": "https://pathway.com/blog/pathway-10m-seed-round-news" },
+      { "label": "Pathway, in the press: Pathway launches a new post-Transformer architecture (Oct 2025)", "url": "https://pathway.com/blog/pathway-launches-a-new-post-transformer-architecture-that-paves-the-way-for-autonomous-ai" },
+      { "label": "Pathway commit: Update license details for Pathway Live Data Framework (June 2026)", "url": "https://github.com/pathwaycom/pathway/commit/db93895087" }
+    ]
+  },
+  "sources": [
+    { "label": "Pathway README (Rust engine based on Differential Dataflow, features, at-least-once vs exactly-once, Linux and macOS)", "url": "https://github.com/pathwaycom/pathway" },
+    { "label": "Pathway LICENSE.txt (BSL 1.1, Additional Use Grant, Change Date)", "url": "https://github.com/pathwaycom/pathway/blob/main/LICENSE.txt" },
+    { "label": "Pathway Cargo.toml (timely and differential-dataflow from ./external)", "url": "https://github.com/pathwaycom/pathway/blob/main/Cargo.toml" },
+    { "label": "Pathway: README for its fork of Timely Dataflow", "url": "https://github.com/pathwaycom/pathway/blob/main/external/timely-dataflow/README-LICENSE-COPYRIGHT" },
+    { "label": "Pathway: README for its fork of Differential Dataflow", "url": "https://github.com/pathwaycom/pathway/blob/main/external/differential-dataflow/README-LICENSE-COPYRIGHT" },
+    { "label": "Pathway docs: Core concepts (dataflow, pw.run, incremental updates, Rust engine, static mode)", "url": "https://pathway.com/developers/user-guide/introduction/concepts" },
+    { "label": "Pathway docs: Persistence (snapshots to filesystem or S3, at-least-once recovery)", "url": "https://pathway.com/developers/user-guide/deployment/persistence" },
+    { "label": "Pathway docs: Windows with behaviors (delay, cutoff, memory)", "url": "https://pathway.com/developers/user-guide/temporal-data/windows_with_behaviors" },
+    { "label": "Pathway template: Tumbling windows for suspicious logins", "url": "https://pathway.com/developers/templates/etl/suspicious_activity_tumbling_window" },
+    { "label": "Pathway API docs: pw.io.kafka", "url": "https://pathway.com/developers/api-docs/pathway-io-kafka" },
+    { "label": "Pathway API docs: pw.io.postgres (read needs Scale or Enterprise)", "url": "https://pathway.com/developers/api-docs/pathway-io-postgres" },
+    { "label": "Pathway API docs: pw.io.iceberg (Scale or Enterprise)", "url": "https://pathway.com/developers/api-docs/pathway-io-iceberg" },
+    { "label": "Pathway API docs: pw.io.deltalake (Scale or Enterprise)", "url": "https://pathway.com/developers/api-docs/pathway-io-deltalake" },
+    { "label": "Pathway API docs: pw.io.kinesis (Scale or Enterprise)", "url": "https://pathway.com/developers/api-docs/pathway-io-kinesis" },
+    { "label": "Pathway API docs: pw.io.s3", "url": "https://pathway.com/developers/api-docs/pathway-io-s3" },
+    { "label": "Pathway docs: LLM xpack overview", "url": "https://pathway.com/developers/user-guide/llm-xpack/overview" },
+    { "label": "Pathway: Licensing terms and conditions (Community, Scale, Enterprise)", "url": "https://pathway.com/license/" },
+    { "label": "Pathway docs: Licensing guide (resource limits per node, telemetry, no automated scaling)", "url": "https://pathway.com/developers/user-guide/introduction/licensing-guide" },
+    { "label": "Pathway: Live Data Framework features and tiers", "url": "https://pathway.com/framework/pricing" },
+    { "label": "Pathway homepage (AI lab positioning, BDH)", "url": "https://pathway.com/" },
+    { "label": "PyPI: pathway (0.33.0, September 2026)", "url": "https://pypi.org/project/pathway/" }
+  ],
+  "checked": "2026-10-06"
+}

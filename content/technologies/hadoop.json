@@ -1,0 +1,145 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Apache Hadoop",
+  "concepts": ["query-engines", "file", "data-lake"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://hadoop.apache.org/",
+  "repo": "https://github.com/apache/hadoop",
+  "summary": "The project that made big-data clusters normal: a distributed file system (HDFS), a cluster scheduler (YARN) and the MapReduce engine.",
+  "intro": [
+    "Hadoop is three systems in one Java project. HDFS stores files as large blocks, 128 MB by default, on the disks of many DataNodes and keeps three copies of each block, at least one on another rack. A NameNode holds the whole namespace and the map of where every block lives in memory; clients ask it where the blocks are, then read and write directly to the DataNodes. Files are written once and can only be appended to or truncated later. Since Hadoop 2.0 a standby NameNode, kept in sync through a quorum of JournalNodes, can take over when the active one fails. YARN runs the work: a ResourceManager hands out containers (slices of CPU and memory) on the NodeManagers that run on every machine, and each application gets its own ApplicationMaster to request containers and track its tasks. MapReduce is one such application: map tasks run where the blocks are, their output is sorted and shuffled by key to reduce tasks, and the results go back to HDFS.",
+    "Hadoop’s file system API also reaches object stores: the S3A connector for S3 and compatible stores, ABFS for Azure Data Lake Storage Gen2 and, since 3.5, Google Cloud Storage. Spark and other engines use these connectors even on clusters without HDFS or YARN. Hadoop is free under Apache 2.0; the current release is 3.5.0 (April 2026), which requires Java 17 on servers. The commercial distributions have consolidated: Cloudera and Hortonworks merged in January 2019, and Cloudera was taken private by Clayton, Dubilier & Rice and KKR in October 2021. In the cloud, Amazon EMR runs Hadoop and Spark on clusters where HDFS is temporary and data lives in S3, and Google now calls Dataproc “Managed Service for Apache Spark”."
+  ],
+  "strengths": [
+    "Proven at very large scale on commodity servers, with rack-aware replication or erasure coding to survive disk, node and rack failures",
+    "Moves computation to the data: tasks are scheduled on the machines that hold their blocks, so big scans don’t cross the network",
+    "HDFS gives real file system semantics, including atomic renames, which commit protocols rely on and object stores lack",
+    "YARN lets MapReduce, Spark and other engines share one cluster with queues and capacity limits",
+    "Its connectors (S3A, ABFS, GCS) are how Spark and many other JVM tools read and write object storage"
+  ],
+  "limits": [
+    "Heavy to run: NameNodes, JournalNodes, DataNodes, ResourceManagers and NodeManagers, usually with Kerberos, each needing tuning and upgrades",
+    "Storage and compute scale together: adding disk means adding servers, and data stored three times costs 200% overhead unless you use erasure coding",
+    "The NameNode keeps every file and block in memory, so millions of small files exhaust its heap long before the disks fill",
+    "MapReduce writes to disk between every step, and higher-level tools have left it: Hive deprecated its MapReduce engine in Hive 2.0",
+    "Commercial distributions have consolidated: Hortonworks merged into Cloudera, now privately held, and Google renamed its managed Hadoop and Spark service after Spark alone"
+  ],
+  "worksWith": [
+    { "id": "spark", "how": "schedules jobs, through YARN, for" },
+    { "id": "s3", "how": "reads and writes buckets, via S3A, in" },
+    { "id": "azure-blob", "how": "reads and writes, via ABFS, data in" },
+    { "id": "gcs", "how": "reads and writes, via its connector, data in" },
+    { "id": "ozone", "how": "can store files, through ofs, in" },
+    { "id": "paimon", "how": "can host tables, in HDFS, for" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Load files into HDFS, run a MapReduce job on YARN, copy the result to S3",
+    "source": [
+      "# put a log file into HDFS and see how its blocks were placed",
+      "hdfs dfs -mkdir -p /data/logs",
+      "hdfs dfs -put access-2026-10-05.log /data/logs/",
+      "hdfs fsck /data/logs/access-2026-10-05.log -files -blocks -locations",
+      "",
+      "# run the bundled word-count example as a MapReduce job on YARN",
+      "yarn jar $HADOOP_HOME/share/hadoop/mapreduce/hadoop-mapreduce-examples-3.5.0.jar \\",
+      "  wordcount /data/logs /data/wordcount",
+      "hdfs dfs -cat /data/wordcount/part-r-00000 | sort -k2 -nr | head",
+      "",
+      "# copy the output to S3 with a parallel DistCp job (S3A connector)",
+      "hadoop distcp /data/wordcount s3a://acme-archive/wordcount/2026-10-05/"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "HDFS or object storage?",
+      "intro": "In the cloud, data usually stays in a bucket and jobs reach it through Hadoop’s connectors; on Amazon EMR, HDFS is only scratch space. The trade-offs, as Hadoop’s and Spark’s own docs describe them:",
+      "columns": ["HDFS", "S3 through S3A"],
+      "rows": [
+        { "label": "Where data lives", "values": ["Disks inside the cluster’s DataNodes", "A bucket run by the provider, outside any cluster"] },
+        { "label": "Metadata", "values": ["One active NameNode, with the whole namespace in memory", "Run by the provider; directories are emulated from key prefixes"] },
+        { "label": "Directory rename", "values": ["Atomic, as Hadoop’s file system spec requires", "Not atomic; time grows with the number and size of files"] },
+        { "label": "Reading data", "values": ["Tasks run on the machines that hold the blocks", "Every read crosses the network; seeks can need new HTTP requests"] },
+        { "label": "On Amazon EMR", "values": ["Temporary: reclaimed when the cluster ends", "Persistent: outlives the cluster"] },
+        { "label": "Capacity", "values": ["Add servers; three replicas by default, or erasure coding (Reed-Solomon 10,4 stores 1.4x)", "Grows without adding servers; billed per GB stored and per request"] }
+      ],
+      "notes": [
+        "Because renames on S3 aren’t atomic, Spark and MapReduce jobs writing to S3 should use the S3A committers rather than the classic rename-based commit."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "What happened to each piece",
+      "items": [
+        { "name": "MapReduce", "tag": "still ships", "text": "Kept for compatibility, but higher-level tools moved off it: Hive deprecated its MapReduce engine in Hive 2.0, and Spark keeps data in memory between steps instead of writing every stage to disk." },
+        { "name": "YARN", "tag": "on-premises clusters", "text": "Still schedules Spark and MapReduce on Hadoop clusters. Spark can also run on Kubernetes or its own standalone cluster manager, with no YARN at all." },
+        { "name": "HDFS", "tag": "replaced in the cloud", "text": "Still the file system of on-premises clusters. Apache Ozone grew out of the Hadoop project to scale past the NameNode with an object store; in the cloud, buckets hold the persistent data." },
+        { "name": "Hadoop client libraries", "tag": "everywhere", "text": "The S3A, ABFS and GCS connectors and the FileSystem API are how Spark and many other JVM tools read and write object storage, even with no Hadoop cluster in sight." },
+        { "name": "Distributions", "tag": "consolidated", "text": "Hortonworks was founded in 2011 by Yahoo’s Hadoop engineers and merged into Cloudera in 2019. Amazon EMR and Google’s managed Spark service still run Hadoop components on demand." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In 2003 and 2004 Google described how it stored and processed the web on thousands of cheap machines: the Google File System, and MapReduce, a model where you write a map and a reduce function and the framework handles splitting, scheduling and failures. Nutch, an open-source web search engine, needed exactly that to crawl and index the web, so its developers built a distributed file system modelled on GFS and their own implementation of MapReduce.",
+      "In February 2006 Doug Cutting moved that code out of Nutch into a new Lucene sub-project named Hadoop. Yahoo’s grid team started using and extending it the next month, and took it from dozens of machines to thousands: by February 2008 Yahoo’s Search Webmap ran on more than 10,000 cores and fed every Yahoo web search. Hadoop became a top-level Apache project in January 2008.",
+      "Hadoop made storing and processing petabytes on commodity servers routine and grew an ecosystem of tools and companies, including Cloudera and Hortonworks. Hadoop 2 added YARN so engines other than MapReduce could share a cluster. Since then Spark and cloud object storage have taken over much of what Hadoop clusters did, and Cloudera and Hortonworks merged in 2019."
+    ],
+    "choices": [
+      { "choice": "Large blocks, written once, copied three times", "why": "HDFS assumed huge files read in long streams on hardware where failure is the norm. Big replicated blocks and write-once files (append and truncate only) kept the design simple and survived lost disks and nodes." },
+      { "choice": "Move the computation to the data", "why": "Shipping a task to the machine that holds its block is cheaper than pulling terabytes across the network, so the scheduler places map tasks next to their input." },
+      { "choice": "One NameNode holding all metadata in memory", "why": "A single master made the namespace simple and fast, but it was a single point of failure until Hadoop 2.0 added standby NameNodes, and it still caps the number of files." },
+      { "choice": "Splitting scheduling out of MapReduce (YARN)", "why": "Hadoop 1 had one JobTracker that queued and ran all MapReduce jobs. YARN separated cluster resource management from per-job scheduling, so other frameworks could run on the same machines." }
+    ],
+    "timeline": [
+      { "year": "2003", "text": "Google publishes the GFS paper; the MapReduce paper follows in 2004" },
+      { "year": "2006", "text": "NDFS and MapReduce leave Nutch as Hadoop; Yahoo adopts it" },
+      { "year": "2008", "text": "Top-level Apache project; Yahoo’s Webmap runs on 10,000+ cores" },
+      { "year": "2011", "text": "Hadoop 1.0.0 released in December" },
+      { "year": "2013", "text": "Hadoop 2.2.0 GA brings YARN and HDFS high availability" },
+      { "year": "2017", "text": "Hadoop 3.0 adds HDFS erasure coding" },
+      { "year": "2026", "text": "Hadoop 3.5.0 requires Java 17 and adds a GCS connector" }
+    ],
+    "sources": [
+      { "label": "Ghemawat, Gobioff, Leung: The Google File System (SOSP 2003)", "url": "https://research.google/pubs/the-google-file-system/" },
+      { "label": "Dean, Ghemawat: MapReduce, simplified data processing on large clusters (OSDI 2004)", "url": "https://research.google/pubs/mapreduce-simplified-data-processing-on-large-clusters/" },
+      { "label": "Apache JIRA: NUTCH-193, move NDFS and MapReduce to a separate project (Doug Cutting, February 2006)", "url": "https://issues.apache.org/jira/browse/NUTCH-193" },
+      { "label": "Yahoo Developer Network: Yahoo! launches world’s largest Hadoop production application (February 2008)", "url": "https://developer.yahoo.com/blogs/hadoop/yahoo-launches-world-largest-hadoop-production-application-398.html", "archive": "https://web.archive.org/web/20160307081144/https://developer.yahoo.com/blogs/hadoop/yahoo-launches-world-largest-hadoop-production-application-398.html" },
+      { "label": "ASF board minutes, January 16, 2008: Establish the Apache Hadoop Project", "url": "https://www.apache.org/foundation/records/minutes/2008/board_minutes_2008_01_16.txt" },
+      { "label": "Hadoop wiki: Project description (built for Nutch, inspired by GFS, JobTracker)", "url": "https://cwiki.apache.org/confluence/display/HADOOP2/ProjectDescription" }
+    ]
+  },
+  "sources": [
+    { "label": "Apache Hadoop: modules (Common, HDFS, YARN, MapReduce)", "url": "https://hadoop.apache.org/" },
+    { "label": "Hadoop docs: HDFS architecture (NameNode, blocks, replication, write-once, moving computation)", "url": "https://hadoop.apache.org/docs/r3.5.0/hadoop-project-dist/hadoop-hdfs/HdfsDesign.html" },
+    { "label": "Hadoop docs: HDFS high availability with the Quorum Journal Manager", "url": "https://hadoop.apache.org/docs/r3.5.0/hadoop-project-dist/hadoop-hdfs/HDFSHighAvailabilityWithQJM.html" },
+    { "label": "Hadoop docs: YARN architecture", "url": "https://hadoop.apache.org/docs/r3.5.0/hadoop-yarn/hadoop-yarn-site/YARN.html" },
+    { "label": "Hadoop docs: S3A connector (non-atomic directory renames, committers)", "url": "https://hadoop.apache.org/docs/r3.5.0/hadoop-aws/tools/hadoop-aws/index.html" },
+    { "label": "Hadoop docs: Azure ABFS connector", "url": "https://hadoop.apache.org/docs/r3.5.0/hadoop-azure/index.html" },
+    { "label": "Hadoop docs: FileSystem specification (atomic rename requirement)", "url": "https://hadoop.apache.org/docs/r3.5.0/hadoop-project-dist/hadoop-common/filesystem/introduction.html" },
+    { "label": "Hadoop docs: HDFS commands (fsck)", "url": "https://hadoop.apache.org/docs/r3.5.0/hadoop-project-dist/hadoop-hdfs/HDFSCommands.html" },
+    { "label": "Hadoop docs: Single node setup (MapReduce examples jar)", "url": "https://hadoop.apache.org/docs/r3.5.0/hadoop-project-dist/hadoop-common/SingleCluster.html" },
+    { "label": "Hadoop docs: DistCp", "url": "https://hadoop.apache.org/docs/r3.5.0/hadoop-distcp/DistCp.html" },
+    { "label": "Hadoop 3.5.0 overview (Java 17, GCS FileSystem, WASB removed)", "url": "https://hadoop.apache.org/docs/r3.5.0/index.html" },
+    { "label": "Hadoop 3.0.0 overview (HDFS erasure coding)", "url": "https://hadoop.apache.org/docs/r3.0.0/index.html" },
+    { "label": "Apache Hadoop releases (3.5.0, April 2, 2026)", "url": "https://hadoop.apache.org/releases.html" },
+    { "label": "Hadoop 1.0.0 release (December 2011)", "url": "https://hadoop.apache.org/release/1.0.0.html" },
+    { "label": "Hadoop 2.2.0 release (October 2013: YARN, HDFS HA)", "url": "https://hadoop.apache.org/release/2.2.0.html" },
+    { "label": "Hadoop 3.0.0 release (December 2017)", "url": "https://hadoop.apache.org/release/3.0.0.html" },
+    { "label": "Spark docs: Integration with cloud infrastructures (Hadoop connectors, object stores are not file systems)", "url": "https://spark.apache.org/docs/latest/cloud-integration.html" },
+    { "label": "Spark docs: Cluster mode overview (standalone, YARN, Kubernetes)", "url": "https://spark.apache.org/docs/latest/cluster-overview.html" },
+    { "label": "Apache JIRA: HIVE-12300, deprecate MR in Hive 2.0", "url": "https://issues.apache.org/jira/browse/HIVE-12300" },
+    { "label": "Amazon EMR docs: What is Amazon EMR", "url": "https://docs.aws.amazon.com/emr/latest/ManagementGuide/emr-what-is-emr.html" },
+    { "label": "Amazon EMR docs: Storage and file systems (HDFS is ephemeral)", "url": "https://docs.aws.amazon.com/emr/latest/ManagementGuide/emr-plan-file-systems.html" },
+    { "label": "Google Cloud docs: Managed Service for Apache Spark (formerly Dataproc) overview", "url": "https://docs.cloud.google.com/dataproc/docs/concepts/overview" },
+    { "label": "Amazon S3 pricing (per GB stored, per request)", "url": "https://aws.amazon.com/s3/pricing/" },
+    { "label": "Apache JIRA: HDFS-7240, Scaling HDFS (the proposal that became Ozone)", "url": "https://issues.apache.org/jira/browse/HDFS-7240" },
+    { "label": "Cloudera press release: Cloudera and Hortonworks complete planned merger (January 2019)", "url": "https://www.cloudera.com/about/news-and-blogs/press-releases/2019-01-03-cloudera-and-hortonworks-complete-planned-merger.html" },
+    { "label": "Cloudera Form 8-K: merger with CD&R and KKR affiliates completed (October 2021)", "url": "https://www.sec.gov/Archives/edgar/data/1535379/000119312521294924/d223205d8k.htm" },
+    { "label": "Hortonworks IPO prospectus (founded 2011 with Yahoo’s Hadoop engineers)", "url": "https://www.sec.gov/Archives/edgar/data/1610532/000119312514440570/d748349d424b4.htm" }
+  ],
+  "checked": "2026-10-06"
+}

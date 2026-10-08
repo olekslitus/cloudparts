@@ -1,0 +1,81 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Dynamic dispatch",
+  "category": "code",
+  "order": 55,
+  "summary": "The function a call runs is chosen at run time from the object it’s called on, usually through a table of function pointers.",
+  "howItWorks": "With dynamic dispatch the code making a call doesn’t know which function will run; the object it’s called on decides. In C++ and Rust the usual mechanism is a vtable: a table of function pointers for each type, and every object (C++) or reference (Rust) carries a pointer to its type’s table. A call loads the right entry and jumps through it, which costs one extra memory load and an indirect call. C++ does this for `virtual` methods, Rust for `dyn Trait`, Go for interface values, C# for `virtual` and interface methods, and Java for most methods. Python and JavaScript look methods up by name on the object, so any object with the right method will do, which Python calls duck typing. The bigger cost is what the compiler loses: it can’t see which function runs, so it can’t inline it and optimize across the call. JIT compilers win much of that back. The HotSpot JVM inlines virtual calls that in practice reach one class and undoes it if a new class loads; V8 caches the lookup at each call site. In return, one compiled copy of the code serves every type, one list can mix types, and new types can arrive after compiling: plugins, user subclasses, test fakes.",
+  "analogy": "Calling a company’s front desk instead of someone’s direct line. You dial the same number whoever is on shift and get put through; it takes a moment longer, but staff can come and go without reprinting anyone’s phone book.",
+  "useWhen": [
+    "One collection holds different types behind a shared interface: shapes on a canvas, middleware in a chain, UI widgets",
+    "Plugins, drivers or library users add implementations after your code is compiled",
+    "Swapping an implementation at run time or in tests, such as a fake payment gateway",
+    "Keeping build time and binary size down when a generic would be compiled for many types"
+  ],
+  "avoidWhen": [
+    "Tight loops where a tiny method is called per element, such as per pixel; prefer static dispatch or move the loop inside the method",
+    "Every type is known at compile time and speed matters; generics let the compiler inline"
+  ],
+  "example": "A drawing app keeps its shapes in a `Vec<Box<dyn Shape>>`: circles, squares and shapes added by plugins, all in one list. Redrawing loops over the list and calls `area()` on each, loading the function from that shape’s vtable. The loop is compiled once, works for shape types that didn’t exist when it was compiled, and pays an indirect call per shape that the compiler can’t inline.",
+  "snippet": {
+    "lang": "rust",
+    "source": [
+      "trait Shape { fn area(&self) -> f64; }",
+      "// ...Circle and Square implement Shape...",
+      "",
+      "// A &dyn Shape is two pointers: the data and the type's vtable",
+      "fn total_area(shapes: &[Box<dyn Shape>]) -> f64 {",
+      "    shapes.iter().map(|s| s.area()).sum()  // area() is looked up in each vtable",
+      "}",
+      "",
+      "fn main() {",
+      "    let shapes: Vec<Box<dyn Shape>> = vec![",
+      "        Box::new(Circle { r: 1.0 }),",
+      "        Box::new(Square { s: 2.0 }),          // different types, one Vec",
+      "    ];",
+      "    println!(\"{}\", total_area(&shapes));   // total_area is compiled once",
+      "}"
+    ]
+  },
+  "related": ["static-dispatch","oop","functional"],
+  "history": {
+    "story": [
+      "Bjarne Stroustrup borrowed virtual functions from Simula and added them to C++ in 1983, and he called them the feature with the greatest impact on how C++ was written. His implementation was deliberately simple: the virtual functions of a class form an array of function pointers, each object holds one pointer to its class’s array, and a virtual call is an indirect call through it. Colleagues were skeptical; some argued virtual functions were a crippled function pointer and a needless inefficiency. He added them anyway.",
+      "Dynamic languages had it worse. In Smalltalk-80 every operation is a message send, so finding the method for each send was both expensive and critical. In 1984 Peter Deutsch and Allan Schiffman noticed that at a given call site the receiver is usually the same class as last time, so they cached the looked-up method right at the call site and only re-checked the class: the inline cache. In 1991 Urs Hölzle, Craig Chambers and David Ungar extended it for the Self language to hold several classes per call site, and used the classes it recorded to recompile hot code with calls inlined.",
+      "Today’s virtual machines rely on the same ideas. The HotSpot JVM profiles running code, inlines virtual calls and deoptimizes when a newly loaded class invalidates its assumptions, and V8 gives every JavaScript object a hidden class so its inline caches can work. Newer languages make the cost visible instead: Rust 1.27 (2018) added the `dyn Trait` syntax because the old trait-object syntax looked like an ordinary type and hid that calls were dispatched at run time."
+    ],
+    "choices": [
+      { "choice": "One table per class, one pointer per object", "why": "Stroustrup wanted a virtual call to be about as efficient in time and space as an ordinary function call as typically used. A per-class array and a single indirect call kept it cheap and predictable." },
+      { "choice": "Cache the lookup at the call site", "why": "Smalltalk systems already used a global method cache keyed by class and selector. Deutsch and Schiffman saw that most call sites see the same class every time, so a one-entry cache in the code itself skips the lookup on most calls." },
+      { "choice": "Several cached classes per call site", "why": "Some call sites really are polymorphic. Polymorphic inline caches kept a short list of classes and, as a side effect, recorded which types actually occur, so the compiler could inline the common cases later. Self programs ran a median 11% faster from the caches alone, and 27% faster with that recompilation." },
+      { "choice": "Make dynamic dispatch explicit", "why": "Rust’s designers came to regret that `Box<Foo>` could mean a trait object. Writing `Box<dyn Foo>` makes it obvious where calls go through a vtable and cost an indirect call." }
+    ],
+    "timeline": [
+      { "year": "1983", "text": "C++ adds virtual functions, borrowed from Simula" },
+      { "year": "1984", "text": "Deutsch and Schiffman describe inline caching for Smalltalk-80" },
+      { "year": "1991", "text": "Polymorphic inline caches for Self (ECOOP ’91)" },
+      { "year": "2008", "text": "Google open-sources Chromium with the V8 JavaScript engine" },
+      { "year": "2018", "text": "Rust 1.27 introduces the `dyn Trait` syntax" }
+    ],
+    "sources": [
+      { "label": "Bjarne Stroustrup: A History of C++, 1979–1991 (HOPL-II), on virtual functions", "url": "https://www.stroustrup.com/hopl2.pdf" },
+      { "label": "L. Peter Deutsch and Allan M. Schiffman: Efficient implementation of the Smalltalk-80 system (POPL 1984)", "url": "https://web.cs.ucla.edu/~palsberg/course/cs232/papers/DeutschSchiffman-popl84.pdf" },
+      { "label": "Hölzle, Chambers and Ungar: Optimizing dynamically-typed object-oriented languages with polymorphic inline caches (ECOOP 1991)", "url": "https://bibliography.selflanguage.org/pics.html" },
+      { "label": "Oracle: The Java HotSpot performance engine architecture", "url": "https://www.oracle.com/java/technologies/whitepaper.html" },
+      { "label": "V8 blog: Fast properties in V8 (Aug 2017)", "url": "https://v8.dev/blog/fast-properties" },
+      { "label": "Chromium blog: Welcome to Chromium (Sep 2008)", "url": "https://blog.chromium.org/2008/09/welcome-to-chromium_02.html" },
+      { "label": "Rust blog: Announcing Rust 1.27 (dyn Trait) (Jun 2018)", "url": "https://blog.rust-lang.org/2018/06/21/Rust-1.27/" }
+    ]
+  },
+  "sources": [
+    { "label": "The Rust Programming Language: Trait objects (dynamic dispatch, runtime cost, no inlining)", "url": "https://doc.rust-lang.org/book/ch18-02-trait-objects.html" },
+    { "label": "The Rust Reference: Trait objects (data pointer plus vtable)", "url": "https://doc.rust-lang.org/reference/types/trait-object.html" },
+    { "label": "cppreference: virtual function specifier", "url": "https://en.cppreference.com/w/cpp/language/virtual.html" },
+    { "label": "Bjarne Stroustrup: A History of C++, 1979–1991 (HOPL-II), on the vtable implementation", "url": "https://www.stroustrup.com/hopl2.pdf" },
+    { "label": "Russ Cox: Go data structures: interfaces (itables of function pointers)", "url": "https://research.swtch.com/interfaces" },
+    { "label": "Microsoft Learn: virtual (C# reference)", "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/virtual" },
+    { "label": "Oracle: The Java HotSpot performance engine architecture (most Java calls are virtual; inlining and deoptimization)", "url": "https://www.oracle.com/java/technologies/whitepaper.html" },
+    { "label": "Python glossary: duck-typing", "url": "https://docs.python.org/3/glossary.html#term-duck-typing" },
+    { "label": "V8 blog: Fast properties in V8 (hidden classes and inline caches)", "url": "https://v8.dev/blog/fast-properties" }
+  ]
+}

@@ -1,0 +1,195 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Web APIs",
+  "category": "network",
+  "order": 80,
+  "summary": "A service exposed over plain HTTP, as resources with URLs (REST) or as one typed graph (GraphQL), so any browser, app or partner can call it.",
+  "howItWorks": "A web API puts a service behind ordinary HTTP, so anything with an HTTP client can call it: a browser, a phone app, a partner’s server, a script with `curl`. REST, the most common style, gives each thing the API deals with its own URL, such as `/orders/4812`, and uses HTTP’s own methods on it: `GET` reads, `PUT` replaces, `DELETE` removes, `POST` creates or triggers an action. The server answers with a representation, usually JSON, and a status code such as `200`, `201 Created`, `404` or `409 Conflict`. HTTP defines `GET` as safe and `GET`, `PUT` and `DELETE` as idempotent, so clients and proxies know which requests they can repeat after a timeout, and caches can keep a `GET` response for as long as its `Cache-Control` header allows, then check it again cheaply with its `ETag`. Each request carries everything needed to answer it, so any server behind a load balancer can take it. GraphQL works differently: one endpoint, usually `POST /graphql`, and a typed schema describing all the objects and how they connect. The client sends a query naming exactly the fields it wants, across related objects; the server validates it against the schema, runs a resolver function for each field to fetch the data, and returns JSON shaped like the query. Two pieces often sit alongside: an OpenAPI document that describes a REST API’s paths and payloads so docs, tests and client code can be generated from it, and webhooks, where the API calls you: it sends an HTTP `POST` to a URL you registered when something happens. Compared with RPC frameworks such as gRPC, the contract is URLs and HTTP’s rules (or a GraphQL schema) rather than generated stubs and binary messages, which makes calls easy to read, debug and cache but larger and less strictly typed. An API gateway is a separate layer in front that checks keys, enforces limits and routes calls; it doesn’t decide how the API itself is shaped.",
+  "analogy": "REST is a well-signposted warehouse: every item has its own shelf address and you use the same few actions everywhere (look, put, remove), so any visitor can find their way. GraphQL is handing the clerk at the counter one order form listing exactly what you want from several aisles, and getting it back in a single bag.",
+  "useWhen": [
+    "Public or partner APIs that unknown clients, written in any language, must be able to call with an ordinary HTTP library",
+    "Backends for web and mobile front ends, which already speak HTTP and JSON",
+    "Read-heavy data that browsers and CDNs can cache: REST `GET` responses with `Cache-Control` and an `ETag`",
+    "Screens that combine many related objects, where GraphQL lets each client fetch exactly the fields it needs in one round trip",
+    "Telling other companies’ systems that something happened, with webhooks instead of having them poll"
+  ],
+  "avoidWhen": [
+    "High-volume calls between your own services, where gRPC’s binary encoding, generated stubs and streaming save bytes and guesswork",
+    "Work that can wait or must survive the receiver being down; put it on a queue",
+    "A steady stream of updates to clients: polling a REST endpoint wastes requests; use WebSockets, server-sent events or GraphQL subscriptions",
+    "A public GraphQL API without depth or cost limits, where one nested query can fan out into a huge number of backend calls"
+  ],
+  "example": "A shop’s product page calls `GET /products/981`. The response carries `Cache-Control: max-age=60` and `ETag: \"v7\"`, so the CDN answers most requests for that minute, and afterwards a browser that asks with `If-None-Match: \"v7\"` gets an empty `304 Not Modified` if nothing changed. A partner places an order with `POST /orders` and gets `201 Created` with `Location: /orders/4812`; when its later `PUT /orders/4812/address` times out, it simply sends it again, because `PUT` is idempotent. The mobile app’s order screen sends one GraphQL query for the order’s status, its line items and the customer’s name instead of three REST calls. When the parcel ships, the shop sends a signed `order.shipped` webhook to the URL the partner registered.",
+  "providers": {
+    "aws": "API Gateway for REST: REST APIs (API keys, usage plans, caching, request validation) or the cheaper, leaner HTTP APIs, in front of Lambda or any HTTP backend. AppSync for managed GraphQL, with resolvers that read DynamoDB, Lambda, OpenSearch, RDS, EventBridge or HTTP endpoints, plus real-time subscriptions",
+    "gcp": "API Gateway (OpenAPI 2.0, 3.0 or 3.1 specs in front of Cloud Run, Cloud Functions and App Engine); Cloud Endpoints; Apigee for full API management, including a GraphQL policy that checks queries against a schema; Firebase Data Connect for a managed GraphQL API over Cloud SQL for PostgreSQL",
+    "azure": "API Management, for REST APIs imported from OpenAPI and for GraphQL APIs, either passed through to an existing GraphQL server or synthesised from a schema with resolvers; Data API builder, a free open-source engine that serves REST and GraphQL over SQL Server, Azure SQL, Cosmos DB, PostgreSQL and MySQL",
+    "oss": "REST frameworks such as FastAPI and Express; GraphQL servers such as GraphQL.js, Apollo Server, GraphQL Yoga, graphql-java and Strawberry; APIs generated from a database: PostgREST, Hasura, PostGraphile, pg_graphql; the OpenAPI Specification and its tooling; the Standard Webhooks spec for signed callbacks"
+  },
+  "snippet": {
+    "lang": "http",
+    "source": [
+      "# REST: the URL names the resource, the method says what to do",
+      "GET /orders/4812 HTTP/1.1",
+      "Host: api.example.com",
+      "Accept: application/json",
+      "If-None-Match: \"v7\"",
+      "",
+      "HTTP/1.1 304 Not Modified",
+      "ETag: \"v7\"",
+      "Cache-Control: private, max-age=60",
+      "",
+      "# GraphQL: one endpoint; the query says which fields to return",
+      "POST /graphql HTTP/1.1",
+      "Host: api.example.com",
+      "Content-Type: application/json",
+      "Accept: application/graphql-response+json",
+      "",
+      "{\"query\": \"query($id: ID!) { order(id: $id) { status customer { name } } }\", \"variables\": {\"id\": \"4812\"}}",
+      "",
+      "HTTP/1.1 200 OK",
+      "Content-Type: application/graphql-response+json",
+      "",
+      "{\"data\": {\"order\": {\"status\": \"PAID\", \"customer\": {\"name\": \"Ada\"}}}}"
+    ]
+  },
+  "related": ["rpc", "apigw", "lb", "cdn"],
+  "diagram": {
+    "caption": "The browser and the partner read orders with REST `GET` requests; the HTTP cache answers repeats from its copy and passes misses to the orders service. The mobile app sends one GraphQL query, and the GraphQL server’s resolvers fetch the fields it asked for from the same service.",
+    "h": 270,
+    "nodes": [
+      {
+        "id": "web",
+        "x": 100,
+        "y": 55,
+        "label": "Browser",
+        "sub": "GET /orders/4812",
+        "emit": { "every": 800, "jitter": 0.4, "req": true, "color": 0 },
+        "out": ["cache"]
+      },
+      {
+        "id": "ptn",
+        "x": 100,
+        "y": 135,
+        "label": "Partner",
+        "sub": "GET /orders?status=paid",
+        "emit": { "every": 1300, "jitter": 0.4, "req": true, "color": 2 },
+        "out": ["cache"]
+      },
+      {
+        "id": "mob",
+        "x": 100,
+        "y": 215,
+        "label": "Mobile app",
+        "sub": "POST /graphql",
+        "emit": { "every": 1100, "jitter": 0.4, "req": true, "color": 1 },
+        "out": ["gql"]
+      },
+      {
+        "id": "cache",
+        "x": 360,
+        "y": 95,
+        "label": "HTTP cache",
+        "sub": "Cache-Control · ETag",
+        "concept": "cdn",
+        "mode": "cache",
+        "p": 0.6,
+        "out": ["api"]
+      },
+      {
+        "id": "gql",
+        "x": 360,
+        "y": 215,
+        "label": "GraphQL server",
+        "sub": "schema · resolvers",
+        "out": ["api"]
+      },
+      {
+        "id": "api",
+        "x": 630,
+        "y": 150,
+        "label": "Orders service",
+        "sub": "REST · JSON",
+        "mode": "reply",
+        "delay": 150
+      }
+    ]
+  },
+  "history": {
+    "story": [
+      "The first web services used HTTP as a pipe. XML-RPC, specified by Dave Winer in 1999, sent a procedure call as XML in an HTTP `POST`, and SOAP, published as a W3C Note in May 2000, wrapped calls in XML envelopes. Every call was a `POST` to one URL, so caches and proxies couldn’t tell a harmless read from an order being placed.",
+      "In 2000 Roy Fielding, a principal author of HTTP/1.0 and HTTP/1.1, named the style he had used since 1994 to guide those standards: Representational State Transfer, or REST. Resources have URLs, every component uses the same small set of methods, requests are stateless and responses say whether they can be cached. When Amazon S3 launched in March 2006 it offered “standards-based REST and SOAP interfaces”; S3 has since deprecated SOAP over plain HTTP. Swagger, created in 2010, gave REST APIs a machine-readable description, and in 2015 it became the OpenAPI Specification under the Linux Foundation.",
+      "Mobile apps exposed REST’s weak spot. Rebuilding its native apps in 2012, Facebook found that fetching News Feed meant many requests and responses shaped by the server, not by the screen. Its answer, GraphQL, let the client ask for exactly the fields it needed in one request. Facebook open-sourced it in 2015, and in 2016 GitHub launched the first major public GraphQL API."
+    ],
+    "choices": [
+      {
+        "choice": "HTTP’s own methods and status codes instead of a tunnel",
+        "why": "Fielding argued that a uniform interface makes interactions visible to every component in between, so caches, proxies and gateways can act on a request without knowing the application. The price, in his words, is that it “degrades efficiency”, because data travels in a standard form rather than one fitted to each application."
+      },
+      {
+        "choice": "Stateless requests",
+        "why": "Each request must carry everything needed to understand it, so the server keeps no session between calls. Fielding accepted repeating some data in every request in exchange for visibility, easier recovery from partial failures, and servers that free resources quickly and scale."
+      },
+      {
+        "choice": "A machine-readable description of the API",
+        "why": "Swagger, and then OpenAPI, describe paths, parameters and payloads in a file that humans and tools can both read, so documentation, tests and client code can be generated instead of written by hand for each language."
+      },
+      {
+        "choice": "Let the client choose the shape of the response",
+        "why": "Facebook’s mobile developers were frustrated by the gap between the data their apps wanted and the server queries they had to call. GraphQL’s hierarchical queries follow relationships between objects in one request, where REST may need several round trips on a slow mobile network."
+      }
+    ],
+    "timeline": [
+      { "year": "1999", "text": "Dave Winer publishes the XML-RPC specification" },
+      { "year": "2000", "text": "SOAP 1.1 published as a W3C Note; Fielding’s dissertation defines REST" },
+      { "year": "2006", "text": "Amazon S3 launches with REST and SOAP interfaces" },
+      { "year": "2015", "text": "Facebook open-sources GraphQL; the OpenAPI Initiative forms around Swagger" },
+      { "year": "2016", "text": "GitHub launches the first major public GraphQL API" },
+      { "year": "2022", "text": "RFC 9110 and RFC 9111 restate HTTP’s semantics and caching rules" }
+    ],
+    "sources": [
+      { "label": "XML-RPC specification (Dave Winer, June 1999)", "url": "http://xmlrpc.com/spec.md" },
+      { "label": "W3C Note: Simple Object Access Protocol (SOAP) 1.1 (May 2000)", "url": "https://www.w3.org/TR/2000/NOTE-SOAP-20000508/" },
+      { "label": "Roy Fielding: Architectural Styles and the Design of Network-based Software Architectures, chapter 5: REST (UC Irvine, 2000)", "url": "https://ics.uci.edu/~fielding/pubs/dissertation/rest_arch_style.htm" },
+      { "label": "Roy Fielding: dissertation, chapter 6: Experience and evaluation (REST since 1994, HTTP/1.0 and HTTP/1.1)", "url": "https://ics.uci.edu/~fielding/pubs/dissertation/evaluation.htm" },
+      { "label": "Amazon press release: Amazon Web Services launches Amazon S3 (March 2006)", "url": "https://press.aboutamazon.com/2006/3/amazon-web-services-launches" },
+      { "label": "Amazon S3 API reference: Welcome (REST API; SOAP over HTTP deprecated)", "url": "https://docs.aws.amazon.com/AmazonS3/latest/API/Welcome.html" },
+      { "label": "Linux Foundation: New collaborative project to extend Swagger specification (Open API Initiative, November 2015)", "url": "https://www.linuxfoundation.org/press/press-release/new-collaborative-project-to-extend-swagger-specification-for-building-connected-applications-and-services" },
+      { "label": "GraphQL blog: GraphQL, a data query language (Lee Byron, September 2015)", "url": "https://graphql.org/blog/2015-09-14-graphql/" },
+      { "label": "GraphQL blog: Leaving technical preview (GitHub GraphQL API, September 2016)", "url": "https://graphql.org/blog/2016-09-14-production-ready/" }
+    ]
+  },
+  "sources": [
+    { "label": "RFC 9110: HTTP Semantics (methods, safe and idempotent methods, status codes, conditional requests)", "url": "https://www.rfc-editor.org/rfc/rfc9110" },
+    { "label": "RFC 9111: HTTP Caching (freshness, validation, invalidation after unsafe methods)", "url": "https://www.rfc-editor.org/rfc/rfc9111" },
+    { "label": "Roy Fielding: dissertation, chapter 5: REST (stateless, cache and uniform interface constraints)", "url": "https://ics.uci.edu/~fielding/pubs/dissertation/rest_arch_style.htm" },
+    { "label": "GraphQL specification, September 2025 edition", "url": "https://spec.graphql.org/September2025/" },
+    { "label": "GraphQL docs: Serving over HTTP (single endpoint, POST and GET, media types, status codes)", "url": "https://graphql.org/learn/serving-over-http/" },
+    { "label": "GraphQL docs: Performance (N+1 problem, DataLoader, GET and persisted queries)", "url": "https://graphql.org/learn/performance/" },
+    { "label": "GraphQL docs: Security (depth limiting, query complexity, trusted documents)", "url": "https://graphql.org/learn/security/" },
+    { "label": "OpenAPI Specification v3.2.1 (paths, webhooks)", "url": "https://spec.openapis.org/oas/v3.2.1.html" },
+    { "label": "Standard Webhooks specification (HTTP POST, webhook-id, HMAC signatures)", "url": "https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md" },
+    { "label": "API Gateway docs: Choose between REST APIs and HTTP APIs", "url": "https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-vs-rest.html" },
+    { "label": "AWS AppSync docs: What is AWS AppSync?", "url": "https://docs.aws.amazon.com/appsync/latest/devguide/what-is-appsync.html" },
+    { "label": "AWS AppSync docs: Data sources (DynamoDB, Lambda, OpenSearch, HTTP, RDS, EventBridge)", "url": "https://docs.aws.amazon.com/appsync/latest/devguide/data-source-components.html" },
+    { "label": "Google Cloud docs: About API Gateway", "url": "https://cloud.google.com/api-gateway/docs/about-api-gateway" },
+    { "label": "Google Cloud docs: API Gateway OpenAPI overview (supported versions)", "url": "https://cloud.google.com/api-gateway/docs/openapi-overview" },
+    { "label": "Google Cloud docs: About Cloud Endpoints", "url": "https://cloud.google.com/endpoints/docs/openapi/about-cloud-endpoints" },
+    { "label": "Apigee docs: GraphQL policy", "url": "https://cloud.google.com/apigee/docs/api-platform/reference/policies/graphql-policy" },
+    { "label": "Firebase docs: Firebase Data Connect", "url": "https://firebase.google.com/docs/data-connect" },
+    { "label": "Microsoft Learn: Overview of GraphQL APIs in Azure API Management (pass-through and synthetic)", "url": "https://learn.microsoft.com/en-us/azure/api-management/graphql-apis-overview" },
+    { "label": "Microsoft Learn: Import an OpenAPI specification to Azure API Management", "url": "https://learn.microsoft.com/en-us/azure/api-management/import-api-from-oas" },
+    { "label": "Microsoft Learn: What is Data API builder?", "url": "https://learn.microsoft.com/en-us/azure/data-api-builder/overview" },
+    { "label": "FastAPI on GitHub", "url": "https://github.com/fastapi/fastapi" },
+    { "label": "Express on GitHub", "url": "https://github.com/expressjs/express" },
+    { "label": "GraphQL.js on GitHub", "url": "https://github.com/graphql/graphql-js" },
+    { "label": "Apollo Server on GitHub", "url": "https://github.com/apollographql/apollo-server" },
+    { "label": "GraphQL Yoga on GitHub", "url": "https://github.com/graphql-hive/graphql-yoga" },
+    { "label": "graphql-java on GitHub", "url": "https://github.com/graphql-java/graphql-java" },
+    { "label": "Strawberry GraphQL on GitHub", "url": "https://github.com/strawberry-graphql/strawberry" },
+    { "label": "PostgREST on GitHub", "url": "https://github.com/PostgREST/postgrest" },
+    { "label": "Hasura GraphQL Engine on GitHub", "url": "https://github.com/hasura/graphql-engine" },
+    { "label": "PostGraphile (graphile/crystal) on GitHub", "url": "https://github.com/graphile/crystal" },
+    { "label": "pg_graphql docs", "url": "https://supabase.github.io/pg_graphql/" }
+  ]
+}

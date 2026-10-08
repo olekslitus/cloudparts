@@ -1,0 +1,211 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Logstash",
+  "concepts": ["logs", "observability"],
+  "provider": "oss",
+  "vendor": "Elastic N.V.",
+  "license": "Apache 2.0 (core and plugins); `x-pack` code under the Elastic License, included in the default download but not in the `-oss` builds",
+  "website": "https://www.elastic.co/logstash",
+  "repo": "https://github.com/elastic/logstash",
+  "summary": "Elastic’s JVM-based pipeline that takes events in, parses them with filters such as `grok`, and sends them on, most often to Elasticsearch.",
+  "intro": [
+    "Logstash is a server process that runs pipelines of three stages. Inputs receive events (from Beats and Elastic Agent, files, syslog, Kafka, S3 or a scheduled SQL query), filters parse and enrich them, and outputs send them on, most often to Elasticsearch. The best-known filter is `grok`, which turns an unstructured log line into named fields using about 120 built-in regular-expression patterns. Worker threads, one per CPU core by default, take events from a queue in batches of 125 and run them through the filters and outputs. That queue lives in memory unless you switch on the persistent queue, which writes events to disk (up to 1 GB by default) so they survive a restart; it is not replicated, so it does not survive losing the disk.",
+    "Logstash runs on the JVM: its core is Java and JRuby, plugins are Ruby gems (over 200 of them), and the downloads bundle a Temurin 21 JDK. It is free to use. The repository mixes licences: code outside the `x-pack` folder is Apache 2.0, code inside it is under the Elastic License, and the default download contains both; builds with `-oss` in the name contain only the Apache 2.0 parts. Elastic’s 2021 move of Elasticsearch and Kibana to SSPL and the Elastic License, and the AGPL option it added for them in 2024, did not apply to Logstash. Some features, such as managing pipelines centrally from Kibana, need a paid Elastic subscription."
+  ],
+  "strengths": [
+    "Flexible parsing in one readable config: `grok`, `date`, `mutate`, `drop`, `clone` and `geoip` filters, with conditionals between them",
+    "The natural fit for Elasticsearch and Kibana; the `beats` input, and its successor `elastic_agent`, receive data from Elastic’s own shippers",
+    "Over 200 plugins, including Kafka, S3, JDBC and Redis, each a separate gem that is released on its own",
+    "The persistent queue gives at-least-once delivery through restarts and crashes, for inputs that acknowledge what they receive",
+    "The core stayed Apache 2.0 through all of Elastic’s licence changes"
+  ],
+  "limits": [
+    "Heavy for running on every host: a JVM for which Elastic recommends a 4 to 8 GB heap in typical ingestion setups",
+    "The default memory queue loses in-flight events if the machine fails; the persistent queue is off by default, cannot protect inputs without acknowledgements (TCP, UDP), and is not replicated",
+    "Mixed licensing to keep track of: the default download includes Elastic License code, the `-oss` build drops every `x-pack` feature, and centralized pipeline management needs a subscription",
+    "Grok patterns are regular expressions, so parsing a new log format means writing and testing patterns by hand"
+  ],
+  "worksWith": [
+    { "id": "kafka", "how": "consumes from and produces to" },
+    { "id": "s3", "how": "reads objects from and archives events to" },
+    { "id": "postgresql", "how": "polls rows on a schedule via JDBC from" },
+    { "id": "redis", "how": "reads queued events from lists in" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Parse web server logs from Beats, then index them and copy them to Kafka",
+    "source": [
+      "cat > /etc/logstash/conf.d/web.conf <<'EOF'",
+      "input {",
+      "  beats { port => 5044 }",
+      "}",
+      "filter {",
+      "  grok { match => { \"message\" => \"%{COMBINEDAPACHELOG}\" } }",
+      "  date { match => [ \"timestamp\", \"dd/MMM/yyyy:HH:mm:ss Z\" ] }   # use the log’s own time",
+      "}",
+      "output {",
+      "  elasticsearch { hosts => [\"https://es.internal:9200\"] }",
+      "  kafka { bootstrap_servers => \"kafka:9092\" topic_id => \"web-access\" codec => json }",
+      "}",
+      "EOF",
+      "",
+      "# keep queued events on disk across restarts (off by default)",
+      "echo 'queue.type: persisted' >> /etc/logstash/logstash.yml",
+      "",
+      "/usr/share/logstash/bin/logstash -f /etc/logstash/conf.d/web.conf --config.test_and_exit",
+      "sudo systemctl restart logstash"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Choosing a telemetry agent",
+      "intro": "All five read from many sources, change data in flight and write it to many destinations. They differ in runtime, in the shape of data they were built around, and in who steers them.",
+      "corner": "",
+      "columns": ["Fluentd", "Logstash", "Telegraf", "OpenTelemetry Collector", "Vector"],
+      "rows": [
+        { "label": "Written in", "values": ["C and Ruby", "Java and JRuby; downloads bundle a JDK", "Go; one static binary", "Go", "Rust"] },
+        { "label": "Licence", "values": ["Apache 2.0", "Apache 2.0, plus `x-pack` features under the Elastic License", "MIT", "Apache 2.0", "MPL 2.0"] },
+        {
+          "label": "Steward",
+          "values": [
+            "CNCF (graduated 2019)",
+            "Elastic",
+            "InfluxData",
+            "CNCF (graduated 2026)",
+            "Datadog (bought its maker, Timber, in 2021)"
+          ]
+        },
+        {
+          "label": "Built around",
+          "values": [
+            "Log events: tag, time, JSON record",
+            "Events of any shape, mostly logs",
+            "Metrics: measurement, tags, fields, time",
+            "Traces, metrics and logs in OTLP",
+            "Logs and metrics"
+          ]
+        },
+        {
+          "label": "Config",
+          "values": [
+            "Own syntax: `<source>`, `<filter>`, `<match>`",
+            "Own DSL: `input`, `filter`, `output`",
+            "TOML",
+            "YAML",
+            "YAML, TOML or JSON"
+          ]
+        },
+        {
+          "label": "Plugins",
+          "values": [
+            "1,000+ external Ruby gems",
+            "200+ Ruby gems",
+            "400+ compiled in; others run as external programs via `execd`",
+            "Core and contrib distributions, or build your own with OCB",
+            "Built-in sources, transforms and sinks; VRL for custom logic"
+          ]
+        },
+        {
+          "label": "Buffer by default, and the durable option",
+          "values": [
+            "Memory or file, chosen per output",
+            "Memory; persistent queue on disk is opt-in",
+            "Memory; disk buffer is experimental (since 1.32)",
+            "Memory; persistent queue with the `file_storage` extension",
+            "Memory (500 events per sink); disk buffer optional"
+          ]
+        }
+      ],
+      "notes": [
+        "Plugin counts are the projects’ own: Fluent Bit’s comparison page for Fluentd, the Logstash README, and InfluxData’s Telegraf docs (the Telegraf README still says 300+).",
+        "Vector’s README lists traces as “coming soon”; its data model has log and metric events only."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Which parts are open source",
+      "intro": "Logstash is often lumped in with Elasticsearch’s licence changes. The repository’s `LICENSE.txt` says what applies today.",
+      "items": [
+        { "name": "Core and plugins", "tag": "Apache 2.0", "text": "Every file outside the `x-pack` folder is Apache 2.0 unless it says otherwise. Plugins live in their own repositories under `logstash-plugins` and ship as Ruby gems." },
+        { "name": "The `x-pack` folder", "tag": "Elastic License", "text": "Elastic’s extra features, such as monitoring, central pipeline management and GeoIP database management, merged into the repository in April 2018. Their source is readable, but under the Elastic License, not an open-source licence." },
+        { "name": "Default download", "tag": "both", "text": "Contains the Apache 2.0 code and the `x-pack` code. Free features are on by default; subscription features, such as centralized pipeline management, need a paid licence or a 30-day trial." },
+        { "name": "`-oss` download", "tag": "Apache 2.0 only", "text": "Elastic still publishes these builds (9.5.4 in September 2026). They include only Apache 2.0 features." },
+        { "name": "2021 and 2024", "tag": "no change", "text": "In January 2021 Elasticsearch and Kibana moved from Apache 2.0 to SSPL and the Elastic License, and in 2024 Elastic added AGPL as a third option for them. Elastic’s licensing FAQ says the changes covered only Elasticsearch and Kibana, and that Logstash and Beats remain Apache 2.0." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Jordan Sissel, who had worked at Google, Loggly and Heroku, started Logstash as an open-source project in 2009; the first prototype commit, by Pete Fritchman, is from August that year. The idea was a generic event processor: a log could be any timestamped piece of data, and inputs, filters and outputs could be combined freely. It was written in Ruby, with a short text config in three stages that made it easy to move data from any source to any destination.",
+      "Sissel says he designed Logstash from day one to work with Elasticsearch and Kibana, and the three became known as the ELK stack. In August 2013 he joined Elasticsearch, the company, which began selling support for Logstash the same day, alongside the release of Logstash 1.2.",
+      "JRuby became Logstash’s usual runtime for speed and for Java libraries, but crossing between Ruby and Java cost CPU and memory, so Elastic moved the internals to Java. A Java execution engine, previewed in 6.3 in 2018, became the default in 7.0 in 2019. When Elasticsearch and Kibana left Apache 2.0 in 2021, Logstash’s core stayed."
+    ],
+    "choices": [
+      { "choice": "Three stages: input, filter, output", "why": "Sissel wanted a generic system where any input, processing step and output could be composed. The simple model and text config proved a friendly way to get data from point A to point B." },
+      { "choice": "Built for Elasticsearch", "why": "Sissel says he designed it from day one to work with Elasticsearch and Kibana: Logstash pulls events off systems, Elasticsearch stores and searches them, and Kibana charts the results." },
+      { "choice": "Run on JRuby, then move the core to Java", "why": "JRuby gave Ruby code the JVM’s speed and its libraries. As more plugins were written in Java, compiling pipelines to JVM bytecode removed the cost of crossing between the two languages and cut startup and reload times." }
+    ],
+    "timeline": [
+      { "year": "2009", "text": "Jordan Sissel starts Logstash; first prototype commit in August" },
+      { "year": "2011", "text": "v1.0.0 tagged in May" },
+      { "year": "2013", "text": "Sissel joins Elasticsearch in August; Logstash 1.2 released" },
+      { "year": "2018", "text": "X-Pack source opens under the Elastic License and moves into the repository" },
+      { "year": "2019", "text": "Logstash 7.0 makes the Java execution engine the default" },
+      { "year": "2021", "text": "Elasticsearch and Kibana leave Apache 2.0; Logstash does not" }
+    ],
+    "sources": [
+      { "label": "Elasticsearch press release: hiring Jordan Sissel, creator of Logstash (August 2013)", "url": "http://elasticsearch.com/blog/press/elasticsearch-strengthents-its-log-management-product-offering-by-hiring-jordan-sissel-creator-of-logstash", "archive": "https://web.archive.org/web/20131121014748/http://elasticsearch.com:80/blog/press/elasticsearch-strengthents-its-log-management-product-offering-by-hiring-jordan-sissel-creator-of-logstash" },
+      { "label": "GitHub: first Logstash prototype commit (August 2009)", "url": "https://github.com/elastic/logstash/commit/82fdc11f2e35b52b05f773be52ba3c0e8072c509" },
+      { "label": "GitHub: Logstash v1.0.0 tag (May 2011)", "url": "https://github.com/elastic/logstash/tree/v1.0.0" },
+      { "label": "Elastic blog: Logstash 7.0.0 released, by João Duarte (April 2019)", "url": "https://www.elastic.co/blog/logstash-7-0-0-released" },
+      { "label": "Elastic blog: Meet the new Logstash Java execution engine, by Dan Hermann (June 2018)", "url": "https://www.elastic.co/blog/meet-the-new-logstash-java-execution-engine" },
+      { "label": "Elastic blog: Doubling down on open, by Shay Banon (February 2018)", "url": "https://www.elastic.co/blog/doubling-down-on-open" },
+      { "label": "GitHub: Migrate x-pack-logstash source to logstash (April 2018)", "url": "https://github.com/elastic/logstash/commit/93cad10d" },
+      { "label": "Elastic blog: Doubling down on open, Part II, by Shay Banon (January 2021)", "url": "https://www.elastic.co/blog/licensing-change" }
+    ]
+  },
+  "sources": [
+    { "label": "Logstash docs: How Logstash works (inputs, filters, outputs, codecs)", "url": "https://www.elastic.co/docs/reference/logstash/how-logstash-works" },
+    { "label": "Logstash docs: Memory queue (batch size 125, workers per core, lost on failure)", "url": "https://www.elastic.co/docs/reference/logstash/memory-queue" },
+    { "label": "Logstash docs: Persistent queues (off by default, 1 GB, not replicated)", "url": "https://www.elastic.co/docs/reference/logstash/persistent-queues" },
+    { "label": "Logstash docs: JVM settings (4 to 8 GB heap)", "url": "https://www.elastic.co/docs/reference/logstash/jvm-settings" },
+    { "label": "Logstash docs: Getting started (bundled Temurin 21 JDK)", "url": "https://www.elastic.co/docs/reference/logstash/getting-started-with-logstash" },
+    { "label": "Logstash docs: Centralized pipeline management (subscription feature)", "url": "https://www.elastic.co/docs/reference/logstash/logstash-centralized-pipeline-management" },
+    { "label": "Logstash docs: Grok filter (about 120 patterns, Oniguruma)", "url": "https://www.elastic.co/docs/reference/logstash/plugins/plugins-filters-grok" },
+    { "label": "Logstash docs: Date filter", "url": "https://www.elastic.co/docs/reference/logstash/plugins/plugins-filters-date" },
+    { "label": "Logstash docs: Beats input (port 5044)", "url": "https://www.elastic.co/docs/reference/logstash/plugins/plugins-inputs-beats" },
+    { "label": "Logstash docs: Elastic Agent input", "url": "https://www.elastic.co/docs/reference/logstash/plugins/plugins-inputs-elastic_agent" },
+    { "label": "Logstash docs: Kafka integration plugin", "url": "https://www.elastic.co/docs/reference/logstash/plugins/plugins-integrations-kafka" },
+    { "label": "Logstash docs: Kafka output", "url": "https://www.elastic.co/docs/reference/logstash/plugins/plugins-outputs-kafka" },
+    { "label": "Logstash docs: S3 input", "url": "https://www.elastic.co/docs/reference/logstash/plugins/plugins-inputs-s3" },
+    { "label": "Logstash docs: S3 output", "url": "https://www.elastic.co/docs/reference/logstash/plugins/plugins-outputs-s3" },
+    { "label": "Logstash docs: JDBC input", "url": "https://www.elastic.co/docs/reference/logstash/plugins/plugins-inputs-jdbc" },
+    { "label": "Logstash docs: Redis input", "url": "https://www.elastic.co/docs/reference/logstash/plugins/plugins-inputs-redis" },
+    { "label": "logstash-patterns-core: ECS `COMBINEDAPACHELOG` pattern", "url": "https://github.com/logstash-plugins/logstash-patterns-core/blob/main/patterns/ecs-v1/httpd" },
+    { "label": "Logstash README (200+ plugins, one gem per plugin)", "url": "https://github.com/elastic/logstash/blob/main/README.md" },
+    { "label": "Logstash LICENSE.txt (Apache 2.0 outside `x-pack`, Elastic License inside, `-oss` builds)", "url": "https://github.com/elastic/logstash/blob/main/LICENSE.txt" },
+    { "label": "Logstash licenses/ELASTIC-LICENSE.txt", "url": "https://github.com/elastic/logstash/blob/main/licenses/ELASTIC-LICENSE.txt" },
+    { "label": "Elastic: Logstash OSS download (Apache 2.0 features only)", "url": "https://www.elastic.co/downloads/logstash-oss" },
+    { "label": "Elastic: Licensing FAQ (Logstash and Beats remain Apache 2.0)", "url": "https://www.elastic.co/pricing/faq/licensing" },
+    { "label": "Elastic blog: Doubling down on open, Part II (January 2021)", "url": "https://www.elastic.co/blog/licensing-change" },
+    { "label": "Elastic blog: Elasticsearch is open source again, by Shay Banon (August 2024)", "url": "https://www.elastic.co/blog/elasticsearch-is-open-source-again" },
+    { "label": "Fluent Bit manual: Fluentd and Fluent Bit (Fluentd figures)", "url": "https://docs.fluentbit.io/manual/about/fluentd-and-fluent-bit" },
+    { "label": "Fluentd docs: Buffer plugins", "url": "https://docs.fluentd.org/buffer" },
+    { "label": "Fluentd docs: Config file syntax", "url": "https://docs.fluentd.org/configuration/config-file" },
+    { "label": "CNCF: Fluentd graduation announcement (April 2019)", "url": "https://www.cncf.io/announcements/2019/04/11/cncf-announces-fluentd-graduation/" },
+    { "label": "Telegraf docs (400+ plugins)", "url": "https://docs.influxdata.com/telegraf/v1/" },
+    { "label": "Telegraf docs: Metrics (InfluxDB data model)", "url": "https://github.com/influxdata/telegraf/blob/master/docs/METRICS.md" },
+    { "label": "Telegraf docs: External plugins (`execd`)", "url": "https://github.com/influxdata/telegraf/blob/master/docs/EXTERNAL_PLUGINS.md" },
+    { "label": "Telegraf changelog: v1.32.0 adds an experimental disk buffer", "url": "https://github.com/influxdata/telegraf/blob/master/CHANGELOG.md" },
+    { "label": "OpenTelemetry docs: Collector distributions and OCB", "url": "https://opentelemetry.io/docs/collector/distributions/" },
+    { "label": "OpenTelemetry Collector: exporterhelper (sending queue and persistent storage)", "url": "https://github.com/open-telemetry/opentelemetry-collector/blob/main/exporter/exporterhelper/README.md" },
+    { "label": "CNCF: OpenTelemetry graduation announcement (May 2026)", "url": "https://www.cncf.io/announcements/2026/05/21/cloud-native-computing-foundation-announces-opentelemetrys-graduation-solidifying-status-as-the-de-facto-observability-standard/" },
+    { "label": "Vector README (Rust; logs, metrics, traces “coming soon”)", "url": "https://github.com/vectordotdev/vector/blob/master/README.md" },
+    { "label": "Vector docs: Data model", "url": "https://vector.dev/docs/architecture/data-model/" },
+    { "label": "Vector docs: Buffering model", "url": "https://vector.dev/docs/architecture/buffering-model/" },
+    { "label": "Vector docs: Configuration (YAML, TOML, JSON)", "url": "https://vector.dev/docs/reference/configuration/" },
+    { "label": "Datadog press release: Datadog acquires Timber Technologies (February 2021)", "url": "https://www.datadoghq.com/about/latest-news/press-releases/datadog-acquires-timber-technologies/" }
+  ],
+  "checked": "2026-10-06"
+}

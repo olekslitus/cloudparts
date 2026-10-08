@@ -1,0 +1,163 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Synthetic monitoring",
+  "category": "observe",
+  "order": 60,
+  "summary": "Robots that use your product from outside on a schedule, so you learn it’s broken before a customer tells you.",
+  "howItWorks": "A synthetic monitor is a scripted check that runs from outside your system on a timer, from several locations. The simplest is an uptime check: request a URL every minute and expect a 200 status, a keyword in the body and a valid TLS certificate. An API check sends a real request with headers and a body and asserts on the JSON that comes back. A browser check drives a headless browser through a user journey with a script, usually Playwright or Puppeteer: open the login page, sign in with a test account, add an item to the cart, and assert that the order page appears, recording timings, screenshots and the network log. Each check runs from probes in different regions, and the monitor alerts only when it fails from more than one place, often after a retry, so a flaky network path in one city doesn’t page anyone. Because the traffic is generated, it arrives at 3 a.m. and on a brand-new feature with no users yet, which is the point. The counterpart is real user monitoring (RUM), a script in real users’ browsers or apps that reports what they actually experienced. Synthetics give a steady, comparable signal on the paths you chose; RUM covers every path, but only where and when people show up.",
+  "analogy": "A mystery shopper who visits every branch every hour, tries the front door, buys one thing and phones head office the moment a door is locked, instead of waiting for angry customers to write in.",
+  "useWhen": [
+    "Login, sign-up, search and checkout: the few journeys that must always work",
+    "Low or uneven traffic, where a failure could go unseen for hours",
+    "Checking from the outside: DNS, TLS certificates, CDNs and third-party APIs that internal metrics never see",
+    "Right after a deploy, to confirm the critical paths still work"
+  ],
+  "avoidWhen": [
+    "As a replacement for real user monitoring: probes from data centres miss slow phones, odd browsers and paths you didn’t script",
+    "Long, brittle browser scripts that break on every UI change and train people to ignore failures",
+    "Journeys with side effects you can’t undo, such as real payments, unless the test account is sandboxed"
+  ],
+  "example": "A shop runs a browser check every 5 minutes from five regions: sign in with a test account, search for “kettle”, add one to the cart and reach the payment page. At 02:40 a certificate on the payment service expires. Every probe fails twice in a row, an alert pages the on-call engineer with a screenshot of the browser error, and the certificate is renewed at 02:58. The first customer email would have arrived after 7 a.m.",
+  "providers": {
+    "aws": "CloudWatch Synthetics canaries (scripts on Lambda, Playwright, Puppeteer or Selenium); Route 53 health checks",
+    "gcp": "Cloud Monitoring uptime checks and synthetic monitors (Cloud Run functions)",
+    "azure": "Application Insights availability tests (Standard tests; URL ping tests are deprecated)",
+    "oss": "Prometheus Blackbox exporter (Apache 2.0), Uptime Kuma (MIT, self-hosted); hosted: Checkly, Datadog Synthetic Monitoring, Grafana Cloud Synthetic Monitoring, Better Stack Uptime, Sentry uptime monitoring"
+  },
+  "snippet": {
+    "lang": "ts",
+    "source": [
+      "// A browser check: Playwright Test, as Checkly, Datadog and CloudWatch Synthetics run it",
+      "import { test, expect } from '@playwright/test';",
+      "",
+      "test('a shopper can reach checkout', async ({ page }) => {",
+      "  await page.goto('https://shop.example.com/');",
+      "  await page.getByRole('link', { name: 'Sign in' }).click();",
+      "  await page.getByRole('textbox', { name: 'Email' }).fill(process.env.PROBE_USER!);",
+      "  await page.getByRole('textbox', { name: 'Password' }).fill(process.env.PROBE_PASSWORD!);",
+      "  await page.getByRole('button', { name: 'Sign in' }).click();",
+      "  await page.getByRole('searchbox').fill('kettle');",
+      "  await page.getByRole('button', { name: 'Add to cart' }).first().click();",
+      "  await page.getByRole('link', { name: 'Checkout' }).click();",
+      "  await expect(page.getByRole('heading', { name: 'Payment' })).toBeVisible();",
+      "});"
+    ]
+  },
+  "related": ["lb", "canary", "alerting", "observability"],
+  "diagram": {
+    "caption": "Real users come and go, but three probes in different regions check the shop every couple of seconds. When the shop goes down during a quiet spell, the probes’ checks are missed straight away, long before any user would notice.",
+    "h": 290,
+    "nodes": [
+      {
+        "id": "users",
+        "x": 105,
+        "y": 50,
+        "label": "Real users",
+        "sub": "busy, then quiet",
+        "emit": { "phases": [[5000, 450], [7000, null]], "jitter": 0.4, "req": true, "color": 0 },
+        "out": ["app"]
+      },
+      {
+        "id": "p1",
+        "x": 105,
+        "y": 130,
+        "label": "Probe: Frankfurt",
+        "sub": "every 1 min",
+        "emit": { "every": 1800, "jitter": 0.1, "req": true, "color": 1 },
+        "out": ["app"]
+      },
+      {
+        "id": "p2",
+        "x": 105,
+        "y": 190,
+        "label": "Probe: Virginia",
+        "sub": "every 1 min",
+        "emit": { "every": 1800, "jitter": 0.1, "req": true, "color": 1 },
+        "out": ["app"]
+      },
+      {
+        "id": "p3",
+        "x": 105,
+        "y": 250,
+        "label": "Probe: Singapore",
+        "sub": "every 1 min",
+        "emit": { "every": 1800, "jitter": 0.1, "req": true, "color": 1 },
+        "out": ["app"]
+      },
+      {
+        "id": "app",
+        "x": 470,
+        "y": 150,
+        "label": "Shop",
+        "sub": "login + checkout",
+        "mode": "reply",
+        "delay": 120
+      }
+    ],
+    "events": [
+      { "node": "app", "at": 6000, "every": 12000, "dur": 3500, "text": "down", "back": "healthy" }
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Synthetic checks or real user monitoring?",
+      "intro": "Most teams run both: synthetics to catch outages fast on the paths that matter, RUM to see what people really experience.",
+            "columns": ["Synthetic monitoring", "Real user monitoring (RUM)"],
+      "rows": [
+        { "label": "Traffic", "values": ["Generated by probes on a schedule", "Real sessions, recorded in the browser or app"] },
+        { "label": "Works with no users", "values": ["Yes: at night, before launch, on new features", "No: no users, no data"] },
+        { "label": "Coverage", "values": ["Only the journeys you scripted", "Every page and device people use"] },
+        { "label": "Signal", "values": ["Steady and comparable run to run", "Noisy: devices, networks and behaviour vary"] },
+        { "label": "Typical products", "values": ["CloudWatch Synthetics, Checkly, Datadog Synthetics", "CloudWatch RUM, Datadog RUM"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Checking a service from outside is as old as the web. Keynote Systems, founded in 1995, sold measurements of website performance taken “from the end user perspective” rather than from inside the data centre. Google’s SRE book later named the approach black-box monitoring, “testing externally visible behavior as a user would see it”, and described it as symptom-oriented: it shows active problems, “The system isn’t working correctly, right now”, while white-box metrics from inside the system can warn of problems before they hit users.",
+      "Simple pings grew into full user journeys thanks to browser automation built for testing. Selenium started in 2004 at ThoughtWorks, where Jason Huggins wrote a JavaScript test runner for an internal expenses app. Headless Chrome and Puppeteer, which reached 1.0 in January 2018, and Microsoft’s Playwright, 1.0 in May 2020, made it cheap to run a real browser in a script, and monitoring vendors started running those same scripts on a schedule.",
+      "The clouds followed. AWS made CloudWatch Synthetics generally available in April 2020, calling its scripts canaries and pitching them as a way to “discover issues before your customers do” even with no customer traffic. Google Cloud runs uptime checks from checkers in several regions and synthetic monitors as Cloud Run functions, and Azure Application Insights runs availability tests from up to 16 locations; Microsoft deprecated its simpler URL ping tests and has pushed their retirement to September 2028."
+    ],
+    "choices": [
+      { "choice": "Probe from outside, from several places", "why": "A check inside the data centre can’t see a broken DNS record, an expired certificate or a CDN outage. Azure recommends at least five test locations so you can tell a problem with your site from a problem with one network path." },
+      { "choice": "Script whole journeys, not just pings", "why": "A home page can return 200 while login or checkout is broken. Browser scripts exercise the paths that make money, the same way a user does." },
+      { "choice": "Retry before alerting", "why": "The internet drops the odd request. Azure says about 80% of failures disappear on retry, so monitors usually retry, or require failures from several locations, before paging anyone." },
+      { "choice": "Generated traffic on purpose", "why": "Real users are the best signal when they are there. Synthetic traffic exists for the times they aren’t: nights, weekends, new features and low-traffic regions." }
+    ],
+    "timeline": [
+      { "year": "1995", "text": "Keynote Systems founded to measure websites from the user’s side" },
+      { "year": "2004", "text": "Selenium starts at ThoughtWorks" },
+      { "year": "2016", "text": "Google’s SRE book describes black-box monitoring" },
+      { "year": "2018", "text": "Puppeteer 1.0 for scripting headless Chrome" },
+      { "year": "2020", "text": "CloudWatch Synthetics generally available (April); Playwright 1.0 (May)" }
+    ],
+    "sources": [
+      { "label": "Wikipedia: Keynote Systems (founded 1995)", "url": "https://en.wikipedia.org/wiki/Keynote_Systems" },
+      { "label": "Google SRE book: Monitoring Distributed Systems (black-box monitoring)", "url": "https://sre.google/sre-book/monitoring-distributed-systems/" },
+      { "label": "Google SRE book: Preface (copyright 2016)", "url": "https://sre.google/sre-book/preface/" },
+      { "label": "Selenium: History", "url": "https://www.selenium.dev/history/" },
+      { "label": "GitHub: Puppeteer v1.0.0 release (January 2018)", "url": "https://github.com/puppeteer/puppeteer/releases/tag/v1.0.0" },
+      { "label": "GitHub: Playwright v1.0.0 release (May 2020)", "url": "https://github.com/microsoft/playwright/releases/tag/v1.0.0" },
+      { "label": "AWS What’s New: Amazon CloudWatch Synthetics is now generally available (Apr 2020)", "url": "https://aws.amazon.com/about-aws/whats-new/2020/04/amazon-cloudwatch-synthetics-generally-available/" },
+      { "label": "Google Cloud docs: Synthetic monitoring overview (uptime checks, synthetic monitors)", "url": "https://cloud.google.com/monitoring/uptime-checks/introduction" },
+      { "label": "Microsoft Learn: Application Insights availability tests (URL ping retirement extended to 2028)", "url": "https://learn.microsoft.com/en-us/azure/azure-monitor/app/availability" }
+    ]
+  },
+  "sources": [
+    { "label": "AWS docs: Synthetic monitoring (canaries), Playwright, Puppeteer and Selenium", "url": "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Synthetics_Canaries.html" },
+    { "label": "AWS docs: CloudWatch RUM", "url": "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-RUM.html" },
+    { "label": "Datadog docs: Real User Monitoring", "url": "https://docs.datadoghq.com/real_user_monitoring/" },
+    { "label": "AWS docs: Route 53 health checks", "url": "https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/dns-failover.html" },
+    { "label": "Google Cloud docs: Synthetic monitoring overview (checkers in several regions)", "url": "https://cloud.google.com/monitoring/uptime-checks/introduction" },
+    { "label": "Microsoft Learn: Application Insights availability tests (locations, frequency, retries)", "url": "https://learn.microsoft.com/en-us/azure/azure-monitor/app/availability" },
+    { "label": "Checkly docs: Synthetic monitoring overview (Playwright browser checks)", "url": "https://www.checklyhq.com/docs/detect/synthetic-monitoring/overview/" },
+    { "label": "Datadog docs: Synthetic Monitoring", "url": "https://docs.datadoghq.com/synthetics/" },
+    { "label": "Grafana docs: Synthetic Monitoring (probe locations, black-box)", "url": "https://grafana.com/docs/grafana-cloud/testing/synthetic-monitoring/" },
+    { "label": "Better Stack docs: Uptime monitors", "url": "https://betterstack.com/docs/uptime/uptime-monitor/" },
+    { "label": "Sentry docs: Uptime monitoring", "url": "https://docs.sentry.io/product/uptime-monitoring/" },
+    { "label": "GitHub: prometheus/blackbox_exporter (Apache 2.0)", "url": "https://github.com/prometheus/blackbox_exporter" },
+    { "label": "GitHub: louislam/uptime-kuma (MIT)", "url": "https://github.com/louislam/uptime-kuma" },
+    { "label": "Playwright docs: Writing tests (locators, actions, assertions)", "url": "https://playwright.dev/docs/writing-tests" }
+  ]
+}

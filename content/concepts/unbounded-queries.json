@@ -1,0 +1,118 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Unbounded queries",
+  "category": "data",
+  "order": 70,
+  "summary": "A query with no time range, no partition key and no LIMIT, whose cost grows with every row ever stored.",
+  "howItWorks": "A query is bounded when something in it caps how much data the database must touch: a time range, a partition or primary key, or a LIMIT that an index can satisfy. Leave all of them out and the database has to read everything, so a query that took 20 ms in the first week takes minutes a year later with no code changed. Time-series data makes this worse because it only grows. Common culprits are a dashboard panel set to “all time”, a Grafana SQL panel without the `$__timeFilter()` macro, `SELECT *` on a hypertable with no `WHERE time > ...`, a PromQL range covering months, a DynamoDB `Scan` (which reads every item, and charges for every item even when a filter drops most of them), a Cassandra query with `ALLOW FILTERING`, and page 500 of a list using `OFFSET`, which still computes and throws away every earlier row. Fixes come in layers. Make bounds part of the interface: require a time range, cap page size, and paginate with a keyset instead of OFFSET. Shape tables so that the bound prunes whole partitions. Keep old data small with retention policies and downsampled rollups. Then add guards that stop whatever slips through: PostgreSQL’s `statement_timeout` (off by default), ClickHouse’s `max_execution_time`, `max_rows_to_read` and `force_index_by_date`, and Prometheus’s `--query.timeout` and `--query.max-samples`.",
+  "analogy": "Asking a librarian for “every book that mentions rain” instead of “this week’s weather reports”. The first request has no end, and it gets longer every time the library buys a book.",
+  "useWhen": [
+    "An unbounded read is fine on a table that is small and stays small, such as countries or feature flags",
+    "One-off exports and backfills, run off-peak against a replica or snapshot, with a known cost",
+    "Batch jobs that read everything on purpose and stream rows instead of holding them all in memory"
+  ],
+  "avoidWhen": [
+    "Dashboards, APIs and anything a user can trigger again and again",
+    "Append-only data such as logs, events and metrics, which only grows",
+    "Shared databases, where one full scan slows every other query",
+    "Code that turns every returned row into an object in memory"
+  ],
+  "example": "A factory dashboard has a “units produced” panel running `SELECT count(*) FROM events WHERE line_id = 4`. In the first month it reads 2 million rows and answers in 50 ms. Two years later the table holds 1.5 billion rows, the panel takes 40 seconds, and ten people opening the dashboard at the 8:00 shift change saturate the database’s disks. The fix has three parts: the panel gets `$__timeFilter(time)` so it reads only the range on screen, the all-time total moves to a daily continuous aggregate (730 rows for two years), and the dashboard’s database role gets `statement_timeout = '15s'`.",
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "-- Unbounded: cost grows with every row ever written",
+      "SELECT * FROM events WHERE device_id = 7 ORDER BY time DESC;",
+      "",
+      "-- Still unbounded: OFFSET computes and discards 100,000 rows first",
+      "SELECT * FROM events ORDER BY id LIMIT 50 OFFSET 100000;",
+      "",
+      "-- Bounded: a time range lets the planner skip old partitions",
+      "SELECT time, value FROM events",
+      "WHERE device_id = 7",
+      "  AND time >= now() - interval '24 hours'",
+      "ORDER BY time DESC",
+      "LIMIT 500;",
+      "",
+      "-- Keyset pagination: continue after the last row already seen",
+      "SELECT * FROM events",
+      "WHERE id > 100050",
+      "ORDER BY id",
+      "LIMIT 50;",
+      "",
+      "-- A guard for whatever slips through, per role",
+      "ALTER ROLE dashboards SET statement_timeout = '15s';"
+    ]
+  },
+  "related": ["tsdb","relational","wide-column","key-value"],
+  "diagram": {
+    "caption": "Two panels on one dashboard query the same events table. The live panel names a 15-minute range, so the database reads one recent partition and answers almost at once. The all-time panel names no range, so every partition is read and it answers far later, and it gets slower every day the table grows.",
+    "h": 260,
+    "nodes": [
+      { "id": "live", "x": 100, "y": 75, "label": "Live panel", "sub": "last 15 minutes", "emit": { "every": 700, "jitter": 0.3, "req": true, "color": 0, "type": "bounded" }, "out": ["db"] },
+      { "id": "all", "x": 100, "y": 190, "label": "All-time panel", "sub": "no time range", "emit": { "every": 2600, "jitter": 0.3, "req": true, "color": 2, "type": "unbounded" }, "out": ["db"] },
+      { "id": "db", "x": 360, "y": 132, "label": "Query planner", "sub": "prunes by time range", "route": "type", "rules": { "bounded": ["hot"], "unbounded": ["scan"] } },
+      { "id": "hot", "x": 620, "y": 75, "label": "Today’s partition", "sub": "1 of 730 read", "mode": "reply", "delay": 120 },
+      { "id": "scan", "x": 620, "y": 190, "label": "Every partition", "sub": "730 of 730 read", "mode": "reply", "delay": 2400 }
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Where it happens, and the guard",
+      "columns": ["Unbounded form", "Fix or guard"],
+      "rows": [
+        { "label": "PostgreSQL", "values": ["No `WHERE` on time or key; a large `OFFSET`", "Partition pruning on a time range; keyset pagination; `statement_timeout`, which is 0 (off) by default"] },
+        { "label": "ClickHouse", "values": ["A filter the primary key or date partition can’t use", "`max_rows_to_read` and `max_execution_time` (throw, or break with a partial result); `force_index_by_date` and `force_primary_key` reject queries that can’t use the index"] },
+        { "label": "Prometheus", "values": ["A range query over months of raw samples", "`--query.timeout` (2 minutes by default) and `--query.max-samples` (50 million by default)"] },
+        { "label": "Grafana and Loki", "values": ["A SQL panel without a time filter; a log query over a huge range", "The `$__timeFilter()` macro; Loki’s `max_query_length` (30 days and 1 hour by default) and `max_query_series` (500)"] },
+        { "label": "DynamoDB", "values": ["`Scan`, which reads every item; filters apply after reading", "`Query` by partition key instead; a Scan returns at most 1 MB per request, so it pages, and `Limit` caps items per page"] },
+        { "label": "Cassandra", "values": ["`ALLOW FILTERING`, which runs a full scan", "A table designed for the query, so the partition key bounds it"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In December 2007 Michael Nygard, author of Release It!, published that year, wrote about two clients with the same problem. A retailer’s checkout page took two minutes because one slot pulled thousands of matching products and turned each row into an object. At the second site, a query returned 1.2 million rows and ran for 90 seconds or more; the app server built objects until it ran out of memory, holding row locks that blocked every other server. He called it an “Unbounded Result Set” and gave the rule: “You should make your apps be paranoid about their data.” The second edition of Release It! (2018) still lists unbounded result sets among its stability antipatterns.",
+      "Pagination turned out to be the most common hiding place. Markus Winand’s 2014 post “We need tool support for keyset pagination” explained that `OFFSET` gives the database only a number of rows to throw away, so it must still fetch and sort them, and that pages shift when rows are inserted in between. His alternative, keyset pagination, continues from the last value seen.",
+      "Databases and monitoring tools then built in guardrails. Cassandra refuses queries that would scan every partition unless they say `ALLOW FILTERING`; DynamoDB returns at most 1 MB per Scan page; Prometheus aborts a query after 2 minutes or 50 million samples by default; Loki caps query length; ClickHouse has a family of complexity limits. PostgreSQL has `statement_timeout`, but it is off unless you set it."
+    ],
+    "choices": [
+      { "choice": "Make bounds part of the interface", "why": "An API that requires a time range and caps page size can’t be asked for everything by accident. A database can only see the query it is given." },
+      { "choice": "Keyset pagination instead of OFFSET", "why": "OFFSET tells the database how many rows to discard, so it must produce them all first. A keyset (`WHERE id > last_seen`) lets an index start at the next page, and pages don’t shift when rows are inserted." },
+      { "choice": "Refuse by default (Cassandra’s `ALLOW FILTERING`)", "why": "CQL rejects queries that would scan every partition unless the caller opts in, so the expensive path is visible in the code and in review." },
+      { "choice": "Timeouts as the last line", "why": "A timeout doesn’t make a query cheaper; it stops one bad query from holding connections, memory and locks for everyone, which is how Nygard’s second client lost all its app servers." }
+    ],
+    "timeline": [
+      { "year": "2007", "text": "Release It! is published; in December Nygard names the “Unbounded Result Set”" },
+      { "year": "2014", "text": "Markus Winand argues for keyset pagination instead of OFFSET" },
+      { "year": "2018", "text": "Release It! second edition keeps unbounded result sets among its antipatterns" }
+    ],
+    "sources": [
+      { "label": "Michael Nygard: Two sites, one antipattern (Dec 2007)", "url": "https://www.michaelnygard.com/blog/2007/12/two-sites-one-antipattern/" },
+      { "label": "LWN.net: Release It! New from the Pragmatic Programmers (Apr 2007)", "url": "https://lwn.net/Articles/229064/" },
+      { "label": "Pragmatic Bookshelf: Release It! Second Edition, contents (Jan 2018)", "url": "https://pragprog.com/titles/mnee2/release-it-second-edition/" },
+      { "label": "Markus Winand, Use The Index, Luke: We need tool support for keyset pagination (2014)", "url": "https://use-the-index-luke.com/no-offset" },
+      { "label": "Cassandra docs: CQL data manipulation (ALLOW FILTERING)", "url": "https://cassandra.apache.org/doc/latest/cassandra/developing/cql/dml.html" },
+      { "label": "DynamoDB Developer Guide: Scanning tables", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Scan.html" },
+      { "label": "Prometheus docs: prometheus command-line flags", "url": "https://prometheus.io/docs/prometheus/latest/command-line/prometheus/" },
+      { "label": "PostgreSQL docs: Client connection defaults (statement_timeout)", "url": "https://www.postgresql.org/docs/current/runtime-config-client.html" }
+    ]
+  },
+  "sources": [
+    { "label": "PostgreSQL docs: Client connection defaults (statement_timeout, default 0)", "url": "https://www.postgresql.org/docs/current/runtime-config-client.html" },
+    { "label": "PostgreSQL docs: LIMIT and OFFSET (skipped rows are still computed)", "url": "https://www.postgresql.org/docs/current/queries-limit.html" },
+    { "label": "PostgreSQL docs: Table partitioning (partition pruning)", "url": "https://www.postgresql.org/docs/current/ddl-partitioning.html" },
+    { "label": "Markus Winand, Use The Index, Luke: Paging through results (offset and seek methods)", "url": "https://use-the-index-luke.com/sql/partial-results/fetch-next-page" },
+    { "label": "ClickHouse docs: Restrictions on query complexity (max_rows_to_read, max_execution_time, overflow modes)", "url": "https://clickhouse.com/docs/operations/settings/query-complexity" },
+    { "label": "ClickHouse docs: Session settings (force_index_by_date, force_primary_key)", "url": "https://clickhouse.com/docs/reference/settings/session-settings/force" },
+    { "label": "Prometheus docs: prometheus command-line flags (query.timeout, query.max-samples)", "url": "https://prometheus.io/docs/prometheus/latest/command-line/prometheus/" },
+    { "label": "Grafana docs: PostgreSQL query editor ($__timeFilter macro)", "url": "https://grafana.com/docs/grafana/latest/datasources/postgres/query-editor/" },
+    { "label": "Grafana Loki docs: Configuration (max_query_length, max_query_series)", "url": "https://grafana.com/docs/loki/latest/configure/" },
+    { "label": "DynamoDB Developer Guide: Scanning tables (reads every item, 1 MB pages, filters after reading)", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Scan.html" },
+    { "label": "DynamoDB Developer Guide: Best practices for querying and scanning data", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-query-scan.html" },
+    { "label": "Cassandra docs: CQL data manipulation (ALLOW FILTERING runs a full scan)", "url": "https://cassandra.apache.org/doc/latest/cassandra/developing/cql/dml.html" },
+    { "label": "TigerData docs: add_retention_policy", "url": "https://www.tigerdata.com/docs/reference/timescaledb/data-retention/add_retention_policy" },
+    { "label": "TigerData docs: Continuous aggregates", "url": "https://www.tigerdata.com/docs/learn/continuous-aggregates" }
+  ]
+}

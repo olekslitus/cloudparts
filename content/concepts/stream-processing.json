@@ -1,0 +1,272 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Stream processing",
+  "category": "messaging",
+  "order": 60,
+  "summary": "Queries that never finish: they read events as they arrive and keep results, counts and joins up to date.",
+  "howItWorks": "A stream processor runs a query that never ends: it reads events from a stream, such as a Kafka topic, and emits results while new events keep arriving. Stateless steps, like filtering or reshaping, look at one event at a time. Stateful steps remember things between events: a join holds events until their match arrives, and an aggregation keeps a running count per key. Aggregations are cut into windows: tumbling (back-to-back minutes), hopping (overlapping, say five minutes long and starting every minute) or session (closed after a quiet gap). Windows usually follow event time, when something happened, rather than processing time, when it arrived, and a watermark says how far event time has got, so the processor knows when a window is complete. The work is split by key across parallel tasks, each keeping its state locally, in memory or in RocksDB. The processor saves that state together with its input positions (Flink in periodic checkpoints, Kafka Streams in changelog topics), so after a crash it resumes without losing or double-counting events. Exactly-once output also needs a sink that takes part, through transactions or idempotent writes.",
+  "analogy": "A tally clerk at a stadium’s gates. Instead of counting everyone from the CCTV recording the next morning, they keep a running count per gate on a clipboard, call out a total every fifteen minutes, and photocopy the clipboard now and then so a stand-in can carry on from that point if they leave.",
+  "useWhen": [
+    "Live metrics, counters and dashboards that have to be seconds old, not hours",
+    "Fraud, anomaly and alerting rules over a window of recent events per key",
+    "Joining or enriching one stream with another, or with a table kept current by change data capture",
+    "Streaming ETL: cleaning, reshaping and routing events on their way into a warehouse or lakehouse"
+  ],
+  "avoidWhen": [
+    "An answer that’s an hour old is fine; a scheduled batch query is easier to write, test and rerun",
+    "Questions you can’t plan in advance; a stream job only answers the query it was started with",
+    "Each event just triggers one action, such as sending an email; a queue and workers are simpler",
+    "Nobody can look after it: long-running stateful jobs need checkpoints, upgrades and watching for lag and growing state"
+  ],
+  "example": "Card payments arrive on a `payments` topic, keyed by card number. A Flink job counts declined payments per card in one-minute tumbling windows by event time, with a watermark ten seconds behind the newest event so stragglers still count. More than five declines in a minute sends an alert. When a worker dies, the job restarts from its last checkpoint and rereads the topic from the offsets stored in it, so no decline is lost or counted twice.",
+  "providers": {
+    "aws": "Managed Service for Apache Flink (named Kinesis Data Analytics until 2023)",
+    "gcp": "Dataflow (Apache Beam)",
+    "azure": "Stream Analytics",
+    "oss": "Apache Flink (StreamFusion, pre-1.0, runs Flink SQL natively in Rust), Kafka Streams, Spark Structured Streaming, Arroyo; streaming databases and incremental views: Feldera (MIT core, paid Enterprise features), RisingWave (Apache 2.0; premium features need a licence key) and Materialize (BSL); ksqlDB (Confluent Community License); Redpanda Connect for stateless pipelines; Python: Quix Streams, Pathway (BSL), Bytewax (now community-maintained); Rust: Timely and Differential Dataflow, Streamling (FSL)"
+  },
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "-- Flink SQL: page views per minute, by event time, waiting 5 s for stragglers",
+      "CREATE TABLE clicks (",
+      "  user_id STRING,",
+      "  page    STRING,",
+      "  ts      TIMESTAMP(3),",
+      "  WATERMARK FOR ts AS ts - INTERVAL '5' SECOND",
+      ") WITH (",
+      "  'connector' = 'kafka',",
+      "  'topic' = 'clicks',",
+      "  'properties.bootstrap.servers' = 'broker:9092',",
+      "  'properties.group.id' = 'page-views',",
+      "  'scan.startup.mode' = 'earliest-offset',",
+      "  'format' = 'json'",
+      ");",
+      "",
+      "-- one row per page per window, emitted once the watermark passes window_end",
+      "SELECT window_start, window_end, page, COUNT(*) AS views",
+      "FROM TUMBLE(TABLE clicks, DESCRIPTOR(ts), INTERVAL '1' MINUTES)",
+      "GROUP BY window_start, window_end, page;"
+    ]
+  },
+  "related": ["stream", "queue", "pubsub", "workflow", "query-engines", "etl"],
+  "diagram": {
+    "caption": "Clicks are split by user across two partitions, and each partition feeds one task of the job. Every event updates that task’s per-user state; only now and then does a window close and send a result on. All of each user’s events go to the same task, so its count lives in one place.",
+    "h": 290,
+    "zones": [
+      { "x": 388, "y": 22, "w": 170, "h": 258, "label": "Job · checkpoint every 30 s" }
+    ],
+    "nodes": [
+      {
+        "id": "src",
+        "x": 85,
+        "y": 160,
+        "label": "Click events",
+        "sub": "keyed by user",
+        "emit": { "every": 380, "jitter": 0.3, "colorByKey": 4, "route": "hash" },
+        "out": ["p0", "p1"]
+      },
+      {
+        "id": "p0",
+        "x": 268,
+        "y": 95,
+        "kind": "log",
+        "cells": 6,
+        "retain": 40,
+        "label": "Topic: clicks",
+        "sub": "partition 0",
+        "concept": "stream",
+        "readers": [
+          { "to": "t0", "every": 480, "name": "task 1" }
+        ]
+      },
+      {
+        "id": "p1",
+        "x": 268,
+        "y": 225,
+        "kind": "log",
+        "cells": 6,
+        "retain": 40,
+        "label": "Topic: clicks",
+        "sub": "partition 1",
+        "concept": "stream",
+        "readers": [
+          { "to": "t1", "every": 480, "name": "task 2" }
+        ]
+      },
+      {
+        "id": "t0",
+        "x": 473,
+        "y": 95,
+        "kind": "pool",
+        "label": "Task 1",
+        "sub": "count per user",
+        "min": 1,
+        "max": 1,
+        "work": 260,
+        "mode": "gate",
+        "p": 0.2,
+        "quiet": true,
+        "out": ["out"]
+      },
+      {
+        "id": "t1",
+        "x": 473,
+        "y": 225,
+        "kind": "pool",
+        "label": "Task 2",
+        "sub": "count per user",
+        "min": 1,
+        "max": 1,
+        "work": 260,
+        "mode": "gate",
+        "p": 0.2,
+        "quiet": true,
+        "out": ["out"]
+      },
+      { "id": "out", "x": 668, "y": 160, "label": "Results", "sub": "per-minute counts", "mode": "sink" }
+    ]
+  },
+  "history": {
+    "story": [
+      "For years, “real time” meant queues and hand-written workers. At BackType, Nathan Marz recalled, most of that code dealt with moving and serialising messages rather than the actual logic, so he built Storm to hide the plumbing and released it in September 2011, after Twitter bought BackType. Exact results still came from batch jobs, so many teams ran the same logic twice: fast in a stream job, correct in Hadoop. In 2014 Jay Kreps called maintaining code for the same result in two distributed systems “exactly as painful as it seems like it would be”, and proposed replaying a retained log through the stream job instead.",
+      "Google’s MillWheel (2013) and Dataflow Model (2015) papers showed how a stream job could be correct on its own, with exactly-once state, event time, windows and watermarks. Apache Flink, which grew out of the Stratosphere research project and became a top-level Apache project in December 2014, paired those ideas with consistent snapshots of all its state. Kafka Streams (2016) put similar machinery into a library.",
+      "Today most engines also speak SQL, and the clouds sell them as services: Google’s Dataflow runs Apache Beam pipelines, Azure has Stream Analytics, and in 2023 AWS renamed Kinesis Data Analytics to Managed Service for Apache Flink, then retired its older SQL engine."
+    ],
+    "choices": [
+      {
+        "choice": "Keep state inside the processor",
+        "why": "Looking up a database for every event is slow and hammers the database. Keeping counts, windows and join buffers in local memory or RocksDB, split by key across tasks, keeps each step fast."
+      },
+      {
+        "choice": "Event time and watermarks, not arrival time",
+        "why": "Events arrive late and out of order, and replays arrive all at once. Grouping by when things happened, and using watermarks to decide when a window is done, gives the same answer live and on replay."
+      },
+      {
+        "choice": "Snapshot state and input positions together",
+        "why": "Writing every update somewhere durable would be too slow. Saving state and offsets as one consistent checkpoint lets a job rewind to that point after a crash, so nothing is lost or counted twice."
+      },
+      {
+        "choice": "Replay instead of a second batch system",
+        "why": "If the input is kept in a log, fixing a bug means rerunning the stream job from the start, not keeping a separate batch pipeline in step with it."
+      }
+    ],
+    "timeline": [
+      { "year": "2011", "text": "Storm is open-sourced at Strange Loop, after Twitter buys BackType" },
+      { "year": "2013", "text": "Google’s MillWheel paper describes low watermarks and exactly-once processing" },
+      { "year": "2014", "text": "Flink becomes a top-level Apache project; Kreps questions the Lambda Architecture" },
+      { "year": "2015", "text": "The Dataflow Model paper sets out event time, windows and watermarks" },
+      { "year": "2016", "text": "Kafka Streams ships in Kafka 0.10; Spark 2.0 previews Structured Streaming" },
+      { "year": "2023", "text": "Kinesis Data Analytics becomes Amazon Managed Service for Apache Flink" },
+      { "year": "2026", "text": "AWS deletes the last Kinesis Data Analytics for SQL applications" }
+    ],
+    "sources": [
+      {
+        "label": "Nathan Marz: History of Apache Storm and lessons learned (2014)",
+        "url": "http://nathanmarz.com/blog/history-of-apache-storm-and-lessons-learned.html"
+      },
+      {
+        "label": "Jay Kreps (O’Reilly Radar): Questioning the Lambda Architecture (July 2014)",
+        "url": "https://www.oreilly.com/radar/questioning-the-lambda-architecture/",
+        "archive": "https://web.archive.org/web/20240102140056/https://www.oreilly.com/radar/questioning-the-lambda-architecture/"
+      },
+      {
+        "label": "Akidau et al.: MillWheel, fault-tolerant stream processing at internet scale (PVLDB 2013; low watermarks, exactly-once)",
+        "url": "https://www.vldb.org/pvldb/vol6/p1033-akidau.pdf"
+      },
+      {
+        "label": "Akidau et al.: The Dataflow Model (PVLDB 2015; event time, windowing, watermarks)",
+        "url": "https://www.vldb.org/pvldb/vol8/p1792-Akidau.pdf"
+      },
+      {
+        "label": "Apache Incubator: Flink project status (renamed from Stratosphere, graduated December 2014)",
+        "url": "https://incubator.apache.org/projects/flink.html"
+      },
+      {
+        "label": "Flink docs: Stateful stream processing (checkpoints inspired by Chandy-Lamport)",
+        "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/concepts/stateful-stream-processing/"
+      },
+      { "label": "Apache Kafka downloads: release date of 0.10.0.0 (May 2016)", "url": "https://kafka.apache.org/community/downloads/" },
+      {
+        "label": "Apache Spark 2.0.0 release notes (first experimental Structured Streaming)",
+        "url": "https://spark.apache.org/releases/spark-release-2-0-0.html"
+      },
+      {
+        "label": "AWS News Blog: Amazon Managed Service for Apache Flink, renamed from Kinesis Data Analytics (Aug 2023)",
+        "url": "https://aws.amazon.com/blogs/aws/announcing-amazon-managed-service-for-apache-flink-renamed-from-amazon-kinesis-data-analytics/"
+      },
+      {
+        "label": "AWS docs: Kinesis Data Analytics for SQL applications discontinuation",
+        "url": "https://docs.aws.amazon.com/kinesisanalytics/latest/dev/what-is.html"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "Flink docs: Timely stream processing (event time, processing time, watermarks)",
+      "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/concepts/time/"
+    },
+    {
+      "label": "Flink docs: Stateful stream processing (keyed state, checkpoints, exactly once)",
+      "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/concepts/stateful-stream-processing/"
+    },
+    {
+      "label": "Flink docs: State backends (heap, RocksDB, ForSt)",
+      "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/ops/state/state_backends/"
+    },
+    {
+      "label": "Flink docs: Windows (tumbling, sliding, session)",
+      "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/dev/datastream/operators/windows/"
+    },
+    {
+      "label": "Flink docs: Fault tolerance guarantees of data sources and sinks",
+      "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/connectors/datastream/guarantees/"
+    },
+    {
+      "label": "Flink docs: Window aggregation in SQL (TUMBLE)",
+      "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/sql/reference/queries/window-agg/"
+    },
+    {
+      "label": "Flink docs: CREATE statements (WATERMARK clause)",
+      "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/sql/reference/ddl/create/"
+    },
+    { "label": "Flink docs: Apache Kafka SQL connector", "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/connectors/table/kafka/" },
+    {
+      "label": "Kafka docs: Kafka Streams architecture (tasks, local state, changelog topics)",
+      "url": "https://kafka.apache.org/43/streams/architecture/"
+    },
+    {
+      "label": "Google Cloud docs: Streaming pipelines (tumbling, hopping and session windows, watermarks)",
+      "url": "https://docs.cloud.google.com/dataflow/docs/concepts/streaming-pipelines"
+    },
+    { "label": "Google Cloud docs: Dataflow overview (Apache Beam)", "url": "https://docs.cloud.google.com/dataflow/docs/overview" },
+    { "label": "Google Cloud docs: Exactly-once in Dataflow", "url": "https://docs.cloud.google.com/dataflow/docs/concepts/exactly-once" },
+    { "label": "AWS docs: What is Amazon Managed Service for Apache Flink?", "url": "https://docs.aws.amazon.com/managed-flink/latest/java/what-is.html" },
+    {
+      "label": "Microsoft Learn: Introduction to Azure Stream Analytics",
+      "url": "https://learn.microsoft.com/en-us/azure/stream-analytics/stream-analytics-introduction"
+    },
+    {
+      "label": "Microsoft Learn: Stream Analytics windowing functions",
+      "url": "https://learn.microsoft.com/en-us/azure/stream-analytics/stream-analytics-window-functions"
+    },
+    { "label": "Apache Spark docs: Structured Streaming programming guide", "url": "https://spark.apache.org/docs/latest/streaming/index.html" },
+    {
+      "label": "Cloudflare blog: Cloudflare acquires Arroyo (April 2025)",
+      "url": "https://blog.cloudflare.com/cloudflare-acquires-arroyo-pipelines-streaming-ingestion-beta/"
+    },
+    { "label": "Arroyo repository (Apache 2.0)", "url": "https://github.com/ArroyoSystems/arroyo" },
+    { "label": "RisingWave docs: Introduction", "url": "https://docs.risingwave.com/get-started/intro" },
+    { "label": "Materialize docs", "url": "https://materialize.com/docs/" },
+    { "label": "Materialize LICENSE (Business Source License 1.1)", "url": "https://github.com/MaterializeInc/materialize/blob/main/LICENSE" },
+    { "label": "Confluent Community License FAQ (ksqlDB is source-available)", "url": "https://www.confluent.io/confluent-community-license-faq/" },
+    { "label": "Redpanda Connect docs", "url": "https://docs.redpanda.com/redpanda-connect/home/" },
+    { "label": "Quix Streams docs: Sources", "url": "https://quix.io/docs/quix-streams/connectors/sources/index.html" },
+    { "label": "Pathway LICENSE.txt (BSL 1.1)", "url": "https://github.com/pathwaycom/pathway/blob/main/LICENSE.txt" },
+    { "label": "GitHub: bytewax/bytewax issue #560 (project status)", "url": "https://github.com/bytewax/bytewax/issues/560" },
+    { "label": "GitHub: TimelyDataflow/timely-dataflow", "url": "https://github.com/TimelyDataflow/timely-dataflow" },
+    { "label": "Goldsky blog: Open-sourcing Streamling", "url": "https://goldsky.com/blog/open-sourcing-streamling" },
+    { "label": "StreamFusion README", "url": "https://github.com/datafusion-contrib/StreamFusion" },
+    { "label": "RisingWave docs: Premium features", "url": "https://docs.risingwave.com/get-started/premium-features" }
+  ]
+}

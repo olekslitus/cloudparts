@@ -1,0 +1,88 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "gVisor",
+  "concepts": ["containers"],
+  "provider": "oss",
+  "vendor": "Google (being donated to the CNCF; accepted September 2026)",
+  "license": "Apache 2.0",
+  "website": "https://gvisor.dev/",
+  "repo": "https://github.com/google/gvisor",
+  "summary": "A Linux kernel reimplemented in Go that runs in user space, so a container’s system calls never reach the host kernel directly.",
+  "intro": [
+    "An ordinary container makes system calls straight to the host’s kernel, so one kernel bug can let it escape. gVisor puts its own kernel in between. The Sentry is an “application kernel” written in Go that runs as a normal, unprivileged process: it implements system calls, signals, memory management and threads itself, and doesn’t pass the application’s calls through to the host. It has its own network stack, netstack, too. The Sentry itself runs under a strict seccomp filter and can’t open host files; a separate Gofer process per container mediates file-system access (since 2023 a feature called directfs gives the Sentry direct access to the container’s own files, skipping that round trip). A “platform” intercepts the calls: systrap, the default since mid-2023, uses seccomp to trap them and works on any Linux machine, including VMs without nested virtualisation; the KVM platform is faster on bare metal; the older ptrace platform is no longer supported.",
+    "You use it through `runsc`, an OCI runtime: `docker run --runtime=runsc`, or a containerd shim and a Kubernetes `RuntimeClass` named `gvisor`. There is no VM to boot and memory grows and shrinks like a process’s, so GKE quotes under 200 ms to start a sandboxed pod. The price is compatibility and speed: 290 of the 352 Linux amd64 system calls are fully or partly implemented, and every call costs more than on Linux, so system-call-heavy and I/O-heavy workloads slow down. Google runs millions of gVisor sandboxes a day behind GKE Sandbox, Cloud Run’s first-generation environment and App Engine, and Ant Group, OpenAI, Anthropic, Cloudflare and Modal use it too. Google open-sourced it in May 2018, and in September 2026 the CNCF accepted it as a donation."
+  ],
+  "strengths": [
+    "No hardware virtualisation needed: it runs on any Linux host, including ordinary cloud VMs",
+    "Starts fast with a small, elastic footprint: no guest memory to reserve, under 200 ms per pod on GKE",
+    "Shrinks the host kernel’s attack surface: the sandboxed program never makes host system calls itself, and the Sentry is written in a memory-safe language",
+    "Proven at very large scale inside Google, plus GPU support through `nvproxy` and checkpoint/restore"
+  ],
+  "limits": [
+    "Not full Linux: 62 of 352 amd64 system calls are unimplemented and some `/proc` and `/sys` files are missing, so some software fails",
+    "Slower per system call, and its network stack is less CPU-efficient than Linux’s; the project says out-of-the-box I/O-heavy performance disappoints, while Google and others rely on kernel patches",
+    "No privileged containers in GKE Sandbox, and no benefit for trusted workloads such as your own database",
+    "A single kernel implementation to trust instead of a hardware boundary; governance is moving from Google to the CNCF only now"
+  ],
+  "worksWith": [
+    { "id": "kubernetes", "how": "sandboxes pods via a RuntimeClass in" },
+    { "id": "docker", "how": "plugs in as the runsc runtime for" },
+    { "id": "cloud-run", "how": "isolates first-generation instances of" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Run a container under gVisor and see its kernel",
+    "source": [
+      "# runsc registered as a Docker runtime (see the install guide)",
+      "docker run --rm --runtime=runsc ubuntu dmesg",
+      "# prints gVisor's own boot messages, not the host kernel's",
+      "",
+      "# On GKE: a node pool with gVisor enabled, then in the pod spec:",
+      "#   spec:",
+      "#     runtimeClassName: gvisor"
+    ]
+  },
+  "history": {
+    "story": [
+      "Containers share the host’s kernel, and its system-call surface is broad enough that, as Google put it in 2018, many security experts didn’t recommend containers for untrusted code. Seccomp filters help but require knowing in advance which calls an application needs, and they don’t help when the bug is in a call the application does need. Running each container in a VM, as Kata Containers did, gives a hard boundary but a fixed resource footprint.",
+      "Google used gVisor internally for a variety of its own services and workloads, and added a trusted file-system proxy, the Gofer, so a compromised sandbox could never hold the credentials for Google’s internal file systems. It open-sourced gVisor under Apache 2.0 on May 2, 2018: a kernel in Go that ran as an unprivileged process, implemented about 200 system calls, and already ran Node.js, Java 8, MySQL, Redis and MongoDB. Today it powers GKE Sandbox, Cloud Run and App Engine.",
+      "In April 2023 the project released systrap, a platform as portable as ptrace but much faster, and made it the default that year. In September 2026 the CNCF accepted Google’s donation of the project, name and trademarks included. The maintainers said corporate ownership had held it back: Linux kernel maintainers had turned down performance patches because gVisor was a wholly Google-owned project."
+    ],
+    "choices": [
+      { "choice": "Reimplement Linux instead of filtering it", "why": "A syscall filter still lets allowed calls reach the host kernel, and writing a filter for an unknown application is hard. Serving the calls in a separate kernel means the application never talks to the host kernel at all." },
+      { "choice": "Written in Go", "why": "Memory-safety bugs plague kernels. Go gives bounds checks, no use-after-free and a race detector, at the cost of some runtime overhead the project accepts." },
+      { "choice": "A process, not a VM", "why": "Without virtual hardware there are no fixed guest resources: memory and threads grow and shrink like a process’s, which keeps start-up fast and density high." },
+      { "choice": "Split the kernel from file access", "why": "The Sentry might be compromised by the code it runs, so it gets no host file access. The Gofer, a separate trusted process, hands it files, keeping credentials and the host file system out of reach." }
+    ],
+    "timeline": [
+      { "year": "2018", "text": "Open-sourced by Google on May 2 with about 200 system calls" },
+      { "year": "2023", "text": "Systrap platform released and made the default; directfs speeds up file access" },
+      { "year": "2026", "text": "CNCF accepts Google’s donation of gVisor (September 28)" }
+    ],
+    "sources": [
+      { "label": "Google Cloud Blog: Open-sourcing gVisor, a sandboxed container runtime (May 2018)", "url": "https://cloud.google.com/blog/products/identity-security/open-sourcing-gvisor-a-sandboxed-container-runtime" },
+      { "label": "gVisor blog: Faster filesystem access with Directfs (Jun 2023, origins of the Gofer)", "url": "https://gvisor.dev/blog/2023/06/27/directfs/" },
+      { "label": "gVisor blog: Releasing Systrap (Apr 2023)", "url": "https://gvisor.dev/blog/2023/04/28/systrap-release/" },
+      { "label": "gVisor docs: Platform guide (systrap default since mid-2023)", "url": "https://gvisor.dev/docs/architecture_guide/platforms/" },
+      { "label": "gVisor blog: gVisor is being donated to the CNCF (Oct 2026)", "url": "https://gvisor.dev/blog/2026/10/02/gvisor-cncf/" },
+      { "label": "gVisor: Who’s using gVisor (Google: GKE Sandbox, Cloud Run, App Engine)", "url": "https://gvisor.dev/users/" }
+    ]
+  },
+  "sources": [
+    { "label": "gVisor docs: What is gVisor? (Sentry, Gofer, runsc, Go)", "url": "https://gvisor.dev/docs/" },
+    { "label": "gVisor docs: Platform guide (systrap, KVM, ptrace)", "url": "https://gvisor.dev/docs/architecture_guide/platforms/" },
+    { "label": "gVisor docs: Networking guide (netstack)", "url": "https://gvisor.dev/docs/architecture_guide/networking/" },
+    { "label": "gVisor docs: Performance guide (structural and implementation costs)", "url": "https://gvisor.dev/docs/architecture_guide/performance/" },
+    { "label": "gVisor docs: Linux/amd64 syscall compatibility (290 of 352 implemented)", "url": "https://gvisor.dev/docs/user_guide/compatibility/linux/amd64/" },
+    { "label": "gVisor docs: GPU support (nvproxy)", "url": "https://gvisor.dev/docs/user_guide/gpu/" },
+    { "label": "gVisor docs: Containerd quick start (containerd-shim-runsc-v1)", "url": "https://gvisor.dev/docs/user_guide/containerd/quick_start/" },
+    { "label": "gVisor docs: Docker quick start (verify with dmesg)", "url": "https://gvisor.dev/docs/user_guide/quick_start/docker/" },
+    { "label": "gVisor docs: Kubernetes quick start (runtimeClassName: gvisor)", "url": "https://gvisor.dev/docs/user_guide/quick_start/kubernetes/" },
+    { "label": "gVisor blog: Faster filesystem access with Directfs (Jun 2023)", "url": "https://gvisor.dev/blog/2023/06/27/directfs/" },
+    { "label": "gVisor: Who’s using gVisor", "url": "https://gvisor.dev/users/" },
+    { "label": "gVisor blog: gVisor is being donated to the CNCF (Oct 2026, kernel patches, I/O performance)", "url": "https://gvisor.dev/blog/2026/10/02/gvisor-cncf/" },
+    { "label": "GKE docs: About GKE Sandbox (start time, overhead, privileged containers, GPUs)", "url": "https://docs.cloud.google.com/kubernetes-engine/docs/concepts/sandbox-pods" },
+    { "label": "Cloud Run docs: Execution environments (first generation is based on gVisor)", "url": "https://docs.cloud.google.com/run/docs/about-execution-environments" }
+  ],
+  "checked": "2026-10-06"
+}

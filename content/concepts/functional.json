@@ -1,0 +1,258 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Functional programming",
+  "category": "code",
+  "order": 20,
+  "summary": "Build programs from functions that take values and return new values, without changing anything else along the way.",
+  "howItWorks": "A pure function’s result depends only on its arguments, and calling it changes nothing outside it: no global variable, no field, no file. Data is immutable: to “change” an order you build a new order with one field different, and the old one stays valid for anyone still holding it. Functions are values too, so you pass them to other functions. `map`, `filter` and `reduce` take a function and replace most hand-written loops. A program becomes expressions that compute values rather than statements that update variables in order. Real programs still have to write to databases and send HTTP requests, so the usual design keeps those effects at the edges: a pure core makes the decisions, and a thin shell does the input and output. The pay-off is in testing and concurrency. A pure function is tested by passing inputs and checking the output, with no setup and no mocks. And because it touches nothing shared, calls can run in any order or on many cores at once. The costs are copying (new values instead of updates, which purpose-built persistent data structures make cheaper) and a style that takes getting used to.",
+  "analogy": "A spreadsheet formula. `=B2*1.2` gives the same answer every time B2 holds the same number, it never edits another cell, and the sheet can recalculate cells in whatever order it likes.",
+  "useWhen": [
+    "Transformations and rules: parsing, validation, pricing, reports, steps in a data pipeline",
+    "Logic you want to unit test without mocks or a database",
+    "Work you want to spread over many cores, or replay and get the same result",
+    "Rendering a UI from state, as React components and reducers do"
+  ],
+  "avoidWhen": [
+    "Hot loops over big mutable buffers (image processing, physics, numerics) where copying costs too much; mutate locally and keep the interface pure",
+    "Code that is almost all input and output, such as a script that moves files; plain steps read better",
+    "Chains of clever one-liners the rest of the team can’t read; name the intermediate steps"
+  ],
+  "example": "An online shop prices a cart with `total(cart)`, a pure function: the same cart always gives the same number, so its tests are a table of carts and expected totals, with no database in sight. The request handler is the only impure part: it loads the cart, calls `total`, and saves the result. Because `total` touches nothing shared, a nightly job can reprice 2 million carts by splitting them across 16 cores with no locks.",
+  "snippet": {
+    "lang": "ts",
+    "source": [
+      "type Line = { readonly sku: string; readonly cents: number; readonly qty: number };",
+      "type Cart = { readonly lines: readonly Line[]; readonly coupon?: string };",
+      "",
+      "// pure: the same cart in gives the same number out, and nothing else changes",
+      "const subtotal = (cart: Cart) =>",
+      "  cart.lines.map(l => l.cents * l.qty).reduce((a, b) => a + b, 0);",
+      "",
+      "const discount = (cart: Cart, cents: number) =>",
+      "  cart.coupon === \"TENOFF\" ? Math.round(cents * 0.1) : 0;",
+      "",
+      "const total = (cart: Cart) => {",
+      "  const s = subtotal(cart);",
+      "  return s - discount(cart, s);",
+      "};",
+      "",
+      "// \"changing\" data means building a new value; the old cart stays as it was",
+      "const addLine = (cart: Cart, line: Line): Cart => ({ ...cart, lines: [...cart.lines, line] });",
+      "",
+      "// higher-order: behaviour is passed in as a function",
+      "const linesWhere = (cart: Cart, keep: (l: Line) => boolean) => cart.lines.filter(keep);",
+      "",
+      "const empty: Cart = { lines: [], coupon: \"TENOFF\" };",
+      "const cart = addLine(addLine(empty, { sku: \"mug\", cents: 1200, qty: 2 }), { sku: \"lamp\", cents: 15000, qty: 1 });",
+      "console.log(total(cart), total(empty));                 // 15660 0",
+      "console.log(linesWhere(cart, l => l.cents > 10_000));   // [ { sku: \"lamp\", ... } ]"
+    ]
+  },
+  "related": [
+    "oop",
+    "monads",
+    "service-layer",
+    "serverless",
+    "multithreading"
+  ],
+  "sections": [
+    {
+      "type": "table",
+      "title": "Functional style in mainstream languages",
+      "intro": "You don’t need Haskell to write this way. Most popular languages now ship the same building blocks.",
+      "corner": "Language",
+      "columns": [
+        "Looks like",
+        "Worth knowing"
+      ],
+      "rows": [
+        {
+          "label": "JavaScript, TypeScript",
+          "values": [
+            "`items.filter(i => i.qty > 0).map(i => i.cents * i.qty).reduce((a, b) => a + b, 0)`",
+            "`map` and `filter` return new arrays and leave the original alone. Each step is eager and builds a full intermediate array."
+          ]
+        },
+        {
+          "label": "Java",
+          "values": [
+            "`widgets.stream().filter(w -> w.getColor() == RED).mapToInt(w -> w.getWeight()).sum()`",
+            "Lambdas and streams arrived in Java 8 (2014). `parallelStream()` runs the same pipeline on many cores, and the docs warn that side effects in the lambdas break that."
+          ]
+        },
+        {
+          "label": "Rust",
+          "values": [
+            "`v.iter().map(|x| x * 2).filter(|x| *x > 10).sum::<i32>()`",
+            "Iterators are lazy: nothing runs until something consumes them. They compile to roughly the same code as a hand-written loop."
+          ]
+        },
+        {
+          "label": "Python",
+          "values": [
+            "`sum(l.cents * l.qty for l in cart if l.qty > 0)`",
+            "Comprehensions and generator expressions were borrowed from Haskell. Python code usually offers a pure interface but uses assignments inside."
+          ]
+        },
+        {
+          "label": "React",
+          "values": [
+            "`function Price({ cents }) { return <b>{(cents / 100).toFixed(2)}</b>; }`",
+            "Components must be pure functions of props, state and context. Strict Mode calls each one twice in development to catch the ones that aren’t."
+          ]
+        }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "The idea is older than computers. In the early 1930s Alonzo Church developed the lambda calculus, a notation in which everything is a function applied to arguments; it later produced the first problem proved undecidable. In 1958 John McCarthy, building a language for artificial-intelligence work at MIT, wanted to pass functions as arguments (to apply one to every element of a list, the ancestor of `map`) and borrowed Church’s λ-notation to do it. The result was Lisp, implemented from the autumn of 1958 and described in his 1960 paper “Recursive Functions of Symbolic Expressions and Their Computation by Machine”. Lisp also introduced garbage collection, which frees programmers from tracking who still uses a value.",
+      "In his 1977 Turing Award lecture, John Backus, who had led the team that created Fortran, attacked the languages he had helped start. Programs written as assignment after assignment were, he said, “fat and weak”, tied to the “word-at-a-time” style of the von Neumann computer, with programming split into “a world of expressions and a world of statements”. He proposed a functional style built from combining forms, with an algebra for transforming programs. Meanwhile at Edinburgh, from 1973, Robin Milner’s group built ML as the scripting language of the LCF theorem prover, adding static types that the compiler inferred; it is the ancestor of Standard ML, OCaml and F#.",
+      "By the late 1980s there were many similar lazy, pure languages, and in 1987 researchers formed a committee to design a common one. The Haskell 1.0 report appeared on 1 April 1990. John Hughes’s “Why Functional Programming Matters” (1989) made the practical case: higher-order functions and lazy evaluation are new kinds of glue for building programs from small, reusable parts. Chris Okasaki’s 1996 thesis tackled a real cost, that most textbook data structures depend on assignment, with efficient purely functional ones. The ideas then went mainstream inside other languages: Java 8 added lambdas and streams in 2014, Rust made lazy iterators a core part of its standard library, and React made pure components its central rule."
+    ],
+    "choices": [
+      {
+        "choice": "No assignment, no side effects",
+        "why": "If a call can do nothing but compute its result, the order of evaluation stops mattering and a whole class of bugs disappears, as Hughes put it. Assignments are also what make programs hard to prove correct."
+      },
+      {
+        "choice": "Functions as values",
+        "why": "McCarthy needed to apply a function to every element of a list, so functions had to be arguments. That needed a notation for anonymous functions, and Church’s λ was the one to hand."
+      },
+      {
+        "choice": "Types inferred by the compiler",
+        "why": "ML was the metalanguage of a theorem prover, so a well-typed program must not be able to produce a faulty proof. Milner’s inference gave that safety without making programmers write the types."
+      },
+      {
+        "choice": "Lazy evaluation (Haskell)",
+        "why": "Delaying work until a result is needed lets programs be glued together from generators and consumers, even infinite ones. Hughes argued this is a key reason functional programs are modular."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "1932",
+        "text": "Alonzo Church introduces the λ-notation for functions"
+      },
+      {
+        "year": "1958",
+        "text": "McCarthy starts implementing Lisp at MIT"
+      },
+      {
+        "year": "1973",
+        "text": "Milner’s group at Edinburgh begins LCF, whose metalanguage becomes ML"
+      },
+      {
+        "year": "1977",
+        "text": "Backus’s Turing lecture: “Can Programming Be Liberated from the von Neumann Style?”"
+      },
+      {
+        "year": "1990",
+        "text": "Haskell 1.0 report published"
+      },
+      {
+        "year": "1996",
+        "text": "Okasaki’s thesis on purely functional data structures"
+      },
+      {
+        "year": "2014",
+        "text": "Java 8 ships lambdas and streams"
+      }
+    ],
+    "sources": [
+      {
+        "label": "Stanford Encyclopedia of Philosophy: The Lambda Calculus (brief history)",
+        "url": "https://plato.stanford.edu/entries/lambda-calculus/"
+      },
+      {
+        "label": "John McCarthy: History of Lisp (1979)",
+        "url": "http://jmc.stanford.edu/articles/lisp/lisp.pdf"
+      },
+      {
+        "label": "John McCarthy: Recursive Functions of Symbolic Expressions and Their Computation by Machine, Part I (CACM, Apr 1960)",
+        "url": "http://www-formal.stanford.edu/jmc/recursive.html"
+      },
+      {
+        "label": "John Backus: Can Programming Be Liberated from the von Neumann Style? (1977 Turing Award lecture, CACM Aug 1978)",
+        "url": "https://worrydream.com/refs/Backus_1978_-_Can_Programming_Be_Liberated_from_the_von_Neumann_Style.pdf"
+      },
+      {
+        "label": "MacQueen, Harper and Reppy: The History of Standard ML (HOPL IV, 2020)",
+        "url": "https://smlfamily.github.io/history/SML-history.pdf"
+      },
+      {
+        "label": "Hudak, Hughes, Peyton Jones and Wadler: A History of Haskell: Being Lazy With Class (HOPL III, 2007)",
+        "url": "https://www.research.ed.ac.uk/en/publications/a-history-of-haskell-being-lazy-with-class/"
+      },
+      {
+        "label": "John Hughes: Why Functional Programming Matters (1990 version of the 1989 paper)",
+        "url": "https://www.cs.kent.ac.uk/people/staff/dat/miranda/whyfp90.pdf"
+      },
+      {
+        "label": "Chris Okasaki: Purely Functional Data Structures (PhD thesis, CMU, 1996)",
+        "url": "https://www.cs.cmu.edu/~rwh/students/okasaki.pdf"
+      },
+      {
+        "label": "OpenJDK JEP 126: Lambda Expressions & Virtual Extension Methods (delivered in Java 8)",
+        "url": "https://openjdk.org/jeps/126"
+      },
+      {
+        "label": "OpenJDK: JDK 8 (General Availability on 18 March 2014)",
+        "url": "https://openjdk.org/projects/jdk8/"
+      },
+      {
+        "label": "The Rust Programming Language: Processing a Series of Items with Iterators (iterators are lazy)",
+        "url": "https://doc.rust-lang.org/book/ch13-02-iterators.html"
+      },
+      {
+        "label": "React docs: Keeping Components Pure (pure functions, Strict Mode renders twice)",
+        "url": "https://react.dev/learn/keeping-components-pure"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "React docs: Keeping Components Pure (pure functions, Strict Mode renders twice)",
+      "url": "https://react.dev/learn/keeping-components-pure"
+    },
+    {
+      "label": "Python docs: Functional Programming HOWTO (purity, testing, comprehensions borrowed from Haskell)",
+      "url": "https://docs.python.org/3/howto/functional.html"
+    },
+    {
+      "label": "John Hughes: Why Functional Programming Matters (1990 version of the 1989 paper)",
+      "url": "https://www.cs.kent.ac.uk/people/staff/dat/miranda/whyfp90.pdf"
+    },
+    {
+      "label": "Gary Bernhardt, Destroy All Software: Functional Core, Imperative Shell (Jul 2012)",
+      "url": "https://www.destroyallsoftware.com/screencasts/catalog/functional-core-imperative-shell"
+    },
+    {
+      "label": "Java SE 21 API: package java.util.stream (stateless operations, parallelism, side-effects)",
+      "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/stream/package-summary.html"
+    },
+    {
+      "label": "MDN: Array.prototype.map() (returns a new array)",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/map"
+    },
+    {
+      "label": "MDN: Array.prototype.reduce()",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/reduce"
+    },
+    {
+      "label": "The Rust Programming Language: Processing a Series of Items with Iterators (iterators are lazy)",
+      "url": "https://doc.rust-lang.org/book/ch13-02-iterators.html"
+    },
+    {
+      "label": "The Rust Programming Language: Comparing Performance: Loops vs. Iterators (zero-cost abstractions)",
+      "url": "https://doc.rust-lang.org/book/ch13-04-performance.html"
+    },
+    {
+      "label": "Chris Okasaki: Purely Functional Data Structures (PhD thesis, CMU, 1996)",
+      "url": "https://www.cs.cmu.edu/~rwh/students/okasaki.pdf"
+    },
+    {
+      "label": "OpenJDK: JDK 8 (General Availability on 18 March 2014)",
+      "url": "https://openjdk.org/projects/jdk8/"
+    }
+  ]
+}

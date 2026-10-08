@@ -1,0 +1,169 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Dagster",
+  "concepts": ["etl", "workflow"],
+  "provider": "oss",
+  "vendor": "Prefect Technologies (acquired Dagster Labs, formerly Elementl, in 2026)",
+  "license": "Apache 2.0; Dagster+ (the hosted service) is proprietary",
+  "website": "https://dagster.io/",
+  "repo": "https://github.com/dagster-io/dagster",
+  "summary": "A Python data orchestrator built around assets: you declare the tables, files and models that should exist, and Dagster works out what to run.",
+  "intro": [
+    "In Dagster you write Python functions decorated with `@asset`. Each one produces a table, file or model, and its parameters name the assets it reads, so Dagster builds an asset graph of what depends on what. Running a function and storing its result is a materialization. Assets can be split into partitions, such as one per day or per region, so a backfill only reruns the slices you pick. Schedules, sensors (functions that check for new files or events and request runs) and declarative automation conditions such as “update whenever an upstream asset changes” decide when things run. Integrations load whole tools into the graph: each dbt model, Fivetran or Airbyte table and Sling replication becomes an asset with its own history.",
+    "A self-hosted deployment has three long-running services. The webserver serves the UI and a GraphQL API, the daemon evaluates schedules and sensors and takes runs off the queue, and code location servers load your definitions in their own processes. The run launcher starts each run as a subprocess, a Docker container, a Kubernetes Job or an ECS task, and runs, event logs and schedule state go to SQLite by default or PostgreSQL or MySQL in production. Dagster+ hosts the control plane for you: with Hybrid your code runs on an agent in your own cloud with no compute charge; with Serverless it runs on Dagster’s machines at $0.01 a minute. Plans start at $10 a month (Solo, one user) or $100 a month (Starter, up to three users), plus $0.040 or $0.035 per credit, where every asset materialization and every op run is one credit (prices checked October 6, 2026)."
+  ],
+  "strengths": [
+    "The asset graph shows lineage, freshness and the last run of every table, which a list of task runs doesn’t",
+    "Partitions and backfills are built in: rerun one day, one region or a whole range, as one run per partition or one run for the range",
+    "Model-level dbt integration: each dbt model is its own asset and dbt tests become asset checks",
+    "Assets are plain Python functions, so you can run and unit-test them locally before deploying",
+    "The open-source core is Apache 2.0, and run launchers and storage are swappable, from a laptop with SQLite to Kubernetes with PostgreSQL"
+  ],
+  "limits": [
+    "Dagster+ bills per materialization: 100 hourly-partitioned assets make 72,000 credits a month, about $2,520 on Starter before any compute",
+    "Prefect announced it was buying Dagster Labs in July 2026 and the founder left; Prefect says Dagster keeps its name and licence, but the long-term roadmap is now Prefect’s",
+    "Self-hosting means running the webserver, a single daemon (it can’t be replicated) and a PostgreSQL or MySQL database",
+    "Built for batch data pipelines in Python, not for one run that waits days on a person; that needs durable timers and signals like Temporal’s",
+    "Large partition sets slow the UI; Dagster recommends at most 100,000 partitions per asset"
+  ],
+  "worksWith": [
+    { "id": "dbt", "how": "runs each model as its own asset from" },
+    { "id": "fivetran", "how": "triggers syncs and tracks tables from" },
+    { "id": "snowflake", "how": "stores asset outputs as tables in" },
+    { "id": "postgresql", "how": "keeps runs and event logs in" },
+    { "id": "kubernetes", "how": "launches each run as a Job on" },
+    { "id": "docker", "how": "can launch each run in a container with" },
+    { "id": "s3", "how": "can store compute logs in" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Two daily-partitioned assets: one on a schedule, one that follows it",
+    "source": [
+      "import dagster as dg",
+      "import pandas as pd",
+      "",
+      "daily = dg.DailyPartitionsDefinition(start_date=\"2026-01-01\")",
+      "",
+      "@dg.asset(partitions_def=daily)",
+      "def raw_orders(context: dg.AssetExecutionContext) -> pd.DataFrame:",
+      "    day = context.partition_key  # e.g. \"2026-10-05\"",
+      "    return pd.read_parquet(f\"s3://acme-raw/orders/{day}.parquet\")",
+      "",
+      "# the parameter name makes raw_orders an upstream dependency",
+      "@dg.asset(partitions_def=daily, automation_condition=dg.AutomationCondition.eager())",
+      "def daily_revenue(raw_orders: pd.DataFrame) -> pd.DataFrame:",
+      "    return raw_orders.groupby(\"country\", as_index=False)[\"amount\"].sum()",
+      "",
+      "orders_job = dg.define_asset_job(\"orders_job\", selection=[raw_orders], partitions_def=daily)",
+      "",
+      "defs = dg.Definitions(",
+      "    assets=[raw_orders, daily_revenue],",
+      "    schedules=[dg.build_schedule_from_partitioned_job(orders_job, hour_of_day=2)],",
+      ")",
+      "",
+      "# dagster dev -f pipeline.py  (UI and daemon on http://localhost:3000)"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Dagster, Apache Airflow and Temporal",
+      "intro": "All three run steps in order and retry failures, but they track different things. Dagster tracks data assets, Airflow tracks task runs in DAGs, and Temporal records every step of long-running application code.",
+      "columns": ["Dagster", "Apache Airflow", "Temporal"],
+      "rows": [
+        { "label": "Unit you define", "values": ["Assets: functions that produce a table, file or model", "Tasks grouped into DAGs; since 3.0, assets as scheduling triggers", "Workflows written as code, with side effects in activities"] },
+        { "label": "What it knows about data", "values": ["Lineage, partitions and the last materialization of each asset", "Asset URIs as strings: “makes no assumptions about the content or location of the data”", "Nothing: it stores the workflow’s event history"] },
+        { "label": "Failure handling", "values": ["Op retries; run retries re-execute from the failed step", "Task retries; backfills run inside the scheduler since 3.0", "Replays the event history on another worker and continues from the same line"] },
+        { "label": "Long waits on people or events", "values": ["Sensors poll and start new runs", "Sensors and event-driven scheduling start new runs", "Durable timers and signals inside one running workflow"] },
+        { "label": "Typical job", "values": ["Batch and ELT pipelines, dbt projects, ML pipelines", "Batch pipelines and scheduled jobs", "Order flows, payments, AI agents"] },
+        { "label": "Licence and steward", "values": ["Apache 2.0; Prefect (Dagster Labs)", "Apache 2.0; Apache Software Foundation", "MIT; Temporal Technologies"] },
+        { "label": "Managed options", "values": ["Dagster+ (Serverless or Hybrid)", "Amazon MWAA, Google Cloud Composer and others", "Temporal Cloud"] }
+      ],
+      "notes": [
+        "Dagster publishes an Airflow comparison and Airlift, a tool to observe Airflow DAGs from Dagster and move them over gradually; that page is the vendor’s own view."
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Dagster+ plans",
+      "intro": "List prices checked October 6, 2026. Every asset materialization and every op that runs counts as one credit. Hybrid is on every plan; SSO, SAML and audit logs are Pro only.",
+      "columns": ["Solo", "Starter", "Pro"],
+      "rows": [
+        { "label": "Base price", "values": ["$10 a month", "$100 a month", "Contact sales"] },
+        { "label": "Per credit", "values": ["$0.040", "$0.035", "Custom"] },
+        { "label": "Serverless compute", "values": ["$0.010 a minute", "$0.010 a minute", "Custom"] },
+        { "label": "Users, code locations, deployments", "values": ["1, 1, 1", "Up to 3, 5, 1", "Unlimited"] },
+        { "label": "Hybrid (your own compute)", "values": ["No compute charge", "No compute charge", "Custom"] }
+      ],
+      "notes": [
+        "Serverless runs get 4 vCPUs, 16 GB of RAM and 128 GB of disk on a single node, with daily caps of 100 GB of bandwidth and 4,500 step-minutes. Heavy or multi-node work belongs on Hybrid."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Through the 2010s, many data teams ran their pipelines as what Pete Hunt, a Facebook colleague of Dagster’s founder, called “a rat’s nest of cron jobs and Python scripts”, often put into production with minimal or no tests and monitoring. Nick Schrock, a former Facebook engineer listed among the original contributors to the GraphQL specification, wrote Dagster’s first line of code in 2018 and founded a company, Elementl, to build it. The first release went to PyPI that June under the Apache 2.0 licence.",
+      "Dagster Cloud, a hosted control plane, was announced in December 2021. Dagster 1.0 followed on August 5, 2022, with stable APIs and software-defined assets: instead of describing tasks, you describe the tables and files that should exist. Elementl raised a $33 million Series B in May 2023 and renamed itself Dagster Labs that August, because Dagster was its only product.",
+      "On July 13, 2026, Schrock announced that Prefect, maker of another Python workflow orchestrator, was acquiring Dagster Labs. About 40 staff joined Prefect and Schrock moved on. Prefect says Dagster keeps its name, its open-source licence and Dagster+."
+    ],
+    "choices": [
+      { "choice": "Assets, not tasks, as the unit of work", "why": "Task-based orchestrators show whether pipelines ran, not the state of the tables they produce. Declaring assets in code gives lineage and lets Dagster materialize only what is missing or out of date." },
+      { "choice": "Pipelines as ordinary, testable Python", "why": "Data code often went to production untested. Plain functions with typed inputs can be run and unit-tested on a laptop, without a scheduler and workers." },
+      { "choice": "Swappable storage, run launchers and executors", "why": "The same definitions run as subprocesses with SQLite on a laptop and as Kubernetes Jobs with PostgreSQL in production; only `dagster.yaml` changes." },
+      { "choice": "Open core with a hosted control plane", "why": "The orchestrator stayed Apache 2.0, and the company sells Dagster Cloud (now Dagster+), whose Hybrid mode keeps customers’ code and data in their own cloud." }
+    ],
+    "timeline": [
+      { "year": "2018", "text": "Schrock starts Dagster and Elementl; first PyPI release in June" },
+      { "year": "2021", "text": "Dagster Cloud announced in December" },
+      { "year": "2022", "text": "Dagster 1.0 in August, with software-defined assets" },
+      { "year": "2023", "text": "$33M Series B in May; Elementl becomes Dagster Labs in August" },
+      { "year": "2026", "text": "Prefect announces it is acquiring Dagster Labs in July; Schrock moves on" }
+    ],
+    "sources": [
+      { "label": "Dagster blog: Pete Hunt, my path to Elementl (Jun 2022)", "url": "https://dagster.io/blog/pete-hunt-path-to-elementl" },
+      { "label": "graphql-spec package.json: contributors (Lee Byron, Nicholas Schrock, Daniel Schafer)", "url": "https://github.com/graphql/graphql-spec/blob/main/package.json" },
+      { "label": "Dagster blog: Dagster 1.0 (Aug 2022; first line of code four years earlier)", "url": "https://dagster.io/blog/dagster-1-0-hello" },
+      { "label": "PyPI: dagster release history (0.1.0rc1, June 2018)", "url": "https://pypi.org/project/dagster/#history" },
+      { "label": "Dagster blog: Introducing Dagster Cloud (Dec 2021)", "url": "https://dagster.io/blog/introducing-dagster-cloud" },
+      { "label": "Dagster blog: Elementl raises $33M Series B (May 2023; founded 2018 by Nick Schrock)", "url": "https://dagster.io/blog/elementl-series-b" },
+      { "label": "Dagster blog: Introducing Dagster Labs (Aug 2023)", "url": "https://dagster.io/blog/introducing-dagster-labs" },
+      { "label": "Dagster blog: Nick Schrock, Prefect is acquiring Dagster (Jul 2026)", "url": "https://dagster.io/blog/prefect-is-acquiring-dagster" },
+      { "label": "PrefectHQ/prefect on GitHub (a Python workflow orchestration framework)", "url": "https://github.com/PrefectHQ/prefect" }
+    ]
+  },
+  "sources": [
+    { "label": "Dagster docs: Assets (definitions, materialization, dependencies)", "url": "https://dagster.io/docs/guides/build/assets" },
+    { "label": "Dagster blog: Software-defined assets", "url": "https://dagster.io/blog/software-defined-assets" },
+    { "label": "Dagster docs: Partitioning assets (types, 100,000 partition recommendation)", "url": "https://dagster.io/docs/guides/build/partitions-and-backfills/partitioning-assets" },
+    { "label": "Dagster docs: Backfilling data (per-partition and single-run backfills)", "url": "https://dagster.io/docs/guides/build/partitions-and-backfills/backfilling-data" },
+    { "label": "Dagster docs: Sensors", "url": "https://dagster.io/docs/guides/automate/sensors" },
+    { "label": "Dagster docs: Schedules", "url": "https://dagster.io/docs/guides/automate/schedules" },
+    { "label": "Dagster docs: Declarative Automation", "url": "https://dagster.io/docs/guides/automate/declarative-automation" },
+    { "label": "Dagster docs: OSS deployment architecture (webserver, daemon, code locations)", "url": "https://dagster.io/docs/deployment/oss/oss-deployment-architecture" },
+    { "label": "Dagster docs: Run launchers", "url": "https://dagster.io/docs/deployment/execution/run-launchers" },
+    { "label": "Dagster docs: Run retries (re-execute from failure)", "url": "https://dagster.io/docs/deployment/execution/run-retries" },
+    { "label": "Dagster docs: dagster.yaml reference (SQLite, PostgreSQL, MySQL storage; S3 compute logs)", "url": "https://dagster.io/docs/deployment/oss/dagster-yaml" },
+    { "label": "Dagster docs: dbt integration (models as assets, tests as asset checks)", "url": "https://dagster.io/docs/integrations/libraries/dbt" },
+    { "label": "Dagster docs: Fivetran integration", "url": "https://dagster.io/docs/integrations/libraries/fivetran" },
+    { "label": "Dagster docs: Airbyte component", "url": "https://dagster.io/docs/integrations/libraries/airbyte/airbyte-component" },
+    { "label": "Dagster docs: Sling component", "url": "https://dagster.io/docs/integrations/libraries/sling" },
+    { "label": "Dagster docs: Snowflake integration", "url": "https://dagster.io/docs/integrations/libraries/snowflake" },
+    { "label": "Dagster docs: Dagster+ Hybrid deployment", "url": "https://dagster.io/docs/deployment/dagster-plus/hybrid" },
+    { "label": "Dagster docs: Dagster+ Serverless (resources and limits)", "url": "https://dagster.io/docs/deployment/dagster-plus/serverless" },
+    { "label": "Dagster+ pricing (plans, credits, Serverless compute)", "url": "https://dagster.io/pricing" },
+    { "label": "Dagster: Dagster vs Airflow (vendor comparison, Airlift)", "url": "https://dagster.io/vs/dagster-vs-airflow" },
+    { "label": "Dagster: Prefect and Dagster (name, licence and Dagster+ continue)", "url": "https://dagster.io/prefect" },
+    { "label": "dagster-io/dagster on GitHub (Apache 2.0)", "url": "https://github.com/dagster-io/dagster" },
+    { "label": "Apache Airflow: Project history", "url": "https://airflow.apache.org/docs/apache-airflow/stable/project.html" },
+    { "label": "Apache Airflow docs: Tasks (retries)", "url": "https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/tasks.html" },
+    { "label": "Apache Airflow docs: Sensors", "url": "https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/sensors.html" },
+    { "label": "Apache Airflow docs: Assets", "url": "https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/assets.html" },
+    { "label": "Apache Airflow blog: Airflow 3.0 is here (Apr 2025)", "url": "https://airflow.apache.org/blog/airflow-three-point-oh-is-here/" },
+    { "label": "apache/airflow on GitHub (Apache 2.0)", "url": "https://github.com/apache/airflow" },
+    { "label": "AWS: Amazon Managed Workflows for Apache Airflow", "url": "https://aws.amazon.com/managed-workflows-for-apache-airflow/" },
+    { "label": "Google Cloud docs: Cloud Composer overview", "url": "https://cloud.google.com/composer/docs/composer-3/composer-overview" },
+    { "label": "Temporal docs: Python durable timers", "url": "https://docs.temporal.io/develop/python/workflows/timers" },
+    { "label": "Temporal docs: Signals, Queries and Updates", "url": "https://docs.temporal.io/encyclopedia/workflow-message-passing" }
+  ],
+  "checked": "2026-10-06"
+}

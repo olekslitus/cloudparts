@@ -1,0 +1,118 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Apache Impala",
+  "concepts": ["query-engines"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://impala.apache.org/",
+  "repo": "https://github.com/apache/impala",
+  "summary": "An MPP SQL engine in C++ for interactive queries over Hive tables on HDFS, Kudu, Iceberg and object storage; built and mainly sold by Cloudera.",
+  "intro": [
+    "Impala runs long-lived daemons instead of launching jobs. An `impalad` process runs on every worker host, often next to an HDFS DataNode so it can read blocks locally; any of them can accept a query from `impala-shell`, JDBC or ODBC, plan it, and act as coordinator while the others execute fragments and stream results back. Since Impala 2.9 you can dedicate some hosts to coordinating and others to executing. Table definitions come from the Hive Metastore, which Impala shares with Hive. A `catalogd` daemon caches that metadata and file locations, and a single `statestored` daemon tracks which impalads are alive and broadcasts catalog changes. The planner is Java; the executor is C++ and uses LLVM to generate machine code for each query’s inner loops, and operators spill to disk under memory pressure.",
+    "Impala reads Parquet, ORC, Avro and text files on HDFS, S3, ADLS and Ozone, queries Apache Kudu tables (which allow in-place UPDATE, DELETE and UPSERT) and HBase tables, and since 4.0 (2021) reads and writes Iceberg tables, including DELETE, UPDATE and MERGE on Iceberg v2. The Apache project ships source releases under Apache 2.0; the current line is 4.5. Cloudera created Impala and sells it as part of its platform: in Cloudera Data Warehouse, an Impala Virtual Warehouse is one of two engine types, next to Hive, that query the same Database Catalog."
+  ],
+  "strengths": [
+    "Low-latency SQL for BI tools on data already in a Hadoop or Cloudera lake, with no per-query job startup",
+    "Shares tables and the Hive Metastore with Hive and Spark, so one copy of the data serves batch and interactive SQL",
+    "C++ executor with LLVM code generation; Cloudera’s CIDR paper measured up to 5.7x speedups from codegen alone",
+    "Writes Iceberg v2 tables, and Kudu tables give it fast in-place UPDATE, DELETE and UPSERT next to full scans",
+    "Active community: the project reports high activity in 2026, with work on Iceberg v3, a Calcite planner and a Kubernetes operator"
+  ],
+  "limits": [
+    "Metadata is cached: after Hive, Spark or any other tool adds files or partitions, you must run REFRESH or INVALIDATE METADATA before Impala sees them",
+    "No mid-query recovery: if a node crashes, the query fails; transparent retries rerun the whole query only when cluster membership changed",
+    "Partial format support: ORC is read-only, and Iceberg writes produce only Parquet data files and position deletes (no equality deletes)",
+    "In practice a Cloudera product: the Apache project publishes source tarballs, and the managed offering is Cloudera Data Warehouse",
+    "A single statestored and catalogd: if you run DDL while the statestore is down, queries that touch the new objects fail"
+  ],
+  "worksWith": [
+    { "id": "hadoop", "how": "reads HDFS blocks locally on" },
+    { "id": "parquet", "how": "reads and writes" },
+    { "id": "orc", "how": "reads, but can’t write," },
+    { "id": "iceberg", "how": "reads and writes tables in" },
+    { "id": "s3", "how": "queries tables stored in" },
+    { "id": "ozone", "how": "queries tables stored in" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "An Iceberg table in impala-shell, plus the REFRESH that outside writes need",
+    "source": [
+      "-- impala-shell -i impala-coordinator:21050",
+      "CREATE TABLE sales.orders (",
+      "  order_id BIGINT, customer_id BIGINT, amount DECIMAL(10,2), ts TIMESTAMP)",
+      "PARTITIONED BY SPEC (day(ts))",
+      "STORED AS ICEBERG",
+      "TBLPROPERTIES ('format-version' = '2');",
+      "",
+      "INSERT INTO sales.orders VALUES (1, 4711, 19.90, now());",
+      "DELETE FROM sales.orders WHERE customer_id = 4711;",
+      "",
+      "-- a Hive table that a Spark job just added files to",
+      "REFRESH web.page_views;",
+      "COMPUTE STATS web.page_views;",
+      "",
+      "SELECT url, count(*) AS views, appx_median(ms) AS p50_ms",
+      "FROM web.page_views",
+      "WHERE ds = '2026-10-05'",
+      "GROUP BY url ORDER BY views DESC LIMIT 10;"
+    ]
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "Ways to run it",
+      "items": [
+        { "name": "Cloudera Data Warehouse", "tag": "managed", "text": "Impala Virtual Warehouses are compute environments that scale independently and query a shared Database Catalog, next to Hive Virtual Warehouses on the same data. They expose HiveServer2-compatible endpoints for Beeline, `impala-shell` and Impyla." },
+        { "name": "Apache source releases", "tag": "build it yourself", "text": "The Apache project publishes signed source tarballs (4.5.x, with older 4.x and 3.4 lines still listed). You build and deploy the impalad, catalogd and statestored daemons yourself, alongside a Hive Metastore." },
+        { "name": "Kubernetes", "tag": "in progress", "text": "The August 2026 board report lists a Kubernetes operator and Helm chart support among current work, together with Iceberg v3 support and OpenTelemetry integration." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "By 2012 Hadoop could store and process petabytes cheaply, but SQL on it meant Hive, which compiled each query into MapReduce jobs. Batch frameworks like that could not give BI and analytic queries the low latency and high concurrency of a traditional analytic database.",
+      "A Cloudera team, with Marcel Kornacker as lead author of its 2015 paper, built Impala from scratch in C++ and Java rather than forking Postgres, as many SQL-on-Hadoop systems did. It reused Hadoop’s own pieces, HDFS, HBase, the Hive Metastore and YARN, and replaced MapReduce with daemons on every node that run queries directly. Impala’s beta came out in October 2012 and it reached general availability in May 2013, with nearly one million downloads by early 2015.",
+      "Impala showed that an MPP engine could run directly on the Hadoop stack and share its tables. Cloudera donated it to the Apache Incubator in December 2015, and it became a top-level project in November 2017."
+    ],
+    "choices": [
+      { "choice": "Always-running daemons instead of batch jobs", "why": "Starting MapReduce jobs added latency to every query. Daemons on every DataNode host could start work immediately and read blocks from local disks without crossing the network." },
+      { "choice": "A new engine in C++, not a Postgres fork", "why": "Impala was architected from the ground up for Hadoop: its storage, file formats and distributed execution, rather than retrofitting a database built for a single machine." },
+      { "choice": "Runtime code generation with LLVM", "why": "Generic interpreted operators pay for virtual function calls on every row. Compiling each query’s inner loops into machine code at runtime removed that overhead." },
+      { "choice": "Reuse the Hive Metastore", "why": "Users already defined their tables in Hive. Sharing the Metastore meant Impala could query those tables without a migration, and both tools stayed in sync." }
+    ],
+    "timeline": [
+      { "year": "2012", "text": "Cloudera releases the Impala beta in October" },
+      { "year": "2013", "text": "General availability in May" },
+      { "year": "2014", "text": "Impala 2.0 released in October" },
+      { "year": "2015", "text": "Enters the Apache Incubator in December" },
+      { "year": "2017", "text": "Becomes a top-level Apache project in November" },
+      { "year": "2021", "text": "Impala 4.0 adds Iceberg table support" },
+      { "year": "2025", "text": "Impala 4.5.0 released in February" }
+    ],
+    "sources": [
+      { "label": "Kornacker et al.: Impala, a modern, open-source SQL engine for Hadoop (CIDR 2015)", "url": "https://www.cidrdb.org/cidr2015/Papers/CIDR15_Paper28.pdf" },
+      { "label": "Apache Incubator: Impala incubation status (entered 2015-12-01, graduated 2017-11-15)", "url": "https://incubator.apache.org/projects/impala.html" },
+      { "label": "ASF board minutes, November 15, 2017: Establish the Apache Impala project", "url": "https://www.apache.org/foundation/records/minutes/2017/board_minutes_2017_11_15.txt" },
+      { "label": "Apache JIRA: IMPALA-10150, write Iceberg tables in Parquet format (fixed in 4.0.0)", "url": "https://issues.apache.org/jira/browse/IMPALA-10150" },
+      { "label": "Apache Impala GitHub mirror (tags 4.0.0, June 2021; 4.5.0, February 2025)", "url": "https://github.com/apache/impala/tags" }
+    ]
+  },
+  "sources": [
+    { "label": "Impala docs: Components of the Impala server (impalad, statestored, catalogd, dedicated coordinators)", "url": "https://impala.apache.org/docs/build/html/topics/impala_components.html" },
+    { "label": "Kornacker et al.: Impala (CIDR 2015): architecture, LLVM code generation, spilling", "url": "https://www.cidrdb.org/cidr2015/Papers/CIDR15_Paper28.pdf" },
+    { "label": "Impala docs: REFRESH (needed after loading data outside Impala; shared metastore with Hive)", "url": "https://impala.apache.org/docs/build/html/topics/impala_refresh.html" },
+    { "label": "Impala docs: INVALIDATE METADATA", "url": "https://impala.apache.org/docs/build/html/topics/impala_invalidate_metadata.html" },
+    { "label": "Impala docs: Transparent query retries", "url": "https://impala.apache.org/docs/build/html/topics/impala_transparent_query_retries.html" },
+    { "label": "Impala docs: Iceberg tables (v2 DELETE, UPDATE, MERGE; position deletes only; Parquet writes)", "url": "https://impala.apache.org/docs/build/html/topics/impala_iceberg.html" },
+    { "label": "Impala docs: ORC file format (reads enabled by default from 3.4.0, no INSERT)", "url": "https://impala.apache.org/docs/build/html/topics/impala_orc.html" },
+    { "label": "Impala docs: Kudu tables (in-place updates, UPDATE, DELETE, UPSERT)", "url": "https://impala.apache.org/docs/build/html/topics/impala_kudu.html" },
+    { "label": "Impala docs: Amazon S3", "url": "https://impala.apache.org/docs/build/html/topics/impala_s3.html" },
+    { "label": "Impala docs: ADLS", "url": "https://impala.apache.org/docs/build/html/topics/impala_adls.html" },
+    { "label": "Impala docs: Ozone", "url": "https://impala.apache.org/docs/build/html/topics/impala_ozone.html" },
+    { "label": "Apache Impala downloads (source releases 4.5.2, 4.1.2, 3.4.2)", "url": "https://impala.apache.org/downloads.html" },
+    { "label": "Cloudera docs: Cloudera Data Warehouse service architecture (Impala and Hive Virtual Warehouses)", "url": "https://docs.cloudera.com/data-warehouse/cloud/overview/topics/dw-service-architecture.html" },
+    { "label": "ASF board minutes, August 19, 2026: Impala report (high activity, Iceberg v3, Calcite, Kubernetes operator)", "url": "https://www.apache.org/foundation/records/minutes/2026/board_minutes_2026_08_19.txt" }
+  ],
+  "checked": "2026-10-06"
+}

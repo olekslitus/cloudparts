@@ -1,0 +1,1009 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Amazon S3",
+  "concepts": [
+    "object"
+  ],
+  "provider": "aws",
+  "vendor": "Amazon Web Services",
+  "license": "Proprietary",
+  "website": "https://aws.amazon.com/s3/",
+  "summary": "AWS’s object storage, and the de facto API most object stores copy.",
+  "intro": [
+    "Amazon S3 stores objects (files plus metadata) in buckets, addressed by a key such as `logs/2026/10/05/app.json`. You read and write whole objects over HTTPS, and S3 scales to any number of objects without you provisioning capacity.",
+    "Amazon S3 stores objects in buckets and is designed for 99.999999999% (11 nines) durability in every storage class. The choice you make for each object is its storage class, which trades storage price against access cost, how quickly the first byte comes back, and how many Availability Zones hold a copy. Choose well and the same data costs a fraction as much. Choose badly and retrieval fees or minimum storage durations eat the savings."
+  ],
+  "strengths": [
+    "Designed for 11 nines of durability, with no capacity planning",
+    "Storage classes and lifecycle rules make cold data very cheap",
+    "Its API is the standard: MinIO, Cloudflare R2, Google Cloud Storage and most data tools speak it"
+  ],
+  "limits": [
+    "Objects are replaced whole; there’s no appending to or editing part of a file",
+    "Per-request fees add up for millions of tiny files",
+    "Data transfer out to the internet is billed, which can dominate costs for public downloads",
+    "A bucket isn’t a file system: “folders” are key prefixes, and renaming one copies every object under it. Mount it with S3 Files or Mountpoint when software needs files"
+  ],
+  "worksWith": [],
+  "snippet": {
+    "lang": "bash",
+    "title": "Upload, list and fetch with the AWS CLI",
+    "source": [
+      "aws s3 cp report.parquet s3://acme-analytics/sales/2026/10/report.parquet",
+      "aws s3 ls s3://acme-analytics/sales/2026/10/",
+      "aws s3 presign s3://acme-analytics/sales/2026/10/report.parquet --expires-in 3600"
+    ]
+  },
+  "play": {
+    "sub": "bucket"
+  },
+  "sections": [
+    {
+      "type": "text",
+      "title": "A bucket is not a disk",
+      "body": [
+        "A disk (a physical SSD, or a block volume such as EBS) is just a long row of numbered blocks. It knows nothing about files. Ask it for block 81,920 and it returns 4 KB of bytes.",
+        "A file system such as ext4, NTFS or XFS is software that turns those blocks into named files inside folders. It tracks which blocks belong to which file, and gives you the operations programs expect: open a file, change bytes in the middle, append to the end, rename a folder in one step, lock a file, set permissions. A network file system (NFS or SMB, as in EFS) runs that software on a server and lets many machines mount the same folders.",
+        "An S3 bucket is neither. It is a flat map from keys to objects that you reach over HTTPS with a handful of calls: `PUT` a whole object, `GET` all or a byte range of one, `LIST` keys by prefix, `DELETE`. There is no file system inside it, so no operating system can mount it out of the box. The folders you see in the console are an illusion: the key `photos/2026/a.jpg` is one string that happens to contain slashes, and the console groups keys by the text before each `/`.",
+        "That difference is why “just put it on S3” sometimes fails: a program that opens a file and edits part of it, renames a temporary file into place, or takes a lock assumes a file system. To run it against a bucket, something has to translate file operations into S3 calls. That is what mounting S3 means."
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Disk, file system or bucket?",
+      "corner": "",
+      "columns": [
+        "Disk (block volume)",
+        "File system (ext4 on a disk, or EFS)",
+        "S3 bucket"
+      ],
+      "rows": [
+        {
+          "label": "What it stores",
+          "values": [
+            "Numbered blocks of bytes",
+            "Named files in nested folders, built on blocks",
+            "Objects (bytes plus metadata) under keys"
+          ]
+        },
+        {
+          "label": "How you reach it",
+          "values": [
+            "Attached to a machine as a device, e.g. `/dev/nvme1n1`",
+            "Mounted as a folder, e.g. `/data`",
+            "HTTPS API calls from anywhere with permission"
+          ]
+        },
+        {
+          "label": "Folders",
+          "values": [
+            "None; it doesn’t know about files",
+            "Real directories",
+            "None; keys containing `/` that tools display as folders"
+          ]
+        },
+        {
+          "label": "Change bytes in the middle",
+          "values": [
+            "Yes, any block",
+            "Yes",
+            "No; upload the whole object again"
+          ]
+        },
+        {
+          "label": "Append to the end",
+          "values": [
+            "Yes",
+            "Yes",
+            "No (Express One Zone directory buckets can)"
+          ]
+        },
+        {
+          "label": "Rename a folder",
+          "values": [
+            "Not applicable",
+            "One instant operation",
+            "Copy and delete every object under the prefix"
+          ]
+        },
+        {
+          "label": "Locks and permissions",
+          "values": [
+            "Not applicable",
+            "File locks, owners, `chmod`",
+            "No locks; access is set by IAM and bucket policies"
+          ]
+        },
+        {
+          "label": "Who can use it at once",
+          "values": [
+            "Usually one machine",
+            "One machine (ext4) or many (EFS, over NFS)",
+            "Any number of clients"
+          ]
+        },
+        {
+          "label": "Typical latency",
+          "values": [
+            "Under a millisecond to a few milliseconds",
+            "Under a millisecond locally; a few over NFS",
+            "Tens of milliseconds per request"
+          ]
+        }
+      ],
+      "notes": [
+        "You never use a disk without a file system: formatting it with `mkfs` is the step that puts one on it. A bucket can’t be formatted, which is why mounting one needs a translator."
+      ]
+    },
+    {
+      "type": "model",
+      "title": "What mounting a bucket does",
+      "intro": "Both apps read files from what looks like an ordinary folder. Underneath, each file operation becomes S3 requests.",
+      "diagram": {
+        "caption": "Mountpoint (top) turns every read into a GET to the bucket, so each one waits for S3. S3 Files (bottom) keeps recently used small files on its own fast storage, answers most reads there, and goes to the bucket only for the rest. Real S3 replies take tens of milliseconds; here they’re slowed down so you can see them.",
+        "w": 800,
+        "h": 280,
+        "nodes": [
+          {
+            "id": "a",
+            "x": 95,
+            "y": 70,
+            "label": "App",
+            "sub": "cat /mnt/s3/a.json",
+            "emit": {
+              "every": 800,
+              "jitter": 0.3,
+              "req": true,
+              "color": 0
+            },
+            "out": [
+              "mp"
+            ]
+          },
+          {
+            "id": "mp",
+            "x": 335,
+            "y": 70,
+            "label": "Mountpoint for S3",
+            "sub": "read → GET · close → PUT",
+            "out": [
+              "bucket"
+            ]
+          },
+          {
+            "id": "b",
+            "x": 95,
+            "y": 210,
+            "label": "App",
+            "sub": "cat /mnt/s3files/a.json",
+            "emit": {
+              "every": 800,
+              "jitter": 0.3,
+              "req": true,
+              "color": 1
+            },
+            "out": [
+              "fs"
+            ]
+          },
+          {
+            "id": "fs",
+            "x": 335,
+            "y": 210,
+            "label": "S3 Files",
+            "sub": "NFS · hot files cached",
+            "mode": "cache",
+            "p": 0.7,
+            "out": [
+              "bucket"
+            ]
+          },
+          {
+            "id": "bucket",
+            "x": 640,
+            "y": 140,
+            "label": "S3 bucket",
+            "sub": "objects by key",
+            "concept": "object",
+            "mode": "reply",
+            "delay": 180
+          }
+        ]
+      }
+    },
+    {
+      "type": "cards",
+      "title": "Ways to put a file system on top of S3",
+      "intro": "None of these changes the bucket itself. Each one runs a file system somewhere else and maps it onto objects. They differ in how much of a real file system you get, and where it runs.",
+      "items": [
+        {
+          "name": "Amazon S3 Files",
+          "tag": "AWS · NFS · since April 2026",
+          "text": "A managed file system, built on EFS, linked to a bucket or prefix. EC2, Lambda, ECS and EKS mount it over NFS 4.1/4.2 and get edits, renames, locks and POSIX permissions. Hot small files live on fast storage; changes are written back to the bucket as new object versions."
+        },
+        {
+          "name": "Mountpoint for Amazon S3",
+          "tag": "AWS · open source · FUSE",
+          "text": "A client you run on the machine (`mount-s3`). Fast for reading big files and writing new ones in one pass, but it deliberately doesn’t fake what S3 can’t do: no editing existing files, no renames (except on directory buckets), no locks or symlinks."
+        },
+        {
+          "name": "s3fs-fuse, rclone mount",
+          "tag": "open source · FUSE",
+          "text": "Older general-purpose mounts that emulate more of a file system, for example by re-uploading a whole object when one byte changes. Convenient, but slow and surprising under heavy writes, and not safe for several writers."
+        },
+        {
+          "name": "JuiceFS",
+          "tag": "open source · own format",
+          "text": "A full POSIX file system that keeps its metadata in a database (Redis, PostgreSQL, SQLite and others) and stores file contents as chunks in a bucket. Renames and locks are real, but the bucket holds JuiceFS chunks, not your files as readable objects."
+        },
+        {
+          "name": "S3 File Gateway",
+          "tag": "AWS · on-premises",
+          "text": "A Storage Gateway appliance in your data centre that serves NFS or SMB shares to local machines and stores each file as an object in S3, with a local cache."
+        },
+        {
+          "name": "FSx for Lustre",
+          "tag": "AWS · HPC",
+          "text": "A high-performance parallel file system for training and simulation jobs. It can be linked to a bucket, presenting its objects as files and exporting results back."
+        },
+        {
+          "name": "Directory buckets",
+          "tag": "S3 Express One Zone",
+          "text": "Not a mount, but the closest S3 gets to a file system on its own: real directories, appending to objects, and an atomic `RenameObject` call. Single Availability Zone only."
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "What survives the translation",
+      "intro": "The two AWS options take opposite approaches. Mountpoint is a thin, fast translator that refuses operations S3 can’t do directly. S3 Files is a real file system that syncs to the bucket in the background.",
+      "corner": "You try to",
+      "columns": [
+        "Mountpoint for S3",
+        "S3 Files"
+      ],
+      "rows": [
+        {
+          "label": "Read a file, or part of one",
+          "values": [
+            "Yes",
+            "Yes; small hot files in about a millisecond"
+          ]
+        },
+        {
+          "label": "Write a new file",
+          "values": [
+            "Yes, written once from start to end",
+            "Yes"
+          ]
+        },
+        {
+          "label": "Edit an existing file",
+          "values": [
+            "No; only replace it whole, with `--allow-overwrite`",
+            "Yes; the bucket gets a new object version"
+          ]
+        },
+        {
+          "label": "Append",
+          "values": [
+            "Only on Express One Zone, with `--incremental-upload`",
+            "Yes"
+          ]
+        },
+        {
+          "label": "Rename a file or folder",
+          "values": [
+            "Only on directory buckets",
+            "Yes; instant on the mount, copied object by object in the bucket"
+          ]
+        },
+        {
+          "label": "Lock a file",
+          "values": [
+            "No",
+            "Yes, advisory locks"
+          ]
+        },
+        {
+          "label": "`chmod`, `chown`, symlinks",
+          "values": [
+            "No; permissions are fixed at mount time",
+            "Yes; stored as object metadata"
+          ]
+        },
+        {
+          "label": "See the change in the bucket",
+          "values": [
+            "When the file is closed",
+            "After 60 seconds without writes to the file"
+          ]
+        },
+        {
+          "label": "Runs where",
+          "values": [
+            "Any Linux machine with AWS credentials",
+            "Inside a VPC: EC2, Lambda, ECS, EKS"
+          ]
+        }
+      ],
+      "notes": [
+        "S3 Files requires versioning on the bucket. If a file changes in the bucket and on the mount at the same time, the bucket wins and your copy is moved to a lost-and-found folder.",
+        "Neither can read objects in Glacier Flexible Retrieval or Deep Archive until they are restored.",
+        "Renaming a folder with millions of objects through any mount is slow and costs one copy and one delete request per object, because the bucket itself has no folders."
+      ]
+    },
+    {
+      "type": "code",
+      "title": "Mount a bucket",
+      "intro": "Mountpoint runs on the machine; S3 Files is created once, then mounted like any NFS share.",
+      "lang": "bash",
+      "source": [
+        "# Mountpoint for Amazon S3: a client on this machine",
+        "mount-s3 my-bucket /mnt/s3",
+        "",
+        "# S3 Files: create a file system linked to the bucket, then mount it",
+        "aws s3files create-file-system --bucket arn:aws:s3:::my-bucket \\",
+        "  --role-arn arn:aws:iam::111122223333:role/S3FilesAccess",
+        "aws s3files create-mount-target --file-system-id fs-0a1b2c3d \\",
+        "  --subnet-id subnet-0123abcd",
+        "sudo mount -t s3files fs-0a1b2c3d:/ /mnt/s3files",
+        "",
+        "echo hello > /mnt/s3files/notes/today.txt   # appears as notes/today.txt in the bucket"
+      ]
+    },
+    {
+      "type": "model",
+      "title": "Retrieval speed by class",
+      "intro": "Each colour is a request for an object stored in a different class.",
+      "diagram": {
+        "caption": "An app reads four objects, each in a different storage class. Standard, Standard-IA and Glacier Instant Retrieval all answer in milliseconds; the last two charge per GB retrieved. The fourth object is in Glacier Deep Archive, so a restore job has to bring it back first. Real Standard restores take up to 12 hours; here they’re compressed to seconds.",
+        "h": 290,
+        "nodes": [
+          {
+            "id": "app",
+            "x": 100,
+            "y": 140,
+            "label": "App",
+            "sub": "GET object",
+            "emit": {
+              "every": 650,
+              "jitter": 0.3,
+              "req": true,
+              "colorByKey": 4,
+              "route": "hash"
+            },
+            "out": [
+              "std",
+              "ia",
+              "gir",
+              "restore"
+            ]
+          },
+          {
+            "id": "std",
+            "x": 400,
+            "y": 40,
+            "label": "S3 Standard",
+            "sub": "milliseconds",
+            "mode": "reply",
+            "delay": 80
+          },
+          {
+            "id": "ia",
+            "x": 400,
+            "y": 105,
+            "label": "S3 Standard-IA",
+            "sub": "milliseconds · per-GB fee",
+            "mode": "reply",
+            "delay": 90
+          },
+          {
+            "id": "gir",
+            "x": 400,
+            "y": 170,
+            "label": "Glacier Instant Retrieval",
+            "sub": "milliseconds · per-GB fee",
+            "mode": "reply",
+            "delay": 90
+          },
+          {
+            "id": "restore",
+            "x": 400,
+            "y": 245,
+            "kind": "pool",
+            "label": "Restore job",
+            "sub": "RestoreObject",
+            "max": 4,
+            "work": 2800,
+            "idle": 4000,
+            "out": [
+              "gda"
+            ]
+          },
+          {
+            "id": "gda",
+            "x": 640,
+            "y": 245,
+            "label": "Glacier Deep Archive",
+            "sub": "within 12 hours",
+            "mode": "reply",
+            "delay": 100
+          }
+        ]
+      }
+    },
+    {
+      "type": "table",
+      "title": "Storage classes at a glance",
+      "corner": "Class",
+      "columns": [
+        "Best for",
+        "First byte",
+        "Availability (designed)",
+        "Zones",
+        "Minimum duration",
+        "Minimum billed size",
+        "Retrieval fee"
+      ],
+      "rows": [
+        {
+          "label": "S3 Standard",
+          "values": [
+            "Frequently accessed data",
+            "Milliseconds",
+            "99.99%",
+            "≥ 3",
+            "None",
+            "None",
+            "None"
+          ]
+        },
+        {
+          "label": "S3 Intelligent-Tiering",
+          "values": [
+            "Unknown or changing access patterns",
+            "Milliseconds; opt-in archive tiers take minutes to hours",
+            "99.9%",
+            "≥ 3",
+            "None",
+            "None; objects under 128 KB aren’t tiered",
+            "None, plus a small monthly fee per monitored object"
+          ]
+        },
+        {
+          "label": "S3 Express One Zone",
+          "values": [
+            "Latency-critical data next to your compute",
+            "Single-digit milliseconds",
+            "99.95%",
+            "1",
+            "1 hour",
+            "None",
+            "Per GB"
+          ]
+        },
+        {
+          "label": "S3 Standard-IA",
+          "values": [
+            "Data read about once a month that must come back instantly",
+            "Milliseconds",
+            "99.9%",
+            "≥ 3",
+            "30 days",
+            "128 KB",
+            "Per GB"
+          ]
+        },
+        {
+          "label": "S3 One Zone-IA",
+          "values": [
+            "Re-creatable data read about once a month",
+            "Milliseconds",
+            "99.5%",
+            "1",
+            "30 days",
+            "128 KB",
+            "Per GB"
+          ]
+        },
+        {
+          "label": "S3 Glacier Instant Retrieval",
+          "values": [
+            "Archives read about once a quarter, instantly",
+            "Milliseconds",
+            "99.9%",
+            "≥ 3",
+            "90 days",
+            "128 KB",
+            "Per GB"
+          ]
+        },
+        {
+          "label": "S3 Glacier Flexible Retrieval",
+          "values": [
+            "Backups and archives read about once a year",
+            "Minutes to hours, after a restore",
+            "99.99% once restored",
+            "≥ 3",
+            "90 days",
+            "+40 KB metadata per object",
+            "Per GB; bulk restores are free"
+          ]
+        },
+        {
+          "label": "S3 Glacier Deep Archive",
+          "values": [
+            "Retention for years, read less than once a year",
+            "Hours, after a restore",
+            "99.99% once restored",
+            "≥ 3",
+            "180 days",
+            "+40 KB metadata per object",
+            "Per GB"
+          ]
+        }
+      ],
+      "notes": [
+        "Every class is designed for 11 nines of durability. The One Zone classes keep data in a single Availability Zone, so losing that zone can lose the data.",
+        "Minimum duration: if you delete, overwrite or transition an object sooner, you’re still billed for the full period.",
+        "Minimum billed size: smaller objects are billed as 128 KB. The two Glacier archive classes add 40 KB of metadata per object: 32 KB billed at the archive rate and 8 KB at the Standard rate.",
+        "Express One Zone stores data in directory buckets and doesn’t support lifecycle transitions."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Intelligent-Tiering, tier by tier",
+      "intro": "Intelligent-Tiering moves each object between tiers based on when it was last read, and moves it back to Frequent Access when it’s read again. There are no retrieval fees.",
+      "items": [
+        {
+          "name": "Frequent Access",
+          "tag": "default",
+          "text": "Where new objects start. Millisecond access."
+        },
+        {
+          "name": "Infrequent Access",
+          "tag": "after 30 days",
+          "text": "Objects nobody has read for 30 consecutive days. Still millisecond access, at a lower storage price."
+        },
+        {
+          "name": "Archive Instant Access",
+          "tag": "after 90 days",
+          "text": "Objects nobody has read for 90 consecutive days. Still millisecond access, and cheaper again."
+        },
+        {
+          "name": "Archive Access",
+          "tag": "opt-in · 90+ days",
+          "text": "Optional, for data your application can wait for. Objects must be restored first, which takes minutes to hours."
+        },
+        {
+          "name": "Deep Archive Access",
+          "tag": "opt-in · 180+ days",
+          "text": "Optional. Restores finish within 12 hours, as with Glacier Deep Archive."
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Getting archived objects back",
+      "intro": "Objects in Glacier Flexible Retrieval or Glacier Deep Archive, or in Intelligent-Tiering’s opt-in archive tiers, can’t be read directly. You first call `RestoreObject`, which makes a temporary readable copy, and choose how fast that should happen.",
+      "corner": "Stored in",
+      "columns": [
+        "Expedited",
+        "Standard",
+        "Bulk"
+      ],
+      "rows": [
+        {
+          "label": "Glacier Flexible Retrieval, or the Archive Access tier",
+          "values": [
+            "1–5 minutes",
+            "3–5 hours",
+            "5–12 hours, free"
+          ]
+        },
+        {
+          "label": "Glacier Deep Archive, or the Deep Archive Access tier",
+          "values": [
+            "Not available",
+            "Within 12 hours",
+            "Within 48 hours"
+          ]
+        }
+      ],
+      "notes": [
+        "Expedited times apply to objects under 250 MB, and Expedited requests may be turned away at busy times unless you buy provisioned capacity.",
+        "Standard retrievals are free for objects in Intelligent-Tiering.",
+        "Restore requests are limited to 1,000 per second per account. To restore millions of objects, use S3 Batch Operations."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Choosing a class",
+      "items": [
+        {
+          "name": "Read often, or you don’t know",
+          "tag": "Standard · Intelligent-Tiering",
+          "text": "Start in S3 Standard. If access patterns are unknown or change over time, Intelligent-Tiering finds the savings for you without retrieval fees."
+        },
+        {
+          "name": "Read about once a month",
+          "tag": "Standard-IA",
+          "text": "Cheaper storage with a per-GB retrieval fee. Use One Zone-IA only for data you could re-create, such as replicas or derived files."
+        },
+        {
+          "name": "Read a few times a year, instantly",
+          "tag": "Glacier Instant Retrieval",
+          "text": "Medical images, news archives, uploads from years ago: rarely read, but when they are, someone is waiting."
+        },
+        {
+          "name": "Read rarely, can wait hours",
+          "tag": "Glacier Flexible · Deep Archive",
+          "text": "Backups, compliance archives and raw data kept for years. Deep Archive is S3’s cheapest class and an alternative to tape."
+        },
+        {
+          "name": "Latency is the bottleneck",
+          "tag": "Express One Zone",
+          "text": "ML training, interactive analytics and other request-heavy jobs running in the same Availability Zone. AWS quotes up to 10x faster access than S3 Standard."
+        },
+        {
+          "name": "Lots of small objects",
+          "tag": "watch out",
+          "text": "In the IA classes and Glacier Instant Retrieval, objects under 128 KB are billed as 128 KB, and Intelligent-Tiering doesn’t tier them. Bundle small files, or leave them in Standard."
+        }
+      ]
+    },
+    {
+      "type": "code",
+      "title": "Automate it with a lifecycle rule",
+      "intro": "Lifecycle rules move objects to colder classes as they age and can delete them at the end. Save this as `lifecycle.json` and apply it with `aws s3api put-bucket-lifecycle-configuration --bucket my-bucket --lifecycle-configuration file://lifecycle.json`.",
+      "lang": "json",
+      "source": [
+        "{",
+        "  \"Rules\": [",
+        "    {",
+        "      \"ID\": \"age-out-logs\",",
+        "      \"Filter\": { \"Prefix\": \"logs/\" },",
+        "      \"Status\": \"Enabled\",",
+        "      \"Transitions\": [",
+        "        { \"Days\": 30, \"StorageClass\": \"STANDARD_IA\" },",
+        "        { \"Days\": 90, \"StorageClass\": \"GLACIER_IR\" },",
+        "        { \"Days\": 365, \"StorageClass\": \"DEEP_ARCHIVE\" }",
+        "      ],",
+        "      \"Expiration\": { \"Days\": 2555 }",
+        "    }",
+        "  ]",
+        "}"
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Other features worth knowing",
+      "items": [
+        {
+          "name": "Versioning",
+          "text": "Keeps every version of an object, so an overwrite or delete can be undone. Pair it with a lifecycle rule that expires old versions."
+        },
+        {
+          "name": "Object Lock",
+          "text": "Write once, read many: objects can’t be deleted or overwritten until a date you set. Used for compliance and ransomware protection."
+        },
+        {
+          "name": "Replication",
+          "text": "Copies new objects to another bucket in the same or another Region, optionally into a cheaper storage class."
+        },
+        {
+          "name": "Strong consistency",
+          "text": "Since December 2020, a read after a successful write or delete always sees the change, for every object in every Region."
+        },
+        {
+          "name": "Event notifications",
+          "text": "Trigger a Lambda function, an SQS queue, an SNS topic or an EventBridge rule when objects are created or deleted."
+        },
+        {
+          "name": "S3 Tables",
+          "text": "Table buckets that store Apache Iceberg tables and run compaction and snapshot clean-up for you, for a higher storage price plus per-object monitoring and compaction fees."
+        },
+        {
+          "name": "Very large objects",
+          "text": "A single object can be up to 50 TB, raised from 5 TB in December 2025. Upload anything over about 100 MB in parallel parts with multipart upload."
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "The same idea at other providers",
+      "intro": "Every major cloud offers hot-to-archive tiers. The names differ, and so do the details: Google’s Archive class is still readable in milliseconds, while Azure’s Archive tier must be rehydrated first.",
+      "corner": "Access pattern",
+      "columns": [
+        "AWS S3",
+        "Google Cloud Storage",
+        "Azure Blob Storage"
+      ],
+      "rows": [
+        {
+          "label": "Frequent",
+          "values": [
+            "Standard",
+            "Standard",
+            "Hot"
+          ]
+        },
+        {
+          "label": "About monthly",
+          "values": [
+            "Standard-IA (30-day minimum)",
+            "Nearline (30-day minimum)",
+            "Cool (30-day minimum)"
+          ]
+        },
+        {
+          "label": "About quarterly",
+          "values": [
+            "Glacier Instant Retrieval (90 days)",
+            "Coldline (90 days)",
+            "Cold (90 days)"
+          ]
+        },
+        {
+          "label": "Yearly or less",
+          "values": [
+            "Glacier Flexible Retrieval (90 days), Deep Archive (180 days)",
+            "Archive (365 days), readable in milliseconds",
+            "Archive (180 days), offline until rehydrated"
+          ]
+        },
+        {
+          "label": "Automatic tiering",
+          "values": [
+            "Intelligent-Tiering",
+            "Autoclass",
+            "Lifecycle rules on last access time"
+          ]
+        },
+        {
+          "label": "A real file system view",
+          "values": [
+            "S3 Files mount; directory buckets for real directories",
+            "Hierarchical namespace buckets; Cloud Storage FUSE to mount",
+            "Data Lake Storage hierarchical namespace; BlobFuse2 or NFS 3.0 to mount"
+          ]
+        }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In 2005 Amazon’s retail business had a storage problem of its own: product images, videos and other data that had to be kept cheaply and reliably at a scale that kept growing. Werner Vogels later wrote that “the majority of our data needed an object (or key-value) store”, and that the block and file storage on the market couldn’t offer low cost with high reliability.",
+      "AWS launched S3 on 14 March 2006 with a one-paragraph announcement. It stored objects of 1 byte to 5 GB under a key you chose, reached over REST or SOAP, for $0.15 per GB-month plus $0.20 per GB transferred, with no minimum fee. Behind it sat about 1 PB of capacity on roughly 400 storage nodes in 15 racks across three data centres. Its stated design principles were decentralization, asynchrony, autonomy and failure tolerance, so that no single machine could become a bottleneck or a single point of failure.",
+      "S3’s bucket-and-key HTTP API became the interface many other object stores copy. At its 20th birthday in March 2026 it held more than 500 trillion objects across hundreds of exabytes, served over 200 million requests a second and charged about 2 cents per GB. AWS says code written against it in 2006 still works unchanged."
+    ],
+    "choices": [
+      { "choice": "A flat key-value store over HTTP, not a file system", "why": "Most of Amazon’s own data was whole objects fetched by key. Leaving out directories, partial writes and locks let S3 spread data over many commodity machines and serve it to any program on the internet." },
+      { "choice": "Cheap commodity hardware that expects failure", "why": "Building from commodity parts kept costs low, so the system was designed around machines failing: every object is stored in several places and no single node is in charge." },
+      { "choice": "Availability first, strong consistency later", "why": "Caches in S3’s metadata layer kept it highly available but meant a read could, rarely, return stale data. In December 2020 a cache coherence protocol made every read see the latest write, at no extra cost." },
+      { "choice": "Pay per GB, with no minimum", "why": "Billing only for what was stored and transferred meant a developer could start with one object and grow without buying capacity up front." }
+    ],
+    "timeline": [
+      { "year": "2006", "text": "Launches on 14 March at $0.15 per GB-month; objects up to 5 GB" },
+      { "year": "2012", "text": "Glacier launches for archives at $0.01 per GB-month (August)" },
+      { "year": "2018", "text": "Intelligent-Tiering moves objects between tiers automatically" },
+      { "year": "2020", "text": "Strong read-after-write consistency for every object, at no extra cost (December)" },
+      { "year": "2023", "text": "Express One Zone offers single-digit millisecond latency" },
+      { "year": "2025", "text": "Maximum object size rises from 5 TB to 50 TB (December)" },
+      { "year": "2026", "text": "Turns 20 with 500+ trillion objects; S3 Files mounts buckets over NFS (April)" }
+    ],
+    "sources": [
+      { "label": "Amazon press release: Amazon Web Services Launches (March 2006)", "url": "https://press.aboutamazon.com/2006/3/amazon-web-services-launches" },
+      { "label": "AWS News Blog: Amazon S3 (launch post, 2006)", "url": "https://aws.amazon.com/blogs/aws/amazon_s3/" },
+      { "label": "All Things Distributed: Happy 15th birthday, Amazon S3", "url": "https://www.allthingsdistributed.com/2021/03/happy-15th-birthday-amazon-s3.html" },
+      { "label": "All Things Distributed: Diving deep on S3 consistency", "url": "https://www.allthingsdistributed.com/2021/04/s3-strong-consistency.html" },
+      { "label": "What’s New: Amazon S3 now delivers strong read-after-write consistency (December 2020)", "url": "https://aws.amazon.com/about-aws/whats-new/2020/12/amazon-s3-now-delivers-strong-read-after-write-consistency-automatically-for-all-applications/" },
+      { "label": "AWS News Blog: Twenty years of Amazon S3 and building what’s next (March 2026)", "url": "https://aws.amazon.com/blogs/aws/twenty-years-of-amazon-s3-and-building-whats-next/" },
+      { "label": "AWS What’s New: Announcing Amazon Glacier (August 2012)", "url": "https://aws.amazon.com/about-aws/whats-new/2012/08/20/announcing-amazon-glacier/" },
+      { "label": "AWS What’s New: S3 Intelligent-Tiering storage class (November 2018)", "url": "https://aws.amazon.com/about-aws/whats-new/2018/11/s3-intelligent-tiering/" },
+      { "label": "AWS What’s New: Announcing the Amazon S3 Express One Zone storage class (November 2023)", "url": "https://aws.amazon.com/about-aws/whats-new/2023/11/amazon-s3-express-one-zone-storage-class/" },
+      { "label": "AWS What’s New: Amazon S3 increases the maximum object size to 50 TB (December 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/12/amazon-s3-maximum-object-size-50-tb/" },
+      { "label": "AWS News Blog: Launching S3 Files, making S3 buckets accessible as file systems (April 2026)", "url": "https://aws.amazon.com/blogs/aws/launching-s3-files-making-s3-buckets-accessible-as-file-systems" }
+    ]
+  },
+  "sources": [
+    {
+      "label": "S3 User Guide: What is Amazon S3?",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html"
+    },
+    {
+      "label": "S3 User Guide: Organizing objects in the console by using folders",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-folders.html"
+    },
+    {
+      "label": "S3 User Guide: Performance design patterns (median latencies in the tens of milliseconds)",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance-design-patterns.html"
+    },
+    {
+      "label": "Amazon S3 pricing (requests, data transfer, free bulk and Intelligent-Tiering retrievals)",
+      "url": "https://aws.amazon.com/s3/pricing/"
+    },
+    {
+      "label": "Amazon S3 storage classes",
+      "url": "https://aws.amazon.com/s3/storage-classes/"
+    },
+    {
+      "label": "S3 User Guide: Understanding and managing Amazon S3 storage classes",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/storage-class-intro.html"
+    },
+    {
+      "label": "S3 User Guide: How S3 Intelligent-Tiering works",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/intelligent-tiering-overview.html"
+    },
+    {
+      "label": "S3 User Guide: Understanding archive retrieval options",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/restoring-objects-retrieval-options.html"
+    },
+    {
+      "label": "S3 User Guide: Restoring an archived object",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/restoring-objects.html"
+    },
+    {
+      "label": "S3 User Guide: Managing the lifecycle of objects",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html"
+    },
+    {
+      "label": "S3 User Guide: S3 Express One Zone (up to 10x faster than S3 Standard)",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/directory-bucket-high-performance.html"
+    },
+    {
+      "label": "S3 User Guide: Directory buckets overview",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/directory-buckets-overview.html"
+    },
+    {
+      "label": "S3 User Guide: Appending data to objects in directory buckets",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/directory-buckets-objects-append.html"
+    },
+    {
+      "label": "S3 User Guide: S3 Lifecycle for directory buckets (no transitions)",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/directory-buckets-objects-lifecycle.html"
+    },
+    {
+      "label": "AWS What’s New: S3 Express One Zone supports atomic renaming of objects (June 2025)",
+      "url": "https://aws.amazon.com/about-aws/whats-new/2025/06/amazon-s3-express-one-zone-atomic-renaming-objects-api/"
+    },
+    {
+      "label": "S3 User Guide: Working with Amazon S3 Files",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-files.html"
+    },
+    {
+      "label": "S3 User Guide: How S3 Files synchronization works",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-files-synchronization.html"
+    },
+    {
+      "label": "S3 User Guide: S3 Files limits and unsupported features",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-files-quotas.html"
+    },
+    {
+      "label": "S3 User Guide: Getting started with S3 Files (CLI tutorial)",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-files-getting-started.html"
+    },
+    {
+      "label": "AWS News Blog: Launching S3 Files, making S3 buckets accessible as file systems (April 2026)",
+      "url": "https://aws.amazon.com/blogs/aws/launching-s3-files-making-s3-buckets-accessible-as-file-systems"
+    },
+    {
+      "label": "S3 User Guide: Mountpoint for Amazon S3",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/mountpoint.html"
+    },
+    {
+      "label": "Mountpoint for Amazon S3: file system behaviour",
+      "url": "https://github.com/awslabs/mountpoint-s3/blob/main/doc/SEMANTICS.md"
+    },
+    {
+      "label": "s3fs-fuse README: limitations",
+      "url": "https://github.com/s3fs-fuse/s3fs-fuse"
+    },
+    {
+      "label": "rclone docs: rclone mount",
+      "url": "https://rclone.org/commands/rclone_mount/"
+    },
+    {
+      "label": "JuiceFS docs: Architecture",
+      "url": "https://juicefs.com/docs/community/architecture/"
+    },
+    {
+      "label": "AWS Storage Gateway docs: What is Amazon S3 File Gateway",
+      "url": "https://docs.aws.amazon.com/filegateway/latest/files3/what-is-file-s3.html"
+    },
+    {
+      "label": "FSx for Lustre docs: Using data repositories with FSx for Lustre",
+      "url": "https://docs.aws.amazon.com/fsx/latest/LustreGuide/fsx-data-repositories.html"
+    },
+    {
+      "label": "Amazon EBS volume types: latency by type",
+      "url": "https://aws.amazon.com/ebs/volume-types/"
+    },
+    {
+      "label": "EFS User Guide: Performance specifications",
+      "url": "https://docs.aws.amazon.com/efs/latest/ug/performance.html"
+    },
+    {
+      "label": "S3 User Guide: Retaining multiple versions of objects with S3 Versioning",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html"
+    },
+    {
+      "label": "S3 User Guide: Locking objects with Object Lock",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html"
+    },
+    {
+      "label": "S3 User Guide: Replicating objects within and across Regions",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication.html"
+    },
+    {
+      "label": "S3 User Guide: Amazon S3 Event Notifications",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/EventNotifications.html"
+    },
+    {
+      "label": "S3 User Guide: Working with S3 Tables and table buckets",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html"
+    },
+    {
+      "label": "S3 User Guide: Uploading and copying objects using multipart upload",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html"
+    },
+    {
+      "label": "AWS What’s New: Amazon S3 now delivers strong read-after-write consistency (December 2020)",
+      "url": "https://aws.amazon.com/about-aws/whats-new/2020/12/amazon-s3-now-delivers-strong-read-after-write-consistency-automatically-for-all-applications/"
+    },
+    {
+      "label": "AWS What’s New: Amazon S3 increases the maximum object size to 50 TB (December 2025)",
+      "url": "https://aws.amazon.com/about-aws/whats-new/2025/12/amazon-s3-maximum-object-size-50-tb/"
+    },
+    {
+      "label": "Cloudflare R2 docs: S3 API compatibility",
+      "url": "https://developers.cloudflare.com/r2/api/s3/api/"
+    },
+    {
+      "label": "MinIO README: S3-compatible object storage",
+      "url": "https://github.com/minio/minio"
+    },
+    {
+      "label": "Cloud Storage docs: Interoperability with Amazon S3 (XML API)",
+      "url": "https://docs.cloud.google.com/storage/docs/interoperability"
+    },
+    {
+      "label": "Cloud Storage docs: Storage classes",
+      "url": "https://cloud.google.com/storage/docs/storage-classes"
+    },
+    {
+      "label": "Cloud Storage docs: Autoclass",
+      "url": "https://docs.cloud.google.com/storage/docs/autoclass"
+    },
+    {
+      "label": "Cloud Storage docs: Hierarchical namespace",
+      "url": "https://cloud.google.com/storage/docs/hns-overview"
+    },
+    {
+      "label": "Cloud Storage docs: Cloud Storage FUSE overview",
+      "url": "https://docs.cloud.google.com/storage/docs/cloud-storage-fuse/overview"
+    },
+    {
+      "label": "Azure docs: Access tiers for blob data",
+      "url": "https://learn.microsoft.com/en-us/azure/storage/blobs/access-tiers-overview"
+    },
+    {
+      "label": "Azure docs: Lifecycle management overview (last access time)",
+      "url": "https://learn.microsoft.com/en-us/azure/storage/blobs/lifecycle-management-overview"
+    },
+    {
+      "label": "Azure docs: Data Lake Storage hierarchical namespace",
+      "url": "https://learn.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-namespace"
+    },
+    {
+      "label": "Azure docs: What is BlobFuse2?",
+      "url": "https://learn.microsoft.com/en-us/azure/storage/blobs/blobfuse2-what-is"
+    },
+    {
+      "label": "Azure docs: NFS 3.0 protocol support for Blob Storage",
+      "url": "https://learn.microsoft.com/en-us/azure/storage/blobs/network-file-system-protocol-support"
+    }
+  ],
+  "checked": "2026-10-05"
+}

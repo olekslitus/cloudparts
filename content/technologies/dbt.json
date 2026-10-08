@@ -1,0 +1,156 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "dbt",
+  "concepts": ["etl"],
+  "provider": "oss",
+  "vendor": "Fivetran + dbt Labs",
+  "license": "Apache 2.0 (dbt v1, and the source of dbt v2 built as `dbt-oss`); the default dbt v2 binary adds proprietary features under the dbt product licence; the dbt platform is proprietary SaaS",
+  "website": "https://docs.getdbt.com/",
+  "repo": "https://github.com/dbt-labs/dbt",
+  "summary": "SQL `select` statements in git, built into warehouse tables in dependency order, with tests and docs alongside.",
+  "intro": [
+    "A dbt project is a folder of models, each a `.sql` file holding one `select`, plus YAML files with tests and descriptions. dbt runs wherever you start it: a laptop, a CI job or a scheduler. It renders the Jinja in each model, swaps `{{ ref('stg_orders') }}` for the real table name, and builds a dependency graph from those references. It then sends `create table as`, `create view` or `merge` statements to the warehouse through an adapter, in graph order, so the warehouse does all the work and the data never passes through dbt. Data tests are queries that return failing rows; `dbt build` runs models and tests together and skips everything downstream of a failed test. `dbt docs generate` writes a static site with the lineage graph.",
+    "There are two engines. dbt v1 is the original Python program (`dbt-core` plus one adapter package per warehouse), Apache 2.0 and still maintained. dbt v2, released on 14 September 2026, is a Rust rewrite that grew out of the Fusion engine and ships as one binary. Its source is Apache 2.0 and installs as `dbt-oss`; the default `dbt` distribution adds proprietary SQL comprehension (errors caught before the warehouse runs anything, editor autocomplete, `dbt lint`) and is free to use. The hosted dbt platform, formerly dbt Cloud, adds scheduling, CI, a browser IDE and a catalog: Developer is free for one seat and 3,000 successful model builds a month, Starter is $100 per seat per month with five developer seats and 15,000 builds, and Enterprise is priced by quote (checked 6 October 2026). dbt Labs merged with Fivetran in June 2026; dbt continues as its own brand."
+  ],
+  "strengths": [
+    "Plain SQL plus Jinja: anyone who writes `select` statements can build models, and `ref()` works out the build order",
+    "Software habits for analytics: models live in git, run in CI and carry tests and descriptions next to the code",
+    "Runs on the warehouse you already have, through adapters for Snowflake, BigQuery, Databricks, Redshift, DuckDB and, on v1, Postgres and many community adapters",
+    "Widely supported: Dagster, Fabric Data Factory and Fivetran all run dbt projects",
+    "Open-source core under Apache 2.0, and v2 installs as a single binary with no Python environment to manage"
+  ],
+  "limits": [
+    "Only the T: dbt doesn’t extract or load data, so you still need a loader (Fivetran, Airbyte, CDC) and usually an orchestrator",
+    "A version in transition: v2 is stricter at parse time and supports fewer warehouses so far (BigQuery, Databricks, Redshift, Snowflake and DuckDB GA; Spark beta; ClickHouse private beta); Postgres stays on v1",
+    "Layered licensing: the source is Apache 2.0, but the default v2 binary includes proprietary code, and products that embed it must let users sign in to the dbt platform",
+    "Every run is warehouse compute: full rebuilds of big models add up, which is why incremental models exist and why dbt sells dbt State ($0.094 per daily active target table) to skip unchanged ones"
+  ],
+  "worksWith": [
+    { "id": "fivetran", "how": "transforms data loaded by" },
+    { "id": "snowflake", "how": "builds models in" },
+    { "id": "bigquery", "how": "builds models in" },
+    { "id": "databricks", "how": "builds models in" },
+    { "id": "duckdb", "how": "builds models locally in" },
+    { "id": "postgresql", "how": "builds models in (v1 adapter)" },
+    { "id": "meltano", "how": "runs as a utility plugin in" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "An incremental model, its tests, and the command that builds both",
+    "source": [
+      "-- models/marts/fct_daily_revenue.sql",
+      "{{ config(materialized='incremental', unique_key='order_date') }}",
+      "",
+      "select",
+      "    cast(o.created_at as date) as order_date,",
+      "    count(*)                   as orders,",
+      "    sum(p.amount)              as revenue",
+      "from {{ ref('stg_orders') }} as o",
+      "join {{ ref('stg_payments') }} as p on p.order_id = o.order_id",
+      "where p.status = 'succeeded'",
+      "{% if is_incremental() %}",
+      "  -- later runs only redo days from the newest one already built",
+      "  and cast(o.created_at as date) >= (select max(order_date) from {{ this }})",
+      "{% endif %}",
+      "group by 1",
+      "",
+      "-- models/marts/schema.yml",
+      "--   models:",
+      "--     - name: fct_daily_revenue",
+      "--       columns:",
+      "--         - name: order_date",
+      "--           data_tests: [unique, not_null]",
+      "--",
+      "-- dbt build --select +fct_daily_revenue   # upstream models, this one, then its tests"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "dbt v1, dbt v2, dbt OSS and the dbt platform",
+      "intro": "The same project files work across all four. What differs is the engine, the licence and the extras.",
+      "columns": ["dbt v1", "dbt v2 (`dbt`)", "dbt OSS (`dbt-oss`)", "dbt platform"],
+      "rows": [
+        { "label": "Engine", "values": ["Python", "Rust, one binary", "Rust, same source as v2", "Runs v1 or v2 for you"] },
+        { "label": "Licence", "values": ["Apache 2.0", "dbt product licence (free; includes proprietary code)", "Apache 2.0", "Proprietary SaaS"] },
+        { "label": "Install", "values": ["`pip install dbt-core dbt-postgres`", "`pip install dbt`, Homebrew, curl script", "`pip install dbt-oss`", "Nothing local"] },
+        { "label": "SQL comprehension, autocomplete, `dbt lint`", "values": ["No", "Yes (some features after a free sign-in)", "No", "Yes"] },
+        { "label": "Warehouses", "values": ["Dozens of trusted and community adapters", "BigQuery, Databricks, Redshift, Snowflake, DuckDB; Spark and ClickHouse in beta", "Same engine as v2", "Depends on the engine chosen"] },
+        { "label": "Price", "values": ["Free", "Free", "Free", "Developer free (1 seat); Starter $100 per seat per month; Enterprise by quote"] }
+      ],
+      "notes": [
+        "dbt v1 keeps receiving critical support through dbt Core 1.13, and dbt Labs expects several (3 to 5) years of maintenance.",
+        "Prices from getdbt.com/pricing, checked 6 October 2026."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Other ways to do the T",
+      "items": [
+        { "name": "SQLMesh", "tag": "Apache 2.0", "text": "A transformation framework that is compatible with dbt projects, with a plan and apply workflow and virtual development environments. Built by Tobiko Data, which Fivetran bought in 2025; now a Linux Foundation project." },
+        { "name": "Dataform", "tag": "Google Cloud", "text": "SQLX files with `ref()` and assertions, compiled and run inside BigQuery. A managed service tied to BigQuery." },
+        { "name": "Bruin", "tag": "Apache 2.0", "text": "One Go binary for ingestion, SQL and Python transforms and quality checks, so a small team can skip a separate loader." },
+        { "name": "dbt jobs in Fabric", "tag": "Microsoft Fabric", "text": "Fabric Data Factory can build, test and deploy dbt models on a Fabric data warehouse without running dbt yourself." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In 2015 and 2016 a team at RJMetrics wrote down a viewpoint: analytics teams had “a workflow problem”, and the practices software engineers use, such as version control, testing and separate environments, should apply to analytics code. Cloud warehouses such as Redshift could now hold raw data and do the heavy lifting, but the SQL that turned it into reports lived in scattered scripts and BI tools.",
+      "Tristan Handy started Fishtown Analytics in Philadelphia in 2016 as a consulting business. dbt’s first commit landed that March, and Handy and co-founder Drew Banin released it as a productivity tool for the consulting work. It was narrow on purpose: “dbt is the T in ELT”, Handy wrote in 2017. It doesn’t move data; it turns `select` statements into tables inside the warehouse, in the right order. A community grew around its Slack channel, and in June 2021 the company renamed itself dbt Labs while raising $150 million. dbt 1.0 followed that December.",
+      "In January 2025 dbt Labs bought SDF Labs, whose Rust SQL compiler became the Fusion engine, announced that May under the source-available Elastic License. After the merger with Fivetran closed on 1 June 2026, the Rust engine became dbt v2.0 under Apache 2.0 in September 2026."
+    ],
+    "choices": [
+      { "choice": "Models are only `select` statements", "why": "Analysts already knew SQL. dbt generates the `create`, `insert` and `merge` statements for each warehouse from the model’s materialization, so the model holds only the logic." },
+      { "choice": "`ref()` instead of hard-coded table names", "why": "References give dbt the dependency graph, so it can build in order and draw lineage. The same code also points at a developer’s schema or production depending on the environment." },
+      { "choice": "Transform inside the warehouse", "why": "Cloud warehouses were powerful enough to do the work, so dbt stayed out of extraction and loading and let the warehouse compute everything." },
+      { "choice": "Open source, controlled by its users", "why": "Handy wrote that “critical analytics infrastructure should be controlled by its users as open source software”. The core has stayed Apache 2.0; the 2025 Fusion engine’s Elastic License was dropped when its code became dbt v2." }
+    ],
+    "timeline": [
+      { "year": "2016", "text": "First dbt commit in March; Tristan Handy starts Fishtown Analytics" },
+      { "year": "2017", "text": "Handy describes dbt as “the T in ELT”" },
+      { "year": "2021", "text": "Renamed dbt Labs with a $150M round in June; dbt 1.0 in December" },
+      { "year": "2025", "text": "Buys SDF Labs, launches the Rust Fusion engine, agrees to merge with Fivetran" },
+      { "year": "2026", "text": "Merger completes in June; Rust dbt v2.0 ships under Apache 2.0 in September" }
+    ],
+    "sources": [
+      { "label": "dbt docs: The dbt viewpoint (RJMetrics, 2015–2016)", "url": "https://docs.getdbt.com/community/resources/viewpoint" },
+      { "label": "dbt Labs blog: What, exactly, is dbt? (Tristan Handy, October 2017)", "url": "https://www.getdbt.com/blog/what-exactly-is-dbt" },
+      { "label": "dbt Labs blog: Of the community, by the community, for the community (renamed dbt Labs, $150M, June 2021)", "url": "https://www.getdbt.com/blog/of-the-community-by-the-community-for-the-community" },
+      { "label": "dbt-labs/dbt on GitHub: initial commit (March 2016)", "url": "https://github.com/dbt-labs/dbt/commit/fd7567fb4dd60530a512f3e6218050cb66f0dcea" },
+      { "label": "Drew Banin on GitHub (co-founder, dbt Labs)", "url": "https://github.com/drewbanin" },
+      { "label": "dbt-labs/dbt on GitHub: release v1.0.0 (December 2021)", "url": "https://github.com/dbt-labs/dbt/releases/tag/v1.0.0" },
+      { "label": "dbt Labs blog: dbt Labs acquires SDF Labs (January 2025)", "url": "https://www.getdbt.com/blog/dbt-labs-acquires-sdf-labs" },
+      { "label": "dbt Labs blog: New code, new license, the dbt Fusion engine (Tristan Handy, May 2025)", "url": "https://www.getdbt.com/blog/new-code-new-license-understanding-the-new-license-for-the-dbt-fusion-engine" },
+      { "label": "dbt Labs blog: dbt Labs and Fivetran merge (Tristan Handy, October 2025)", "url": "https://www.getdbt.com/blog/dbt-labs-and-fivetran-merge-announcement" },
+      { "label": "dbt Labs blog: Fivetran and dbt are one company now (Tristan Handy, June 2026)", "url": "https://www.getdbt.com/blog/fivetran-and-dbt-are-one-company-now-here-s-what-that-means" },
+      { "label": "dbt-labs/dbt on GitHub: release v2.0.0 (September 2026)", "url": "https://github.com/dbt-labs/dbt/releases/tag/v2.0.0" }
+    ]
+  },
+  "sources": [
+    { "label": "dbt docs: Introduction (v2, v1 and OSS; the dbt platform)", "url": "https://docs.getdbt.com/docs/introduction" },
+    { "label": "dbt-labs/dbt README (v2 source under Apache 2.0, dbt product licence for the distribution)", "url": "https://github.com/dbt-labs/dbt" },
+    { "label": "dbt Labs: Licenses FAQ (product licence, dbt OSS, ELv2 removed, v1 support)", "url": "https://www.getdbt.com/licenses-faq" },
+    { "label": "dbt Labs: dbt product license agreement", "url": "https://www.getdbt.com/dbt-product-license-agreement" },
+    { "label": "dbt docs: Install dbt (v2)", "url": "https://docs.getdbt.com/docs/local/install-dbt" },
+    { "label": "dbt docs: Install dbt OSS (what it leaves out)", "url": "https://docs.getdbt.com/docs/local/install-dbt-v2" },
+    { "label": "dbt docs: Supported data platforms (v2 adapter lifecycle)", "url": "https://docs.getdbt.com/docs/supported-data-platforms" },
+    { "label": "dbt docs: Connect Postgres to dbt v1", "url": "https://docs.getdbt.com/docs/local/connect-data-platform/postgres-setup" },
+    { "label": "dbt docs: Incremental models", "url": "https://docs.getdbt.com/docs/build/incremental-models" },
+    { "label": "dbt docs: Data tests", "url": "https://docs.getdbt.com/docs/build/data-tests" },
+    { "label": "dbt docs: `dbt build` (skips downstream of a failed test)", "url": "https://docs.getdbt.com/reference/commands/build" },
+    { "label": "dbt docs: About documentation (`dbt docs generate`, lineage)", "url": "https://docs.getdbt.com/docs/build/documentation" },
+    { "label": "dbt Labs: Pricing (plans, dbt State per DATT)", "url": "https://www.getdbt.com/pricing" },
+    { "label": "dbt Labs blog: dbt Core v2.0 and the future (Daniel Poppy, July 2026)", "url": "https://www.getdbt.com/blog/fivetran-dbt-20-future" },
+    { "label": "Fivetran press release: Fivetran + dbt Labs complete merger (June 2026; brands continue)", "url": "https://www.fivetran.com/press/fivetran-dbt-labs-complete-merger-to-create-the-data-infrastructure-for-trusted-ai-agents" },
+    { "label": "Fivetran press release: Fivetran and dbt Labs unite (all-stock merger, October 2025)", "url": "https://www.fivetran.com/press/fivetran-and-dbt-labs-unite-to-set-the-standard-for-open-data-infrastructure-2025" },
+    { "label": "Fivetran press release: Fivetran acquires Tobiko Data (September 2025)", "url": "https://www.fivetran.com/press/fivetran-acquires-tobiko-data-to-power-the-next-generation-of-advanced-ai-ready-data-transformation" },
+    { "label": "SQLMesh on GitHub (Linux Foundation project)", "url": "https://github.com/SQLMesh/sqlmesh" },
+    { "label": "Google Cloud docs: Dataform overview", "url": "https://docs.cloud.google.com/dataform/docs/overview" },
+    { "label": "Bruin on GitHub", "url": "https://github.com/bruin-data/bruin" },
+    { "label": "Microsoft Learn: What is Data Factory in Microsoft Fabric? (dbt jobs)", "url": "https://learn.microsoft.com/en-us/fabric/data-factory/data-factory-overview" },
+    { "label": "Dagster docs (dbt integration)", "url": "https://dagster.io/docs" },
+    { "label": "Fivetran press release: Fivetran Transformations for dbt Core (January 2022)", "url": "https://www.fivetran.com/press/fivetran-transformations-for-dbt-core-accelerates-data-transformations" }
+  ],
+  "checked": "2026-10-06"
+}

@@ -1,0 +1,126 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Multithreading",
+  "category": "code",
+  "order": 60,
+  "summary": "Several threads of one program run at once, on separate cores or taking turns, all sharing the same memory.",
+  "howItWorks": "A thread is an independent stream of execution inside a process. Each thread has its own stack and registers, but it shares the process’s memory, files and sockets with every other thread. The OS scheduler runs threads in parallel on separate cores and preempts them, interrupting a thread at any moment to give another a turn. That makes threads the plain way to use every core, and to write blocking code: a thread waiting on a socket simply sleeps while others run. Shared memory is also the danger. If two threads touch the same memory at the same time, at least one writes, and nothing synchronizes them, that’s a data race: even `count++` is a read, an add and a write that two threads can interleave, losing updates. Locks prevent races but bring deadlocks, where two threads each hold a lock the other needs and wait forever. Threads also cost memory. Each has its own stack: on Linux with glibc a new thread gets the stack limit, typically 8 MB of virtual address space, and Windows reserves 1 MB by default. One OS thread per connection therefore strains at tens of thousands of connections (the C10K problem), so servers use thread pools: a fixed set of threads taking tasks from a queue. Green threads are the middle way: Go’s goroutines start with a few kilobytes of stack, and Java 21’s virtual threads step off their OS thread when they block, so a program can run hundreds of thousands of them on a handful of OS threads. In CPython, the global interpreter lock (GIL) lets only one thread run Python bytecode at a time; a free-threaded build without it is officially supported since Python 3.14, but still optional.",
+  "analogy": "Several cooks in one kitchen. Together they get through orders faster, but they share the fridge and the knives, so they need rules about who takes what; and two cooks each holding the one thing the other needs will stand there forever.",
+  "useWhen": [
+    "CPU-heavy work that splits across cores: image processing, compression, simulations, parallel queries",
+    "Blocking code and libraries you can’t make asynchronous, run on a thread pool",
+    "Thread-per-request servers at moderate concurrency, or at high concurrency with virtual threads or goroutines"
+  ],
+  "avoidWhen": [
+    "Tens of thousands of mostly idle connections, one OS thread each; use an event loop or green threads",
+    "CPU-bound pure Python on the default build with the GIL; use processes or the free-threaded build",
+    "Lots of shared mutable state; pass messages between threads (actors, channels, queues) so less needs a lock"
+  ],
+  "example": "A Java service handles each request on its own thread, and a request takes 50 ms, most of it waiting on the database. Little’s law says throughput is concurrency divided by latency, so a pool of 200 platform threads tops out near 200 / 0.05 s = 4,000 requests per second however idle the CPUs are, because every waiting request holds a thread. With virtual threads each request gets its own cheap thread, and while one waits on the database its OS thread runs others. They don’t make any request faster; they let more wait at once.",
+  "snippet": {
+    "lang": "java",
+    "source": [
+      "// A data race: count++ is read, add, write, and two threads can interleave them",
+      "class Counter {",
+      "    private int count = 0;",
+      "    void unsafeIncrement() { count++; }            // updates can be lost",
+      "    synchronized void increment() { count++; }     // a lock: one thread at a time",
+      "}",
+      "",
+      "// Java 21 virtual threads (example from JEP 444): 10,000 tasks that block",
+      "try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {",
+      "    IntStream.range(0, 10_000).forEach(i -> {",
+      "        executor.submit(() -> {",
+      "            Thread.sleep(Duration.ofSeconds(1));   // parks the virtual thread only",
+      "            return i;",
+      "        });",
+      "    });",
+      "}  // runs on a few OS threads; 10,000 platform threads might crash the program"
+    ]
+  },
+  "related": ["event-loop","actors","amdahls-law"],
+  "diagram": {
+    "caption": "A pool of four threads. Each request holds a thread for its whole 900 ms, including the time it spends waiting on I/O. When all four are busy, new requests queue for a free thread.",
+    "h": 220,
+    "nodes": [
+      {
+        "id": "clients",
+        "x": 130,
+        "y": 110,
+        "label": "Clients",
+        "sub": "requests",
+        "emit": {"every":300,"jitter":0.4,"req":true,"cycle":true},
+        "out": ["pool"]
+      },
+      {
+        "id": "pool",
+        "x": 470,
+        "y": 110,
+        "kind": "pool",
+        "label": "Thread pool",
+        "sub": "4 threads, blocking I/O",
+        "min": 4,
+        "max": 4,
+        "work": 900,
+        "mode": "reply",
+        "delay": 20
+      }
+    ]
+  },
+  "history": {
+    "story": [
+      "The problems came before the threads. In his 1965 lecture notes “Cooperating sequential processes”, Edsger Dijkstra introduced semaphores, with their P and V operations, so that processes sharing memory could take turns safely, and he described the “deadly embrace”, now called deadlock, along with his banker’s algorithm for avoiding it.",
+      "Threads became an everyday tool in the 1990s, and so did the complaints. In a 1995 talk, “Why Threads Are A Bad Idea (for most purposes)”, John Ousterhout argued that shared state, locks and deadlocks made threads too hard for most programmers, and that events should be the default. Dan Kegel’s C10K page (1999) put a number on the cost: with a 2 MB stack per thread, a 32-bit machine with 1 GB of address space runs out after 512 threads. Linux’s NPTL rewrite of POSIX threads, which needs a 2.6 kernel, made creating large numbers of threads much faster, and in 2003 Rob von Behren, Jeremy Condit and Eric Brewer answered Ousterhout with “Why Events Are A Bad Idea”, showing a user-level thread package that scaled to 100,000 threads.",
+      "That last idea, threads made cheap by the language runtime, won. Go launched in 2009 with goroutines whose stacks start at a few kilobytes and grow as needed. Java 21 (2023) added virtual threads so thread-per-request code can scale, and JDK 24 eliminated nearly all cases where one stayed pinned to its OS thread. Python is removing its GIL: PEP 703 was accepted in 2023, Python 3.13 (2024) shipped an experimental free-threaded build, and 3.14 (2025) made it officially supported but optional, at roughly 5 to 10% slower single-threaded code."
+    ],
+    "choices": [
+      { "choice": "Threads share all memory", "why": "Sharing makes communication as cheap as reading a variable, with no copying. The cost is that every shared value needs a lock or other synchronization: forget one and data is corrupted, take two in different orders and threads deadlock." },
+      { "choice": "Preemptive scheduling", "why": "The OS can interrupt any thread at any instruction, so one busy thread can’t freeze the others. It also means interleavings are unpredictable, which is why threading bugs depend on timing and are hard to reproduce." },
+      { "choice": "One kernel thread per thread (1:1)", "why": "Linux’s NPTL maps each thread to its own kernel scheduling entity. It’s simple and lets blocking system calls just work, but each thread carries a kernel object and a full stack." },
+      { "choice": "Cheap threads in the runtime", "why": "Go and Java’s virtual threads multiplex many lightweight threads onto a few OS threads and move them off when they block. Code stays sequential and blocking, which is easy to read, debug and profile, while scaling like asynchronous code." }
+    ],
+    "timeline": [
+      { "year": "1965", "text": "Dijkstra’s “Cooperating sequential processes” introduces semaphores and the deadly embrace" },
+      { "year": "1995", "text": "Ousterhout’s talk “Why Threads Are A Bad Idea (for most purposes)”" },
+      { "year": "1999", "text": "Dan Kegel publishes the C10K problem" },
+      { "year": "2009", "text": "Google open-sources Go, with goroutines" },
+      { "year": "2023", "text": "Java 21 ships virtual threads; PEP 703 (optional GIL) is accepted" },
+      { "year": "2024", "text": "Python 3.13 ships an experimental free-threaded build" },
+      { "year": "2025", "text": "Python 3.14 makes the free-threaded build officially supported" }
+    ],
+    "sources": [
+      { "label": "E. W. Dijkstra: Cooperating sequential processes (EWD 123)", "url": "https://www.cs.utexas.edu/~EWD/transcriptions/EWD01xx/EWD123.html" },
+      { "label": "Wikipedia: Semaphore (programming), dating EWD 123 to September 1965", "url": "https://en.wikipedia.org/wiki/Semaphore_(programming)" },
+      { "label": "John Ousterhout: Why Threads Are A Bad Idea (for most purposes), slides (1995)", "url": "https://web.stanford.edu/~ouster/cgi-bin/papers/threads.pdf" },
+      { "label": "Dan Kegel: The C10K problem", "url": "http://www.kegel.com/c10k.html" },
+      { "label": "Linux man-pages: pthreads(7) (LinuxThreads, NPTL, 1:1 threading)", "url": "https://man7.org/linux/man-pages/man7/pthreads.7.html" },
+      { "label": "von Behren, Condit and Brewer: Why Events Are A Bad Idea (for high-concurrency servers) (HotOS 2003)", "url": "https://www.usenix.org/legacy/events/hotos03/tech/full_papers/vonbehren/vonbehren.pdf" },
+      { "label": "Google Open Source Blog: Hey! Ho! Let’s Go! (Nov 2009)", "url": "https://opensource.googleblog.com/2009/11/hey-ho-lets-go.html" },
+      { "label": "Go 1.4 release notes: goroutine stacks start at 2048 bytes", "url": "https://go.dev/doc/go1.4" },
+      { "label": "OpenJDK: JDK 21 (General Availability 19 September 2023)", "url": "https://openjdk.org/projects/jdk/21/" },
+      { "label": "OpenJDK: JEP 444, Virtual Threads", "url": "https://openjdk.org/jeps/444" },
+      { "label": "OpenJDK: JEP 491, Synchronize Virtual Threads without Pinning (JDK 24)", "url": "https://openjdk.org/jeps/491" },
+      { "label": "PEP 703: Making the Global Interpreter Lock Optional in CPython (resolution Oct 2023)", "url": "https://peps.python.org/pep-0703/" },
+      { "label": "PEP 719: Python 3.13 release schedule (final 2024-10-07)", "url": "https://peps.python.org/pep-0719/" },
+      { "label": "PEP 745: Python 3.14 release schedule (final 2025-10-07)", "url": "https://peps.python.org/pep-0745/" },
+      { "label": "What’s New in Python 3.14: free-threaded Python is officially supported (5 to 10% single-threaded penalty)", "url": "https://docs.python.org/3/whatsnew/3.14.html" }
+    ]
+  },
+  "sources": [
+    { "label": "Linux man-pages: pthread_create(3) (default stack size comes from RLIMIT_STACK)", "url": "https://man7.org/linux/man-pages/man3/pthread_create.3.html" },
+    { "label": "Linux kernel: include/uapi/linux/resource.h (_STK_LIM, 8 MB)", "url": "https://github.com/torvalds/linux/blob/master/include/uapi/linux/resource.h" },
+    { "label": "Microsoft Learn: Thread stack size (1 MB default reservation)", "url": "https://learn.microsoft.com/en-us/windows/win32/procthread/thread-stack-size" },
+    { "label": "Dan Kegel: The C10K problem (one thread per client and its stack)", "url": "http://www.kegel.com/c10k.html" },
+    { "label": "John Ousterhout: Why Threads Are A Bad Idea, slides (shared state, preemption, locks, deadlock)", "url": "https://web.stanford.edu/~ouster/cgi-bin/papers/threads.pdf" },
+    { "label": "The Rustonomicon: Data races and race conditions", "url": "https://doc.rust-lang.org/nomicon/races.html" },
+    { "label": "The Java Tutorials: Thread interference (c++ is three steps)", "url": "https://docs.oracle.com/javase/tutorial/essential/concurrency/interfere.html" },
+    { "label": "The Java Tutorials: Synchronized methods", "url": "https://docs.oracle.com/javase/tutorial/essential/concurrency/syncmeth.html" },
+    { "label": "The Java Tutorials: Deadlock", "url": "https://docs.oracle.com/javase/tutorial/essential/concurrency/deadlock.html" },
+    { "label": "The Java Tutorials: Thread pools", "url": "https://docs.oracle.com/javase/tutorial/essential/concurrency/pools.html" },
+    { "label": "OpenJDK: JEP 444, Virtual Threads (Little’s law, carriers, pinning, the 10,000-task example)", "url": "https://openjdk.org/jeps/444" },
+    { "label": "Go FAQ: Why goroutines instead of threads?", "url": "https://go.dev/doc/faq#goroutines" },
+    { "label": "Python glossary: global interpreter lock", "url": "https://docs.python.org/3/glossary.html#term-global-interpreter-lock" },
+    { "label": "Python docs: Python support for free threading", "url": "https://docs.python.org/3/howto/free-threading-python.html" },
+    { "label": "PEP 779: Criteria for supported status for free-threaded Python", "url": "https://peps.python.org/pep-0779/" }
+  ]
+}

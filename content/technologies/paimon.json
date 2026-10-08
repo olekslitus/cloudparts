@@ -1,0 +1,142 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Apache Paimon",
+  "concepts": ["table-formats", "lakehouse"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://paimon.apache.org/",
+  "repo": "https://github.com/apache/paimon",
+  "summary": "A lake table format built on LSM trees, so streaming jobs can upsert into object storage and other jobs can read the changes as a stream.",
+  "intro": [
+    "Paimon keeps a table as files under one directory, like Iceberg: a snapshot file (JSON) names the schema and a manifest list, manifests list the data files, and data files are Parquet by default, or ORC or Avro. What differs is how rows with a primary key are stored. Each partition is split into buckets by a hash of the key, and each bucket is an LSM tree: writers buffer records in memory, sort them by key and flush them as a new sorted run. Readers merge the runs, and a background compaction, similar to RocksDB’s universal compaction, folds runs together so reads stay fast. When two records share a key, a merge engine decides the result: keep the latest (the default), fill in non-null columns from several streams (partial update), aggregate, or keep the first row.",
+    "Because every commit is a snapshot, a streaming job can read a table as an endless queue of changes and pass them to the next table, which is how Flink pipelines chain Paimon tables. A changelog producer controls whether those changes include old values: `input` stores the incoming change stream, while `lookup` and `full-compaction` compute it during compaction. Flink and Spark read and write, including streaming; Hive, Trino, Presto, StarRocks and Doris can read, and Paimon can also write Iceberg-compatible metadata so Iceberg readers see the same files. Tables can sit in HDFS, S3, Azure, Google Cloud Storage and other stores, with the catalog in the file system, Hive Metastore, a JDBC database or a REST service. Paimon 2.0, from August 2026, adds multimodal tables with BLOB, vector and variant columns and vector and full-text indexes."
+  ],
+  "strengths": [
+    "High-rate upserts and deletes into object storage: writes are appends to an LSM tree rather than rewrites of whole files",
+    "A table doubles as a change stream, so streaming jobs can chain table to table instead of through Kafka topics",
+    "Merge engines handle common streaming patterns in storage: wide tables assembled from several streams (partial update) and running aggregates",
+    "Built-in CDC jobs sync MySQL, PostgreSQL, MongoDB, Kafka or Pulsar sources into tables, following schema changes",
+    "Iceberg-compatible metadata lets engines that only speak Iceberg read Paimon tables"
+  ],
+  "limits": [
+    "Streaming writes and reads need Flink, or Spark in micro-batches; Hive, Trino, Presto, StarRocks and Doris only read or batch-write",
+    "Bucket layout needs care: too many buckets make small files, too few limit write parallelism, and changing a fixed bucket count is an offline job",
+    "Dynamic buckets, the default for primary-key tables, allow only one writing job per partition; a second job can duplicate data",
+    "Compaction competes with writes, and only one job may compact a partition, so several writers to one table need a separate compaction job",
+    "Changelog producers slow compaction, and the docs advise enabling them only when a downstream consumer needs old values"
+  ],
+  "worksWith": [
+    { "id": "parquet", "how": "stores data files by default as" },
+    { "id": "s3", "how": "can keep tables in" },
+    { "id": "spark", "how": "is read and written, in batch or streams, by" },
+    { "id": "iceberg", "how": "writes compatible metadata for readers of" },
+    { "id": "kafka", "how": "can sync CDC topics into tables from" },
+    { "id": "mysql", "how": "can sync tables and schema changes from" },
+    { "id": "trino", "how": "can be queried by" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "A primary-key table on S3, read as a stream and as of a snapshot (Flink SQL)",
+    "source": [
+      "-- paimon-flink and paimon-s3 jars in Flink's lib directory",
+      "CREATE CATALOG lake WITH (",
+      "  'type' = 'paimon',",
+      "  'warehouse' = 's3://acme-lake/paimon',",
+      "  's3.endpoint' = 's3.eu-west-1.amazonaws.com',",
+      "  's3.access-key' = '...',",
+      "  's3.secret-key' = '...'",
+      ");",
+      "USE CATALOG lake;",
+      "",
+      "-- each bucket of each partition is an LSM tree sorted by the key",
+      "CREATE TABLE orders (",
+      "  order_id BIGINT,",
+      "  status STRING,",
+      "  amount DECIMAL(10, 2),",
+      "  updated_at TIMESTAMP(3),",
+      "  dt STRING,",
+      "  PRIMARY KEY (dt, order_id) NOT ENFORCED",
+      ") PARTITIONED BY (dt) WITH (",
+      "  'sequence.field' = 'updated_at',   -- newest update wins, even out of order",
+      "  'changelog-producer' = 'lookup'    -- emit old and new values for consumers",
+      ");",
+      "",
+      "SET 'execution.runtime-mode' = 'streaming';",
+      "-- another job: read only new changes, as an unbounded stream",
+      "SELECT * FROM orders /*+ OPTIONS('scan.mode' = 'latest') */;",
+      "",
+      "-- batch: the table as of snapshot 42",
+      "SELECT * FROM orders /*+ OPTIONS('scan.snapshot-id' = '42') */;"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Paimon, Iceberg, Hudi or Delta Lake?",
+      "intro": "All four turn files in object storage into tables with snapshots. They differ in how they apply updates by key and how well a downstream job can follow the changes.",
+      "columns": ["Paimon", "Iceberg", "Hudi", "Delta Lake"],
+      "rows": [
+        { "label": "How commits are tracked", "values": ["Snapshot files pointing to manifest lists and manifests", "Metadata file pointing to snapshots, manifest lists and manifests; a catalog swaps the pointer", "A timeline of commits, compactions and cleans in `.hoodie`", "Numbered JSON commits in `_delta_log`, with Parquet checkpoints"] },
+        { "label": "Updates by key", "values": ["LSM tree per bucket; merged at read and in compaction, with a choice of merge engines", "Rewrite files, or write delete files or deletion vectors", "Index finds the file group; copy-on-write or log files merged later", "Rewrite files, or deletion vectors"] },
+        { "label": "Following changes downstream", "values": ["Streaming read of every snapshot; changelog producers add old values", "Streaming reads process append snapshots only; overwrites and deletes fail or are skipped", "Incremental queries return records changed since a commit", "Change data feed, when enabled on the table"] }
+      ],
+      "notes": [
+        "Paimon was designed for Flink pipelines that update tables continuously. It can also write Iceberg metadata, as Delta Lake can through UniForm, so engines that only read Iceberg can query the same files."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Flink users building real-time pipelines typically wired up several stores: a message queue such as Kafka between streaming jobs, a file system or object store for batch and ad-hoc queries, and a key-value store for lookups. Intermediate Kafka tables couldn’t be queried, so teams dual-wrote to other systems, and the lake formats of the time, Hudi and Iceberg, struggled to take a high-speed stream of updates.",
+      "Jingsong Lee at Alibaba proposed FLIP-188, a storage layer built into Flink that combined a log for streaming with an LSM-based file store in columnar formats. It shipped as Flink Table Store 0.1.0, a preview, in May 2022. As engines other than Flink started using it, users questioned whether a Flink sub-project could be neutral, so it left Flink and entered the Apache Incubator as Paimon in March 2023, with developers from Alibaba, ByteDance, Bilibili and Confluent. Paimon 0.4 in June 2023 was the first release under the new name.",
+      "Paimon became a top-level Apache project in March 2024 and released 1.0 in early 2025, after production use at Alibaba and ByteDance. Version 2.0 in August 2026 turned toward AI data, with BLOB and vector columns and indexes in the same tables."
+    ],
+    "choices": [
+      { "choice": "An LSM tree inside each bucket", "why": "LSM trees turn updates and deletes into appends, which suits an object store that can’t edit files in place and a stream that never stops writing. Compaction merges the sorted runs later." },
+      { "choice": "Changes as a first-class output", "why": "The goal was to replace the queue between streaming jobs. Storing snapshots and, optionally, full changelogs lets a downstream Flink job read the table as a stream with old and new values." },
+      { "choice": "Leaving Flink for an independent project", "why": "As Spark, Hive and others adopted it, users worried about the neutrality of a storage layer owned by one engine’s community, so it moved to its own Apache project and name." }
+    ],
+    "timeline": [
+      { "year": "2022", "text": "Flink Table Store 0.1.0 preview released in May" },
+      { "year": "2023", "text": "Enters the Apache Incubator as Paimon in March; 0.4 in June" },
+      { "year": "2024", "text": "Graduates to a top-level Apache project in March" },
+      { "year": "2025", "text": "Paimon 1.0, a stabilisation release" },
+      { "year": "2026", "text": "Paimon 2.0 adds multimodal tables, vectors and search indexes" }
+    ],
+    "sources": [
+      { "label": "Apache Flink: FLIP-188, Introduce built-in dynamic table storage", "url": "https://cwiki.apache.org/confluence/display/FLINK/FLIP-188%3A+Introduce+Built-in+Dynamic+Table+Storage" },
+      { "label": "Apache Flink blog: Flink Table Store 0.1.0 release announcement (May 2022)", "url": "https://flink.apache.org/2022/05/11/apache-flink-table-store-0.1.0-release-announcement/" },
+      { "label": "Apache Incubator: Paimon proposal", "url": "https://cwiki.apache.org/confluence/display/INCUBATOR/PaimonProposal" },
+      { "label": "Apache Incubator: Paimon project status (entered March 2023, graduated March 2024)", "url": "https://incubator.apache.org/projects/paimon.html" },
+      { "label": "Apache Paimon 0.4 release notes (first release as Paimon, June 2023)", "url": "https://github.com/apache/paimon-website/blob/master/community/docs/releases/release-0.4.md" },
+      { "label": "Apache Paimon 1.0 release notes (2025)", "url": "https://github.com/apache/paimon-website/blob/master/community/docs/releases/release-1.0.md" }
+    ]
+  },
+  "sources": [
+    { "label": "Paimon docs: Basic concepts (snapshots, manifests, data file formats, commits)", "url": "https://paimon.apache.org/docs/2.0/concepts/basic-concepts" },
+    { "label": "Paimon docs: Primary key table (buckets, LSM trees, sorted runs)", "url": "https://paimon.apache.org/docs/2.0/primary-key-table/" },
+    { "label": "Paimon docs: Data distribution (fixed, dynamic and postpone buckets)", "url": "https://paimon.apache.org/docs/2.0/primary-key-table/data-distribution" },
+    { "label": "Paimon docs: Merge engines", "url": "https://paimon.apache.org/docs/2.0/primary-key-table/merge-engine/" },
+    { "label": "Paimon docs: Partial update", "url": "https://paimon.apache.org/docs/2.0/primary-key-table/merge-engine/partial-update" },
+    { "label": "Paimon docs: Changelog producer", "url": "https://paimon.apache.org/docs/2.0/primary-key-table/changelog-producer" },
+    { "label": "Paimon docs: Compaction (universal compaction, one compaction job per partition)", "url": "https://paimon.apache.org/docs/2.0/primary-key-table/compaction" },
+    { "label": "Paimon docs: Catalog (filesystem, Hive, JDBC, REST)", "url": "https://paimon.apache.org/docs/2.0/concepts/catalog" },
+    { "label": "Paimon docs: Filesystems (S3, Azure, GCS, HDFS and others)", "url": "https://paimon.apache.org/docs/2.0/maintenance/filesystems" },
+    { "label": "Paimon docs: Flink SQL query (streaming reads, time travel)", "url": "https://paimon.apache.org/docs/2.0/flink/sql-query" },
+    { "label": "Paimon docs: Ecosystem (engine compatibility matrix)", "url": "https://paimon.apache.org/docs/2.0/ecosystem/" },
+    { "label": "Paimon docs: Iceberg metadata", "url": "https://paimon.apache.org/docs/2.0/iceberg/" },
+    { "label": "Paimon docs: CDC ingestion", "url": "https://paimon.apache.org/docs/2.0/cdc-ingestion/" },
+    { "label": "Paimon docs: Multimodal table", "url": "https://paimon.apache.org/docs/2.0/multimodal-table/" },
+    { "label": "Apache Paimon 2.0 release notes (August 2026)", "url": "https://github.com/apache/paimon-website/blob/master/community/docs/releases/release-2.0.md" },
+    { "label": "GitHub: apache/paimon release 2.0.0", "url": "https://github.com/apache/paimon/releases/tag/release-2.0.0" },
+    { "label": "Iceberg table spec (metadata tree, delete files, deletion vectors)", "url": "https://iceberg.apache.org/spec/" },
+    { "label": "Iceberg docs: Spark Structured Streaming (append snapshots only)", "url": "https://iceberg.apache.org/docs/latest/spark-structured-streaming/" },
+    { "label": "Hudi docs: Table and query types", "url": "https://hudi.apache.org/docs/table_types" },
+    { "label": "Hudi docs: Timeline", "url": "https://hudi.apache.org/docs/timeline" },
+    { "label": "Delta transaction log protocol", "url": "https://github.com/delta-io/delta/blob/master/PROTOCOL.md" },
+    { "label": "Delta Lake docs: Change data feed", "url": "https://docs.delta.io/delta-change-data-feed/" },
+    { "label": "Delta Lake docs: Universal Format (UniForm)", "url": "https://docs.delta.io/delta-uniform/" }
+  ],
+  "checked": "2026-10-06"
+}

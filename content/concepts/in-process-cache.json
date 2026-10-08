@@ -1,0 +1,142 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "In-process caches",
+  "category": "data",
+  "order": 32,
+  "summary": "A small cache inside your service’s own memory: no network hop, but every copy of the service has its own.",
+  "howItWorks": "An in-process cache is a map kept in the same memory as your code, with rules for what to throw away. You look a key up, and on a miss you compute or fetch the value and store it for next time. Because it’s an ordinary memory lookup, a hit takes nanoseconds to a few microseconds, with no network call, no serialisation and nothing extra to run. Memory is limited, so the cache evicts entries: **LRU** drops the least recently used, Caffeine’s **W-TinyLFU** also weighs how often a key has been used, and a **TTL** expires entries after a fixed time so stale data can’t live forever. Libraries handle this for you: Caffeine or Guava in Java, `lru-cache` in Node, `functools.lru_cache` in Python, `IMemoryCache` in .NET. The catch is that each running instance has its own cache. With ten pods there are ten copies, each warming up separately after a deploy, each using memory counted against that pod’s limit, and each possibly holding a different version of the same record. Clearing a key in one pod leaves the other nine stale until their TTL runs out, unless you broadcast invalidations. That’s why in-process caches suit data that is read often, changes rarely and may be slightly stale, and why many systems put one in front of a shared cache such as Valkey or Redis: **two-level caching**, where the local cache absorbs the hottest keys and the shared one keeps all instances close to each other and protects the database.",
+  "analogy": "A sticky note on your own monitor versus the team whiteboard. Reading your note is instant, but when the meeting time changes, everyone’s notes are wrong until each person rewrites theirs; the whiteboard is a walk away, but there’s only one of it.",
+  "useWhen": [
+    "Hot, small, read-mostly data: configuration, feature flags, currency rates, product categories, compiled templates",
+    "Results that are expensive to compute and safe to be a little stale for seconds or minutes",
+    "As the first level in front of a shared cache, to cut network round trips for the hottest keys",
+    "Memoising a pure function inside one process"
+  ],
+  "avoidWhen": [
+    "Data that must look the same on every instance right after a write, such as account balances or permissions just revoked",
+    "Large datasets: every instance pays the memory, and a big cache can push a pod over its memory limit",
+    "Sessions or anything a user expects to follow them across instances, unless you pin users to instances"
+  ],
+  "example": "A pricing service runs on eight pods. Each keeps the 10,000 most-used product records in Caffeine for 30 seconds, behind a shared Valkey cache with a five-minute TTL. On a hit the pod answers without a network call; a miss on the pod costs one Valkey round trip, and only a miss in both reaches the database. When a price changes, the service deletes the Valkey key, and the pods catch up within 30 seconds, which the business has agreed is acceptable for list prices.",
+  "snippet": {
+    "lang": "ts",
+    "source": [
+      "import { LRUCache } from 'lru-cache'",
+      "import { createClient } from 'redis'          // works with Valkey too",
+      "",
+      "const local = new LRUCache<string, Product>({ max: 10_000, ttl: 30_000 })  // per pod, 30 s",
+      "const shared = await createClient({ url: 'redis://cache:6379' }).connect()",
+      "",
+      "export async function getProduct(id: string): Promise<Product> {",
+      "  const key = `product:${id}`",
+      "  const hit = local.get(key)",
+      "  if (hit) return hit                          // level 1: in memory, no network",
+      "",
+      "  const cached = await shared.get(key)         // level 2: one network round trip",
+      "  if (cached) {",
+      "    const p = JSON.parse(cached) as Product",
+      "    local.set(key, p)",
+      "    return p",
+      "  }",
+      "",
+      "  const p = await db.loadProduct(id)           // miss everywhere: ask the database",
+      "  await shared.set(key, JSON.stringify(p), { EX: 300 })",
+      "  local.set(key, p)",
+      "  return p",
+      "}"
+    ]
+  },
+  "related": ["cache", "key-value", "cdn"],
+  "diagram": {
+    "caption": "Each pod checks its own in-process cache first (HIT). On a miss it asks the shared cache, and only misses there reach the database. The two pods warm and hold their caches separately.",
+    "h": 270,
+    "nodes": [
+      {
+        "id": "cl",
+        "x": 80,
+        "y": 135,
+        "label": "Clients",
+        "sub": "GET /products/…",
+        "emit": {"every": 450, "jitter": 0.35, "req": true, "color": 0},
+        "out": ["lb"]
+      },
+      {"id": "lb", "x": 220, "y": 135, "label": "Load balancer", "sub": "round robin", "route": "rr", "concept": "lb", "out": ["p1", "p2"]},
+      {"id": "p1", "x": 395, "y": 65, "label": "Pod A", "sub": "in-process LRU · 30 s", "mode": "cache", "p": 0.7, "out": ["shared"]},
+      {"id": "p2", "x": 395, "y": 205, "label": "Pod B", "sub": "in-process LRU · 30 s", "mode": "cache", "p": 0.7, "out": ["shared"]},
+      {"id": "shared", "x": 560, "y": 135, "label": "Shared cache", "sub": "Valkey · 5 min", "mode": "cache", "p": 0.6, "concept": "cache", "out": ["db"]},
+      {"id": "db", "x": 695, "y": 135, "label": "Database", "sub": "slow · 150 ms", "mode": "reply", "delay": 550, "concept": "relational"}
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Common libraries",
+      "corner": "Library",
+      "columns": ["Language", "Eviction and expiry", "Notes"],
+      "rows": [
+        { "label": "Caffeine", "values": ["Java", "Size limit with Window TinyLFU; expire or refresh after write or access", "Apache 2.0. Guava-inspired API, built on its authors’ experience designing Guava’s cache"] },
+        { "label": "Guava Cache", "values": ["Java", "Size limit; expireAfterWrite, expireAfterAccess", "Part of Guava since release 10.0 (2011); in memory only, its docs point to Memcached for anything bigger"] },
+        { "label": "lru-cache", "values": ["JavaScript (Node and browsers)", "Count (max) or size (maxSize) limit with LRU; optional TTL", "BlueOak-1.0.0. Stale entries aren’t removed until read unless ttlAutopurge is on"] },
+        { "label": "functools.lru_cache", "values": ["Python (standard library)", "LRU, 128 entries by default; no time-based expiry", "A decorator that memoises a function; added in Python 3.2"] },
+        { "label": "IMemoryCache and HybridCache", "values": [".NET", "Expirations and SizeLimit; the runtime doesn’t shrink it under memory pressure", "HybridCache adds a distributed second level, stampede protection and tag invalidation"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Remembering a function’s answers is older than web caches. In April 1968 Donald Michie described “memo” functions in Nature: functions that keep a record of results they have already computed, the idea now called memoisation. Application code kept doing it too, holding hot data in a local variable or a map.",
+      "The web exposed the limits. In 2004 Brad Fitzpatrick explained why he wrote memcached for LiveJournal: each of the 30 to 50 mod_perl processes on a web server had its own address space and could cache only for itself, which wasted memory, and he didn’t want 40-plus machines all caching independently and duplicating the same data. A shared cache over the network fixed that, and for years the in-process cache was the less fashionable option.",
+      "It came back as a first level in front of shared caches, because even a fast network cache costs a round trip. Libraries made it easy: Python 3.2 added `functools.lru_cache` in 2011, Guava added `CacheBuilder` the same year, and Ben Manes, who had worked on Guava’s cache, went on to write Caffeine, using the W-TinyLFU policy from a 2015 paper he wrote with Gil Einziger and Roy Friedman. Redis 6 (2020) added server-assisted client-side caching, which tells clients when keys they cached locally have changed, and .NET’s HybridCache (2025) packaged two-level caching with stampede protection."
+    ],
+    "choices": [
+      {
+        "choice": "Keep the cache in the same process as the code",
+        "why": "Access to local memory is orders of magnitude faster than a networked service, as Redis’s own documentation on client-side caching points out, and there is no extra system to run."
+      },
+      {
+        "choice": "Bound the cache by size and by time",
+        "why": "An unbounded map is a memory leak. lru-cache refuses to start without max, maxSize or ttl, and .NET leaves the size limit to the developer because the runtime won’t shrink the cache under memory pressure."
+      },
+      {
+        "choice": "Weigh frequency as well as recency",
+        "why": "Plain LRU lets a burst of one-off keys push out entries that are used all the time. TinyLFU keeps a compact frequency sketch and admits a new entry only if it is likely to be used more than the one it would evict."
+      },
+      {
+        "choice": "Put a shared cache behind it",
+        "why": "Per-instance caches disagree and each warms up on its own. A shared second level keeps instances close to each other and protects the database, while the local level absorbs the hottest keys."
+      }
+    ],
+    "timeline": [
+      { "year": "1968", "text": "Donald Michie describes “memo” functions in Nature" },
+      { "year": "2004", "text": "Brad Fitzpatrick explains why per-process caches pushed LiveJournal to memcached" },
+      { "year": "2011", "text": "Python 3.2 adds functools.lru_cache; Guava 10 adds CacheBuilder" },
+      { "year": "2015", "text": "Einziger, Friedman and Manes describe TinyLFU, later used in Caffeine" },
+      { "year": "2020", "text": "Redis 6 adds server-assisted client-side caching (tracking)" },
+      { "year": "2025", "text": ".NET HybridCache, a two-level cache, becomes generally available" }
+    ],
+    "sources": [
+      { "label": "Donald Michie: “Memo” Functions and Machine Learning (Nature, Apr 1968)", "url": "https://www.nature.com/articles/218019a0" },
+      { "label": "Brad Fitzpatrick: Distributed caching with memcached (Linux Journal, Aug 2004)", "url": "https://www.linuxjournal.com/article/7451" },
+      { "label": "Python.org: Python 3.2 release (Feb 2011)", "url": "https://www.python.org/downloads/release/python-320/" },
+      { "label": "Python docs: functools.lru_cache (added in version 3.2)", "url": "https://docs.python.org/3/library/functools.html" },
+      { "label": "Guava wiki: Release 10.0 notes (Sep 2011, new common.cache package)", "url": "https://github.com/google/guava/wiki/Release10" },
+      { "label": "Einziger, Friedman and Manes: TinyLFU, A Highly Efficient Cache Admission Policy (arXiv, Dec 2015)", "url": "https://arxiv.org/abs/1512.00727" },
+      { "label": "Caffeine on GitHub (Guava-inspired API, drawing on Guava’s cache)", "url": "https://github.com/ben-manes/caffeine" },
+      { "label": "Redis 6.0 release notes (6.0.0 GA, Apr 2020; client side caching)", "url": "https://raw.githubusercontent.com/redis/redis/6.0/00-RELEASENOTES" },
+      { "label": ".NET Blog: Hello HybridCache! (Mar 2025)", "url": "https://devblogs.microsoft.com/dotnet/hybrid-cache-is-now-ga/" }
+    ]
+  },
+  "sources": [
+    { "label": "Caffeine on GitHub (Apache 2.0)", "url": "https://github.com/ben-manes/caffeine" },
+    { "label": "Caffeine wiki: Efficiency (Window TinyLFU)", "url": "https://github.com/ben-manes/caffeine/wiki/Efficiency" },
+    { "label": "Guava wiki: Caches explained", "url": "https://github.com/google/guava/wiki/CachesExplained" },
+    { "label": "isaacs/node-lru-cache on GitHub (BlueOak-1.0.0)", "url": "https://github.com/isaacs/node-lru-cache" },
+    { "label": "Python docs: functools.lru_cache", "url": "https://docs.python.org/3/library/functools.html" },
+    { "label": "Microsoft Learn: Cache in-memory in ASP.NET Core (per-server cache, sticky sessions, SizeLimit)", "url": "https://learn.microsoft.com/en-us/aspnet/core/performance/caching/memory" },
+    { "label": "Microsoft Learn: Overview of caching in ASP.NET Core (HybridCache two-level caching)", "url": "https://learn.microsoft.com/en-us/aspnet/core/performance/caching/overview" },
+    { "label": "Microsoft Learn: HybridCache library in ASP.NET Core (other servers’ in-memory caches aren’t invalidated)", "url": "https://learn.microsoft.com/en-us/aspnet/core/performance/caching/hybrid" },
+    { "label": "Redis docs: Client-side caching reference", "url": "https://redis.io/docs/latest/develop/reference/client-side-caching/" },
+    { "label": "Peter Norvig: Teach Yourself Programming in Ten Years (fetch from main memory: 100 ns)", "url": "https://norvig.com/21-days.html" },
+    { "label": "Kubernetes docs: Assign memory resources to containers (over the limit: OOMKilled)", "url": "https://kubernetes.io/docs/tasks/configure-pod-container/assign-memory-resource/" }
+  ]
+}

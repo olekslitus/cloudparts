@@ -1,0 +1,134 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Amazon MemoryDB",
+  "concepts": ["cache", "key-value"],
+  "provider": "aws",
+  "vendor": "Amazon Web Services",
+  "license": "Proprietary (engine compatible with open-source Valkey 7.2 and Redis OSS 7, both BSD-3-Clause)",
+  "website": "https://aws.amazon.com/memorydb/",
+  "summary": "A Valkey- and Redis-compatible database that keeps everything in memory but loses no acknowledged write.",
+  "intro": [
+    "A MemoryDB cluster looks like a Valkey or Redis OSS cluster: shards inside your VPC, each with a primary node and read replicas, holding the whole dataset in RAM and speaking the same commands. The difference is where durability lives. A write isn’t acknowledged until it’s stored in a separate distributed transaction log that spans several Availability Zones. Replicas follow that log. If a primary dies, a replica takes over without losing anything the client was told succeeded, and reads from primaries stay strongly consistent across the failover. Replica reads are eventually consistent. The result is microsecond reads but single-digit-millisecond writes, on clusters of up to 500 nodes and more than 100 TB.",
+    "There is no serverless option. You pay per node-hour, plus per GB written: $0.20 per GB on Redis OSS, while Valkey clusters write the first 10 TB a month free and pay $0.04 per GB after that. Snapshots up to the cluster’s size are free. Valkey nodes cost about 30% less than Redis OSS nodes. Vector search arrived in 2024, and Multi-Region clusters replicate active-active across up to five Regions. In June 2026 ElastiCache gained the same kind of Multi-AZ transaction log for Valkey 9.0, and AWS’s MemoryDB FAQ now recommends ElastiCache for new workloads."
+  ],
+  "strengths": [
+    "Acknowledged writes survive node and Availability Zone failures; the design targets eleven nines of durability",
+    "Reads from primaries are strongly consistent, even across failovers",
+    "Microsecond reads with Valkey and Redis data structures, so one service can replace a cache plus a database",
+    "Multi-Region active-active clusters with up to 99.999% availability, and vector search at no extra cost"
+  ],
+  "limits": [
+    "AWS now recommends ElastiCache with durability for new workloads, and MemoryDB’s engines lag behind: Valkey 7.2.6 and MemoryDB 7.3 (December 2024), while ElastiCache runs Valkey 9.1",
+    "Every write waits for the Multi-AZ log, so writes take single-digit milliseconds rather than microseconds, and there is no faster asynchronous mode",
+    "No serverless or scale-to-zero: the smallest Valkey node, `db.t4g.small`, costs $0.0336 an hour (about $25 a month), and high availability needs at least two. Redis OSS clusters also pay $0.20 per GB written",
+    "The whole dataset lives in RAM. Data tiering to SSD on R6gd nodes helps only when about 20% of the data is hot",
+    "Multi-Region replication is asynchronous and eventually consistent, with automatic conflict resolution (CRDTs). It works only with Valkey and in 12 Regions"
+  ],
+  "worksWith": [
+    { "id": "redis", "how": "speaks the commands and protocol of" },
+    { "id": "aws-vpc", "how": "runs every cluster inside" },
+    { "id": "s3", "how": "keeps and exports snapshots in" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "A two-shard Valkey cluster with a password-protected user",
+    "source": [
+      "aws memorydb create-subnet-group --subnet-group-name orders-subnets \\",
+      "  --subnet-ids subnet-0a1b2c3d4e5f60718 subnet-0f1e2d3c4b5a69788",
+      "",
+      "aws memorydb create-user --user-name orders-app \\",
+      "  --access-string 'on ~order:* +@all' \\",
+      "  --authentication-mode Type=password,Passwords=\"$ORDERS_DB_PASSWORD\"",
+      "aws memorydb create-acl --acl-name orders-acl --user-names orders-app",
+      "",
+      "# 2 shards x (1 primary + 1 replica) = 4 nodes",
+      "aws memorydb create-cluster --cluster-name orders --engine valkey \\",
+      "  --node-type db.r7g.large --num-shards 2 --num-replicas-per-shard 1 \\",
+      "  --acl-name orders-acl --subnet-group-name orders-subnets --tls-enabled",
+      "",
+      "aws memorydb describe-clusters --cluster-name orders \\",
+      "  --query 'Clusters[0].ClusterEndpoint.Address' --output text",
+      "",
+      "# the reply comes back only after the write is in the Multi-AZ log",
+      "valkey-cli -c --tls -h clustercfg.orders.ab12cd.memorydb.us-east-1.amazonaws.com -p 6379 \\",
+      "  --user orders-app --pass \"$ORDERS_DB_PASSWORD\" HSET order:1042 status paid total 59.90"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "ElastiCache, MemoryDB or DynamoDB?",
+      "intro": "All three can hold an app’s key-value data. They differ in where the data lives, when a write counts as safe, and how you pay. Node prices are US East (N. Virginia) on-demand list prices for one 13.07 GiB `r7g.large` Valkey node, checked 2026-10-05.",
+      "corner": "",
+      "columns": ["ElastiCache (Valkey)", "MemoryDB", "DynamoDB"],
+      "rows": [
+        { "label": "Where data lives", "values": ["RAM on nodes (optionally SSD with data tiering)", "RAM on nodes, plus a transaction log across Availability Zones", "SSD-backed partitions replicated across Availability Zones"] },
+        { "label": "When a write counts as safe", "values": ["Default: once the primary has it; replicas copy later. With durability (Valkey 9.0): synchronous or asynchronous log", "Always after the Multi-AZ log commits", "Written to partitions replicated across Availability Zones"] },
+        { "label": "Latency", "values": ["Microsecond reads; microsecond writes, or single-digit milliseconds with synchronous durability", "Microsecond reads, single-digit-millisecond writes", "Single-digit milliseconds"] },
+        { "label": "Lost on a primary failure", "values": ["Default: recent unreplicated writes. Asynchronous durability: up to 10 seconds. Synchronous: nothing acknowledged", "Nothing acknowledged", "No nodes to fail over; AWS manages replicas"] },
+        { "label": "Billing", "values": ["Node-hours, or serverless per GB-hour and ECPU", "Node-hours plus data written (Valkey: first 10 TB a month free)", "Per request (on-demand) or provisioned throughput"] },
+        { "label": "One `r7g.large` node", "values": ["$0.1752 an hour; $0.2067 with synchronous durability (+18%)", "$0.2163 an hour", "Not node-based"] },
+        { "label": "API", "values": ["Valkey, Redis OSS or Memcached commands", "Valkey or Redis OSS commands", "DynamoDB’s own API"] },
+        { "label": "Fits", "values": ["Caches, and since 2026 durable in-memory data on new clusters", "Existing MemoryDB users, Multi-Region active-active in memory", "Large datasets that don’t need memory speed, with pay-per-request billing"] }
+      ],
+      "notes": [
+        "Durability on ElastiCache needs a node-based cluster on Valkey 9.0 or later; serverless caches don’t offer it.",
+        "Both in-memory services need at least two nodes per shard for high availability, so double the node prices for a minimal highly available setup."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Teams that wanted Redis speed for their main data usually ran two systems: ElastiCache as a cache in front of a durable database such as Aurora or DynamoDB. That meant writing code to keep the two in sync and paying for both. Redis’s own persistence didn’t close the gap: its append-only file sits on one node’s disk, and replicas copy writes asynchronously, so a failover could lose data.",
+      "AWS launched MemoryDB for Redis on 19 August 2021 in four Regions. It was compatible with Redis 6.2 and scaled to 500 nodes and more than 100 TB. A 2024 SIGMOD paper by its engineers describes the design: keep Redis as the in-memory execution engine, but move durability into a separate low-latency transaction log service, so performance, availability and durability can scale independently.",
+      "Data tiering to SSD came in 2022. Vector search went GA in July 2024. In October 2024 Valkey support arrived at 30% lower prices, and Multi-Region clusters followed that December. In June 2026 ElastiCache added the same kind of Multi-AZ log for Valkey 9.0, with a choice of synchronous or asynchronous writes, and AWS began recommending ElastiCache for new workloads."
+    ],
+    "choices": [
+      { "choice": "Durability in a separate log service, not on the node", "why": "Offloading durability to a distributed transaction log let MemoryDB keep the open-source engine nearly unchanged while scaling performance, availability and durability independently." },
+      { "choice": "Acknowledge a write only after it is in the Multi-AZ log", "why": "Clients must never be told a write succeeded and then lose it in a failover. The cost is single-digit-millisecond writes instead of microseconds." },
+      { "choice": "Stay compatible with Redis", "why": "Supporting the same data types, commands and clients let teams point existing Redis code at MemoryDB and drop the separate cache-plus-database setup." }
+    ],
+    "timeline": [
+      { "year": "2021", "text": "Launches in August, compatible with Redis 6.2, in four Regions" },
+      { "year": "2022", "text": "Data tiering moves cold items to SSD on R6gd nodes" },
+      { "year": "2024", "text": "Vector search GA (July); Valkey support at 30% lower prices (October)" },
+      { "year": "2024", "text": "Multi-Region active-active clusters for Valkey (December)" },
+      { "year": "2026", "text": "ElastiCache adds a Multi-AZ log; AWS recommends it for new workloads" }
+    ],
+    "sources": [
+      { "label": "AWS What’s New: Announcing Amazon MemoryDB for Redis (Aug 2021)", "url": "https://aws.amazon.com/about-aws/whats-new/2021/08/amazon-memorydb-redis/" },
+      { "label": "AWS News Blog: Introducing Amazon MemoryDB for Redis (Aug 2021)", "url": "https://aws.amazon.com/blogs/aws/introducing-amazon-memorydb-for-redis-a-redis-compatible-durable-in-memory-database-service/" },
+      { "label": "Taleb et al.: Amazon MemoryDB, a fast and durable memory-first cloud database (SIGMOD 2024)", "url": "https://www.amazon.science/publications/amazon-memorydb-a-fast-and-durable-memory-first-cloud-database" },
+      { "label": "Amazon MemoryDB FAQs: how durability differs from append-only files", "url": "https://aws.amazon.com/memorydb/faqs/" },
+      { "label": "AWS What’s New: Data tiering for Amazon MemoryDB for Redis (Nov 2022)", "url": "https://aws.amazon.com/about-aws/whats-new/2022/11/amazon-memorydb-redis-data-tiering/" },
+      { "label": "AWS What’s New: Announcing Amazon MemoryDB for Valkey (Oct 2024)", "url": "https://aws.amazon.com/about-aws/whats-new/2024/10/amazon-memorydb-valkey/" },
+      { "label": "AWS What’s New: Amazon ElastiCache for Valkey now supports durability (Jun 2026)", "url": "https://aws.amazon.com/about-aws/whats-new/2026/06/durability-amazon-elasticache/" }
+    ]
+  },
+  "sources": [
+    { "label": "MemoryDB Developer Guide: What is MemoryDB?", "url": "https://docs.aws.amazon.com/memorydb/latest/devguide/what-is-memorydb.html" },
+    { "label": "MemoryDB Developer Guide: Features of MemoryDB (500 nodes, 100 TB)", "url": "https://docs.aws.amazon.com/memorydb/latest/devguide/servicename-feature-overview.html" },
+    { "label": "MemoryDB Developer Guide: Consistency", "url": "https://docs.aws.amazon.com/memorydb/latest/devguide/consistency.html" },
+    { "label": "MemoryDB Developer Guide: Engine versions", "url": "https://docs.aws.amazon.com/memorydb/latest/devguide/engine-versions.html" },
+    { "label": "MemoryDB Developer Guide: Authenticating users with ACLs", "url": "https://docs.aws.amazon.com/memorydb/latest/devguide/clusters.acls.html" },
+    { "label": "MemoryDB Developer Guide: Create a cluster", "url": "https://docs.aws.amazon.com/memorydb/latest/devguide/getting-started.createcluster.html" },
+    { "label": "Amazon MemoryDB FAQs (ElastiCache recommendation, durability, Multi-Region, snapshots)", "url": "https://aws.amazon.com/memorydb/faqs/" },
+    { "label": "Amazon MemoryDB pricing (nodes, data written, snapshots)", "url": "https://aws.amazon.com/memorydb/pricing/" },
+    { "label": "AWS What’s New: Vector search for Amazon MemoryDB GA (Jul 2024)", "url": "https://aws.amazon.com/about-aws/whats-new/2024/07/aws-vector-search-for-amazon-memorydb/" },
+    { "label": "AWS What’s New: Amazon MemoryDB Multi-Region GA (Dec 2024)", "url": "https://aws.amazon.com/about-aws/whats-new/2024/12/general-availability-amazon-memory-db-multi-region/" },
+    { "label": "AWS What’s New: Announcing Amazon MemoryDB for Valkey (Oct 2024)", "url": "https://aws.amazon.com/about-aws/whats-new/2024/10/amazon-memorydb-valkey/" },
+    { "label": "Taleb et al.: Amazon MemoryDB, a fast and durable memory-first cloud database (SIGMOD 2024)", "url": "https://www.amazon.science/publications/amazon-memorydb-a-fast-and-durable-memory-first-cloud-database" },
+    { "label": "ElastiCache User Guide: Durability in ElastiCache", "url": "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/durability.html" },
+    { "label": "ElastiCache User Guide: Engine versions and upgrading", "url": "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/engine-versions.html" },
+    { "label": "Amazon ElastiCache pricing (nodes, durability)", "url": "https://aws.amazon.com/elasticache/pricing/" },
+    { "label": "DynamoDB Developer Guide: What is Amazon DynamoDB?", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Introduction.html" },
+    { "label": "DynamoDB Developer Guide: Partitions and data distribution", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.Partitions.html" },
+    { "label": "DynamoDB Developer Guide: Throughput capacity modes", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/capacity-mode.html" },
+    { "label": "AWS CLI reference: memorydb create-cluster", "url": "https://docs.aws.amazon.com/cli/latest/reference/memorydb/create-cluster.html" },
+    { "label": "AWS CLI reference: memorydb create-user", "url": "https://docs.aws.amazon.com/cli/latest/reference/memorydb/create-user.html" },
+    { "label": "AWS CLI reference: memorydb describe-clusters", "url": "https://docs.aws.amazon.com/cli/latest/reference/memorydb/describe-clusters.html" },
+    { "label": "Redis licenses (versions 7.2 and earlier are BSD-3-Clause)", "url": "https://redis.io/legal/licenses/" },
+    { "label": "Valkey on GitHub (BSD-3-Clause)", "url": "https://github.com/valkey-io/valkey" }
+  ],
+  "checked": "2026-10-05"
+}

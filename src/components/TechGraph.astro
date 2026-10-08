@@ -1,0 +1,96 @@
+---
+// How one technology connects to others: products that use it on the left, what it
+// uses on the right. Each link reads left to right as a sentence, e.g.
+// "DuckDB reads and writes DuckLake" and "DuckLake keeps its catalog in PostgreSQL".
+import type { Catalog, CatalogTech } from '@/lib/catalog';
+import { href } from '@/lib/nav';
+
+interface Props { tech: CatalogTech; catalog: Catalog }
+const { tech: t, catalog: c } = Astro.props;
+
+const left = c.edges.filter(e => e.to === t.id).map(e => ({ id: e.from, how: e.how }));
+const right = c.edges.filter(e => e.from === t.id).map(e => ({ id: e.to, how: e.how }));
+
+const W = 960, ROW = 58, PAD = 26, NW = 190, NH = 44, CW = 180;
+const rows = Math.max(left.length, right.length, 1);
+const H = rows * ROW + PAD * 2 - (ROW - NH);
+const cy = H / 2;
+const LX = 20 + NW / 2, RX = W - 20 - NW / 2, CX = W / 2;
+const busL = CX - CW / 2 - 26, busR = CX + CW / 2 + 26;
+const ys = (n: number) => Array.from({ length: n }, (_, i) => cy + (i - (n - 1) / 2) * ROW);
+
+/** Splits a label into at most two lines of about `max` characters. */
+function wrap(s: string, max = 23): string[] {
+  if (s.length <= max) return [s];
+  const words = s.split(' ');
+  let a = '';
+  while (words.length && (a + ' ' + words[0]).trim().length <= max) a = (a + ' ' + words.shift()).trim();
+  return [a, words.join(' ')];
+}
+
+const sides = [
+  ...left.map((n, i) => ({ ...n, side: 'l' as const, x: LX, y: ys(left.length)[i] })),
+  ...right.map((n, i) => ({ ...n, side: 'r' as const, x: RX, y: ys(right.length)[i] })),
+];
+const mid = (id: string) => c.tech(id);
+/** Long names lose their "Amazon " or "AWS " prefix so they fit in a box. */
+const short = (name: string) => (name.length > 22 ? name.replace(/^(Amazon|AWS|Google Cloud|Google|Azure) /, '') : name);
+---
+
+{sides.length > 0 && (
+  <div>
+    <div class="hidden overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10 sm:block">
+      <div class="bench px-2 py-1">
+        <svg viewBox={`0 0 ${W} ${H}`} class="dia" role="img" aria-label={`How ${t.name} connects to other technologies`}>
+          <defs>
+            <marker id="tg-arrow" viewBox="0 0 8 8" refX="7.5" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+              <path d="M0,0.6 L8,4 L0,7.4 z" class="arrow" />
+            </marker>
+          </defs>
+          {left.length > 0 && <text x={LX} y={14} text-anchor="middle" class="zlabel">USES {short(t.name).toUpperCase()}</text>}
+          {right.length > 0 && <text x={RX} y={14} text-anchor="middle" class="zlabel">{short(t.name).toUpperCase()} USES</text>}
+          {left.length > 1 && <line x1={busL} y1={ys(left.length)[0]} x2={busL} y2={ys(left.length).at(-1)} class="edge" />}
+          {right.length > 1 && <line x1={busR} y1={ys(right.length)[0]} x2={busR} y2={ys(right.length).at(-1)} class="edge" />}
+          {left.length > 0 && <line x1={busL} y1={cy} x2={CX - CW / 2 - 2} y2={cy} class="edge" marker-end="url(#tg-arrow)" />}
+          {right.length > 0 && <line x1={CX + CW / 2 + 2} y1={cy} x2={busR} y2={cy} class="edge" />}
+          {sides.map(n => {
+            const x1 = n.side === 'l' ? n.x + NW / 2 + 2 : busR;
+            const x2 = n.side === 'l' ? busL : n.x - NW / 2 - 2;
+            const lines = wrap(n.how);
+            const tx = n.side === 'l' ? x1 + 8 : x2 - 8;
+            return (
+              <g>
+                <line x1={x1} y1={n.y} x2={x2} y2={n.y} class="edge" marker-end={n.side === 'r' ? 'url(#tg-arrow)' : undefined} />
+                {lines.map((l, i) => (
+                  <text x={tx} y={n.y - 6 - (lines.length - 1 - i) * 12} text-anchor={n.side === 'l' ? 'start' : 'end'} class="tg-how">{l}</text>
+                ))}
+              </g>
+            );
+          })}
+          <g class="node current" transform={`translate(${CX},${cy})`}>
+            <rect x={-CW / 2} y={-26} width={CW} height={52} rx="6" class="nbox" />
+            <text x="0" y="-2" text-anchor="middle" class="nlabel">{short(t.name)}</text>
+            <text x="0" y="14" text-anchor="middle" class="nsub">{c.concept(t.concepts[0]).name}</text>
+          </g>
+          {sides.map(n => (
+            <a href={href(`technologies/${n.id}/`)} class="node linkable" transform={`translate(${n.x},${n.y})`} aria-label={`Open ${mid(n.id).name}`}>
+              <rect x={-NW / 2} y={-NH / 2} width={NW} height={NH} rx="6" class="nbox" />
+              <text x="0" y="-3" text-anchor="middle" class="nlabel">{short(mid(n.id).name)}</text>
+              <text x="0" y="12.5" text-anchor="middle" class="nsub">{c.concept(mid(n.id).concepts[0]).name}</text>
+            </a>
+          ))}
+        </svg>
+      </div>
+    </div>
+
+    <ul class="space-y-2 sm:hidden">
+      {sides.map(n => (
+        <li class="rounded-lg bg-card px-3 py-2 text-sm ring-1 ring-foreground/10">
+          {n.side === 'l'
+            ? <><a href={href(`technologies/${n.id}/`)} class="font-medium underline-offset-4 hover:underline">{mid(n.id).name}</a> <span class="text-muted-foreground">{n.how}</span> {t.name}</>
+            : <>{t.name} <span class="text-muted-foreground">{n.how}</span> <a href={href(`technologies/${n.id}/`)} class="font-medium underline-offset-4 hover:underline">{mid(n.id).name}</a></>}
+        </li>
+      ))}
+    </ul>
+  </div>
+)}

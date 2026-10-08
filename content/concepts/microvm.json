@@ -1,0 +1,199 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "MicroVMs",
+  "category": "compute",
+  "order": 25,
+  "summary": "A stripped-down virtual machine that boots as fast as a container, with its own kernel.",
+  "howItWorks": "A microVM uses the same hardware virtualisation as a normal VM, so each one gets its own kernel and a hard boundary from its neighbours. The monitor that runs it emulates only a few devices (a network card, a disk, a serial console) and no BIOS or USB, so there is far less to boot and far less to attack. Firecracker, the best-known one, starts a microVM in about 125 ms with under 5 MiB of overhead, so one host can run thousands. Many platforms also snapshot a booted VM and restore copies of it, which is faster than booting.",
+  "analogy": "A row of locked hotel rooms instead of bunks in a shared dorm. Containers are the dorm: quick to fill, but everyone shares one building. MicroVMs give each guest their own room with its own lock, and housekeeping can still turn a room around in seconds.",
+  "useWhen": [
+    "Running code you didn’t write: AI agent sandboxes, online code playgrounds, customer plugins",
+    "Building a multi-tenant platform where one customer must never reach another",
+    "Giving each CI job or user session a fresh machine that is thrown away afterwards"
+  ],
+  "avoidWhen": [
+    "Your own trusted services, where plain containers are simpler and have better tooling",
+    "Workloads that need GPUs or unusual devices; Firecracker emulates very few, and GPU passthrough isn’t in a release yet",
+    "Hosts without KVM access, e.g. most cloud VMs unless they’re bare metal or allow nested virtualisation"
+  ],
+  "example": "AWS Lambda isolates its function execution environments with Firecracker microVMs, so code from thousands of customers shares the same physical servers without sharing a kernel. When a burst arrives, new microVMs start in a fraction of a second, which is a large part of a cold start.",
+  "providers": {
+    "aws": "Firecracker (under Lambda), Lambda MicroVMs",
+    "gcp": "Cloud Run second-generation execution environment; GKE Sandbox microVMs (Kata Containers)",
+    "azure": "Container Instances, Container Apps dynamic sessions (Hyper-V isolation); AKS Pod Sandboxing (Kata Containers)",
+    "oss": "Firecracker, Cloud Hypervisor, Kata Containers, QEMU microvm, Fly.io Machines, E2B, smolvm"
+  },
+  "snippet": {
+    "lang": "bash",
+    "source": [
+      "# Firecracker is configured over a REST API on a Unix socket",
+      "fc() { curl -s --unix-socket /tmp/firecracker.socket -X PUT \"http://localhost/$1\" -d \"$2\"; }",
+      "",
+      "fc boot-source    '{\"kernel_image_path\": \"vmlinux\", \"boot_args\": \"console=ttyS0 reboot=k panic=1\"}'",
+      "fc drives/rootfs  '{\"drive_id\": \"rootfs\", \"path_on_host\": \"rootfs.ext4\", \"is_root_device\": true, \"is_read_only\": false}'",
+      "fc machine-config '{\"vcpu_count\": 2, \"mem_size_mib\": 1024}'",
+      "fc actions        '{\"action_type\": \"InstanceStart\"}'"
+    ]
+  },
+  "related": [
+    "vm",
+    "containers",
+    "serverless"
+  ],
+  "diagram": {
+    "caption": "Three customers send untrusted code to run. Each job gets its own microVM, with its own kernel, on one shared host; amber marks a 125 ms boot. Idle microVMs are thrown away, so the next job always starts clean.",
+    "h": 270,
+    "zones": [
+      {
+        "x": 450,
+        "y": 35,
+        "w": 240,
+        "h": 205,
+        "label": "One host · KVM"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "a",
+        "x": 100,
+        "y": 60,
+        "label": "Customer A",
+        "sub": "agent sandbox",
+        "emit": {
+          "req": true,
+          "color": 0,
+          "jitter": 0.5,
+          "phases": [
+            [
+              2600,
+              700
+            ],
+            [
+              2400,
+              1800
+            ]
+          ]
+        },
+        "out": [
+          "api"
+        ]
+      },
+      {
+        "id": "b",
+        "x": 100,
+        "y": 135,
+        "label": "Customer B",
+        "sub": "code playground",
+        "emit": {
+          "req": true,
+          "color": 1,
+          "jitter": 0.5,
+          "phases": [
+            [
+              2200,
+              1600
+            ],
+            [
+              2800,
+              600
+            ]
+          ]
+        },
+        "out": [
+          "api"
+        ]
+      },
+      {
+        "id": "c",
+        "x": 100,
+        "y": 210,
+        "label": "Customer C",
+        "sub": "CI job",
+        "emit": {
+          "req": true,
+          "color": 2,
+          "jitter": 0.4,
+          "every": 1400
+        },
+        "out": [
+          "api"
+        ]
+      },
+      {
+        "id": "api",
+        "x": 320,
+        "y": 135,
+        "label": "Scheduler",
+        "sub": "one job, one VM",
+        "out": [
+          "host"
+        ]
+      },
+      {
+        "id": "host",
+        "x": 570,
+        "y": 140,
+        "kind": "pool",
+        "label": "MicroVMs",
+        "sub": "Firecracker · own kernel each",
+        "max": 8,
+        "work": 900,
+        "idle": 1200,
+        "cold": 125,
+        "coldText": "boot 125 ms",
+        "scaleText": "discarded"
+      }
+    ]
+  },
+  "history": {
+    "story": [
+      "By the mid-2010s, anyone running other people’s code had two imperfect options. A virtual machine gave each tenant its own kernel and a hardware boundary, but general-purpose monitors like QEMU emulate a whole PC (BIOS, PCI bus, dozens of devices), which makes them large and slow to boot. Containers started in about a second but shared the host’s kernel, so isolation rested on one kernel shared with every neighbour. Serverless platforms, which start and stop thousands of short-lived sandboxes for strangers, needed the safety of the first with the speed of the second.",
+      "Two answers arrived within a year. In late 2017 Kata Containers merged Intel’s Clear Containers and Hyper’s runV to run each container inside its own lightweight VM. In November 2018 AWS open-sourced Firecracker, the monitor behind Lambda, and called its guests microVMs: a few virtio devices, no BIOS or PCI, under 125 ms to boot and under 5 MiB of overhead. The idea spread quickly. Cloud Hypervisor began in 2019 as a Rust monitor for general cloud workloads, and QEMU 4.2 added a `microvm` machine type “inspired by Firecracker” that December.",
+      "MicroVMs now sit under many serverless and sandbox platforms, and some restore them from snapshots instead of booting them at all."
+    ],
+    "choices": [
+      { "choice": "Keep hardware virtualization, drop the PC", "why": "The CPU’s virtualization features give the hard boundary; almost everything else a normal VM emulates is legacy hardware a cloud workload never touches. Removing it cuts boot time, memory and attack surface together." },
+      { "choice": "Paravirtual devices only", "why": "Instead of imitating real network cards and disks, microVMs offer virtio devices that cooperate with the guest kernel, which is simpler and faster to emulate." },
+      { "choice": "Monitors written in Rust", "why": "The monitor is the wall between tenants, so memory-safety bugs matter. Firecracker, crosvm and Cloud Hypervisor are all Rust and share components through the rust-vmm project." },
+      { "choice": "Restore from a snapshot instead of booting", "why": "The VM boots fast, but starting a runtime and app inside it can take seconds. Snapshotting the VM after initialisation and restoring copies skips both; AWS says SnapStart can cut cold starts “from several seconds (or higher) to as low as sub-second”." }
+    ],
+    "timeline": [
+      { "year": "2017", "text": "Kata Containers launches, merging Clear Containers and runV" },
+      { "year": "2018", "text": "AWS open-sources Firecracker, already running Lambda" },
+      { "year": "2019", "text": "Cloud Hypervisor starts; QEMU 4.2 adds a Firecracker-style `microvm` machine type" },
+      { "year": "2022", "text": "Lambda SnapStart restores functions from Firecracker snapshots" },
+      { "year": "2026", "text": "AWS launches Lambda MicroVMs, stateful sandboxes built on Firecracker" }
+    ],
+    "sources": [
+      { "label": "AWS News Blog: Firecracker, lightweight virtualization for serverless computing (2018)", "url": "https://aws.amazon.com/blogs/aws/firecracker-lightweight-virtualization-for-serverless-computing/" },
+      { "label": "QEMU docs: the microvm machine type", "url": "https://www.qemu.org/docs/master/system/i386/microvm.html" },
+      { "label": "Cloud Hypervisor on GitHub", "url": "https://github.com/cloud-hypervisor/cloud-hypervisor" },
+      { "label": "AWS Compute Blog: Under the hood of Lambda SnapStart", "url": "https://aws.amazon.com/blogs/compute/under-the-hood-how-aws-lambda-snapstart-optimizes-function-startup-latency/" },
+      { "label": "OpenStack Foundation: Kata Containers project launches (Dec 2017)", "url": "https://www.openstack.org/news/view/365/kata-containers-project-launches-to-build-secure-container-infrastructure", "archive": "https://web.archive.org/web/20250814203554/https://www.openstack.org/news/view/365/kata-containers-project-launches-to-build-secure-container-infrastructure" },
+      { "label": "Firecracker FAQ: origins in crosvm and rust-vmm", "url": "https://github.com/firecracker-microvm/firecracker/blob/main/FAQ.md" },
+      { "label": "QEMU: version 4.2.0 released with the microvm machine (Dec 2019)", "url": "https://www.qemu.org/2019/12/13/qemu-4-2-0/" },
+      { "label": "AWS News Blog: AWS Lambda introduces MicroVMs (Jun 2026)", "url": "https://aws.amazon.com/blogs/aws/run-isolated-sandboxes-with-full-lifecycle-control-aws-lambda-introduces-microvms/" }
+    ]
+  },
+  "sources": [
+    { "label": "Firecracker website: boot time, overhead and density", "url": "https://firecracker-microvm.github.io/" },
+    { "label": "Firecracker FAQ: emulated devices", "url": "https://github.com/firecracker-microvm/firecracker/blob/main/FAQ.md" },
+    { "label": "Firecracker docs: Getting started (KVM requirement, API socket)", "url": "https://github.com/firecracker-microvm/firecracker/blob/main/docs/getting-started.md" },
+    { "label": "Firecracker docs: Snapshot support", "url": "https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/snapshot-support.md" },
+    { "label": "Firecracker issue #5679: VFIO device passthrough support (open)", "url": "https://github.com/firecracker-microvm/firecracker/issues/5679" },
+    { "label": "Lambda docs: Tenant isolation (execution environments use Firecracker)", "url": "https://docs.aws.amazon.com/lambda/latest/dg/tenant-isolation.html" },
+    { "label": "AWS News Blog: AWS Lambda introduces MicroVMs (Jun 2026)", "url": "https://aws.amazon.com/blogs/aws/run-isolated-sandboxes-with-full-lifecycle-control-aws-lambda-introduces-microvms/" },
+    { "label": "AWS Containers Blog: Under the hood, the Fargate data plane (note: Firecracker references no longer accurate)", "url": "https://aws.amazon.com/blogs/containers/under-the-hood-fargate-data-plane/" },
+    { "label": "Cloud Run docs: Execution environments (second generation is a microVM)", "url": "https://docs.cloud.google.com/run/docs/about-execution-environments" },
+    { "label": "Azure docs: Container Instances overview (hypervisor-level security)", "url": "https://learn.microsoft.com/en-us/azure/container-instances/container-instances-overview" },
+    { "label": "Azure docs: Container Apps dynamic sessions (Hyper-V isolation)", "url": "https://learn.microsoft.com/en-us/azure/container-apps/sessions" },
+    { "label": "Cloud Hypervisor on GitHub", "url": "https://github.com/cloud-hypervisor/cloud-hypervisor" },
+    { "label": "Kata Containers: Learn", "url": "https://katacontainers.io/learn/" },
+    { "label": "QEMU docs: the microvm machine type", "url": "https://www.qemu.org/docs/master/system/i386/microvm.html" },
+    { "label": "Fly.io docs: Architecture (apps run in Firecracker microVMs)", "url": "https://fly.io/docs/reference/architecture/" },
+    { "label": "E2B infra on GitHub (Firecracker microVM runtime)", "url": "https://github.com/e2b-dev/infra" },
+    { "label": "GKE docs: About GKE Sandbox (gVisor and Kata Containers microVMs)", "url": "https://docs.cloud.google.com/kubernetes-engine/docs/concepts/sandbox-pods" },
+    { "label": "AKS docs: Pod Sandboxing (Kata Containers)", "url": "https://learn.microsoft.com/en-us/azure/aks/use-pod-sandboxing" },
+    { "label": "smol-machines/smolvm on GitHub", "url": "https://github.com/smol-machines/smolvm" }
+  ]
+}

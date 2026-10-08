@@ -1,0 +1,105 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Agones",
+  "concepts": ["orchestration"],
+  "parent": { "id": "kubernetes", "as": "extension" },
+  "provider": "oss",
+  "vendor": "Google (with Ubisoft as founding contributor)",
+  "license": "Apache 2.0",
+  "website": "https://agones.dev/site/",
+  "repo": "https://github.com/googleforgames/agones",
+  "summary": "Runs dedicated multiplayer game servers on Kubernetes: keeps a fleet of them warm, hands one to each match, and never kills a server while players are on it.",
+  "intro": [
+    "A dedicated game server is an odd workload. It holds a whole match in memory, lives for minutes or hours rather than months, and players connect straight to its IP address and port, because a load balancer would add latency and split players who must share one simulation. Agones teaches Kubernetes about this with custom resources and a controller. A `GameServer` is a Pod plus a host port (picked dynamically by default) and a lifecycle state; a `Fleet` keeps a number of them warm, with rolling updates; a `FleetAutoscaler` keeps a buffer of `Ready` servers above however many are in use.",
+    "The flow follows a match. The game server process calls the Agones SDK’s `Ready()` once it can take players. A matchmaker then creates a `GameServerAllocation`, which atomically picks a `Ready` server matching its filters, marks it `Allocated` and returns its address and port. Allocated servers are left alone by scale-down and fleet updates until the process calls `Shutdown()` at the end of the match. The SDK is a thin client for a sidecar that Agones runs next to each server, with versions for Unreal Engine, Unity, C++, Go, C#, Node.js and Rust, plus a REST interface.",
+    "Google and Ubisoft announced Agones in March 2018, and it lives in Google’s `googleforgames` organisation on GitHub. Version 1.0 shipped in September 2019, and in 2026 it put out a minor release about every six weeks. Google Cloud also sold Agones as a managed service, Game Servers (beta in March 2020, generally available that August), but that product has been retired: its documentation now redirects to Google Cloud’s games page, which points to Agones itself."
+  ],
+  "strengths": [
+    "Purpose-built lifecycle: warm fleets, atomic allocation, and no scale-down or rollout of servers with players on them",
+    "Game servers and the services around them (accounts, inventory, matchmaking) run on one platform with standard Kubernetes tools",
+    "Runs wherever Kubernetes runs: any cloud, on-premises, or a developer laptop",
+    "Mature and steadily released: version 1.0 in 2019 and a minor release roughly every six weeks"
+  ],
+  "limits": [
+    "Players connect directly to node IPs and host ports, so nodes need public addresses and open port ranges",
+    "It allocates servers but doesn’t match players: you bring a matchmaker (Google’s Open Match is one option)",
+    "An Allocated server is only removed when the game calls `Shutdown()` (or someone deletes it), so a server that never exits keeps holding capacity",
+    "The managed Google Cloud Game Servers offering is gone, so you operate the cluster and Agones yourself"
+  ],
+  "worksWith": [
+    { "id": "kubernetes", "how": "adds game server resources to" }
+  ],
+  "snippet": {
+    "lang": "yaml",
+    "title": "A fleet of warm game servers, then an allocation for one match",
+    "source": [
+      "apiVersion: agones.dev/v1",
+      "kind: Fleet",
+      "metadata:",
+      "  name: arena",
+      "spec:",
+      "  replicas: 10            # GameServers kept Ready or Allocated",
+      "  scheduling: Packed      # bin-pack, so empty nodes can be removed",
+      "  template:",
+      "    spec:",
+      "      ports:",
+      "        - name: default",
+      "          portPolicy: Dynamic   # Agones picks a free host port",
+      "          containerPort: 7654",
+      "      template:",
+      "        spec:",
+      "          containers:",
+      "            - name: arena",
+      "              image: registry.example.com/arena-server:2.3",
+      "---",
+      "apiVersion: allocation.agones.dev/v1",
+      "kind: GameServerAllocation   # created by the matchmaker per match",
+      "spec:",
+      "  selectors:",
+      "    - matchLabels:",
+      "        agones.dev/fleet: arena"
+    ]
+  },
+  "history": {
+    "story": [
+      "Fast-paced online games such as shooters, MOBAs and MMOs need a dedicated server that runs the authoritative copy of each match. Studios usually built their own systems to start, place and scale those servers, because general orchestrators assumed long-running, load-balanced services, not short-lived stateful processes that players connect to directly.",
+      "Google Cloud and Ubisoft announced Agones on March 13, 2018, its name coming from the Greek for “contest” or “gathering”. Instead of a separate game server manager, it extended Kubernetes with a GameServer resource and a controller, so any matchmaker could request a server through the Kubernetes API. The first release, v0.1, was an alpha; Fleets were the next feature planned.",
+      "Version 1.0 arrived in September 2019. In 2020 Google Cloud launched Game Servers, a managed service built on Agones, but the product was later retired, leaving the open-source project as the way to use it."
+    ],
+    "choices": [
+      { "choice": "Extend Kubernetes rather than build a new scheduler", "why": "Studios could run game servers and their supporting services on one platform, reuse Kubernetes tooling and the work of its contributors, and run it anywhere from a laptop to multiple clouds." },
+      { "choice": "Direct IP and port, no load balancer", "why": "Players in a match share one in-memory simulation and are sensitive to latency, so they connect straight to the server process; Agones allocates host ports and reports the address back." },
+      { "choice": "An SDK inside the game server", "why": "Only the game knows when it is ready for players, healthy, or finished. The SDK reports those moments, so Agones never removes a server mid-match." },
+      { "choice": "Allocation as an atomic API call", "why": "Two matchmakers must never get the same server. A GameServerAllocation picks a Ready server and marks it Allocated in one step." }
+    ],
+    "timeline": [
+      { "year": "2018", "text": "Announced by Google Cloud and Ubisoft on March 13; v0.1 alpha" },
+      { "year": "2019", "text": "Version 1.0 released in September" },
+      { "year": "2020", "text": "Google Cloud Game Servers, a managed Agones service, enters beta in March and GA in August" },
+      { "year": "2023", "text": "Game Servers product pages redirect to Google Cloud’s games solutions page" },
+      { "year": "2026", "text": "v1.61.0 in September, on a roughly six-week release cadence" }
+    ],
+    "sources": [
+      { "label": "Google Cloud Blog: Introducing Agones, open-source multiplayer dedicated game-server hosting built on Kubernetes (Mar 2018)", "url": "https://cloud.google.com/blog/products/containers-kubernetes/introducing-agones-open-source-multiplayer-dedicated-game-server-hosting-built-on-kubernetes" },
+      { "label": "TechCrunch: Google partners with Ubisoft to launch Agones (Mar 2018)", "url": "https://techcrunch.com/2018/03/13/google-partners-with-ubisoft-to-launch-agones-an-open-source-game-server-hosting-system/" },
+      { "label": "Agones v1.0.0 release on GitHub (Sep 2019)", "url": "https://github.com/googleforgames/agones/releases/tag/v1.0.0" },
+      { "label": "Google Cloud: Game Servers release notes feed (beta Mar 2020, GA Aug 2020)", "url": "https://cloud.google.com/feeds/cloud-game-servers-release-notes.xml" },
+      { "label": "Google Cloud: Game Servers documentation (archived May 2022)", "url": "https://cloud.google.com/game-servers/docs", "archive": "https://web.archive.org/web/20220510150216/https://cloud.google.com/game-servers/docs" },
+      { "label": "Google Cloud for Games (where Game Servers pages redirect, archived Mar 2023)", "url": "https://cloud.google.com/solutions/games", "archive": "https://web.archive.org/web/20230306072413/https://cloud.google.com/solutions/games" },
+      { "label": "Agones releases on GitHub", "url": "https://github.com/googleforgames/agones/releases" }
+    ]
+  },
+  "sources": [
+    { "label": "Agones docs: Overview (what it is, runs anywhere Kubernetes runs)", "url": "https://agones.dev/site/docs/overview/" },
+    { "label": "Agones docs: GameServer specification (port policies, states)", "url": "https://agones.dev/site/docs/reference/gameserver/" },
+    { "label": "Agones docs: Fleet specification (replicas, Packed scheduling, rolling updates)", "url": "https://agones.dev/site/docs/reference/fleet/" },
+    { "label": "Agones docs: FleetAutoscaler (buffer of Ready servers)", "url": "https://agones.dev/site/docs/reference/fleetautoscaler/" },
+    { "label": "Agones docs: GameServerAllocation (atomic allocation, Allocated until Shutdown)", "url": "https://agones.dev/site/docs/reference/gameserverallocation/" },
+    { "label": "Agones docs: Client SDKs (sidecar, gRPC and REST, supported languages)", "url": "https://agones.dev/site/docs/guides/client-sdks/" },
+    { "label": "Google Cloud Blog: Introducing Agones (direct connections, no load balancer; Ubisoft) (Mar 2018)", "url": "https://cloud.google.com/blog/products/containers-kubernetes/introducing-agones-open-source-multiplayer-dedicated-game-server-hosting-built-on-kubernetes" },
+    { "label": "Agones releases on GitHub (v1.55.0 Jan 2026 through v1.61.0 Sep 2026)", "url": "https://github.com/googleforgames/agones/releases" },
+    { "label": "Google Cloud: Game Servers release notes feed (beta Mar 2020, GA Aug 2020)", "url": "https://cloud.google.com/feeds/cloud-game-servers-release-notes.xml" },
+    { "label": "Google Cloud for Games: points to Agones and Open Match", "url": "https://cloud.google.com/solutions/games" }
+  ],
+  "checked": "2026-10-06"
+}

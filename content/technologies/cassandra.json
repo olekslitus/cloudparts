@@ -1,0 +1,167 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Apache Cassandra",
+  "concepts": ["wide-column"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://cassandra.apache.org/_/index.html",
+  "repo": "https://github.com/apache/cassandra",
+  "summary": "A masterless, wide-column database that spreads and replicates partitions around a ring of equal nodes, with consistency chosen per request.",
+  "intro": [
+    "A Cassandra cluster has no leader. Each node owns several ranges on a token ring (16 virtual nodes per node by default), and a row’s partition key is hashed to a token that decides which nodes hold its replicas; the replication factor is set per keyspace and per datacenter. Any node can coordinate a request. It sends a write to every replica and waits for as many answers as the consistency level asks for: `ONE`, `QUORUM` (a majority), `LOCAL_QUORUM` (a majority in this datacenter) or `ALL`. Nodes learn about each other by gossip. Conflicting writes resolve by timestamp, last write wins, and replicas catch up through hinted handoff, read repair and Merkle-tree anti-entropy repair.",
+    "On each node, a write is appended to the commit log and kept in a memtable, which is later flushed to immutable SSTables on disk; background compaction merges them. Deletes are tombstones that must outlive `gc_grace_seconds` (ten days by default), so repair has to run within that window. You define tables in CQL, a SQL-like language without joins, and design one table per query, choosing a partition key and clustering columns that keep each query’s rows together. The current release line is 5.0 (September 2024), which added Storage Attached Indexes, vector search, trie memtables and the Unified Compaction Strategy; 6.0 is in alpha. Cassandra is free under Apache 2.0; managed versions include Amazon Keyspaces, Azure Managed Instance for Apache Cassandra and Astra DB from DataStax, which IBM bought in 2025."
+  ],
+  "strengths": [
+    "No master to fail over: every node can take reads and writes for any key",
+    "Replication across datacenters is built in, and `LOCAL_QUORUM` keeps each request inside one region",
+    "Append-only writes (commit log, memtable, SSTables) handle very high write rates",
+    "Grows by adding nodes, and virtual nodes spread the data that moves across many neighbours",
+    "Apache 2.0, with several managed services that speak the same CQL protocol"
+  ],
+  "limits": [
+    "No joins and no cross-partition transactions: you design tables around known queries and often write the same data to several of them",
+    "Ongoing operational work: repair before tombstones expire, compaction tuning, JVM tuning and long, careful upgrades",
+    "Last-write-wins by timestamp depends on synchronised clocks, and lightweight transactions (`IF NOT EXISTS`) use Paxos and cost noticeably more",
+    "Materialized views are experimental and off by default; flexible indexing on non-key columns only arrived with SAI in 5.0",
+    "Managed versions behave differently: Amazon Keyspaces always writes at `LOCAL_QUORUM` and ignores compaction and other server settings"
+  ],
+  "worksWith": [
+    { "id": "scylladb", "how": "is reimplemented, CQL-compatible, by" },
+    { "id": "spark", "how": "is read and written, via a connector, by" },
+    { "id": "kafka", "how": "receives topics, via a sink connector, from" },
+    { "id": "flink", "how": "is written to, via a sink connector, by" },
+    { "id": "trino", "how": "is queried with SQL, via a connector, by" },
+    { "id": "kubernetes", "how": "runs, via the K8ssandra operator, on" },
+    { "id": "temporal", "how": "can store workflow state and history for" },
+    { "id": "pekko", "how": "journals entity events, via a plugin, for" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "A table shaped for one query, written and read at LOCAL_QUORUM in cqlsh",
+    "source": [
+      "-- three replicas in each of two datacenters",
+      "CREATE KEYSPACE iot WITH replication =",
+      "  {'class': 'NetworkTopologyStrategy', 'eu-west': 3, 'us-east': 3};",
+      "",
+      "-- query: latest readings for one sensor on one day",
+      "CREATE TABLE iot.readings_by_sensor_day (",
+      "  sensor_id   text,",
+      "  day         date,",
+      "  ts          timestamp,",
+      "  temperature double,",
+      "  PRIMARY KEY ((sensor_id, day), ts)",
+      ") WITH CLUSTERING ORDER BY (ts DESC);",
+      "",
+      "CONSISTENCY LOCAL_QUORUM;  -- cqlsh: 2 of the 3 local replicas must answer",
+      "",
+      "INSERT INTO iot.readings_by_sensor_day (sensor_id, day, ts, temperature)",
+      "VALUES ('s-17', '2026-10-06', '2026-10-06 09:30:00+0000', 21.4)",
+      "USING TTL 2592000;  -- expires after 30 days",
+      "",
+      "SELECT ts, temperature FROM iot.readings_by_sensor_day",
+      "WHERE sensor_id = 's-17' AND day = '2026-10-06' LIMIT 10;",
+      "",
+      "-- Cassandra 5.0: a Storage Attached Index on a non-key column",
+      "CREATE INDEX readings_temp_sai ON iot.readings_by_sensor_day (temperature) USING 'sai';"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Cassandra or ScyllaDB?",
+      "intro": "ScyllaDB rewrote Cassandra’s design in C++ and speaks the same CQL protocol, so the two are often weighed against each other. Where they differ, according to each project’s own docs and licence:",
+      "columns": ["Apache Cassandra", "ScyllaDB"],
+      "rows": [
+        { "label": "Written in", "values": ["Java, on the JVM (5.0 adds JDK 17; 6.0 defaults to generational ZGC on JDK 21)", "C++ on the Seastar framework, no JVM"] },
+        { "label": "Inside a node", "values": ["One JVM process serving all of the node’s token ranges", "One shard per CPU core: a thread pinned to that core with its own memory and data"] },
+        { "label": "Spreading data", "values": ["Virtual nodes: each node owns 16 token ranges by default", "Tablets by default: each table is split into tablets that split and move as data grows"] },
+        { "label": "APIs", "values": ["CQL", "CQL (Cassandra 3.11 level, with some 4.0 features) and the DynamoDB API, called Alternator"] },
+        { "label": "Recent features", "values": ["Storage Attached Indexes, vector search, trie memtables, Unified Compaction Strategy (5.0)", "Tablets; vector search, but only in ScyllaDB Cloud; no Storage Attached Indexes"] },
+        { "label": "Licence", "values": ["Apache 2.0", "Source-available: free use capped at 10 TB and 50 vCPUs, no SaaS; the AGPL edition ended with 6.2"] },
+        { "label": "Managed", "values": ["Amazon Keyspaces, Azure Managed Instance, Astra DB (IBM)", "ScyllaDB Cloud, billed by instance rather than per request"] }
+      ],
+      "notes": [
+        "ScyllaDB works with Cassandra drivers and can import Cassandra’s SSTables, but check features such as user-defined functions, triggers and SAI before migrating: its compatibility page lists them as unsupported."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Where to run it",
+      "items": [
+        { "name": "Self-managed", "tag": "Apache 2.0", "text": "Packages, tarballs or containers on your own machines. You own repair schedules, upgrades and capacity. On Kubernetes, the K8ssandra operator deploys and manages clusters." },
+        { "name": "Amazon Keyspaces", "tag": "serverless, per request", "text": "A Cassandra-compatible service with no nodes to manage. Data is kept three times across Availability Zones; writes always use `LOCAL_QUORUM`, reads `LOCAL_ONE` or `LOCAL_QUORUM`. On-demand bills a read request unit per 4 KB read at `LOCAL_QUORUM` (half at `LOCAL_ONE`) and a write unit per 1 KB written; provisioned capacity is the alternative. Compaction, caching and similar settings are ignored." },
+        { "name": "Azure Managed Instance for Apache Cassandra", "tag": "VMs in your network", "text": "Real open-source Cassandra, up to 5.0, deployed as virtual machine scale sets in your virtual network. Datacenters can join an existing ring on premises. Billed for the VMs and disks you choose, with no licence fee." },
+        { "name": "Astra DB", "tag": "IBM since 2025", "text": "DataStax’s Cassandra-based cloud database with vector search. IBM announced it would buy DataStax in February 2025 and closed the deal in the second quarter of 2025; Astra DB is now sold as part of IBM watsonx." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Facebook’s Inbox Search had to store an index of the messages every user sent and received: billions of writes a day, served from data centers on both US coasts. Avinash Lakshman, one of the authors of Amazon’s 2007 Dynamo paper, and Prashant Malik built Cassandra for it. They combined Dynamo’s way of spreading and replicating data, with consistent hashing, gossip and no master, with the column families and log-structured storage of Google’s Bigtable. Inbox Search launched on it in June 2008 for about 100 million users.",
+      "Facebook open-sourced Cassandra in 2008. It entered the Apache Incubator in January 2009 and became a top-level project in February 2010. That November, Facebook chose HBase rather than Cassandra for its new Messages system, finding Cassandra’s eventual consistency hard to reconcile with it, but development carried on at Apache.",
+      "Version 4.0 arrived in July 2021, six years after 3.0, after the project built new tools to test correctness at scale. 5.0, in September 2024, added Storage Attached Indexes and vector search."
+    ],
+    "choices": [
+      { "choice": "No master: every node is equal", "why": "Running on hundreds of machines across data centers, components fail all the time. With no single point of failure, any node can take any request and a lost node needs no failover." },
+      { "choice": "Consistency chosen per request", "why": "Cassandra adapted Dynamo’s rule that reads and writes must overlap (R + W > N) into named levels such as `ONE` and `QUORUM`, so each query can trade freshness for latency and availability." },
+      { "choice": "Bigtable’s log-structured storage", "why": "Inbox Search needed very high write throughput. Appending to a commit log and an in-memory table, then flushing sorted files and compacting them later, means a write never waits for a read." }
+    ],
+    "timeline": [
+      { "year": "2007", "text": "Amazon’s Dynamo paper, co-written by Avinash Lakshman, is published" },
+      { "year": "2008", "text": "Facebook launches Inbox Search on Cassandra and open-sources it" },
+      { "year": "2009", "text": "Cassandra enters the Apache Incubator in January" },
+      { "year": "2010", "text": "Becomes a top-level Apache project; Facebook picks HBase for Messages" },
+      { "year": "2011", "text": "Cassandra 1.0 is released in October" },
+      { "year": "2021", "text": "Cassandra 4.0 ships in July, six years after 3.0" },
+      { "year": "2024", "text": "Cassandra 5.0 adds Storage Attached Indexes and vector search" },
+      { "year": "2025", "text": "IBM acquires DataStax, maker of Astra DB" }
+    ],
+    "sources": [
+      { "label": "Lakshman and Malik: Cassandra, a decentralized structured storage system (LADIS 2009)", "url": "https://www.cs.cornell.edu/projects/ladis2009/papers/lakshman-ladis2009.pdf" },
+      { "label": "Avinash Lakshman, Engineering at Meta: Cassandra, a structured storage system on a P2P network (Aug 2008)", "url": "https://engineering.fb.com/2008/08/25/core-infra/cassandra-a-structured-storage-system-on-a-p2p-network/" },
+      { "label": "Werner Vogels: Amazon’s Dynamo (authors of the 2007 paper)", "url": "https://www.allthingsdistributed.com/2007/10/amazons_dynamo.html" },
+      { "label": "Apache Incubator: Cassandra incubation status (entered January 2009, graduated February 2010)", "url": "https://incubator.apache.org/projects/cassandra.html" },
+      { "label": "ASF board minutes, February 17, 2010: Establish the Apache Cassandra Project", "url": "https://www.apache.org/foundation/records/minutes/2010/board_minutes_2010_02_17.txt" },
+      { "label": "Engineering at Meta: The underlying technology of Messages (Nov 2010)", "url": "https://engineering.fb.com/2010/11/15/core-infra/the-underlying-technology-of-messages/" },
+      { "label": "apache/cassandra on GitHub: tag cassandra-1.0.0 (October 2011)", "url": "https://github.com/apache/cassandra/releases/tag/cassandra-1.0.0" },
+      { "label": "Apache Cassandra blog: Apache Cassandra 4.0 is here (July 2021)", "url": "https://cassandra.apache.org/_/blog/Apache-Cassandra-4.0-is-Here.html" },
+      { "label": "Apache Cassandra blog: Announcing Apache Cassandra 5.0 (Sept 2024)", "url": "https://cassandra.apache.org/_/blog/Apache-Cassandra-5.0-Announcement.html" },
+      { "label": "IBM Q2 2025 earnings release (Form 8-K exhibit): “We closed the acquisition of DataStax this quarter”", "url": "https://www.sec.gov/Archives/edgar/data/51143/000005114325000051/ibm-ex99x1.htm" }
+    ]
+  },
+  "sources": [
+    { "label": "Cassandra docs: Architecture overview (Dynamo and Bigtable lineage)", "url": "https://cassandra.apache.org/doc/latest/cassandra/architecture/overview.html" },
+    { "label": "Cassandra docs: Dynamo (token ring, vnodes, replication, consistency levels, gossip, repair, last write wins)", "url": "https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html" },
+    { "label": "Cassandra docs: Storage engine (commit log, memtables, SSTables, compaction)", "url": "https://cassandra.apache.org/doc/latest/cassandra/architecture/storage-engine.html" },
+    { "label": "Cassandra docs: cassandra.yaml (num_tokens default 16; materialized views experimental)", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/configuration/cass_yaml_file.html" },
+    { "label": "Cassandra docs: Tombstones and gc_grace_seconds", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/tombstones.html" },
+    { "label": "Cassandra docs: Data modeling introduction (query-driven modeling, no joins)", "url": "https://cassandra.apache.org/doc/latest/cassandra/developing/data-modeling/intro.html" },
+    { "label": "Cassandra docs: Data manipulation (lightweight transactions use Paxos)", "url": "https://cassandra.apache.org/doc/latest/cassandra/developing/cql/dml.html" },
+    { "label": "Cassandra docs: SAI quickstart", "url": "https://cassandra.apache.org/doc/latest/cassandra/getting-started/sai-quickstart.html" },
+    { "label": "Apache Cassandra blog: Announcing Apache Cassandra 5.0 (SAI, vector search, trie memtables, UCS, JDK 17)", "url": "https://cassandra.apache.org/_/blog/Apache-Cassandra-5.0-Announcement.html" },
+    { "label": "Apache Cassandra downloads (5.0.9, August 2026)", "url": "https://cassandra.apache.org/_/download.html" },
+    { "label": "apache/cassandra on GitHub: NEWS.txt at cassandra-6.0-alpha2 (transactional cluster metadata, auto repair, JDK 21)", "url": "https://github.com/apache/cassandra/blob/cassandra-6.0-alpha2/NEWS.txt" },
+    { "label": "Amazon Keyspaces docs: What is Amazon Keyspaces?", "url": "https://docs.aws.amazon.com/keyspaces/latest/devguide/what-is-keyspaces.html" },
+    { "label": "Amazon Keyspaces docs: Functional differences from Apache Cassandra", "url": "https://docs.aws.amazon.com/keyspaces/latest/devguide/functional-differences.html" },
+    { "label": "Amazon Keyspaces pricing (request units, replication, consistency levels)", "url": "https://aws.amazon.com/keyspaces/pricing/" },
+    { "label": "Microsoft Learn: Azure Managed Instance for Apache Cassandra", "url": "https://learn.microsoft.com/en-us/azure/managed-instance-apache-cassandra/introduction" },
+    { "label": "IBM newsroom: IBM to acquire DataStax (Feb 2025)", "url": "https://newsroom.ibm.com/2025-02-25-ibm-to-acquire-datastax,-deepening-watsonx-capabilities-and-addressing-generative-ai-data-needs-for-the-enterprise" },
+    { "label": "IBM: DataStax (Astra DB and HCD in watsonx)", "url": "https://www.ibm.com/products/datastax" },
+    { "label": "ScyllaDB docs: ScyllaDB and Apache Cassandra compatibility", "url": "https://docs.scylladb.com/manual/stable/using-scylla/cassandra-compatibility.html" },
+    { "label": "ScyllaDB docs: Data distribution with tablets", "url": "https://docs.scylladb.com/manual/stable/architecture/tablets.html" },
+    { "label": "ScyllaDB docs: Glossary (shard)", "url": "https://docs.scylladb.com/manual/stable/reference/glossary.html" },
+    { "label": "ScyllaDB docs: Vector search (ScyllaDB Cloud only)", "url": "https://docs.scylladb.com/manual/stable/features/vector-search.html" },
+    { "label": "Dor Laor, ScyllaDB blog: Why we’re moving to a source available license (6.2 is the last AGPL release)", "url": "https://www.scylladb.com/2024/12/18/why-were-moving-to-a-source-available-license/" },
+    { "label": "ScyllaDB Software License Agreement 1.1", "url": "https://github.com/scylladb/scylladb/blob/master/LICENSE-ScyllaDB-Source-Available.md" },
+    { "label": "Seastar: shared-nothing C++ framework", "url": "https://seastar.io/" },
+    { "label": "Apache Cassandra Spark connector", "url": "https://github.com/apache/cassandra-spark-connector" },
+    { "label": "DataStax Apache Kafka connector (sink to Cassandra)", "url": "https://github.com/datastax/kafka-sink" },
+    { "label": "Flink docs: Cassandra connector", "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/connectors/datastream/cassandra/" },
+    { "label": "Trino docs: Cassandra connector", "url": "https://trino.io/docs/current/connector/cassandra.html" },
+    { "label": "K8ssandra docs", "url": "https://docs.k8ssandra.io/" },
+    { "label": "Temporal docs: Persistence (supported Cassandra versions)", "url": "https://docs.temporal.io/temporal-service/persistence" },
+    { "label": "Apache Pekko Persistence Cassandra", "url": "https://github.com/apache/pekko-persistence-cassandra" }
+  ],
+  "checked": "2026-10-06"
+}

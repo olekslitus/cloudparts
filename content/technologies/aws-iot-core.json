@@ -1,0 +1,191 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "AWS IoT Core",
+  "concepts": ["iot"],
+  "provider": "aws",
+  "vendor": "Amazon Web Services",
+  "license": "Proprietary; the AWS IoT Device SDKs are open source (Apache 2.0; the Embedded C SDK is MIT)",
+  "website": "https://aws.amazon.com/iot-core/",
+  "summary": "AWS’s managed MQTT broker for devices, with per-device certificates, a SQL rules engine that routes messages into AWS services, and cloud-side device state.",
+  "intro": [
+    "Each AWS account gets its own device endpoint. Devices connect to it over MQTT 3.1.1 or MQTT 5 on TLS (port 8883, or 443 with ALPN), MQTT over WebSockets, or HTTPS, which can only publish. Most devices prove who they are with an X.509 client certificate; apps can sign with AWS SigV4, and a Lambda function can act as a custom authorizer. An AWS IoT policy, a JSON document in IAM style attached to the certificate, decides which client IDs may connect and which topics they may publish, subscribe and receive on. Behind the endpoint is a real publish/subscribe broker: topics are free-form, devices and apps can subscribe to each other, and it keeps retained messages and offline sessions (an hour by default). It supports QoS 0 and 1, not QoS 2.",
+    "Three services sit next to the broker. The rules engine runs SQL such as `SELECT temp FROM 'factory/+/telemetry' WHERE temp > 80` over incoming messages and hands matches to actions: Lambda, Kinesis, Firehose, DynamoDB, S3, SQS, SNS, Kafka, Step Functions, Timestream, an HTTPS endpoint and more. Basic Ingest lets a device publish straight to one rule on `$aws/rules/<rule>/...`, skipping the broker and its message charge. Device Shadow keeps a JSON document per device with the state apps want (`desired`) and the state the device last reported (`reported`), so apps can read and change it while the device is offline. You pay per use: in US East, $1.00 per million messages (counted in 5 KB steps) for the first billion each month, $0.08 per million connection minutes, $1.25 per million shadow or registry operations, and $0.15 per million rules run and per million actions."
+  ],
+  "strengths": [
+    "A full MQTT 3.1.1 and 5 broker with free-form topics, retained messages, persistent sessions and shared subscriptions, not just a device-to-cloud pipe",
+    "The rules engine filters messages with SQL and delivers them to about twenty destinations, mostly AWS services, with no servers to run; Basic Ingest skips the messaging charge",
+    "Per-device X.509 identities with IAM-style policies, and policy variables such as the thing name to give each device only its own topics",
+    "Pure pay-per-use: an idle fleet costs little, at $0.08 per million connection minutes in US East"
+  ],
+  "limits": [
+    "No QoS 2, no guaranteed ordering, and QoS 0 messages can arrive more than once; devices must handle duplicates and reconnects",
+    "Every delivery is billed, in 5 KB steps: one publish fanned out to many subscribers, or replayed to a reconnecting persistent session, is charged again",
+    "Hard limits to design around: 128 KB per message, 100 publishes per second per connection, 8 KB shadows, and 50 subscriptions per connection by default",
+    "Shadows, rules, policies and `$aws/...` topics are AWS-specific, so device firmware and pipelines don’t move to another cloud unchanged",
+    "AWS has been retiring services around it: IoT Analytics shut down in December 2025, IoT Events in May 2026, and Greengrass V1 support ends on 7 October 2026"
+  ],
+  "worksWith": [
+    { "id": "mqtt", "how": "is a managed broker for" },
+    { "id": "lambda", "how": "invokes functions from rules in" },
+    { "id": "kinesis", "how": "routes messages via rules into" },
+    { "id": "dynamodb", "how": "writes rule output to" },
+    { "id": "s3", "how": "stores messages via rules in" },
+    { "id": "sqs", "how": "queues messages via rules in" },
+    { "id": "sns", "how": "sends alerts via rules to" },
+    { "id": "kafka", "how": "forwards messages via rules to" },
+    { "id": "step-functions", "how": "starts workflows from rules in" },
+    { "id": "aws-iam", "how": "runs rule actions with roles from" },
+    { "id": "azure-iot-hub", "how": "is AWS’s counterpart to" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Register a device, route hot readings to Lambda, publish with mosquitto",
+    "source": [
+      "# 1. A thing, a certificate, and a policy that limits it to its own topics",
+      "aws iot create-thing --thing-name pump-17",
+      "CERT_ARN=$(aws iot create-keys-and-certificate --set-as-active \\",
+      "  --certificate-pem-outfile pump-17.crt --private-key-outfile pump-17.key \\",
+      "  --query certificateArn --output text)",
+      "",
+      "cat > policy.json <<'EOF'",
+      "{",
+      "  \"Version\": \"2012-10-17\",",
+      "  \"Statement\": [",
+      "    { \"Effect\": \"Allow\", \"Action\": \"iot:Connect\",",
+      "      \"Resource\": \"arn:aws:iot:us-east-1:123456789012:client/${iot:Connection.Thing.ThingName}\" },",
+      "    { \"Effect\": \"Allow\", \"Action\": \"iot:Publish\",",
+      "      \"Resource\": \"arn:aws:iot:us-east-1:123456789012:topic/factory/${iot:Connection.Thing.ThingName}/*\" }",
+      "  ]",
+      "}",
+      "EOF",
+      "aws iot create-policy --policy-name pump-policy --policy-document file://policy.json",
+      "aws iot attach-policy --policy-name pump-policy --target \"$CERT_ARN\"",
+      "aws iot attach-thing-principal --thing-name pump-17 --principal \"$CERT_ARN\"",
+      "",
+      "# 2. A rule: readings above 80 go to a Lambda function",
+      "cat > rule.json <<'EOF'",
+      "{",
+      "  \"sql\": \"SELECT topic(2) AS device, temp FROM 'factory/+/telemetry' WHERE temp > 80\",",
+      "  \"awsIotSqlVersion\": \"2016-03-23\",",
+      "  \"actions\": [{ \"lambda\": { \"functionArn\": \"arn:aws:lambda:us-east-1:123456789012:function:alert-on-heat\" } }]",
+      "}",
+      "EOF",
+      "aws iot create-topic-rule --rule-name hot_pumps --topic-rule-payload file://rule.json",
+      "# (the function also needs `aws lambda add-permission` for iot.amazonaws.com)",
+      "",
+      "# 3. Publish as the device over MQTT with its certificate",
+      "ENDPOINT=$(aws iot describe-endpoint --endpoint-type iot:Data-ATS \\",
+      "  --query endpointAddress --output text)",
+      "mosquitto_pub -h \"$ENDPOINT\" -p 8883 --cafile AmazonRootCA1.pem \\",
+      "  --cert pump-17.crt --key pump-17.key -i pump-17 -q 1 \\",
+      "  -t factory/pump-17/telemetry -m '{\"temp\": 84.2}'",
+      "",
+      "# Same rule through Basic Ingest: no broker, no messaging charge",
+      "# (the policy must also allow iot:Publish on topic/$aws/rules/hot_pumps/*)",
+      "mosquitto_pub -h \"$ENDPOINT\" -p 8883 --cafile AmazonRootCA1.pem \\",
+      "  --cert pump-17.crt --key pump-17.key -i pump-17 -q 1 \\",
+      "  -t '$aws/rules/hot_pumps/factory/pump-17/telemetry' -m '{\"temp\": 84.2}'"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "What you pay for",
+      "intro": "List prices in US East (N. Virginia), checked 6 October 2026. Each line is billed separately, so one reading can incur several charges: the inbound message, each outbound delivery, a rule run and its actions.",
+      "corner": "Meter",
+      "columns": ["Price", "Notes"],
+      "rows": [
+        { "label": "Connectivity", "values": ["$0.08 per million connection minutes", "A device online all month is about 43,800 minutes, or $0.0035"] },
+        { "label": "Messaging (MQTT and HTTPS)", "values": ["$1.00 per million for the first billion a month; $0.80 for the next 4 billion; $0.70 beyond", "Metered in 5 KB steps: an 8 KB message counts as two. Inbound publishes and each delivery to a subscriber count"] },
+        { "label": "Device Shadow and registry", "values": ["$1.25 per million operations", "Shadow gets, updates and deletes, and registry calls"] },
+        { "label": "Rules engine", "values": ["$0.15 per million rules triggered, plus $0.15 per million actions", "The target service (Lambda, DynamoDB, S3…) bills on top"] },
+        { "label": "Basic Ingest", "values": ["No messaging charge", "Rule and action charges still apply; nothing else can subscribe to these messages"] },
+        { "label": "Direct Messaging", "values": ["$1.80 per million for the first billion; $2.50 per million with delivery confirmation", "An HTTPS call that sends to one connected client by its client ID"] }
+      ],
+      "notes": [
+        "Prices from the AWS Price List API for AWSIoT in us-east-1 (published 3 October 2026) and the AWS IoT Core pricing page. Other Regions cost more; LoRaWAN, Sidewalk and Device Location are priced separately."
+      ]
+    },
+    {
+      "type": "table",
+      "title": "AWS IoT Core, Azure IoT Hub and the Event Grid MQTT broker",
+      "intro": "Azure splits what AWS IoT Core does across two services: IoT Hub for device identity, twins and commands, and Event Grid’s MQTT broker for open publish/subscribe. Google had an equivalent, Cloud IoT Core, until it retired the service on 16 August 2023.",
+      "corner": "",
+      "columns": ["AWS IoT Core", "Azure IoT Hub", "Azure Event Grid MQTT broker"],
+      "rows": [
+        { "label": "Model", "values": ["Pub/sub broker on any topic, plus a rules engine", "Device-to-cloud gateway: each device uses fixed topics for its own messages", "Pub/sub broker on custom topics, device to device and broadcast"] },
+        { "label": "MQTT", "values": ["3.1.1 and 5; QoS 0 and 1", "3.1.1 only, with limited features; QoS 0 and 1", "3.1.1 and 5; QoS 0 and 1"] },
+        { "label": "Other protocols", "values": ["HTTPS (publish only), MQTT over WebSockets", "AMQP, HTTPS, MQTT and AMQP over WebSockets", "MQTT over WebSockets, HTTP Publish"] },
+        { "label": "Largest message", "values": ["128 KB", "256 KB device to cloud; 64 KB cloud to device", "1 MB"] },
+        { "label": "Device state", "values": ["Device Shadow, 8 KB by default", "Device twin: 32 KB desired, 32 KB reported, 8 KB tags", "None built in; retained messages hold the last value per topic"] },
+        { "label": "Commands to a device", "values": ["Shadow `desired` state, MQTT topics, Direct Messaging", "Cloud-to-device queue (50 pending per device), direct methods with a 5 to 300 s timeout", "MQTT topics, MQTT 5 request-response"] },
+        { "label": "Routing", "values": ["SQL rules to about twenty destinations, mostly AWS services", "Routing queries to Event Hubs, Service Bus, Storage, Cosmos DB", "Routes to Event Grid topics, then Event Hubs, webhooks or Fabric"] },
+        { "label": "Pricing model", "values": ["Per message (5 KB), per connection minute, per shadow operation, per rule", "Fixed price per unit per month with a daily message quota (4 KB)", "Throughput units per hour plus operations (64 KB)"] }
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "AWS IoT services that are gone or going",
+      "intro": "The broker, shadows and rules engine are still developed, but several services built around them have been retired. Check before you design on top of one.",
+      "items": [
+        { "name": "AWS IoT Analytics", "tag": "shut down Dec 2025", "text": "Closed to new customers on 24 July 2024 and ended on 15 December 2025, after which consoles and resources were no longer reachable. Its rule action is gone from the docs." },
+        { "name": "AWS IoT Events", "tag": "shut down May 2026", "text": "Detector models for state machines over device data. Closed to new customers on 20 May 2025 and ended on 20 May 2026. AWS’s migration guide rebuilds detectors with Kinesis, Lambda and other services." },
+        { "name": "AWS IoT Greengrass V1", "tag": "ends 7 Oct 2026", "text": "The first version of AWS’s edge runtime is in sunset; support ends on 7 October 2026. Greengrass V2 is the replacement." },
+        { "name": "IoT FleetWise, SiteWise Monitor, Device Defender Detect", "tag": "maintenance", "text": "No new customers and no new features, per AWS’s lifecycle list (announced October 2025 and March 2026). Existing users can keep using them." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In 2015 AWS argued that cheaper compute, near-universal IP connectivity and big-data analytics would turn factory floors, vehicles, health care systems and household appliances into connected “things” that need somewhere in the cloud to talk to. On 8 October 2015 Jeff Barr announced AWS IoT in beta: a message broker speaking MQTT and HTTP, a registry of things, “thing shadows” holding each device’s state in the cloud, a rules engine with SQL-like filters that fed other AWS services, X.509 certificates for devices, and device SDKs for C, JavaScript and Arduino Yún. It became generally available on 18 December 2015.",
+      "The service, now called AWS IoT Core, grew around that broker. In December 2020 AWS added a managed LoRaWAN network server for long-range, low-power radios, and in November 2022 it added MQTT 5 features such as user properties, topic aliases, request-response and message expiry, with MQTT 3.1.1 and 5 clients able to talk to each other.",
+      "The family around it shrank later. AWS stopped taking new IoT Analytics customers in July 2024 and shut it down in December 2025, and ended IoT Events in May 2026, pointing customers back to general services like Kinesis and Lambda fed by IoT Core rules."
+    ],
+    "choices": [
+      { "choice": "A shadow of every device kept in the cloud", "why": "Devices drop off networks and sleep to save power. A stored `desired` and `reported` state lets apps read and change a device at any time; the device catches up when it reconnects." },
+      { "choice": "SQL rules instead of consumer code", "why": "Most messages just need filtering and delivery to a database, queue or function. A declarative rule removes the fleet of subscriber programs you would otherwise run." },
+      { "choice": "Per-device X.509 certificates and IAM-style policies", "why": "Shared passwords can’t be revoked for one stolen device. Mutual TLS with a certificate per device, and policies scoped to it, limit the damage to that device." },
+      { "choice": "Standard MQTT, minus QoS 2", "why": "MQTT was already the light protocol constrained devices used. Leaving out QoS 2’s four-step handshake kept the broker simpler and scalable; devices handle duplicates instead." }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "AWS IoT announced in beta on 8 October; generally available 18 December" },
+      { "year": "2020", "text": "AWS IoT Core for LoRaWAN runs the LoRaWAN network server for you" },
+      { "year": "2022", "text": "MQTT 5 support generally available in November" },
+      { "year": "2024", "text": "AWS IoT Analytics stops accepting new customers in July" },
+      { "year": "2025", "text": "AWS IoT Analytics shut down on 15 December" },
+      { "year": "2026", "text": "AWS IoT Events ends 20 May; Greengrass V1 support ends 7 October" }
+    ],
+    "sources": [
+      { "label": "AWS News Blog: AWS IoT, Cloud Services for Connected Devices (8 October 2015)", "url": "https://aws.amazon.com/blogs/aws/aws-iot-cloud-services-for-connected-devices/" },
+      { "label": "AWS News Blog: AWS IoT Now Generally Available (18 December 2015)", "url": "https://aws.amazon.com/blogs/aws/aws-iot-now-generally-available/" },
+      { "label": "AWS News Blog: New AWS IoT Core for LoRaWAN (15 December 2020)", "url": "https://aws.amazon.com/blogs/aws/new-aws-iot-core-for-lorawan-to-connect-manage-and-secure-lorawan-devices-at-scale/" },
+      { "label": "AWS IoT Blog: Introducing new MQTTv5 features for AWS IoT Core (28 November 2022)", "url": "https://aws.amazon.com/blogs/iot/introducing-new-mqttv5-features-for-aws-iot-core-to-help-build-flexible-architecture-patterns/" },
+      { "label": "AWS docs: AWS IoT Analytics end of support", "url": "https://docs.aws.amazon.com/iotanalytics/latest/userguide/iotanalytics-end-of-support.html", "archive": "https://web.archive.org/web/20251207234637/https://docs.aws.amazon.com/iotanalytics/latest/userguide/iotanalytics-end-of-support.html" },
+      { "label": "AWS docs: AWS IoT Events end of support", "url": "https://docs.aws.amazon.com/iotevents/latest/developerguide/iotevents-end-of-support.html", "archive": "https://web.archive.org/web/20260604014306/https://docs.aws.amazon.com/iotevents/latest/developerguide/iotevents-end-of-support.html" }
+    ]
+  },
+  "sources": [
+    { "label": "AWS IoT Core pricing", "url": "https://aws.amazon.com/iot-core/pricing/" },
+    { "label": "AWS Price List API: AWS IoT, US East (N. Virginia)", "url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSIoT/current/us-east-1/index.json" },
+    { "label": "AWS General Reference: AWS IoT Core endpoints and quotas", "url": "https://docs.aws.amazon.com/general/latest/gr/iot-core.html" },
+    { "label": "AWS IoT docs: Device communication protocols (ports, ALPN, authentication)", "url": "https://docs.aws.amazon.com/iot/latest/developerguide/protocols.html" },
+    { "label": "AWS IoT docs: MQTT (versions, persistent sessions, retained messages, differences from the spec)", "url": "https://docs.aws.amazon.com/iot/latest/developerguide/mqtt.html" },
+    { "label": "AWS IoT docs: AWS IoT Core policies", "url": "https://docs.aws.amazon.com/iot/latest/developerguide/iot-policies.html" },
+    { "label": "AWS IoT docs: AWS IoT rule actions", "url": "https://docs.aws.amazon.com/iot/latest/developerguide/iot-rule-actions.html" },
+    { "label": "AWS IoT docs: Reducing messaging costs with Basic Ingest", "url": "https://docs.aws.amazon.com/iot/latest/developerguide/iot-basic-ingest.html" },
+    { "label": "AWS IoT docs: AWS IoT Device Shadow service", "url": "https://docs.aws.amazon.com/iot/latest/developerguide/iot-device-shadows.html" },
+    { "label": "AWS IoT docs: Direct Messaging", "url": "https://docs.aws.amazon.com/iot/latest/developerguide/direct-messaging.html" },
+    { "label": "GitHub: AWS IoT Device SDK for Python v2 (Apache 2.0)", "url": "https://github.com/aws/aws-iot-device-sdk-python-v2" },
+    { "label": "GitHub: AWS IoT Device SDK for Embedded C (MIT)", "url": "https://github.com/aws/aws-iot-device-sdk-embedded-C" },
+    { "label": "AWS General Reference: Services in sunset (Greengrass V1)", "url": "https://docs.aws.amazon.com/general/latest/gr/sunset_services.html" },
+    { "label": "AWS General Reference: Services in maintenance (IoT FleetWise, SiteWise Monitor, Device Defender Detect)", "url": "https://docs.aws.amazon.com/general/latest/gr/maintenance_services.html" },
+    { "label": "AWS docs: AWS IoT Analytics end of support", "url": "https://docs.aws.amazon.com/iotanalytics/latest/userguide/iotanalytics-end-of-support.html", "archive": "https://web.archive.org/web/20251207234637/https://docs.aws.amazon.com/iotanalytics/latest/userguide/iotanalytics-end-of-support.html" },
+    { "label": "AWS docs: AWS IoT Events end of support", "url": "https://docs.aws.amazon.com/iotevents/latest/developerguide/iotevents-end-of-support.html", "archive": "https://web.archive.org/web/20260604014306/https://docs.aws.amazon.com/iotevents/latest/developerguide/iotevents-end-of-support.html" },
+    { "label": "Azure docs: Use MQTT to communicate with IoT Hub (IoT Hub vs Event Grid)", "url": "https://learn.microsoft.com/en-us/azure/iot-hub/iot-mqtt-connect-to-iot-hub" },
+    { "label": "Azure docs: IoT Hub quotas and throttling", "url": "https://learn.microsoft.com/en-us/azure/iot-hub/iot-hub-devguide-quotas-throttling" },
+    { "label": "Azure docs: Event Grid MQTT broker overview (1 MB messages, MQTT 5)", "url": "https://learn.microsoft.com/en-us/azure/event-grid/mqtt-overview" },
+    { "label": "Azure Event Grid pricing (MQTT operations metered per 64 KB)", "url": "https://azure.microsoft.com/en-us/pricing/details/event-grid/" },
+    { "label": "Google Cloud: Cloud IoT Core release notes (retirement on 16 August 2023)", "url": "https://cloud.google.com/iot/docs/release-notes", "archive": "https://web.archive.org/web/20230119085529/https://cloud.google.com/iot/docs/release-notes" }
+  ],
+  "checked": "2026-10-06"
+}

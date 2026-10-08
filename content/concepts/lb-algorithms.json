@@ -1,0 +1,189 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Load-balancing algorithms",
+  "category": "network",
+  "order": 15,
+  "summary": "The rule a load balancer uses to pick which healthy server gets the next request or connection.",
+  "howItWorks": "Every load balancer has to answer one question many thousands of times a second: of the healthy servers, which one gets this request? **Round robin** takes them in turn: 1, 2, 3, 1, 2, 3. It needs no information about the servers and is the default almost everywhere, but it assumes every server is equally fast and every request equally heavy. **Weighted round robin** gives bigger servers more turns. **Least connections** (or **least outstanding requests**) sends the request to the server with the fewest in flight, so a server stuck on slow requests gets fewer new ones. Counting every server on every pick is costly at scale, and many balancers acting on the same stale counts can all pile onto the same “least busy” server, so **power of two choices** picks two servers at random and sends the request to the less busy of the two, which is nearly as good as checking them all. **Hashing** turns something about the request (client IP, a header, a URL, the TCP connection) into a number that picks the server, so the same key keeps landing on the same server: good for sticky sessions and caches. Plain `hash mod N` reshuffles almost every key when a server is added or removed; **consistent hashing** (a ring hash, or Google’s Maglev table) moves only about 1/N of them. Finally, **slow start** ramps a newly healthy server from a trickle up to its full share, so a cold cache or a JIT that hasn’t warmed up isn’t flooded the moment it joins.",
+  "analogy": "Supermarket checkouts. Round robin is a staff member sending each shopper to the next till in order, even if that till has a trainee. Least connections is sending them to the shortest queue. Power of two choices is glancing at two random tills and picking the shorter. Hashing is “surnames A to F use till 1”, so the same family always meets the same cashier.",
+  "useWhen": [
+    "Round robin: identical servers and short, similar requests (a typical stateless web API)",
+    "Least connections or outstanding requests: request times vary a lot, or connections are long-lived (WebSockets, database sessions)",
+    "Hashing: each server keeps state worth reusing, such as a local cache, a session or a shard of data",
+    "Slow start: servers need warm-up time (JIT compilation, empty caches) after scaling out or a deploy"
+  ],
+  "avoidWhen": [
+    "Round robin when servers differ in size or a few requests are much heavier; one server falls behind while it still gets its full share",
+    "Hashing on client IP when many users share one address (offices, mobile carriers, NAT); one server gets them all",
+    "Plain (non-consistent) hashing in front of caches; every scale event empties most of them"
+  ],
+  "example": "An image API runs on three servers, but one of them is a smaller instance. Under round robin each gets a third of the requests, and the small one’s p99 latency climbs from 80 ms to 900 ms. Switching the target group to least outstanding requests sends it fewer requests while it is busy, and p99 drops back. Thumbnails are then served through a cache tier keyed by `hash $request_uri consistent`, so adding a fourth cache node moves only about a quarter of the URLs instead of nearly all of them.",
+  "providers": {
+    "aws": "Elastic Load Balancing: ALB routing algorithms (round robin, least outstanding requests, weighted random), NLB flow hash",
+    "gcp": "Cloud Load Balancing locality policies: ROUND_ROBIN, LEAST_REQUEST, RING_HASH, RANDOM, MAGLEV, WEIGHTED_ROUND_ROBIN",
+    "azure": "Azure Load Balancer distribution modes (five-tuple hash, source IP affinity); Application Gateway (round robin)",
+    "oss": "NGINX (round robin, least_conn, ip_hash, hash consistent, random two), HAProxy (roundrobin, leastconn, source, uri, random), Envoy (round robin, least request, ring hash, Maglev, random)"
+  },
+  "snippet": {
+    "lang": "nginx",
+    "source": [
+      "upstream api {",
+      "    least_conn;                        # fewest active connections wins",
+      "    server 10.0.1.11:8080 weight=2;    # bigger box, counts double",
+      "    server 10.0.1.12:8080;",
+      "    server 10.0.1.13:8080;",
+      "}",
+      "",
+      "upstream thumbs {",
+      "    hash $request_uri consistent;      # same URL, same cache node (ketama)",
+      "    server 10.0.2.21:8080;",
+      "    server 10.0.2.22:8080;",
+      "    server 10.0.2.23:8080;",
+      "}",
+      "",
+      "server {",
+      "    listen 80;",
+      "    location /api/    { proxy_pass http://api; }",
+      "    location /thumbs/ { proxy_pass http://thumbs; }",
+      "}"
+    ]
+  },
+  "related": ["lb", "autoscaling", "key-value", "service-mesh", "dns"],
+  "diagram": {
+    "caption": "Round robin hands requests to the servers strictly in turn. Server 3 is a smaller machine and answers more slowly, but it still gets every third request; when server 2 fails its health check, the rotation simply skips it.",
+    "h": 260,
+    "nodes": [
+      {
+        "id": "cl",
+        "x": 100,
+        "y": 130,
+        "label": "Clients",
+        "sub": "GET /api/…",
+        "emit": {"every": 330, "jitter": 0.3, "req": true, "cycle": true},
+        "out": ["lb"]
+      },
+      {
+        "id": "lb",
+        "x": 330,
+        "y": 130,
+        "label": "Load balancer",
+        "sub": "round robin",
+        "route": "rr",
+        "concept": "lb",
+        "out": ["s1", "s2", "s3"]
+      },
+      {"id": "s1", "x": 610, "y": 55, "label": "Server 1", "sub": "8 vCPU · 80 ms", "mode": "reply", "delay": 80},
+      {"id": "s2", "x": 610, "y": 130, "label": "Server 2", "sub": "8 vCPU · 80 ms", "mode": "reply", "delay": 80},
+      {"id": "s3", "x": 610, "y": 205, "label": "Server 3", "sub": "2 vCPU · 400 ms", "mode": "reply", "delay": 400}
+    ],
+    "events": [{"node": "s2", "at": 4000, "every": 12000, "dur": 3500, "text": "health check failed", "back": "healthy"}]
+  },
+  "sections": [
+    {
+      "type": "model",
+      "title": "Hashing: the same key, the same server",
+      "intro": "Each colour is a different key, such as a user ID or a URL. The balancer hashes the key to pick a server, so a key always lands in the same place and that server’s cache stays warm for it.",
+      "diagram": {
+        "caption": "Requests are coloured by key. Hashing sends every request with the same key to the same server, whatever order they arrive in.",
+        "h": 250,
+        "nodes": [
+          {
+            "id": "cl",
+            "x": 100,
+            "y": 125,
+            "label": "Clients",
+            "sub": "key = user ID",
+            "emit": {"every": 360, "jitter": 0.3, "req": true, "colorByKey": 3},
+            "out": ["lb"]
+          },
+          {"id": "lb", "x": 330, "y": 125, "label": "Load balancer", "sub": "hash(key)", "route": "hash", "out": ["c1", "c2", "c3"]},
+          {"id": "c1", "x": 610, "y": 50, "label": "Server A", "sub": "warm cache for its keys", "mode": "reply", "delay": 60},
+          {"id": "c2", "x": 610, "y": 125, "label": "Server B", "sub": "warm cache for its keys", "mode": "reply", "delay": 60},
+          {"id": "c3", "x": 610, "y": 200, "label": "Server C", "sub": "warm cache for its keys", "mode": "reply", "delay": 60}
+        ]
+      }
+    },
+    {
+      "type": "table",
+      "title": "What each balancer offers",
+      "intro": "From each product’s documentation, checked 2026-10-06.",
+      "corner": "Balancer",
+      "columns": ["Default", "Also offers", "Slow start"],
+      "rows": [
+        { "label": "AWS Application Load Balancer", "values": ["Round robin", "Least outstanding requests; weighted random, which can use Automatic Target Weights to steer traffic away from failing targets", "Yes, linear ramp, with round robin only"] },
+        { "label": "AWS Network Load Balancer", "values": ["Flow hash on protocol, source and destination IP and port (plus TCP sequence number); each connection stays on one target", "", ""] },
+        { "label": "Google Cloud Application and proxy Network Load Balancers", "values": ["ROUND_ROBIN (MAGLEV when session affinity is set)", "LEAST_REQUEST (two random hosts, fewer active requests), RING_HASH, RANDOM, MAGLEV, WEIGHTED_ROUND_ROBIN from custom metrics", ""] },
+        { "label": "Google Cloud passthrough Network Load Balancers", "values": ["MAGLEV", "WEIGHTED_MAGLEV (regional external)", ""] },
+        { "label": "Azure Load Balancer", "values": ["Five-tuple hash (source and destination IP and port, protocol)", "Source IP affinity: two-tuple or three-tuple hash", ""] },
+        { "label": "Azure Application Gateway", "values": ["Round robin across healthy servers", "", ""] },
+        { "label": "NGINX (open source)", "values": ["Weighted round robin", "least_conn, ip_hash, hash (optionally consistent), random with “two” choices, least_time (open source since 1.31.0)", "Only in the commercial NGINX Plus (slow_start)"] },
+        { "label": "HAProxy", "values": ["roundrobin (weighted, dynamic)", "static-rr, leastconn, first, source, uri, url_param, hdr, hash (optionally consistent), random with N draws (default 2)", "Yes (slowstart), linear from 0 to 100%"] },
+        { "label": "Envoy", "values": ["Weighted round robin", "Weighted least request (power of two choices by default), ring hash, Maglev, random, client-side weighted round robin from load reports", "Yes, for round robin, least request and client-side weighted round robin"] }
+      ],
+      "notes": ["An empty cell means we found no such option in the documentation we checked."]
+    }
+  ],
+  "history": {
+    "story": [
+      "The first way to spread web traffic was round-robin DNS: list several addresses under one name and rotate their order, as RFC 1794 described in 1995. It knew nothing about load or health. Dedicated balancers that could see every connection brought smarter schedulers. The Linux Virtual Server project, started in 1998, shipped round robin, weighted round robin, least connections, weighted least connections, and source and destination hashing, and its documentation already warned that round robin can leave servers unevenly loaded when requests vary.",
+      "Two pieces of theory from the late 1990s shaped what came next. In 1997 David Karger, Tom Leighton, Daniel Lewin and colleagues published consistent hashing, to spread web caching across a changing set of servers so that adding or removing one moved only a small share of the keys. Michael Mitzenmacher’s analysis of the “supermarket model”, published in 2001, showed that letting each request look at just two random servers and join the shorter queue gives an exponential improvement over picking one at random, while a third choice adds only a constant factor.",
+      "Both ideas are now in mainstream products. Google’s Maglev, serving traffic since 2008 and described in 2016, uses its own consistent-hashing lookup table that is fast to build and to query. Envoy, HAProxy and NGINX all offer power-of-two-choices variants, and Google Cloud’s LEAST_REQUEST uses it too. AWS added least outstanding requests to the ALB in 2019 and weighted random with Automatic Target Weights, which sends less traffic to targets that are returning errors, in 2023."
+    ],
+    "choices": [
+      {
+        "choice": "Round robin as the default",
+        "why": "It needs no feedback from the servers and spreads load evenly when servers and requests are alike, which is the common case for stateless web tiers. ALB, Google Cloud, NGINX, HAProxy and Envoy all default to it."
+      },
+      {
+        "choice": "Two random choices instead of a full scan",
+        "why": "Checking every server on every request costs O(n), and many balancers working from the same slightly stale counts tend to herd onto one server. Mitzenmacher showed two random picks get most of the benefit; Envoy credits his result for its O(1) least-request balancer."
+      },
+      {
+        "choice": "Consistent hashing instead of hash mod N",
+        "why": "With mod N, changing N remaps almost every key, which empties caches and breaks affinity. Placing servers on a ring (or in Maglev’s table) means adding or removing one of N servers moves only about 1/N of the keys."
+      },
+      {
+        "choice": "Ramp new servers up slowly",
+        "why": "A server that just passed its health check may still have cold caches or unoptimised code. ALB, HAProxy and Envoy raise its share of traffic gradually over a configured period instead of giving it a full share at once."
+      }
+    ],
+    "timeline": [
+      { "year": "1995", "text": "RFC 1794 describes rotating DNS answers to spread load" },
+      { "year": "1997", "text": "Karger and colleagues publish consistent hashing (STOC)" },
+      { "year": "1998", "text": "Linux Virtual Server starts, with round robin, least-connection and hashing schedulers" },
+      { "year": "2001", "text": "Mitzenmacher publishes “The Power of Two Choices in Randomized Load Balancing”" },
+      { "year": "2016", "text": "Google publishes the Maglev paper, with its consistent-hashing table" },
+      { "year": "2019", "text": "AWS ALB adds least outstanding requests" },
+      { "year": "2023", "text": "AWS ALB adds weighted random with Automatic Target Weights" }
+    ],
+    "sources": [
+      { "label": "RFC 1794: DNS Support for Load Balancing (1995)", "url": "https://www.rfc-editor.org/rfc/rfc1794" },
+      { "label": "Linux Virtual Server project news (1998 onward)", "url": "https://www.linuxvirtualserver.org/news.html" },
+      { "label": "Linux Virtual Server docs: Job scheduling algorithms", "url": "http://www.linuxvirtualserver.org/docs/scheduling.html" },
+      { "label": "Karger, Lehman, Leighton, Levine, Lewin and Panigrahy: Consistent Hashing and Random Trees (STOC 1997)", "url": "https://cs.brown.edu/courses/csci2950-u/f09/papers/chash97stoc.pdf" },
+      { "label": "Wikipedia: Consistent hashing", "url": "https://en.wikipedia.org/wiki/Consistent_hashing" },
+      { "label": "Michael Mitzenmacher: The Power of Two Choices in Randomized Load Balancing (IEEE TPDS, Oct 2001)", "url": "https://www.eecs.harvard.edu/~michaelm/postscripts/tpds2001.pdf" },
+      { "label": "Eisenbud et al.: Maglev, A Fast and Reliable Software Network Load Balancer (NSDI 2016)", "url": "https://www.usenix.org/system/files/conference/nsdi16/nsdi16-paper-eisenbud.pdf" },
+      { "label": "Envoy docs: Supported load balancers (P2C credited to Mitzenmacher)", "url": "https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers" },
+      { "label": "AWS What’s New: Application Load Balancer supports Least Outstanding Requests (Nov 2019)", "url": "https://aws.amazon.com/about-aws/whats-new/2019/11/application-load-balancer-now-supports-least-outstanding-requests-algorithm-for-load-balancing-requests/" },
+      { "label": "AWS What’s New: Application Load Balancer increases availability with Automatic Target Weights (Nov 2023)", "url": "https://aws.amazon.com/about-aws/whats-new/2023/11/application-load-balancer-availability-target-weights/" }
+    ]
+  },
+  "sources": [
+    { "label": "ALB docs: Edit target group attributes (routing algorithms, slow start mode)", "url": "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/edit-target-group-attributes.html" },
+    { "label": "ELB docs: How Elastic Load Balancing works (ALB round robin default, NLB flow hash)", "url": "https://docs.aws.amazon.com/elasticloadbalancing/latest/userguide/how-elastic-load-balancing-works.html" },
+    { "label": "Google Cloud docs: Backend services overview (balancing modes and locality policies)", "url": "https://docs.cloud.google.com/load-balancing/docs/backend-service" },
+    { "label": "Microsoft Learn: Azure Load Balancer distribution modes", "url": "https://learn.microsoft.com/en-us/azure/load-balancer/distribution-mode-concepts" },
+    { "label": "Microsoft Learn: How an application gateway works (round robin)", "url": "https://learn.microsoft.com/en-us/azure/application-gateway/how-application-gateway-works" },
+    { "label": "nginx docs: Using nginx as HTTP load balancer", "url": "https://nginx.org/en/docs/http/load_balancing.html" },
+    { "label": "nginx docs: ngx_http_upstream_module (least_conn, hash consistent, random two, least_time, slow_start)", "url": "https://nginx.org/en/docs/http/ngx_http_upstream_module.html" },
+    { "label": "HAProxy 3.2 configuration manual: balance, hash-type and slowstart", "url": "https://docs.haproxy.org/3.2/configuration.html" },
+    { "label": "Envoy docs: Supported load balancers", "url": "https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers" },
+    { "label": "Envoy docs: Slow start mode", "url": "https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/slow_start" },
+    { "label": "Envoy API: Cluster LbPolicy (ROUND_ROBIN is the default)", "url": "https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/cluster/v3/cluster.proto" },
+    { "label": "Michael Mitzenmacher: The Power of Two Choices in Randomized Load Balancing (IEEE TPDS, Oct 2001)", "url": "https://www.eecs.harvard.edu/~michaelm/postscripts/tpds2001.pdf" },
+    { "label": "Karger et al.: Consistent Hashing and Random Trees (STOC 1997)", "url": "https://cs.brown.edu/courses/csci2950-u/f09/papers/chash97stoc.pdf" },
+    { "label": "Eisenbud et al.: Maglev (NSDI 2016)", "url": "https://www.usenix.org/system/files/conference/nsdi16/nsdi16-paper-eisenbud.pdf" },
+    { "label": "Linux Virtual Server docs: Job scheduling algorithms (weighted round robin and its imbalance)", "url": "http://www.linuxvirtualserver.org/docs/scheduling.html" }
+  ]
+}

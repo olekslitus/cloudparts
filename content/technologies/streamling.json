@@ -1,0 +1,155 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Streamling",
+  "concepts": ["stream-processing"],
+  "provider": "vendor",
+  "vendor": "Goldsky (Endless Sky, Inc.)",
+  "license": "Functional Source License 1.1 with Apache 2.0 future licence (FSL-1.1-ALv2): source-available, not OSI open source; each version becomes Apache 2.0 two years after its release",
+  "website": "https://streamling.dev/",
+  "repo": "https://github.com/goldsky-io/streamling",
+  "summary": "Goldsky’s young Rust pipeline runtime: YAML pipelines of stateless SQL, TypeScript and plugin steps on Arrow, from Kafka or files into Postgres, ClickHouse or webhooks.",
+  "intro": [
+    "Streamling is a single Rust binary that runs one pipeline, described in a YAML file as `sources`, `transforms` and `sinks`. Every stage is an Apache DataFusion execution plan that passes Arrow record batches to the next over in-process streams, so different kinds of step chain freely: DataFusion SQL, JavaScript or TypeScript run per record in a WebAssembly sandbox, calls to an HTTP endpoint, and plugins, which are Rust crates loaded at runtime through a stable ABI. Built-in sources read Kafka (Avro through a schema registry, or JSON), ClickHouse and files on disk, S3 or Google Cloud Storage (Parquet, JSON, CSV or Avro); built-in sinks write to Postgres, ClickHouse, Kafka and webhooks, and track inserts, updates and deletes through a `_gs_op` column taken from Debezium-style `dbz.op` headers. The SQL is deliberately stateless: filters and projections work, joins and aggregations are switched off. For lookups there are dynamic tables, sets of values kept in Postgres that a query can test against and that you can update without restarting. Every few seconds a checkpoint marker flows from the sources through every step; once all sinks have flushed and acknowledged it, the sources commit their Kafka offsets, to Kafka and to a SQLite or Postgres state backend. That gives at-least-once delivery. There is no shuffle between machines: you scale by running more copies in one Kafka consumer group, each checkpointing on its own.",
+    "Goldsky, a blockchain data company, wrote Streamling to replace the Apache Flink engine under its pipeline product, and it now runs Goldsky’s Turbo Pipelines. Goldsky published it in June 2026 under the Functional Source License: you may use, change and redistribute it for anything except a commercial product that competes with it, and each version becomes Apache 2.0 on its second anniversary. Goldsky calls it open source, but that licence isn’t an OSI open-source licence. It is new and small: five releases from 0.1.0 (June 2026) to 0.4.0 (September 2026), under a hundred public commits, and fewer than a hundred GitHub stars. The managed way to use it is Turbo Pipelines over Goldsky’s blockchain datasets, at $0.10 per worker hour plus $1 per 100,000 events written after the first million on the Scale plan (checked 2026-10-06)."
+  ],
+  "strengths": [
+    "Light on resources: Goldsky reports a Kafka-to-ClickHouse workload falling from over 10 CPU cores on Flink to 0.3, and cold starts from over two minutes to under five seconds (its own production numbers)",
+    "Extend it without forking: sources, transforms, sinks and SQL functions written as Rust plugins get the same checkpointing as built-in steps, and small transforms can be TypeScript in a WebAssembly sandbox",
+    "Arrow from end to end: Avro decodes straight into Arrow batches, and the ClickHouse sink sends Arrow compressed with zstd",
+    "Little to restore after a crash: only source offsets live in the state backend, so a supervisor such as Kubernetes can restart it and it resumes from Postgres in seconds",
+    "Upserts and deletes flow through to Postgres and ClickHouse, with each batch collapsed to the latest row per primary key"
+  ],
+  "limits": [
+    "Source-available, not open source: the Functional Source License forbids offering it, or something substantially similar, as a competing commercial product until each version turns Apache 2.0 two years after release",
+    "Very young and pre-1.0: public only since June 2026, release notes are empty, 0.3 changed the plugin interface so every plugin had to be recompiled, and most commits come from Goldsky’s own engineers",
+    "Not a stateful stream processor: no joins, aggregations or windows in SQL and no distributed state; Goldsky’s answer is to keep state in external databases or use the trigger-based Postgres aggregation sink",
+    "At-least-once only: after a restart the gap is replayed, so sinks without a primary key see duplicates",
+    "Connector gaps: the Kafka source rejects tombstone records, and the Kafka sink writes only Avro through a schema registry"
+  ],
+  "worksWith": [
+    { "id": "datafusion", "how": "runs every pipeline stage as a plan in" },
+    { "id": "arrow", "how": "passes record batches between stages in" },
+    { "id": "kafka", "how": "consumes and produces topics in" },
+    { "id": "clickhouse", "how": "upserts Arrow batches into" },
+    { "id": "postgresql", "how": "keeps offsets and lookup tables in" },
+    { "id": "sqlite", "how": "can keep its checkpoint offsets in" },
+    { "id": "s3", "how": "reads Parquet, CSV or JSON files from" },
+    { "id": "gcs", "how": "reads Parquet, CSV or JSON files from" },
+    { "id": "kubernetes", "how": "is restarted and scaled out as pods on" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Large orders from a JSON Kafka topic into ClickHouse, with offsets checkpointed in Postgres",
+    "source": [
+      "curl -fsSL https://streamling.dev/install.sh | bash",
+      "",
+      "export STREAMLING__KAFKA_SOURCE__BROKERS=kafka-1:9092",
+      "export STREAMLING__KAFKA_SOURCE__CONSUMER_GROUP_ID=orders-to-clickhouse  # more copies share the partitions",
+      "export STREAMLING__STATE_BACKEND__BACKEND_TYPE=Postgres",
+      "export STREAMLING__STATE_BACKEND__POSTGRES__HOST=pg.internal",
+      "export STREAMLING__STATE_BACKEND__POSTGRES__PASSWORD=\"$PG_PASSWORD\"",
+      "export STREAMLING__CLICKHOUSE_SINK__URL=http://clickhouse:8123",
+      "",
+      "cat > pipeline.yaml <<'EOF'",
+      "sources:",
+      "  orders:",
+      "    type: kafka",
+      "    topic: shop.orders",
+      "    data_format: json",
+      "    primary_key: id",
+      "    schema:",
+      "      id: string",
+      "      customer_id: string",
+      "      amount: float64",
+      "      country: string",
+      "transforms:",
+      "  large_orders:",
+      "    type: sql",
+      "    primary_key: id",
+      "    sql: |",
+      "      SELECT id, customer_id, amount, lower(country) AS country",
+      "      FROM orders",
+      "      WHERE amount > 1000",
+      "sinks:",
+      "  ch_large_orders:",
+      "    type: clickhouse",
+      "    from: large_orders",
+      "    table: large_orders  # must exist, as ReplacingMergeTree(insert_time, is_deleted)",
+      "    primary_key: id",
+      "EOF",
+      "",
+      "streamling pipeline.yaml"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "What’s built in",
+      "intro": "From the README, checked 2026-10-06. Anything else is a plugin.",
+      "corner": "Stage",
+      "columns": ["Built-in options"],
+      "rows": [
+        { "label": "Sources", "values": ["Kafka (Avro or JSON), ClickHouse, files (Parquet, JSON, CSV, Avro; bounded or watched), hybrid (backfill, then a live stream)"] },
+        { "label": "Transforms", "values": ["Stateless DataFusion SQL, JavaScript or TypeScript in WebAssembly, HTTP handler, dynamic tables"] },
+        { "label": "Sinks", "values": ["Postgres, Postgres aggregation (trigger-maintained totals), ClickHouse, Kafka (Avro), webhook, print, blackhole"] },
+        { "label": "State backend", "values": ["In-memory, SQLite or Postgres; holds source offsets, not keyed operator state"] },
+        { "label": "Delivery", "values": ["At-least-once, through checkpoint markers that sinks acknowledge before sources commit"] }
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "When something else fits better",
+      "items": [
+        { "name": "Apache Flink", "tag": "stateful, distributed", "text": "What Goldsky moved away from. Pick it when you need streaming joins, windows and large keyed state with exactly-once checkpoints across a cluster." },
+        { "name": "Arroyo", "tag": "MIT or Apache 2.0", "text": "Also Rust on Arrow and DataFusion, but with stateful SQL: windows, joins and checkpointed state in object storage. Open source, developed at Cloudflare." },
+        { "name": "Redpanda Connect", "tag": "MIT core", "text": "The closest match in shape: one Go binary running a YAML pipeline with at-least-once delivery and no state of its own, with a much larger connector list." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Goldsky sells blockchain data to developers. Its Mirror product, launched in 2023, let users write a YAML pipeline that kept a copy of on-chain data in their own database, and it ran on Apache Flink: over 3,000 pipelines at once, the biggest on 40 Flink task managers. CTO Jeff Ling says Flink did the job but was hard for anyone outside the streaming team to extend, its checkpoints were hard to inspect, the AWS bill was large, and pipelines took minutes to restart after every change.",
+      "A team member’s experiment, a lighter engine to take Kafka data, filter it and post it to webhooks, started in seconds and used a fraction of the resources. Goldsky rewrote the whole platform on it in Rust, on Apache Arrow and DataFusion, kept Mirror’s YAML format, and dropped stateful SQL. The engine became Streamling, and the product built on it, Turbo Pipelines, succeeded Mirror.",
+      "On 8 June 2026 Goldsky published the code under the Functional Source License and tagged 0.1.0. Ling credits fast cold starts, a narrow plugin interface and a large saving on cloud costs, and says the team generates many of its plugins with AI coding agents."
+    ],
+    "choices": [
+      { "choice": "No joins or aggregations in SQL", "why": "Streaming joins need coordination and large intermediate state. Goldsky decided state belongs in external databases with their own high availability, and that a pipeline needing a join has a problem upstream." },
+      { "choice": "Restart fast instead of building for high availability", "why": "With no keyed state, the only thing to restore is source offsets. If a restart takes seconds, there is no need for standby tasks, hot replicas or state rehydration; a supervisor just starts the binary again." },
+      { "choice": "A runtime with plugins, not a framework", "why": "Extending Flink meant working inside the framework. A Streamling plugin is a Rust crate implementing one trait, loaded at runtime, so other teams, and code-writing agents, can add steps without touching the engine or crashing other users." },
+      { "choice": "Keep Mirror’s YAML pipeline format", "why": "Customers already described thousands of pipelines as sources, transforms and sinks in YAML, so the rewrite could swap the engine underneath without changing what they write." }
+    ],
+    "timeline": [
+      { "year": "2023", "text": "Goldsky starts rolling out Mirror, its Flink-based pipeline product" },
+      { "year": "2024", "text": "Mirror becomes generally available in June" },
+      { "year": "2026", "text": "Streamling published on 8 June under FSL, with 0.1.0" },
+      { "year": "2026", "text": "0.3.0 in July: DataFusion 54, file and Kafka JSON sources, benchmarks" },
+      { "year": "2026", "text": "0.4.0 in September" }
+    ],
+    "sources": [
+      { "label": "Goldsky blog: Open-sourcing Streamling (Jeff Ling, 8 Jun 2026)", "url": "https://goldsky.com/blog/open-sourcing-streamling" },
+      { "label": "Goldsky blog: Introducing Mirror (Sep 2023; notes it was succeeded by Turbo Pipelines)", "url": "https://goldsky.com/blog/introducing-mirror" },
+      { "label": "Goldsky blog: Goldsky Mirror is now generally available (Jun 2024)", "url": "https://goldsky.com/blog/mirror-ga" },
+      { "label": "GitHub: Streamling v0.1.0 release (Jun 2026)", "url": "https://github.com/goldsky-io/streamling/releases/tag/v0.1.0" },
+      { "label": "Streamling blog: 0.3 release and benchmarking suite", "url": "https://www.streamling.dev/blog/streamling-0-3-0" },
+      { "label": "GitHub: Streamling v0.4.0 release (Sep 2026)", "url": "https://github.com/goldsky-io/streamling/releases/tag/v0.4.0" }
+    ]
+  },
+  "sources": [
+    { "label": "Streamling README (topology, connectors, checkpointing, state backends, plugins)", "url": "https://github.com/goldsky-io/streamling" },
+    { "label": "Streamling LICENSE.txt (FSL-1.1-ALv2, Endless Sky Inc.)", "url": "https://github.com/goldsky-io/streamling/blob/main/LICENSE.txt" },
+    { "label": "Streamling default configuration (5-second checkpoints, state backend settings)", "url": "https://github.com/goldsky-io/streamling/blob/main/crates/streamling-config/default_config.yaml" },
+    { "label": "Streamling releases on GitHub", "url": "https://github.com/goldsky-io/streamling/releases" },
+    { "label": "Streamling commit history", "url": "https://github.com/goldsky-io/streamling/commits/main" },
+    { "label": "Streamling contributors", "url": "https://github.com/goldsky-io/streamling/graphs/contributors" },
+    { "label": "streamling.dev (architecture, single-node, at-least-once)", "url": "https://streamling.dev/" },
+    { "label": "Streamling blog: 0.3 release (Arrow-native Avro decoding, zstd ClickHouse sink, plugin interface change)", "url": "https://www.streamling.dev/blog/streamling-0-3-0" },
+    { "label": "Goldsky blog: Open-sourcing Streamling (no stateful SQL, restarts, plugins, Flink comparison)", "url": "https://goldsky.com/blog/open-sourcing-streamling" },
+    { "label": "Goldsky: Turbo Pipelines", "url": "https://goldsky.com/products/turbo-pipelines" },
+    { "label": "Goldsky pricing (Turbo worker hours and events written)", "url": "https://goldsky.com/pricing" },
+    { "label": "Goldsky privacy policy (Endless Sky, Inc. d/b/a Goldsky)", "url": "https://goldsky.com/privacy" },
+    { "label": "Flink docs: Stateful stream processing", "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/concepts/stateful-stream-processing/" },
+    { "label": "Arroyo README", "url": "https://github.com/ArroyoSystems/arroyo" },
+    { "label": "Redpanda Connect docs", "url": "https://docs.redpanda.com/redpanda-connect/home/" }
+  ],
+  "checked": "2026-10-06"
+}

@@ -1,0 +1,132 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "CedarDB",
+  "concepts": ["relational", "olap"],
+  "provider": "vendor",
+  "vendor": "CedarDB GmbH",
+  "license": "Proprietary; the free Community Edition comes under CedarDB’s own terms (64 GiB data limit, no modification or redistribution)",
+  "website": "https://cedardb.com/",
+  "summary": "A PostgreSQL-compatible database rebuilt from scratch at TU Munich, running transactions and analytics on one copy of the data on a single server.",
+  "intro": [
+    "CedarDB is one server binary for Linux (or a Docker image) that speaks the PostgreSQL wire protocol, SQL grammar and system catalog, so `psql`, JDBC, ORMs and Grafana’s PostgreSQL data source connect unchanged. None of the code comes from PostgreSQL. Each table is a single copy in a hybrid row and column format: fresh writes land in a write-optimized area and are visible at once, and in the background they are compressed into columnar blocks that are fast to scan. A table can keep its cold, compressed data in S3 or an S3-compatible store while metadata and hot rows stay on the local SSD. Every query is compiled to machine code, starting fast and recompiling with more optimization while it runs, and is split into small morsels that all CPU cores pick up in parallel. A buffer manager built for fast SSDs keeps the working set in RAM and reads the rest from disk, and transactions are ACID.",
+    "There are three editions. Community is free, needs no sign-up and may run in production, but its terms cap persisted data at 64 GiB (the database turns read-only above that) and forbid modifying, reverse engineering or passing on the software. Enterprise removes the cap and adds role-based access control, monitoring and priority support; pricing is usage-based on compute and set by sales, with a 90-day self-service trial. CedarDB Cloud, a managed service on AWS in Europe and the US, has a waitlist and a price calculator ($300 a month for the smallest 2 vCPU / 8 GiB instance, plus storage billed per GiB-hour) but has not opened yet. CedarDB runs on one server: replication, automatic failover, point-in-time recovery and automatic backups are on the roadmap as planned."
+  ],
+  "strengths": [
+    "One engine and one copy for transactions and analytics: dashboards read the rows the application just committed, with no CDC pipeline or second database to run",
+    "PostgreSQL wire protocol, SQL dialect and system tables, so existing drivers, ORMs and tools such as DBeaver and Grafana work",
+    "Uses the whole machine: every query runs on all cores as compiled code, there is no process per connection and no autovacuum to tune",
+    "The free Community Edition is allowed in production up to 64 GiB, with no limits on cores, connections or running time",
+    "Its internals come from more than a decade of published TU Munich research (HyPer, then Umbra), so the papers explain how it works"
+  ],
+  "limits": [
+    "Not open source: binaries only, under terms that forbid modification and redistribution, let CedarDB refuse downloads in some regions, and are legally binding only in German",
+    "A single server with no replication, failover, point-in-time recovery or automatic backups yet; high availability is up to you",
+    "PostgreSQL-compatible, not PostgreSQL: PostgreSQL extensions don’t load, XML is not planned, savepoints arrived only in September 2026, and range types and full-text search are still in progress or planned",
+    "Past 64 GiB you need Enterprise, whose price is not published, and the managed cloud is still a waitlist",
+    "A young product from a small Munich start-up; claims such as “the world’s fastest database” come from CedarDB’s own benchmarks"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "speaks the wire protocol and SQL of" },
+    { "id": "s3", "how": "can keep cold, compressed table data in" },
+    { "id": "parquet", "how": "imports and queries files in" },
+    { "id": "grafana", "how": "is a PostgreSQL data source for" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "Transactions and a dashboard query on the same table",
+    "source": [
+      "-- docker run --rm -p 5432:5432 -e CEDAR_PASSWORD=test cedardb/cedardb",
+      "-- PGPASSWORD=test psql -h localhost -U postgres",
+      "CREATE TABLE orders (",
+      "  id          bigint PRIMARY KEY,",
+      "  customer_id bigint NOT NULL,",
+      "  region      text NOT NULL,",
+      "  total       numeric(10,2) NOT NULL,",
+      "  created_at  timestamp NOT NULL DEFAULT now()",
+      ");",
+      "",
+      "-- history loaded from the old warehouse export",
+      "INSERT INTO orders SELECT * FROM 'orders_2025.parquet';",
+      "",
+      "-- the application's transaction",
+      "BEGIN;",
+      "INSERT INTO orders (id, customer_id, region, total) VALUES (100001, 42, 'EU', 129.00);",
+      "COMMIT;",
+      "",
+      "-- the dashboard reads the same table, including the row just committed",
+      "SELECT region, date_trunc('hour', created_at) AS hour,",
+      "       count(*) AS orders, sum(total) AS revenue",
+      "FROM orders",
+      "WHERE created_at >= now() - interval '24 hours'",
+      "GROUP BY region, hour",
+      "ORDER BY hour, region;"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Community, Enterprise and Cloud",
+      "intro": "All three run the same engine. What changes is the data limit, the features around it and who operates the server.",
+      "corner": "Checked 6 October 2026",
+      "columns": ["Community", "Enterprise", "CedarDB Cloud"],
+      "rows": [
+        { "label": "Price", "values": ["Free", "Usage-based on compute, quoted by sales; 90-day free trial", "Calculator shows $300/month for 2 vCPU / 8 GiB, storage per GiB-hour (16 GiB minimum, $6/month), 3 backups included"] },
+        { "label": "Data limit", "values": ["64 GiB of persisted data, then read-only", "None", "None"] },
+        { "label": "Extra features", "values": ["None", "Role-based access control, monitoring, priority support", "Enterprise features plus management UI and scheduled backups"] },
+        { "label": "Where it runs", "values": ["Your Linux machines, Docker or cloud images", "Your Linux machines, Docker or cloud images", "AWS, Europe and US regions at first"] },
+        { "label": "Status", "values": ["Available", "Available", "Waitlist, not yet open"] }
+      ],
+      "notes": [
+        "When an Enterprise trial expires the database falls back to Community: Enterprise features switch off and it becomes read-only above 64 GiB, but no data is lost. Only one trial is allowed per database."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In 2008 Alfons Kemper and Thomas Neumann started HyPer at the Technical University of Munich, a main-memory database meant to run transactions and analytics on the same data. Its compiling query engine, which turns each query into machine code, influenced many later systems. Six researchers founded a HyPer start-up in 2015, and Tableau bought it in March 2016; HyPer became Hyper, the engine inside Tableau.",
+      "Pure in-memory systems need all data in RAM, which stayed expensive while SSDs became fast and cheap. Neumann’s group built Umbra as HyPer’s successor, described by Neumann and Michael Freitag at CIDR 2020 as “a disk-based system with in-memory performance”: a low-overhead buffer manager with variable-size pages keeps the cached working set as fast as HyPer while reading the rest from SSD.",
+      "In 2024 Umbra researchers including Moritz Sichert, Lukas Vogel, Christian Winter, Dominik Durner and Philipp Fent spun off CedarDB in Munich, starting on a German EXIST start-up grant. They released the free Community Edition in May 2025, together with a €5.3 million seed round led by Amplify Partners, and in 2026 pitched CedarDB as a single-engine HTAP system for teams running PostgreSQL next to a separate analytics database. Umbra continues as a research project at TUM."
+    ],
+    "choices": [
+      { "choice": "Start from scratch but keep PostgreSQL’s interface", "why": "The founders argued that PostgreSQL still carries 1990s assumptions such as 4 KB pages tuned for spinning disks and mostly single-threaded queries. A new engine fixes those, while wire protocol and SQL compatibility keep existing tools and drivers working." },
+      { "choice": "SSD-backed buffer management instead of all data in RAM", "why": "HyPer needed every byte in memory. Umbra’s buffer manager, with variable-size pages and pointer swizzling instead of a global lock, keeps in-memory speed for hot data and lets the database grow past RAM." },
+      { "choice": "Compile every query, adaptively", "why": "Compiled queries avoid interpretation overhead, but compiling takes time. A custom low-level language that compiles quickly lets a query start at once and get recompiled with heavier optimization only if it runs long." },
+      { "choice": "One hybrid row and column storage format", "why": "Row stores are good at updates and column stores at scans. Keeping hot data write-optimized and compressing it to columns in the background lets one copy serve both workloads." }
+    ],
+    "timeline": [
+      { "year": "2008", "text": "Kemper and Neumann start HyPer at TU Munich" },
+      { "year": "2016", "text": "Tableau acquires the HyPer start-up in March" },
+      { "year": "2020", "text": "Umbra paper at CIDR: a disk-based system with in-memory performance" },
+      { "year": "2024", "text": "CedarDB spins off from TUM, announced with “Ode to Postgres” in May" },
+      { "year": "2025", "text": "Free Community Edition and a €5.3 million seed round in May" },
+      { "year": "2026", "text": "Relaunched as a single-engine HTAP database in June" }
+    ],
+    "sources": [
+      { "label": "Tableau Hyper API: Hyper’s journey (HyPer at TUM, 2015 start-up, Tableau acquisition 2016)", "url": "https://tableau.github.io/hyper-db/journey" },
+      { "label": "Neumann and Freitag: Umbra, A Disk-Based System with In-Memory Performance (CIDR 2020)", "url": "https://www.cidrdb.org/cidr2020/papers/p29-neumann-cidr20.pdf" },
+      { "label": "CedarDB: About us (Umbra origins, 2024 spin-off, team)", "url": "https://cedardb.com/about/" },
+      { "label": "CedarDB blog: An ode to PostgreSQL, and why it is still time to start over (May 2024)", "url": "https://cedardb.com/blog/ode_to_postgres/" },
+      { "label": "CedarDB blog: Community Edition launch and seed round (May 2025)", "url": "https://cedardb.com/blog/launch/" },
+      { "label": "CedarDB blog: CedarDB launches HTAP (June 2026)", "url": "https://cedardb.com/blog/cedardb_launches_htap/" }
+    ]
+  },
+  "sources": [
+    { "label": "CedarDB home page (who it is for, no shared PostgreSQL code)", "url": "https://cedardb.com/" },
+    { "label": "CedarDB: Get started (editions, Community FAQ, Enterprise pricing basis)", "url": "https://cedardb.com/get-started/" },
+    { "label": "CedarDB docs: Licensing (editions, trial, read-only above 64 GiB)", "url": "https://cedardb.com/docs/licensing/" },
+    { "label": "CedarDB Community Edition General Terms and Conditions (PDF)", "url": "https://cedardb.com/legal/agreements/community_tcs.pdf" },
+    { "label": "CedarDB Cloud (waitlist, AWS, regions, price calculator)", "url": "https://cedardb.com/cloud/" },
+    { "label": "CedarDB docs: The technology behind CedarDB (morsels, buffer manager, code generation)", "url": "https://cedardb.com/docs/technology/" },
+    { "label": "CedarDB blog: Colibri, fast scans and fast writes in a single system", "url": "https://cedardb.com/blog/colibri/" },
+    { "label": "CedarDB docs: Tables on AWS S3", "url": "https://cedardb.com/docs/references/advanced/s3/" },
+    { "label": "CedarDB docs: Importing data from Parquet", "url": "https://cedardb.com/docs/references/advanced/parquet/" },
+    { "label": "CedarDB docs: PostgreSQL compatibility (extensions, XML)", "url": "https://cedardb.com/docs/compatibility/" },
+    { "label": "CedarDB docs: Roadmap (replication, failover, backups, PITR planned)", "url": "https://cedardb.com/docs/roadmap/" },
+    { "label": "CedarDB docs: Releases (v2026-09-29 adds savepoints)", "url": "https://cedardb.com/docs/releases/" },
+    { "label": "CedarDB docs: Install locally (Linux, glibc 2.27 or newer)", "url": "https://cedardb.com/docs/get_started/install_locally/" },
+    { "label": "CedarDB docs: Run with Docker", "url": "https://cedardb.com/docs/get_started/install_with_docker/" },
+    { "label": "CedarDB docs: Grafana", "url": "https://cedardb.com/docs/clients/tools/grafana/" },
+    { "label": "The Umbra Database System (TUM research project)", "url": "https://umbra-db.com/" }
+  ],
+  "checked": "2026-10-06"
+}

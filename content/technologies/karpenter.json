@@ -1,0 +1,87 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Karpenter",
+  "concepts": ["autoscaling"],
+  "provider": "oss",
+  "vendor": "Kubernetes SIG Autoscaling (created by AWS)",
+  "license": "Apache 2.0",
+  "website": "https://karpenter.sh/",
+  "repo": "https://github.com/kubernetes-sigs/karpenter",
+  "summary": "A Kubernetes node autoscaler that launches right-sized machines for waiting pods and removes ones you don’t need.",
+  "intro": [
+    "Karpenter watches for pods the Kubernetes scheduler has marked unschedulable because no node has room. It adds up their CPU, memory and placement constraints, picks instance types that fit from everything the cloud offers, and launches nodes directly through the cloud’s API, with no node groups or fixed instance sizes to configure first. You describe what’s allowed (instance families, Spot or On-Demand, architectures, zones, a total CPU limit) in a `NodePool` resource.",
+    "It also removes capacity. Consolidation deletes a node when its pods fit elsewhere, or replaces it with a single cheaper one; drift replaces nodes whose configuration no longer matches the `NodePool`; and expiry recycles nodes after a set lifetime (30 days by default). On Spot, it drains a node as soon as the two-minute interruption notice arrives. AWS built Karpenter and donated its vendor-neutral core to the Kubernetes project in 2023, where it is a SIG Autoscaling subproject; providers exist for AWS, Azure and a growing list of other clouds."
+  ],
+  "strengths": [
+    "Chooses from every instance type the `NodePool` allows on each launch, instead of a few fixed node groups, so pods pack more tightly",
+    "Launches nodes directly through the cloud API, with no node groups or launch templates per instance size to maintain",
+    "Consolidation keeps cutting cost after the spike passes",
+    "Makes mixing Spot and On-Demand capacity routine"
+  ],
+  "limits": [
+    "It scales nodes, not pods: pair it with the Horizontal Pod Autoscaler or KEDA",
+    "Consolidation moves pods around; workloads need PodDisruptionBudgets and graceful shutdown",
+    "Each cloud needs its own provider, maintained separately; features and maturity differ between them",
+    "A new node still takes time to boot and join, so sudden spikes wait on it"
+  ],
+  "worksWith": [
+    { "id": "kubernetes", "how": "adds and removes worker nodes for" },
+    { "id": "ec2", "how": "launches nodes as instances on" }
+  ],
+  "snippet": {
+    "lang": "yaml",
+    "title": "A NodePool that mixes Spot and On-Demand and consolidates",
+    "source": [
+      "apiVersion: karpenter.sh/v1",
+      "kind: NodePool",
+      "metadata:",
+      "  name: default",
+      "spec:",
+      "  template:",
+      "    spec:",
+      "      requirements:",
+      "        - { key: karpenter.sh/capacity-type, operator: In, values: [spot, on-demand] }",
+      "      nodeClassRef: { group: karpenter.k8s.aws, kind: EC2NodeClass, name: default }",
+      "  limits:",
+      "    cpu: \"200\"",
+      "  disruption:",
+      "    consolidationPolicy: WhenEmptyOrUnderutilized",
+      "    consolidateAfter: 1m"
+    ]
+  },
+  "history": {
+    "story": [
+      "The standard way to add nodes to a Kubernetes cluster on AWS was the Kubernetes Cluster Autoscaler, which grows and shrinks EC2 Auto Scaling groups. Each group is a pool of similar instances, so covering different sizes, zones and Spot or On-Demand capacity meant configuring more groups, and the autoscaler could only choose among them. AWS said that “nearly half of Kubernetes customers on AWS” found configuring it “challenging and restrictive”.",
+      "AWS started Karpenter as an open-source project on GitHub in 2020 and declared it ready for production on November 29, 2021, under the Apache 2.0 licence. Instead of resizing groups, it looks at the pods that can’t be scheduled, works out what machines would fit them, and asks EC2 for those machines directly. In October 2023 AWS donated the vendor-neutral core to the Kubernetes project under SIG Autoscaling, keeping the AWS-specific parts as a separate provider, and the stable 1.0 API followed on August 14, 2024.",
+      "Karpenter changed node scaling from “pick a group to grow” to “buy the right machine for these pods”. Its repository now lists providers for AWS, Azure, Google Cloud, Oracle Cloud and about a dozen other clouds and platforms, many maintained by third parties."
+    ],
+    "choices": [
+      { "choice": "No node groups: call the cloud’s compute API directly", "why": "Node groups lock each pool to a fixed shape. Launching instances directly lets Karpenter choose from every instance type the cloud offers, and AWS said it launches right-sized capacity rapidly to cut scheduling latency." },
+      { "choice": "Plan for all pending pods at once", "why": "Rather than adding one node per waiting pod, Karpenter bin-packs the whole batch of unschedulable pods onto as few, well-sized instances as possible." },
+      { "choice": "A neutral core with per-cloud providers", "why": "Splitting out the cloud-specific code let AWS hand the core to the Kubernetes community, and let other clouds plug in their own providers." }
+    ],
+    "timeline": [
+      { "year": "2020", "text": "AWS begins developing Karpenter in the open on GitHub" },
+      { "year": "2021", "text": "Declared ready for production at re:Invent on November 29" },
+      { "year": "2023", "text": "Vendor-neutral core donated to Kubernetes SIG Autoscaling in October" },
+      { "year": "2024", "text": "Version 1.0 makes the `NodePool` API stable in August" },
+      { "year": "2026", "text": "Version 1.14 released in July" }
+    ],
+    "sources": [
+      { "label": "AWS News Blog: Introducing Karpenter (Nov 2021)", "url": "https://aws.amazon.com/blogs/aws/introducing-karpenter-an-open-source-high-performance-kubernetes-cluster-autoscaler/" },
+      { "label": "AWS Containers Blog: Announcing Karpenter 1.0 (Aug 2024)", "url": "https://aws.amazon.com/blogs/containers/announcing-karpenter-1-0/" },
+      { "label": "Karpenter core repository (kubernetes-sigs)", "url": "https://github.com/kubernetes-sigs/karpenter" },
+      { "label": "Karpenter AWS provider repository (created Jul 2020)", "url": "https://github.com/aws/karpenter-provider-aws" },
+      { "label": "Karpenter v1.14.0 release on GitHub (Jul 2026)", "url": "https://github.com/kubernetes-sigs/karpenter/releases/tag/v1.14.0" }
+    ]
+  },
+  "sources": [
+    { "label": "Karpenter docs: Overview (watches unschedulable pods)", "url": "https://karpenter.sh/docs/" },
+    { "label": "Karpenter docs: NodePools", "url": "https://karpenter.sh/docs/concepts/nodepools/" },
+    { "label": "Karpenter docs: Disruption (consolidation, drift, expiration, Spot interruption)", "url": "https://karpenter.sh/docs/concepts/disruption/" },
+    { "label": "Karpenter source: NodeClaim API, `expireAfter` default 720h", "url": "https://github.com/kubernetes-sigs/karpenter/blob/main/pkg/apis/v1/nodeclaim.go" },
+    { "label": "kubernetes-sigs/karpenter on GitHub (provider list)", "url": "https://github.com/kubernetes-sigs/karpenter" },
+    { "label": "AWS Containers Blog: Announcing Karpenter 1.0 (Aug 2024)", "url": "https://aws.amazon.com/blogs/containers/announcing-karpenter-1-0/" }
+  ],
+  "checked": "2026-10-05"
+}

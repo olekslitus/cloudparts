@@ -1,0 +1,149 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "WAL-G",
+  "concepts": ["backup", "relational"],
+  "provider": "oss",
+  "vendor": "WAL-G contributors (started at Citus Data; supported by Yandex Cloud)",
+  "license": "Apache 2.0 (the optional LZO support is GPL 3.0 or later)",
+  "website": "https://wal-g.readthedocs.io/",
+  "repo": "https://github.com/wal-g/wal-g",
+  "summary": "A single Go binary that streams compressed, encrypted Postgres backups and WAL to object storage, and restores them in parallel.",
+  "intro": [
+    "WAL-G has no server of its own. Postgres calls it: `archive_command` runs `wal-g wal-push` for each finished WAL segment, and on restore `restore_command` runs `wal-g wal-fetch`, which also prefetches the next segments. A base backup is `wal-g backup-push $PGDATA`: it reads the data directory, packs it into tar bundles (1 GB each by default), compresses them (LZ4 by default, or zstd, Brotli or LZMA), optionally encrypts them with libsodium, OpenPGP or Yandex Cloud KMS, and uploads them over 16 parallel streams. A JSON sentinel file marks a finished backup. With `WALG_DELTA_MAX_STEPS` set, later backups copy only pages whose LSN changed since the previous one. Restoring is `wal-g backup-fetch <dir> LATEST`, then Postgres replays WAL from the bucket up to the moment you choose.",
+    "Backups can go to Amazon S3 and S3-compatible stores such as MinIO, Google Cloud Storage, Azure Blob Storage, Alibaba Cloud OSS, OpenStack Swift, a host over SSH, or a local disk, with optional failover storages if the main one is down. The same binary also backs up MySQL and MariaDB (with xtrabackup and binlogs), SQL Server, Greenplum and Cloudberry, and, in beta, MongoDB and Redis or Valkey. It is free under Apache 2.0; the cost is object storage and requests, and smaller tar bundles mean more requests."
+  ],
+  "strengths": [
+    "Fast: written in Go with compression, tar and uploads in-process and in parallel; Citus measured restores about 4 times faster than WAL-E",
+    "Delta backups and WAL prefetch keep backup volume and restore time down on large databases",
+    "Speaks to every major object store, plus S3-compatible ones, SSH and local disk, with failover storages",
+    "Reads WAL-E archives, so it replaced WAL-E in place; Patroni-based stacks such as Zalando’s Spilo and Datadog’s Postgres platform use it",
+    "One tool and one bucket layout across Postgres, MySQL, SQL Server, Greenplum and more"
+  ],
+  "limits": [
+    "No scheduler, catalogue server or UI: cron, systemd or an orchestrator must run `backup-push` and `delete`, and you watch for failures yourself",
+    "`delete retain` orders Postgres backups by timeline by default; after `pg_upgrade` resets the timeline it can delete new backups unless you pass `--use-sentinel-time`",
+    "Outside Postgres, interfaces are marked unstable: MySQL/MariaDB, MongoDB and Redis docs say so, and etcd and FoundationDB support is work in progress",
+    "Configuration is a long list of environment variables with few safety checks; GPG key encryption is deprecated in favour of libsodium or OpenPGP keys",
+    "LZO support is licensed under GPL 3.0 or later, unlike the rest of the code"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "archives WAL and base backups of" },
+    { "id": "mysql", "how": "backs up, with xtrabackup and binlogs," },
+    { "id": "s3", "how": "stores backups in" },
+    { "id": "gcs", "how": "stores backups in" },
+    { "id": "azure-blob", "how": "stores backups in" },
+    { "id": "minio", "how": "can store backups in" },
+    { "id": "mongodb", "how": "backs up (beta)" },
+    { "id": "redis", "how": "backs up (beta)" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Continuous archiving to S3, nightly backups and a restore",
+    "source": [
+      "# /etc/wal-g.env, sourced by Postgres and by cron",
+      "export WALG_S3_PREFIX=s3://acme-pg-backups/orders",
+      "export AWS_REGION=eu-central-1",
+      "export WALG_COMPRESSION_METHOD=zstd",
+      "export WALG_DELTA_MAX_STEPS=6            # up to 6 delta backups between full ones",
+      "export WALG_LIBSODIUM_KEY_PATH=/etc/wal-g/backup.key",
+      "export WALG_LIBSODIUM_KEY_TRANSFORM=hex  # key made with: openssl rand -hex 32",
+      "export PGHOST=/var/run/postgresql",
+      "",
+      "# postgresql.conf: ship every finished WAL segment",
+      "#   archive_mode = on",
+      "#   archive_command = '. /etc/wal-g.env && wal-g wal-push %p'",
+      "",
+      "# nightly: base backup, then keep 7 full backups, their deltas and WAL",
+      "wal-g backup-push \"$PGDATA\"",
+      "wal-g backup-list --pretty",
+      "wal-g delete retain FULL 7 --use-sentinel-time --confirm",
+      "",
+      "# restore on a fresh server, then let Postgres replay WAL from S3",
+      "wal-g backup-fetch /var/lib/postgresql/18/main LATEST",
+      "touch /var/lib/postgresql/18/main/recovery.signal",
+      "#   restore_command = '. /etc/wal-g.env && wal-g wal-fetch %f %p'",
+      "#   recovery_target_time = '2026-10-06 09:41:00+00'"
+    ]
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "What it backs up, and how ready each one is",
+      "intro": "Status as the WAL-G README and each database’s page describe it.",
+      "items": [
+        { "name": "PostgreSQL", "tag": "mature", "text": "Full and delta backups, WAL archiving through `archive_command` or `wal-receive` over streaming replication, catch-up backups for lagging replicas, partial restores (experimental) and WAL integrity checks." },
+        { "name": "MySQL and MariaDB", "tag": "unstable interface", "text": "Wraps a backup command such as xtrabackup that writes one stream, and archives binlogs for point-in-time recovery. Delta backups only with `xtrabackup-push`." },
+        { "name": "SQL Server", "tag": "production-ready since 1.0", "text": "Emulates Azure Blob storage locally so the standard `BACKUP ... TO URL` and `RESTORE` commands write through WAL-G." },
+        { "name": "Greenplum and Cloudberry", "tag": "production-ready", "text": "Encrypted, compressed physical backups of Greenplum 6.19+ and Cloudberry 2.0+." },
+        { "name": "MongoDB, Redis and Valkey", "tag": "beta", "text": "Backups and restores, with interfaces the docs call unstable." },
+        { "name": "etcd and FoundationDB", "tag": "work in progress", "text": "Early support for encrypted, compressed backups of these key-value stores." }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "WAL-G or pgBackRest?",
+      "intro": "Both are open-source Postgres backup tools that write to object storage. The WAL-E maintainers point to these two as its successors.",
+      "corner": "",
+      "columns": ["WAL-G", "pgBackRest"],
+      "rows": [
+        { "label": "Model", "values": ["A binary called from `archive_command` and cron; state lives in the bucket", "Its own repository format, run locally or from a separate repository host over TLS or SSH"] },
+        { "label": "Databases", "values": ["Postgres plus MySQL, SQL Server, Greenplum and others", "Postgres only"] },
+        { "label": "Incremental backups", "values": ["Delta backups from page LSNs", "Full, differential and incremental, at file or block level"] },
+        { "label": "Where backups go", "values": ["S3 and compatible, GCS, Azure, Alibaba OSS, Swift, SSH, local; failover storages", "S3, Azure and GCS compatible stores, local or remote hosts; several repositories at once"] },
+        { "label": "Integrity", "values": ["`wal-verify` checks WAL continuity; optional page checksum checks", "Checksums every file, rechecked on restore; validates page checksums; resumes interrupted backups"] },
+        { "label": "Licence", "values": ["Apache 2.0 (LZO part GPL 3.0+)", "MIT"] }
+      ],
+      "notes": [
+        "The WAL-E README says WAL-G tends to follow a cloud service provider’s priorities, while pgBackRest has more polished features for independent system operators."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Continuous archiving is how Postgres gets point-in-time recovery: a base copy of the data directory plus every WAL segment written since. WAL-E, written in Python by Daniel Farina, made object storage the place to keep both, and was used to protect millions of databases. It shelled out to `lzop`, `cat` and pipes, though, and memory copies between them became its bottleneck.",
+      "At Citus Data, a summer engineering intern, Katie Li, a UC Berkeley undergraduate, rewrote it in Go with Farina, linking tar, LZ4 and the AWS SDK’s multipart uploads directly instead of running external processes. Citus announced WAL-G on 18 August 2017, measuring restores about 4 times faster than WAL-E, and as much as 7 times on some instances, with 1,500 lines of code instead of 6,500.",
+      "Development continued in the `wal-g` organisation on GitHub, with Yandex Cloud supporting the work. Version 1.0 in 2021 could restore WAL-E backups and declared MySQL and SQL Server support production-ready. WAL-E’s README now calls it obsolete and suggests WAL-G or pgBackRest."
+    ],
+    "choices": [
+      { "choice": "Go instead of Python", "why": "A compiled language with cheap concurrency, and libraries linked in-process instead of external `lzop` and `cat` processes joined by pipes, which had been WAL-E’s main bottleneck." },
+      { "choice": "Parallel restore as the main goal", "why": "Disaster recovery time is what users feel. Downloading and unpacking many bundles at once let WAL-G hold close to an instance’s advertised disk throughput during a restore." },
+      { "choice": "Keep WAL-E’s model and read its archives", "why": "Hooking into `archive_command` and `restore_command` with object storage underneath meant existing WAL-E users could switch without re-architecting, and keep their old backups." }
+    ],
+    "timeline": [
+      { "year": "2017", "text": "Citus Data releases WAL-G 0.1 on 18 August" },
+      { "year": "2021", "text": "1.0: restores WAL-E backups; MySQL and SQL Server production-ready" },
+      { "year": "2022", "text": "2.0 released in May" },
+      { "year": "2024", "text": "3.0 adds failover storages, a WAL archiving daemon and partial restore" },
+      { "year": "2026", "text": "3.0.9 released in August" }
+    ],
+    "sources": [
+      { "label": "Citus Data blog: Introducing WAL-G by Citus, faster disaster recovery for Postgres (Aug 2017)", "url": "https://www.citusdata.com/blog/2017/08/18/introducing-wal-g-faster-restores-for-postgres/" },
+      { "label": "wal-g/wal-g on GitHub: tag v0.1.0 (Aug 2017)", "url": "https://github.com/wal-g/wal-g/releases/tag/v0.1.0" },
+      { "label": "wal-g/wal-g on GitHub: release v1.0 (May 2021)", "url": "https://github.com/wal-g/wal-g/releases/tag/v1.0" },
+      { "label": "wal-g/wal-g on GitHub: release v2.0.0 (May 2022)", "url": "https://github.com/wal-g/wal-g/releases/tag/v2.0.0" },
+      { "label": "wal-g/wal-g on GitHub: release v3.0.0 (Mar 2024)", "url": "https://github.com/wal-g/wal-g/releases/tag/v3.0.0" },
+      { "label": "WAL-E README: obsolescence notice", "url": "https://github.com/wal-e/wal-e" }
+    ]
+  },
+  "sources": [
+    { "label": "WAL-G documentation (configuration, compression, encryption, delete, authors, licence)", "url": "https://wal-g.readthedocs.io/" },
+    { "label": "WAL-G docs: PostgreSQL (backup-push, wal-push, delta backups, concurrency)", "url": "https://wal-g.readthedocs.io/PostgreSQL/" },
+    { "label": "WAL-G docs: Storages", "url": "https://wal-g.readthedocs.io/STORAGES/" },
+    { "label": "WAL-G docs: MySQL", "url": "https://wal-g.readthedocs.io/MySQL/" },
+    { "label": "WAL-G docs: Failover storages", "url": "https://github.com/wal-g/wal-g/blob/master/docs/FailoverStorages.md" },
+    { "label": "WAL-G docs: SQL Server", "url": "https://github.com/wal-g/wal-g/blob/master/docs/SQLServer.md" },
+    { "label": "WAL-G docs: Greenplum and Cloudberry", "url": "https://github.com/wal-g/wal-g/blob/master/docs/Greenplum.md" },
+    { "label": "WAL-G docs: MongoDB", "url": "https://github.com/wal-g/wal-g/blob/master/docs/MongoDB.md" },
+    { "label": "WAL-G docs: Redis and Valkey", "url": "https://github.com/wal-g/wal-g/blob/master/docs/Redis.md" },
+    { "label": "WAL-G LICENSE.md (Apache 2.0 notice, Citus Data 2017)", "url": "https://github.com/wal-g/wal-g/blob/master/LICENSE.md" },
+    { "label": "WAL-G README on GitHub (supported databases, Yandex Cloud support)", "url": "https://github.com/wal-g/wal-g" },
+    { "label": "wal-g/wal-g on GitHub: release v3.0.9 (Aug 2026)", "url": "https://github.com/wal-g/wal-g/releases/tag/v3.0.9" },
+    { "label": "Citus Data blog: Introducing WAL-G (4x faster restores)", "url": "https://www.citusdata.com/blog/2017/08/18/introducing-wal-g-faster-restores-for-postgres/" },
+    { "label": "WAL-E README: obsolescence notice (WAL-G and pgBackRest as alternatives)", "url": "https://github.com/wal-e/wal-e" },
+    { "label": "pgBackRest: features", "url": "https://pgbackrest.org/" },
+    { "label": "pgBackRest LICENSE (MIT)", "url": "https://github.com/pgbackrest/pgbackrest/blob/main/LICENSE" },
+    { "label": "Zalando Spilo: environment (WAL-G backups with Patroni)", "url": "https://github.com/zalando/spilo/blob/master/ENVIRONMENT.rst" },
+    { "label": "PGConf NYC 2025: How (and why) Datadog is moving from cloud-managed to self-managed Postgres (slides, PDF)", "url": "https://postgresql.us/events/pgconfus2025/sessions/session/2064/slides/204/" }
+  ],
+  "checked": "2026-10-06"
+}

@@ -1,0 +1,91 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Amdahl’s law",
+  "category": "code",
+  "order": 70,
+  "summary": "The part of a job that can’t run in parallel caps how much faster more workers can make it.",
+  "howItWorks": "Split a job’s running time on one worker into the fraction p that can be shared out and the fraction 1 − p that must run in order: setup, a lock everyone takes, merging the results. With n workers the parallel part takes p/n of the time but the serial part still takes 1 − p, so the speedup is 1 / ((1 − p) + p/n). As n grows, p/n shrinks toward zero and the speedup approaches 1 / (1 − p). A job that is 95% parallel can never run more than 20 times faster: 1,024 cores give 19.6×, and the next 1,024 add almost nothing. The same arithmetic applies wherever work is shared: threads waiting on one lock, services queued behind a single database primary, a build whose link step runs alone. John Gustafson’s counterpoint is that people rarely keep the problem fixed. Given more processors they solve a bigger problem in the same time, and if only the parallel part grows, the scaled speedup is (1 − p) + p·n, close to linear. Neil Gunther’s Universal Scalability Law adds what Amdahl leaves out: workers also spend time keeping each other consistent (cache coherence, replication, meetings). That cost grows with every pair of workers, so past a peak, adding workers makes the system slower. The same goes for people: Fred Brooks observed in 1975 that adding manpower to a late software project makes it later.",
+  "analogy": "Ten friends can peel a sack of potatoes ten times faster than one, but there’s still one pot and one stove. However many people help, dinner can’t be ready before the pot boils.",
+  "useWhen": [
+    "Deciding whether more cores, threads, instances or people will actually help",
+    "Finding the bottleneck: measure the serial fraction (the lock, the single writer, the merge step) and attack that first",
+    "Setting expectations for autoscaling, parallel builds and parallel queries"
+  ],
+  "avoidWhen": [
+    "Treating it as a precise forecast: real serial fractions change with load, and coordination costs can make things worse than Amdahl predicts",
+    "Judging work that grows with the machine, such as bigger simulations or more users; use Gustafson’s scaled speedup"
+  ],
+  "example": "A nightly report takes 100 minutes on one machine: 5 minutes to load configuration and write the final file, 95 minutes of per-customer work that splits cleanly. On 8 machines it takes 5 + 95/8 ≈ 16.9 minutes (5.9× faster); on 64 machines, 6.5 minutes (15.4×); on 1,024 machines, still just over 5 minutes (19.6×). Shaving the serial 5 minutes to 1 would do more than the last 960 machines.",
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "def amdahl(p, n):",
+      "    \"\"\"Speedup on n workers when a fraction p of the work is parallel.\"\"\"",
+      "    return 1 / ((1 - p) + p / n)",
+      "",
+      "def gustafson(p, n):",
+      "    \"\"\"Scaled speedup when the parallel part grows with n.\"\"\"",
+      "    return (1 - p) + p * n",
+      "",
+      "def usl(n, sigma, kappa):",
+      "    \"\"\"Gunther's Universal Scalability Law: contention and coherence.\"\"\"",
+      "    return n / (1 + sigma * (n - 1) + kappa * n * (n - 1))",
+      "",
+      "print(round(amdahl(0.95, 1024), 2))      # 19.64",
+      "print(round(gustafson(0.95, 1024), 2))   # 972.85",
+      "print(round(usl(32, 0.05, 0.001), 2))    # 9.03, near the peak",
+      "print(round(usl(64, 0.05, 0.001), 2))    # 7.82, more workers, less done"
+    ]
+  },
+  "related": ["multithreading","autoscaling","team-structure"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "Speedup by parallel fraction and number of workers",
+      "intro": "Computed with 1 / ((1 − p) + p/n). Read across a row to see the ceiling arrive long before the workers run out.",
+      "corner": "Parallel fraction p",
+      "columns": ["2 workers", "8 workers", "64 workers", "1,024 workers", "Limit (n → ∞)"],
+      "rows": [
+        { "label": "50%", "values": ["1.33×", "1.78×", "1.97×", "1.998×", "2×"] },
+        { "label": "90%", "values": ["1.82×", "4.71×", "8.77×", "9.91×", "10×"] },
+        { "label": "95%", "values": ["1.90×", "5.93×", "15.42×", "19.64×", "20×"] },
+        { "label": "99%", "values": ["1.98×", "7.48×", "39.26×", "91.18×", "100×"] }
+      ],
+      "notes": [
+        "Amdahl’s law assumes a fixed problem and free coordination. With Gustafson’s scaled problem, p = 95% on 1,024 workers gives 972.85×; with Gunther’s coherence cost (σ = 0.05, κ = 0.001) throughput peaks near 31 workers at about 9× and falls to 7.8× at 64."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In 1967 Gene Amdahl, then at IBM, argued at an AFIPS conference in Atlantic City that building faster single processors still beat wiring many together. His evidence was practical: about 40% of the instructions in production runs went to data-management housekeeping that appeared to be sequential, which alone would cap throughput at five to seven times the sequential rate. He concluded that effort spent on high parallel rates is wasted unless sequential speed improves by nearly as much. The three-page paper contains no equations, just one figure; the formula now called Amdahl’s law was written down by others from his argument.",
+      "Twenty years later John Gustafson’s team at Sandia National Laboratories got speedups of 1,016 to 1,021 on a 1,024-processor hypercube, for programs with 0.4 to 0.8% serial time that Amdahl’s formula would cap far lower. In “Reevaluating Amdahl’s Law” (1988) he pointed out the hidden assumption: nobody runs a fixed-size problem on a bigger machine except in research. Users grow the problem to fill the time they have, and it’s the parallel part that grows.",
+      "Neil Gunther took the opposite correction. His Universal Scalability Law, first presented in 1993, adds a coherency term for the cost of keeping copies of data consistent between workers, which grows with the number of pairs. It explains why real systems often don’t just flatten but go retrograde, and in 2008 he showed that Amdahl’s and Gustafson’s formulas are special cases of it. The same shape had long been known for people: Fred Brooks’s 1975 book The Mythical Man-Month argued that communication overhead grows with team size, so adding people to a late project makes it later."
+    ],
+    "choices": [
+      { "choice": "Measure what real programs spend sequentially", "why": "Amdahl’s case rested on measured workloads, not theory: the roughly 40% housekeeping fraction had been nearly constant for a decade, and irregular real-world problems degraded parallel machines further." },
+      { "choice": "Fix the run time, not the problem size", "why": "Gustafson observed that with more processors users raise grid resolution or time steps to fill the same wall-clock time, while serial parts such as loading and I/O stay the same. Under that assumption speedup grows almost linearly." },
+      { "choice": "Count coordination, not just serial work", "why": "Gunther’s model separates contention (waiting in line, Amdahl’s serial part) from coherency (exchanging data to stay consistent). Only the second can make throughput fall as workers are added, which is what shared-writable workloads like database updates show." }
+    ],
+    "timeline": [
+      { "year": "1967", "text": "Amdahl’s AFIPS paper on the validity of the single-processor approach" },
+      { "year": "1975", "text": "Fred Brooks’s The Mythical Man-Month" },
+      { "year": "1988", "text": "Gustafson’s “Reevaluating Amdahl’s Law” after 1,024-processor results at Sandia" },
+      { "year": "1993", "text": "Gunther presents the capacity model that becomes the Universal Scalability Law" },
+      { "year": "2008", "text": "Gunther shows Amdahl’s and Gustafson’s laws are special cases of the USL" }
+    ],
+    "sources": [
+      { "label": "Gene M. Amdahl: Validity of the single processor approach to achieving large scale computing capabilities (AFIPS 1967), reprinted in IEEE SSCS News, Summer 2007", "url": "https://www3.cs.stonybrook.edu/~rezaul/Spring-2012/CSE613/reading/Amdahl-1967.pdf" },
+      { "label": "John L. Gustafson: Reevaluating Amdahl’s Law (Communications of the ACM, 1988)", "url": "http://www.johngustafson.net/pubs/pub13/amdahl.htm" },
+      { "label": "Neil J. Gunther: A general theory of computational scalability based on rational functions (arXiv, 2008)", "url": "https://arxiv.org/abs/0808.1431" },
+      { "label": "Wikipedia: Brooks’s law", "url": "https://en.wikipedia.org/wiki/Brooks%27s_law" }
+    ]
+  },
+  "sources": [
+    { "label": "Gene M. Amdahl: Validity of the single processor approach (AFIPS 1967), IEEE SSCS News reprint", "url": "https://www3.cs.stonybrook.edu/~rezaul/Spring-2012/CSE613/reading/Amdahl-1967.pdf" },
+    { "label": "John L. Gustafson: Reevaluating Amdahl’s Law (Amdahl’s formula and scaled speedup)", "url": "http://www.johngustafson.net/pubs/pub13/amdahl.htm" },
+    { "label": "Neil J. Gunther: A general theory of computational scalability based on rational functions (arXiv:0808.1431)", "url": "https://arxiv.org/pdf/0808.1431" },
+    { "label": "Wikipedia: Amdahl’s law", "url": "https://en.wikipedia.org/wiki/Amdahl%27s_law" },
+    { "label": "Wikipedia: Brooks’s law", "url": "https://en.wikipedia.org/wiki/Brooks%27s_law" }
+  ]
+}

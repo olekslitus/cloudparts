@@ -1,0 +1,140 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Alibaba Cloud Hologres",
+  "concepts": ["olap", "warehouse"],
+  "provider": "vendor",
+  "vendor": "Alibaba Cloud",
+  "license": "Proprietary (managed service only)",
+  "website": "https://www.alibabacloud.com/help/en/hologres/product-overview/what-is-hologres",
+  "summary": "Alibaba Cloud’s PostgreSQL-compatible real-time data warehouse, which takes streaming writes, answers analytical queries and serves key lookups from one copy of the data.",
+  "intro": [
+    "Hologres splits each table group into shards, and each shard is written by exactly one worker at a time, while the data itself lives in Pangu, Alibaba’s distributed file system. Frontend nodes speak the PostgreSQL 11 protocol and dialect, so `psql`, JDBC drivers and BI tools connect unchanged; they parse and plan SQL and hand it to workers. A worker runs a vectorised MPP engine (HQE) for analytics, falls back to a PostgreSQL engine for features HQE lacks, such as PostGIS and PL/Python functions, and has a third engine that reads MaxCompute tables directly from Pangu without copying them. Tables can be row-oriented for point lookups by primary key, column-oriented for scans, or both. Writes go into LSM-style tablets and are visible within seconds, and a table’s binlog lets Flink consume its changes. Alibaba’s managed Flink uses Hologres as a source, sink, lookup table and catalog.",
+    "It is sold only on Alibaba Cloud. An exclusive instance is general-purpose, split into virtual warehouses (each at least 32 CU, plus two or more gateway nodes billed separately) or, in beta, serverless. One compute unit (CU) is 1 core and 4 GB of memory. Subscription prepays CUs by the month; pay-as-you-go bills by the hour, even while idle, unless you pause the instance. In US (Virginia) a CU costs $27.149254 a month on subscription or $0.056561 an hour pay-as-you-go, and standard storage is $0.164179 per GB-month prepaid or $0.000342 per GB-hour (about $0.25 per GB-month) pay-as-you-go. Serverless Computing runs selected large jobs on a shared pool billed per CU-hour, and a separate shared-cluster product that only accelerates MaxCompute and OSS queries bills by data scanned."
+  ],
+  "strengths": [
+    "One system for real-time writes, sub-second analytics and high-QPS primary-key lookups, instead of a warehouse plus a separate serving store",
+    "PostgreSQL wire protocol and syntax, so existing drivers, SQL clients and BI tools work",
+    "Queries MaxCompute tables in place, reading straight from shared storage, and writes results back with `INSERT OVERWRITE`",
+    "Deep integration with Alibaba’s managed Flink: source, sink, dimension lookups, binlog consumption and catalogs",
+    "Virtual warehouses share one copy of storage while isolating compute, for example ingestion from dashboards"
+  ],
+  "limits": [
+    "Alibaba Cloud only: no self-hosted version, and the MaxCompute, Flink and DataWorks integrations tie it to that ecosystem",
+    "Pay-as-you-go compute bills every hour the instance is running, busy or not; pay-as-you-go storage costs about half again as much as prepaid storage",
+    "Locally redundant storage keeps data in one zone; zone-redundant storage is offered only in some regions and costs about 30 to 50% more",
+    "PostgreSQL compatibility is with version 11, and features such as PostGIS and PL/Python functions run on a separate PostgreSQL engine instead of the vectorised HQE",
+    "Releasing a subscription instance early means asking support through a DingTalk group, and a released instance’s data can’t be recovered"
+  ],
+  "worksWith": [
+    { "id": "flink", "how": "is a source, sink and lookup table for" },
+    { "id": "postgresql", "how": "speaks the wire protocol and SQL of" },
+    { "id": "spark", "how": "takes high-throughput writes from" },
+    { "id": "paimon", "how": "maps foreign tables (via DLF) onto" },
+    { "id": "hudi", "how": "queries tables on OSS in" },
+    { "id": "delta-lake", "how": "queries tables on OSS in" },
+    { "id": "parquet", "how": "reads and exports OSS files as" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "A column table tuned for time filters, filled from MaxCompute, then queried over the PostgreSQL protocol",
+    "source": [
+      "BEGIN;",
+      "CREATE TABLE events (",
+      "  event_id   BIGINT NOT NULL PRIMARY KEY,",
+      "  user_id    BIGINT NOT NULL,",
+      "  event_type TEXT NOT NULL,",
+      "  amount     DECIMAL(12,2),",
+      "  ts         TIMESTAMPTZ NOT NULL",
+      ");",
+      "CALL set_table_property('events', 'orientation', 'column');",
+      "CALL set_table_property('events', 'distribution_key', 'event_id');",
+      "CALL set_table_property('events', 'segment_key', 'ts');",
+      "CALL set_table_property('events', 'bitmap_columns', 'event_type');",
+      "COMMIT;",
+      "",
+      "-- map last month's batch table from MaxCompute without copying it",
+      "IMPORT FOREIGN SCHEMA sales_project LIMIT TO (events_history)",
+      "FROM SERVER odps_server INTO public",
+      "OPTIONS (if_table_exist 'update');",
+      "",
+      "INSERT INTO events",
+      "SELECT event_id, user_id, event_type, amount, ts FROM events_history;",
+      "",
+      "SELECT event_type, count(*) AS n, sum(amount) AS revenue",
+      "FROM events",
+      "WHERE ts >= now() - interval '1 hour'",
+      "GROUP BY event_type",
+      "ORDER BY n DESC;"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "List prices by region",
+      "intro": "Exclusive instances, general-purpose compute and standard locally redundant storage. Checked 6 October 2026.",
+      "corner": "Region",
+      "columns": ["Compute, pay-as-you-go", "Compute, subscription", "Storage, subscription", "Storage, pay-as-you-go"],
+      "rows": [
+        { "label": "US (Virginia)", "values": ["$0.056561 per CU-hour", "$27.149254 per CU-month", "$0.164179 per GB-month", "$0.000342 per GB-hour"] },
+        { "label": "Germany (Frankfurt)", "values": ["$0.068190 per CU-hour", "$32.731343 per CU-month", "$0.189552 per GB-month", "$0.000395 per GB-hour"] },
+        { "label": "Singapore", "values": ["$0.066604 per CU-hour", "$31.970149 per CU-month", "$0.182090 per GB-month", "$0.000379 per GB-hour"] },
+        { "label": "Mainland China (Hangzhou, Shanghai, Beijing and others)", "values": ["$0.052861 per CU-hour", "$25.373134 per CU-month", "$0.149254 per GB-month", "$0.000311 per GB-hour"] }
+      ],
+      "notes": [
+        "1 CU = 1 core and 4 GB of memory. Virtual warehouse instances add gateway nodes, at least two, at twice the CU price per node (for example $0.113122 per node-hour in Virginia).",
+        "Subscription storage above the prepaid capacity is billed by the hour at pay-as-you-go rates. Infrequent-access storage, backup snapshots and cross-region snapshot traffic are billed separately."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Instance types",
+      "items": [
+        { "name": "General-purpose", "tag": "exclusive", "text": "A fixed amount of compute that you scale up or down; read-only secondary instances share its storage for load isolation." },
+        { "name": "Virtual warehouse", "tag": "exclusive", "text": "Compute split into warehouses of 32 to 8,192 CU in steps of 16, each with its own settings and access control, over one copy of the data, with optional scheduled scaling." },
+        { "name": "Serverless instance", "tag": "beta", "text": "No reserved compute: each write and query is billed for what it uses. Not for streaming writes or high-QPS serving." },
+        { "name": "Shared cluster", "tag": "lakehouse acceleration", "text": "Only accelerates queries on MaxCompute and OSS data, cannot hold internal tables, and bills by data scanned per query." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Alibaba’s recommendation stack had to do several jobs at once. Clicks, page views and payments, around ten million events a second, were joined on the fly with dimension data by point lookups, aggregated into features, served to the recommender and analysed in dashboards and ad hoc queries; on the Double 11 shopping festival, analytical queries reached hundreds per second. Without one system that meant Druid for continuous aggregation, Cassandra for serving, Impala or Greenplum for interactive analysis and Hive for batch, with the same data copied and synchronised between them.",
+      "A team at Alibaba Group (Xiaowei Jiang and twelve co-authors) built Hologres to do both kinds of work in one service, a design they called hybrid serving and analytical processing (HSAP). They described it at VLDB 2020: storage separated from compute, tables split into self-contained shards, row and column tablets managed like LSM trees, and a scheduler that keeps short lookups from waiting behind long scans. By then it ran inside Alibaba and as an Alibaba Cloud product, with the PostgreSQL protocol on top.",
+      "Later versions added multi-statement transactions and runtime filters (2023), Dynamic Tables and serverless computing (2024), and AI functions, vector and full-text search (2025)."
+    ],
+    "choices": [
+      { "choice": "Shards owned by one worker, on shared storage", "why": "One writer per shard avoids coordination for consistency, while keeping data in Pangu lets Alibaba add compute or replace a failed node without rebalancing data." },
+      { "choice": "Row, column and hybrid tablets in one system", "why": "Serving needs fast lookups by key and analysis needs fast column scans. Supporting both layouts per table lets one copy of data handle both." },
+      { "choice": "A custom scheduler with execution contexts", "why": "Cooperative scheduling with little context switching lets thousands of concurrent queries share cores, and keeps latency-sensitive lookups isolated from heavy analytical queries." },
+      { "choice": "PostgreSQL protocol and syntax", "why": "Using an existing protocol meant drivers, SQL clients and BI tools worked from the start, instead of a new client stack." }
+    ],
+    "timeline": [
+      { "year": "2020", "text": "HSAP design published at VLDB; V0.8 adds upserts and views" },
+      { "year": "2021", "text": "V1.1 released" },
+      { "year": "2023", "text": "V2.0: runtime filters and multi-statement transactions" },
+      { "year": "2024", "text": "V3.0 adds Dynamic Tables; Serverless Computing generally available" },
+      { "year": "2025", "text": "V4.0 adds AI functions and full-text search; serverless instances in beta" },
+      { "year": "2026", "text": "V4.1 upgrades the query engine and adds history-based optimisation rules" }
+    ],
+    "sources": [
+      { "label": "Jiang et al.: Alibaba Hologres, a cloud-native service for hybrid serving/analytical processing (VLDB 2020)", "url": "http://www.vldb.org/pvldb/vol13/p3272-jiang.pdf" },
+      { "label": "Alibaba Cloud: Hologres release notes (V0.8 in 2020 to V4.1 in 2026)", "url": "https://www.alibabacloud.com/help/en/hologres/product-overview/release-notes" },
+      { "label": "Alibaba Cloud: Hologres architecture", "url": "https://www.alibabacloud.com/help/en/hologres/product-overview/architecture" }
+    ]
+  },
+  "sources": [
+    { "label": "Alibaba Cloud: What is Hologres?", "url": "https://www.alibabacloud.com/help/en/hologres/product-overview/what-is-hologres" },
+    { "label": "Alibaba Cloud: Hologres architecture (FE, HQE, PQE, SQE, Pangu, PostgreSQL 11)", "url": "https://www.alibabacloud.com/help/en/hologres/product-overview/architecture" },
+    { "label": "Alibaba Cloud: Hologres billing overview (billing methods, rules, prices by region)", "url": "https://www.alibabacloud.com/help/en/hologres/product-overview/billing-overview" },
+    { "label": "Alibaba Cloud: Hologres pay-as-you-go (hourly billing, pause and resume)", "url": "https://www.alibabacloud.com/help/en/hologres/product-overview/pay-as-you-go" },
+    { "label": "Alibaba Cloud: Purchase a Hologres instance (instance types, virtual warehouse sizes, shared clusters, storage redundancy)", "url": "https://www.alibabacloud.com/help/en/hologres/getting-started/purchase-a-hologres-instance" },
+    { "label": "Alibaba Cloud: What is a Hologres serverless instance?", "url": "https://www.alibabacloud.com/help/en/hologres/user-guide/what-is-a-hologres-serverless-instance" },
+    { "label": "Alibaba Cloud: Hologres release notes (Dynamic Tables, EXTERNAL_FILES and OSS export in V4.1)", "url": "https://www.alibabacloud.com/help/en/hologres/product-overview/release-notes" },
+    { "label": "Alibaba Cloud: Hologres and MaxCompute (foreign tables, direct reads, limits)", "url": "https://www.alibabacloud.com/help/en/hologres/user-guide/maxcompute" },
+    { "label": "Alibaba Cloud: IMPORT FOREIGN SCHEMA (MaxCompute and Paimon in DLF)", "url": "https://www.alibabacloud.com/help/en/hologres/developer-reference/import-foreign-schema" },
+    { "label": "Alibaba Cloud: Table creation and tuning by scenario (orientation, distribution, segment and clustering keys, bitmap indexes)", "url": "https://www.alibabacloud.com/help/en/hologres/user-guide/guide-on-scenario-specific-table-creation-and-tuning" },
+    { "label": "Alibaba Cloud: Hologres and fully managed Flink (source, dimension and result tables, binlog, catalogs)", "url": "https://www.alibabacloud.com/help/en/hologres/user-guide/fully-managed-flink" },
+    { "label": "Alibaba Cloud Realtime Compute for Apache Flink: Hologres connector", "url": "https://www.alibabacloud.com/help/en/flink/developer-reference/hologres-connector" }
+  ],
+  "checked": "2026-10-06"
+}

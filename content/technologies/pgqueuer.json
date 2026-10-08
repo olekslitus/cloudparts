@@ -1,0 +1,133 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "PgQueuer",
+  "concepts": ["queue"],
+  "provider": "oss",
+  "vendor": "janbjorge (JeyBee) and contributors",
+  "license": "MIT",
+  "website": "https://janbjorge.github.io/pgqueuer/",
+  "repo": "https://github.com/janbjorge/pgqueuer",
+  "summary": "A Python background-job library that uses Postgres as the broker: `SKIP LOCKED` to claim, LISTEN/NOTIFY to wake.",
+  "intro": [
+    "PgQueuer is a Python library that turns a Postgres database into a job queue. `pgq install` creates a `pgqueuer` table, a log table and a trigger. A producer calls `queries.enqueue(entrypoint, payload)`, which inserts a row, and the trigger sends a `NOTIFY` that wakes listening workers. A worker, started with `pgq run module:factory`, claims up to `batch_size` ready rows with `FOR UPDATE SKIP LOCKED`, marks them `picked` and runs the async handler registered for that entrypoint. While a job runs, the worker refreshes its heartbeat; if the heartbeat is older than `heartbeat_timeout` (30 seconds by default), another worker can pick the job up again. On success the row is deleted from the queue and the outcome appended to `pgqueuer_log`. Workers also poll, so a missed notification only delays a job.",
+    "Because jobs are rows, a job can be enqueued in the same transaction as the data it’s about. PgQueuer adds cron-style schedules, deferred jobs (`execute_after`), retries with a delay, per-entrypoint concurrency limits enforced across all workers, deduplication keys, Prometheus metrics, a terminal dashboard and an in-memory mode for tests. It’s free under the MIT licence, needs Python 3.10+ and Postgres 14+, and reached 1.0 in May 2026 after two years of 0.x releases."
+  ],
+  "strengths": [
+    "Transactional enqueue: the job commits or rolls back with your data, so there’s no dual write to drift",
+    "Jobs start right away through LISTEN/NOTIFY, with polling as a safety net",
+    "The usual job-queue features built in: cron schedules, deferred jobs, retries with backoff, cancellation, completion tracking and fleet-wide concurrency limits",
+    "Observability out of the box: Prometheus metrics, tracing with Logfire or Sentry, and `pgq dashboard`",
+    "Tests and prototypes can run without Postgres using `PgQueuer.in_memory()`"
+  ],
+  "limits": [
+    "Python only: handlers must be `async def`, and retries, cancellation and tracing are Python APIs, so workers in other languages aren’t an option",
+    "At least once: if a worker dies mid-job the job runs again, and a crash re-delivery doesn’t increase `attempts`, so handlers must be idempotent",
+    "Each finished job is a delete on a high-churn table; without the aggressive autovacuum settings from `pgq autovac`, dead tuples slow index scans",
+    "Claims, heartbeats and logs load the same Postgres instance as your application, and `pgqueuer_log` is never pruned automatically",
+    "No workflows: no chains, groups or DAGs, and nothing stores a handler’s return value"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "keeps jobs, locks and its log in" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "A worker with a concurrency limit, and a transactional enqueue",
+    "source": [
+      "# worker.py: run with `pgq run worker:main`",
+      "import asyncpg",
+      "from pgqueuer import PgQueuer",
+      "from pgqueuer.db import AsyncpgDriver",
+      "from pgqueuer.models import Job",
+      "from pgqueuer.queries import Queries",
+      "",
+      "async def main() -> PgQueuer:",
+      "    conn = await asyncpg.connect()  # uses PGHOST, PGUSER, PGDATABASE",
+      "    pgq = PgQueuer(AsyncpgDriver(conn))",
+      "",
+      "    @pgq.entrypoint(\"send_receipt\", concurrency_limit=4)",
+      "    async def send_receipt(job: Job) -> None:",
+      "        order_id = int(job.payload.decode())",
+      "        print(f\"emailing receipt for order {order_id}\")",
+      "",
+      "    return pgq",
+      "",
+      "# in the web app: the job commits only if the order does",
+      "async def place_order(conn: asyncpg.Connection, order_id: int) -> None:",
+      "    queries = Queries(AsyncpgDriver(conn))",
+      "    async with conn.transaction():",
+      "        await conn.execute(\"INSERT INTO orders (id, status) VALUES ($1, 'paid')\", order_id)",
+      "        await queries.enqueue(\"send_receipt\", str(order_id).encode())"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "pgmq, PgQue and PgQueuer",
+      "intro": "All three keep queues in Postgres tables. They differ in what a reader gets, which languages can join in, and how old rows are cleaned up.",
+      "columns": ["pgmq", "PgQue", "PgQueuer"],
+      "rows": [
+        { "label": "Model", "values": ["Message queue: each message goes to one reader", "Shared event log: every subscribed consumer sees every event", "Job queue: Python workers run a handler per job"] },
+        { "label": "What you install", "values": ["SQL objects, as an extension or a plain SQL file", "One PL/pgSQL file, plus a scheduler that calls the ticker", "A Python package; `pgq install` creates its tables"] },
+        { "label": "Languages", "values": ["Any, through SQL; official Rust and Python clients", "Any, through SQL; first-party Python, Go and TypeScript clients", "Python 3.10+, async handlers"] },
+        { "label": "Handing out work", "values": ["`FOR UPDATE SKIP LOCKED`, then a visibility timeout", "Batches between ticks, found by comparing two transaction snapshots; no row locks", "`FOR UPDATE SKIP LOCKED`, then status `picked` with a heartbeat"] },
+        { "label": "Delivery", "values": ["Exactly once within the visibility timeout, then at least once", "At least once, in batches; about 52 ms median wait at the default 100 ms tick", "At least once; handlers must be idempotent"] },
+        { "label": "Retries", "values": ["The message reappears after the timeout; track `read_ct` yourself", "`nack` schedules a retry; a dead-letter queue after the limit", "`RetryRequested` with a delay, or hold failed jobs for review"] },
+        { "label": "Finished messages", "values": ["Deleted, or moved to an archive table", "Stay in the log; `ack` moves the consumer’s cursor", "Deleted from the queue; the outcome is appended to a log table"] },
+        { "label": "Dead rows and cleanup", "values": ["Updates and deletes leave dead rows for VACUUM; optional partitions dropped by pg_partman", "None on the hot path: three tables rotate and the oldest is emptied with `TRUNCATE`", "Deletes leave dead rows; `pgq autovac` makes autovacuum aggressive"] },
+        { "label": "Licence and maturity", "values": ["PostgreSQL licence; 1.0 in November 2023", "Apache 2.0; 0.x, first release April 2026", "MIT; 1.0 in May 2026"] }
+      ],
+      "notes": ["PgQue’s latency figure comes from its own committed benchmark."]
+    }
+  ],
+  "history": {
+    "story": [
+      "Celery, a long-standing Python job queue, runs beside a separate broker such as Redis, RabbitMQ or SQS, plus a `celery-beat` process for recurring tasks. Yet Postgres already has what a queue needs: row locks with `SKIP LOCKED`, so workers don’t collide, and LISTEN/NOTIFY to wake them. In April 2024 a developer who publishes on GitHub as janbjorge (JeyBee) released PgQueuer to use just those, so an application that already has Postgres needs no other broker.",
+      "Early Show HN posts in April and May 2024 advertised over 5,000 jobs a second, and a post that August drew 376 points. Features arrived in quick 0.x releases, such as recurring schedules in 0.15 (November 2024) and deduplication keys in 0.20 (April 2025).",
+      "After about two years and 26 minor releases, 1.0 shipped on 11 May 2026 as the first stable release, with strict semantic versioning from then on. The project records its design in architecture decision records: workers claim jobs by lock contention, notifications only signal and never carry job data, and delivery is at least once."
+    ],
+    "choices": [
+      { "choice": "Workers race for rows; no coordinator assigns work", "why": "With `FOR UPDATE SKIP LOCKED`, any worker can claim any ready job and the database arbitrates, so there’s no coordinator or worker registry to run. The cost is no fairness between workers and lock traffic at the head of the queue." },
+      { "choice": "NOTIFY wakes workers but never carries the job", "why": "NOTIFY payloads are capped at about 8 kB, vanish if the sending transaction rolls back, and are missed by late listeners. So a wake-up only prompts a normal claim query, and a periodic poll covers anything missed." },
+      { "choice": "At-least-once, not exactly-once", "why": "Exactly-once would need fencing tokens or an outbox and still breaks once side effects leave the database. Re-running a crashed job was judged better than losing it." }
+    ],
+    "timeline": [
+      { "year": "2024", "text": "0.1 released in April; early posts claim over 5,000 jobs a second" },
+      { "year": "2024", "text": "0.15 adds recurring, cron-style schedules" },
+      { "year": "2025", "text": "0.20 adds job deduplication with a `dedupe_key`" },
+      { "year": "2026", "text": "1.0, the first stable release, ships in May" },
+      { "year": "2026", "text": "1.4 makes concurrency limits hold across simultaneous workers" }
+    ],
+    "sources": [
+      { "label": "Hacker News: Show HN: PgQueuer, over 5k jobs/sec with PostgreSQL (Apr 2024)", "url": "https://news.ycombinator.com/item?id=40203680" },
+      { "label": "Hacker News: Show HN: PgQueuer, transform PostgreSQL into a job queue (Aug 2024)", "url": "https://news.ycombinator.com/item?id=41284703" },
+      { "label": "PgQueuer v0.15.0 release: recurring job scheduling (Nov 2024)", "url": "https://github.com/janbjorge/pgqueuer/releases/tag/v0.15.0" },
+      { "label": "PgQueuer v0.20.0 release: job deduplication (Apr 2025)", "url": "https://github.com/janbjorge/pgqueuer/releases/tag/v0.20.0" },
+      { "label": "Hacker News: Show HN: PgQueuer v1.0 (May 2026)", "url": "https://news.ycombinator.com/item?id=48100177" },
+      { "label": "PgQueuer architecture decision records", "url": "https://github.com/janbjorge/pgqueuer/blob/main/docs/adr/README.md" }
+    ]
+  },
+  "sources": [
+    { "label": "PgQueuer README", "url": "https://github.com/janbjorge/pgqueuer/blob/main/README.md" },
+    { "label": "PgQueuer docs: Architecture", "url": "https://github.com/janbjorge/pgqueuer/blob/main/docs/reference/architecture.md" },
+    { "label": "PgQueuer docs: Heartbeat monitoring", "url": "https://github.com/janbjorge/pgqueuer/blob/main/docs/guides/heartbeat.md" },
+    { "label": "PgQueuer docs: Performance tuning (batch size, autovacuum, polling)", "url": "https://github.com/janbjorge/pgqueuer/blob/main/docs/guides/performance-tuning.md" },
+    { "label": "PgQueuer docs: Database-level retry", "url": "https://github.com/janbjorge/pgqueuer/blob/main/docs/guides/retry.md" },
+    { "label": "PgQueuer docs: Reliability (job log retention)", "url": "https://github.com/janbjorge/pgqueuer/blob/main/docs/guides/reliability.md" },
+    { "label": "PgQueuer docs: When to use PgQueuer", "url": "https://github.com/janbjorge/pgqueuer/blob/main/docs/getting-started/when-to-use.md" },
+    { "label": "PgQueuer docs: PgQueuer vs Celery", "url": "https://github.com/janbjorge/pgqueuer/blob/main/docs/comparisons/celery-comparison.md" },
+    { "label": "PgQueuer ADR-0002: Workers claim jobs by row-level lock contention", "url": "https://github.com/janbjorge/pgqueuer/blob/main/docs/adr/ADR-0002-workers-claim-by-lock-contention.md" },
+    { "label": "PgQueuer ADR-0003: Notifications signal, never carry job data", "url": "https://github.com/janbjorge/pgqueuer/blob/main/docs/adr/ADR-0003-notifications-signal-not-carry.md" },
+    { "label": "PgQueuer ADR-0004: Delivery is at-least-once", "url": "https://github.com/janbjorge/pgqueuer/blob/main/docs/adr/ADR-0004-delivery-is-at-least-once.md" },
+    { "label": "PgQueuer v1.0.0 release (May 2026)", "url": "https://github.com/janbjorge/pgqueuer/releases/tag/v1.0.0" },
+    { "label": "PgQueuer v1.4.0 release: concurrency limits across workers (Sep 2026)", "url": "https://github.com/janbjorge/pgqueuer/releases/tag/v1.4.0" },
+    { "label": "PgQueuer LICENSE (MIT)", "url": "https://github.com/janbjorge/pgqueuer/blob/main/LICENSE" },
+    { "label": "pgmq README", "url": "https://github.com/pgmq/pgmq/blob/main/README.md" },
+    { "label": "pgmq source: pgmq.sql (read with FOR UPDATE SKIP LOCKED)", "url": "https://github.com/pgmq/pgmq/blob/main/pgmq-extension/sql/pgmq.sql" },
+    { "label": "pgmq docs: Partitioned queues", "url": "https://github.com/pgmq/pgmq/blob/main/docs/partitioned-queues.md" },
+    { "label": "Tembo blog: Introducing PGMQ (exactly once within the visibility timeout)", "url": "https://tembo.io/blog/introducing-pgmq", "archive": "https://web.archive.org/web/20231204054249/https://tembo.io/blog/introducing-pgmq/" },
+    { "label": "pgmq v1.0.0 release (Nov 2023)", "url": "https://github.com/pgmq/pgmq/releases/tag/v1.0.0" },
+    { "label": "PgQue README (model, latency, retries)", "url": "https://github.com/NikolayS/pgque/blob/main/README.md" },
+    { "label": "PgQue docs: Concepts and heritage (snapshots, rotation, delivery)", "url": "https://github.com/NikolayS/pgque/blob/main/docs/concepts.md" }
+  ],
+  "checked": "2026-10-06"
+}

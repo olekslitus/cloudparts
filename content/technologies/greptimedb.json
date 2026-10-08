@@ -1,0 +1,153 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "GreptimeDB",
+  "concepts": ["tsdb", "observability"],
+  "provider": "oss",
+  "vendor": "GrepTime Inc.",
+  "license": "Apache 2.0 (core); a few enterprise-only features under the GreptimeDB Enterprise License, not built by default",
+  "website": "https://greptime.com/",
+  "repo": "https://github.com/GreptimeTeam/greptimedb",
+  "summary": "A Rust database that stores metrics, logs and traces as tables on object storage, queried with SQL or PromQL.",
+  "intro": [
+    "GreptimeDB runs as one binary for development or as a cluster of four kinds of process. Frontends are stateless: they accept OpenTelemetry (OTLP), Prometheus remote write, Loki push, Elasticsearch bulk, InfluxDB line protocol, gRPC and the MySQL and PostgreSQL wire protocols, then plan queries and route reads and writes. Metasrv keeps the catalog and the map of which Datanode hosts which region (a slice of a table), backed by etcd or a relational database. Datanodes hold the regions: each write goes to a write-ahead log and an in-memory table (memtable), which is flushed as Parquet files to S3, Google Cloud Storage, Azure Blob or local disk, with memory and local-disk caches for recent data. The WAL can be local (an embedded raft-engine) or remote in Kafka, which is what makes fast failover and moving regions between nodes possible. An optional Flownode runs continuous aggregations into other tables.",
+    "Every signal is a table with tag columns (the primary key), one time-index column and field columns: a Prometheus metric becomes a table with its labels as tags, OpenTelemetry logs and spans land in `opentelemetry_logs` and `opentelemetry_traces`, and SQL can join them on `trace_id`. The core is Apache 2.0, including cluster mode, object storage and every ingestion protocol. GrepTime Inc. sells GreptimeDB Enterprise, which adds read replicas, automatic rebalancing, LDAP, RBAC and audit logging, either fully managed from $290 a month or deployed in your own cloud at custom prices. Version 1.0 shipped in April 2026; the current release is 1.2.1."
+  ],
+  "strengths": [
+    "One engine and one SQL dialect for metrics, logs and traces, so you can join a slow span to the log lines it produced",
+    "Drop-in ingestion for existing agents: OpenTelemetry, Prometheus remote write, Loki push, Elasticsearch bulk and InfluxDB line protocol",
+    "Object storage is the primary store, so long retention costs bucket prices and compute scales separately from data",
+    "PromQL for dashboards and alerts that already exist, plus SQL over the same data through MySQL or PostgreSQL clients",
+    "Cluster mode, object storage and continuous aggregation (Flow) are all in the Apache 2.0 build"
+  ],
+  "limits": [
+    "Open core: read replicas, automatic repartitioning and region rebalancing, LDAP, RBAC, audit logging and Kibana-style Elasticsearch queries are Enterprise only; in the open build, repartitioning and region migration are manual",
+    "Query compatibility is narrower than ingestion: Loki’s LogQL and most Elasticsearch APIs aren’t supported, and PromQL has documented gaps",
+    "Fast failover needs Kafka as a remote WAL; with the local WAL, recovery means replaying the log and regions can’t move to other nodes",
+    "Young as a 1.x product: GA only in April 2026, and 1.2.0 shipped a compaction bug that could lose `JSON2` data, fixed in 1.2.1",
+    "The self-serve Hobby and Serverless cloud plans of 2024 are gone from the pricing page; managed service now starts at $290 a month"
+  ],
+  "worksWith": [
+    { "id": "s3", "how": "stores its data files in" },
+    { "id": "parquet", "how": "writes data files as" },
+    { "id": "datafusion", "how": "builds its query engine on" },
+    { "id": "kafka", "how": "can use as its write-ahead log" },
+    { "id": "prometheus", "how": "takes remote write and PromQL queries from" },
+    { "id": "opentelemetry", "how": "ingests OTLP metrics, logs and traces from" },
+    { "id": "telegraf", "how": "takes metrics via line protocol from" },
+    { "id": "grafana", "how": "is queried, through a plugin, by" },
+    { "id": "kubernetes", "how": "runs, through its operator, on" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "A metrics table, a downsampling flow, and PromQL from SQL",
+    "source": [
+      "-- tags form the primary key; one time index; fields hold the values",
+      "CREATE TABLE cpu (",
+      "  host STRING,",
+      "  region STRING,",
+      "  usage_pct DOUBLE,",
+      "  ts TIMESTAMP TIME INDEX,",
+      "  PRIMARY KEY (host, region)",
+      ") WITH ('ttl' = '30d');",
+      "",
+      "-- keep 5-minute peaks per region; Flow creates and updates cpu_5m",
+      "CREATE FLOW cpu_5m_flow",
+      "SINK TO cpu_5m",
+      "AS",
+      "SELECT region, max(usage_pct) AS peak_pct,",
+      "  date_bin('5 minutes'::INTERVAL, ts) AS time_window",
+      "FROM cpu",
+      "GROUP BY region, time_window;",
+      "",
+      "-- a metric written by Prometheus remote write, queried with PromQL",
+      "TQL EVAL (1759730400, 1759734000, '1m')",
+      "  sum by (job) (rate(http_requests_total[5m]));"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "GreptimeDB, Prometheus or TimescaleDB?",
+      "intro": "All three store time-stamped data, but they start from different places: GreptimeDB from object storage and several signal types, Prometheus from scraping metrics, TimescaleDB from PostgreSQL.",
+      "columns": ["GreptimeDB", "Prometheus", "TimescaleDB"],
+      "rows": [
+        { "label": "What it stores", "values": ["Metrics, logs and traces, each signal in its own tables", "Metrics only", "Any PostgreSQL rows; hypertables split them into time chunks"] },
+        { "label": "Where the data lives", "values": ["Object storage (S3, GCS, Azure Blob) or local disk, with local caches", "Local disk on one server, not clustered or replicated", "PostgreSQL’s own disks"] },
+        { "label": "How data gets in", "values": ["OTLP, Prometheus remote write, Loki push, Elasticsearch bulk, InfluxDB line protocol, SQL inserts", "Pulls (scrapes) HTTP `/metrics` endpoints", "Ordinary PostgreSQL inserts"] },
+        { "label": "Query languages", "values": ["SQL and PromQL", "PromQL", "SQL"] },
+        { "label": "Licence", "values": ["Apache 2.0 core; some features Enterprise only", "Apache 2.0", "Apache 2.0 core; most features under the Tiger Data License"] }
+      ],
+      "notes": [
+        "The two can be combined: Prometheus can keep scraping and send its samples to GreptimeDB with `remote_write`, using it as long-term storage, and read them back with `remote_read`."
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Open source and Enterprise",
+      "intro": "The same database in each column; Enterprise adds operations, security and support features and a commercial licence. Prices are list prices checked on 2026-10-06.",
+      "corner": "Feature",
+      "columns": ["Open source", "Enterprise, your cloud", "Enterprise, fully managed"],
+      "rows": [
+        { "label": "Who runs it", "values": ["You", "You, with GrepTime support (also on AWS Marketplace)", "GrepTime"] },
+        { "label": "Price", "values": ["Free", "Custom", "From $290 a month"] },
+        { "label": "Cluster mode, object storage, Flow, all ingestion protocols", "values": ["Yes", "Yes", "Yes"] },
+        { "label": "Read replicas, automatic region rebalancing, scheduled compaction", "values": ["No", "Yes", "Yes"] },
+        { "label": "LDAP login, RBAC, audit logging, protection against `DROP`", "values": ["No", "Yes", "Yes"] },
+        { "label": "Elasticsearch query compatibility (Kibana), triggers with webhooks", "values": ["No", "Yes", "Yes"] },
+        { "label": "Active-active disaster recovery", "values": ["No", "Yes", "Yes"] }
+      ],
+      "notes": [
+        "Enterprise-only source files carry the GreptimeDB Enterprise License header and sit behind the `enterprise` Cargo feature, which the default build leaves out."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Most of Greptime’s founding team had spent four years building a proprietary time-series database at a major tech company, which at peak wrote more than 100 million data points a second. Storage costs kept growing, and they had seen the cost of running metrics, logs and traces in three siloed systems: when something broke, the logs and traces behind a metric spike lived somewhere else. Existing architectures also kept several copies of the data on over-provisioned clusters, and handling high-cardinality series at a reasonable cost was still unsolved.",
+      "Founder and CEO Dennis Zhuang announced GreptimeDB on November 15, 2022, when the GitHub repository went public after about six months of work. It was a cloud-native time-series database written in Rust, with stateless frontends and Datanodes and cheap object storage such as S3 underneath. Version 0.4 in October 2023 replaced the first row-oriented storage engine with a columnar one, Mito2, which made scans several times faster.",
+      "The project then widened from metrics to logs and traces in one table model, and reached 1.0 in April 2026. In June 2026 GrepTime added a separate Enterprise License for its feature-gated code, keeping the core under Apache 2.0."
+    ],
+    "choices": [
+      { "choice": "Rust instead of Go or Java", "why": "The team wanted precise memory control and stable latency under heavy write load. Co-founder Jeremy Feng wrote that at the storage-engine level “a single GC pause can mean a latency spike”, which they considered unacceptable." },
+      { "choice": "Object storage underneath, with local caches", "why": "Separating storage from compute lets data live on commodity object storage while compute scales elastically; local disks keep hot data close to avoid object-store latency." },
+      { "choice": "Rewriting the storage engine as columnar", "why": "The original row-oriented memtable duplicated keys and tags for every row and inflated memory. Incremental fixes couldn’t solve a data-layout problem, so version 0.4 rebuilt it around series and columnar files." },
+      { "choice": "One table model for all three signals", "why": "Metrics, logs and traces are all timestamped events with context. Storing them as tables with shared tags lets one SQL query correlate them instead of jumping between three systems." }
+    ],
+    "timeline": [
+      { "year": "2022", "text": "GreptimeDB open-sourced on GitHub on November 15" },
+      { "year": "2023", "text": "First release, 0.1.0, in March" },
+      { "year": "2023", "text": "0.4 in October replaces the storage engine with columnar Mito2" },
+      { "year": "2026", "text": "Version 1.0 GA in April" },
+      { "year": "2026", "text": "Enterprise License for gated code in June; 1.2 adds `JSON2` in September" }
+    ],
+    "sources": [
+      { "label": "Greptime blog: This time, for real (open-source announcement, November 2022)", "url": "https://greptime.com/blogs/2022-11-15-this-time-for-real" },
+      { "label": "Greptime blog: GreptimeDB internal design (December 2022)", "url": "https://greptime.com/blogs/2022-12-08-GreptimeDB-internal-design" },
+      { "label": "Greptime blog: GreptimeDB four years retrospective (April 2026)", "url": "https://greptime.com/blogs/2026-04-21-greptimedb-four-years-retrospective" },
+      { "label": "GitHub: GreptimeDB v0.1.0 release (March 2023)", "url": "https://github.com/GreptimeTeam/greptimedb/releases/tag/v0.1.0" },
+      { "label": "Greptime blog: GreptimeDB v1.0 GA release (April 2026)", "url": "https://greptime.com/blogs/2026-04-14-greptimedb-v1-ga-release" },
+      { "label": "GitHub: commit declaring the GreptimeDB Enterprise License (June 2026)", "url": "https://github.com/GreptimeTeam/greptimedb/commit/e89d591cb43099de94fcf447c9a08049da60f77a" }
+    ]
+  },
+  "sources": [
+    { "label": "GreptimeDB README: protocols, storage backends, edition boundary, licence", "url": "https://github.com/GreptimeTeam/greptimedb" },
+    { "label": "GreptimeDB docs: Architecture (Frontend, Datanode, Metasrv, Flownode)", "url": "https://docs.greptime.com/user-guide/concepts/architecture" },
+    { "label": "GreptimeDB docs: Data model (tags, time index, fields)", "url": "https://docs.greptime.com/user-guide/concepts/data-model" },
+    { "label": "GreptimeDB docs: WAL overview (local raft-engine, remote Kafka)", "url": "https://docs.greptime.com/user-guide/deployments-administration/wal/overview" },
+    { "label": "GreptimeDB docs: CREATE (table options such as ttl)", "url": "https://docs.greptime.com/reference/sql/create" },
+    { "label": "GreptimeDB docs: TQL", "url": "https://docs.greptime.com/reference/sql/tql" },
+    { "label": "GreptimeDB docs: Manage flows", "url": "https://docs.greptime.com/user-guide/flow-computation/manage-flow" },
+    { "label": "GreptimeDB docs: Prometheus remote write and remote read", "url": "https://docs.greptime.com/user-guide/ingest-data/for-observability/prometheus/" },
+    { "label": "GreptimeDB docs: InfluxDB line protocol and Telegraf", "url": "https://docs.greptime.com/user-guide/ingest-data/for-iot/influxdb-line-protocol" },
+    { "label": "GreptimeDB docs: Enterprise overview", "url": "https://docs.greptime.com/enterprise/overview" },
+    { "label": "GreptimeDB pricing (checked 2026-10-06)", "url": "https://greptime.com/pricing" },
+    { "label": "Greptime blog: GreptimeCloud plans (Hobby, Serverless, Dedicated; June 2024)", "url": "https://greptime.com/blogs/2024-06-12-greptimecloud-plans" },
+    { "label": "GreptimeDB Enterprise License", "url": "https://github.com/GreptimeTeam/greptimedb/blob/main/LICENSE-ENTERPRISE" },
+    { "label": "GitHub: GreptimeDB v1.2.0 release notes (JSON2, Remote Write v2, upgrade advice)", "url": "https://github.com/GreptimeTeam/greptimedb/releases/tag/v1.2.0" },
+    { "label": "GitHub: GreptimeDB v1.2.1 release", "url": "https://github.com/GreptimeTeam/greptimedb/releases/tag/v1.2.1" },
+    { "label": "Prometheus docs: Storage (local storage not clustered or replicated, remote write)", "url": "https://prometheus.io/docs/prometheus/latest/storage/" },
+    { "label": "Tiger Data docs: Hypertables", "url": "https://www.tigerdata.com/docs/learn/hypertables/understand-hypertables" },
+    { "label": "Tiger Data docs: TimescaleDB editions (Apache 2.0 and Community)", "url": "https://www.tigerdata.com/docs/get-started/choose-your-path/timescaledb-editions" }
+  ],
+  "checked": "2026-10-06"
+}

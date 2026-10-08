@@ -1,0 +1,138 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Structured logging",
+  "category": "observe",
+  "order": 25,
+  "summary": "Logs written as named fields (logfmt or JSON) instead of free text, so a machine can filter, group and join them.",
+  "howItWorks": "An unstructured log line is a sentence for a person: `Payment for order 9124 declined after 812 ms (card_declined)`. To ask “which orders were declined in the last hour, by reason?” you need a regular expression for every way any developer ever phrased it, and the query breaks when someone rewords the message. A structured log keeps the message short and fixed and puts each variable part in a named field. In logfmt that’s `level=error msg=\"payment declined\" order_id=9124 reason=card_declined duration_ms=812`; in JSON it’s the same as one object per line. The log store can index the fields, so the question becomes a filter on `reason` grouped by hour, with no parsing, and adding a field never breaks an old query. The most valuable fields join logs to everything else: `trace_id` and `span_id` from the current trace, a request ID, the service name and its version. OpenTelemetry’s log data model fixes names for the common parts (Timestamp, SeverityText, SeverityNumber, Body, Attributes, TraceId, SpanId, Resource) so that agents and stores agree on them. Most languages have a structured logger: pino for Node.js, zap and the standard library’s `log/slog` (since Go 1.21) for Go, structlog for Python and Serilog for .NET. The price is size and readability: JSON lines are longer than a sentence and harder to scan in a terminal.",
+  "analogy": "A form instead of a letter. Letters say the same things in a different order every time; a form has the same boxes in the same places, so a clerk can sort a thousand of them by one box in minutes.",
+  "useWhen": [
+    "Any service whose logs go to a central store, which in practice means every production service",
+    "Counting, grouping or alerting on what’s in the logs: errors by customer, slow calls by endpoint",
+    "Joining logs to traces: put `trace_id` and `span_id` in every line",
+    "Many teams and languages writing to one store, where field names need to match"
+  ],
+  "avoidWhen": [
+    "A small script or CLI whose output only a person reads in a terminal",
+    "Dumping whole request bodies or objects as fields: size, cost and leaked personal data grow fast",
+    "Field names that change per call, such as one key per user; keep the names fixed and put the variable part in the value"
+  ],
+  "example": "An on-call engineer needs every declined payment for customer 7781 in the last day. With plain text lines she searches for “declined” and reads 4,000 matches by eye, because the customer ID appears in three different phrasings. With JSON lines in CloudWatch Logs, which discovers JSON fields by itself, `filter reason = \"card_declined\" and customer_id = 7781 | fields @timestamp, order_id, trace_id` returns 12 lines, and each `trace_id` opens the full trace of that request.",
+  "snippet": {
+    "lang": "json",
+    "source": [
+      "{",
+      "  \"timestamp\": \"2026-10-06T09:14:03.120Z\",",
+      "  \"level\": \"error\",",
+      "  \"msg\": \"payment declined\",",
+      "  \"service\": \"payments\",",
+      "  \"version\": \"2.14.0\",",
+      "  \"trace_id\": \"4bf92f3577b34da6a3ce929d0e0e4736\",",
+      "  \"span_id\": \"00f067aa0ba902b7\",",
+      "  \"order_id\": 9124,",
+      "  \"customer_id\": 7781,",
+      "  \"reason\": \"card_declined\",",
+      "  \"duration_ms\": 812",
+      "}"
+    ]
+  },
+  "related": ["logs", "correlation-ids", "traces"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "The same event, three ways",
+      "intro": "One declined payment, written as a sentence, as logfmt and as JSON, and what it takes to answer “how many declines per reason in the last hour?”",
+      "corner": "Format",
+      "columns": ["The line", "Counting declines by reason"],
+      "rows": [
+        {
+          "label": "Plain text",
+          "values": [
+            "`2026-10-06 09:14:03 ERROR Payment for order 9124 declined after 812 ms (card_declined)`",
+            "A regular expression to pull out the reason; it misses lines another developer worded differently"
+          ]
+        },
+        {
+          "label": "logfmt",
+          "values": [
+            "`time=2026-10-06T09:14:03Z level=error msg=\"payment declined\" order_id=9124 reason=card_declined duration_ms=812`",
+            "Group by the `reason` field; easy to read in a terminal too, but every value is a string"
+          ]
+        },
+        {
+          "label": "JSON",
+          "values": [
+            "`{\"time\":\"2026-10-06T09:14:03Z\",\"level\":\"error\",\"msg\":\"payment declined\",\"order_id\":9124,\"reason\":\"card_declined\",\"duration_ms\":812}`",
+            "Group by `reason`; numbers stay numbers and objects can nest, at the cost of a longer line"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "code",
+      "title": "Fields once, on every line (Go’s slog)",
+      "intro": "A child logger carries the request’s fields, so every line it writes can be joined to the trace without repeating them.",
+      "lang": "go",
+      "source": [
+        "logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))",
+        "",
+        "// fields added here appear on every line this logger writes",
+        "reqLog := logger.With(\"service\", \"payments\", \"trace_id\", traceID)",
+        "",
+        "reqLog.Error(\"payment declined\", \"order_id\", 9124, \"reason\", \"card_declined\")",
+        "// {\"time\":\"2026-10-06T09:14:03.120345678Z\",\"level\":\"ERROR\",\"msg\":\"payment declined\",",
+        "//  \"service\":\"payments\",\"trace_id\":\"4bf92f35...\",\"order_id\":9124,\"reason\":\"card_declined\"}"
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "For decades log lines were sentences, and getting facts back out of them was a parsing job. Logstash’s `grok` filter exists to “parse arbitrary text and structure it” with patterns. Syslog itself tried to add fields: RFC 5424 (2009) defined structured data elements such as `[exampleSDID@32473 iut=\"3\" eventSource=\"Application\"]`, but most programs kept writing free text.",
+      "Application developers took a simpler route: write the fields yourself. At Heroku the router and internal components logged `key=value` pairs, and in 2013 Brandur Leach wrote up the style under the name it had internally, logfmt, noting that Splunk recommended the same format. Libraries made fields the default: Serilog for .NET, built “from the ground up to record structured event data”, and structlog for Python both started in 2013; in 2016 came pino, a JSON logger for Node.js, and Uber’s zap for Go, both built for speed.",
+      "Standards followed. OpenTelemetry declared its log data model stable in 2022, with fields for the trace and span IDs so a log record can point at the trace it belongs to. In August 2023 Go 1.21 added `log/slog` to the standard library, because large programs were pulling in several structured loggers through their dependencies and needed a common one."
+    ],
+    "choices": [
+      {
+        "choice": "A fixed message with the variable parts in fields",
+        "why": "With free text, every log line is a small design decision: brackets here, parentheses there. With fields the developer just adds whatever matters, adding one more never breaks a query, and statistics such as the p95 of a duration field come straight from the log search."
+      },
+      {
+        "choice": "logfmt for people and machines alike",
+        "why": "Brandur Leach described logfmt as readable enough for a person and easy enough for a parser, “even while not being optimal for either”. JSON gives up some readability in exchange for types and nesting, and is what most log stores ingest natively."
+      },
+      {
+        "choice": "One data model that any format maps onto",
+        "why": "OpenTelemetry’s log data model was designed so that existing log formats can be mapped onto it unambiguously, and it adds trace context fields so logs, traces and metrics can be joined."
+      }
+    ],
+    "timeline": [
+      { "year": "2009", "text": "RFC 5424 adds structured data elements to syslog" },
+      { "year": "2013", "text": "Serilog and structlog repositories start; logfmt is written up" },
+      { "year": "2016", "text": "pino for Node.js and Uber’s zap for Go appear" },
+      { "year": "2022", "text": "OpenTelemetry declares its log data model stable" },
+      { "year": "2023", "text": "Go 1.21 adds `log/slog` to the standard library" }
+    ],
+    "sources": [
+      { "label": "Elastic docs: Logstash grok filter plugin (“parse arbitrary text and structure it”)", "url": "https://www.elastic.co/docs/reference/logstash/plugins/plugins-filters-grok" },
+      { "label": "RFC 5424: The Syslog Protocol, structured data (March 2009)", "url": "https://www.rfc-editor.org/rfc/rfc5424.html" },
+      { "label": "Brandur Leach: logfmt (Oct 2013)", "url": "https://brandur.org/logfmt" },
+      { "label": "Serilog on GitHub (repository created February 2013)", "url": "https://github.com/serilog/serilog" },
+      { "label": "structlog on GitHub (repository created August 2013)", "url": "https://github.com/hynek/structlog" },
+      { "label": "pino on GitHub (repository created February 2016)", "url": "https://github.com/pinojs/pino" },
+      { "label": "zap on GitHub, Uber (repository created February 2016)", "url": "https://github.com/uber-go/zap" },
+      { "label": "OpenTelemetry specification PR #2387: Declare Log Data Model Stable (merged March 2022)", "url": "https://github.com/open-telemetry/opentelemetry-specification/pull/2387" },
+      { "label": "Go blog: Structured logging with slog, Jonathan Amsterdam (Aug 2023)", "url": "https://go.dev/blog/slog" }
+    ]
+  },
+  "sources": [
+    { "label": "Brandur Leach: logfmt", "url": "https://brandur.org/logfmt" },
+    { "label": "OpenTelemetry specification: Logs data model", "url": "https://opentelemetry.io/docs/specs/otel/logs/data-model/" },
+    { "label": "Go blog: Structured logging with slog (JSONHandler and TextHandler output)", "url": "https://go.dev/blog/slog" },
+    { "label": "pino README (JSON output, child loggers)", "url": "https://github.com/pinojs/pino" },
+    { "label": "zap on GitHub: structured, leveled logging in Go", "url": "https://github.com/uber-go/zap" },
+    { "label": "structlog README: structured logging for Python", "url": "https://github.com/hynek/structlog" },
+    { "label": "Serilog README: message templates and structured event data", "url": "https://github.com/serilog/serilog" },
+    { "label": "AWS docs: CloudWatch Logs Insights, supported logs and discovered fields (JSON)", "url": "https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/CWL_AnalyzeLogData-discoverable-fields.html" },
+    { "label": "AWS docs: CloudWatch Logs Insights query examples", "url": "https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/CWL_QuerySyntax-examples.html" }
+  ]
+}

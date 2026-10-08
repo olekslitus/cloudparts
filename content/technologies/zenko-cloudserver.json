@@ -1,0 +1,114 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Zenko CloudServer",
+  "concepts": ["object"],
+  "provider": "oss",
+  "vendor": "Scality",
+  "license": "Apache 2.0",
+  "website": "https://www.zenko.io/cloudserver/",
+  "repo": "https://github.com/scality/cloudserver",
+  "summary": "Scality’s open-source Node.js S3 server: a light S3 endpoint for development and tests, and a front end that can store objects in other clouds.",
+  "intro": [
+    "Zenko CloudServer is the S3 front end of Scality’s commercial storage, published as open source. It is a Node.js server that parses S3 requests, checks v2 and v4 signatures, ACLs and bucket policies, then hands metadata and data to pluggable backends. Run on its own, it keeps metadata in a local LevelDB database and object data as files on disk, or holds everything in memory, which makes it a quick, disposable S3 endpoint for tests and CI. With the `multiple` data backend, each bucket or object gets a location constraint that sends its bytes to AWS S3, Azure Blob Storage or Google Cloud Storage while CloudServer keeps the metadata, so one S3 endpoint can sit in front of several clouds.",
+    "In Scality’s products the same code is the S3 connector in front of the RING, with metadata in a separate Raft-based service (bucketd) or MongoDB and accounts in Scality’s Vault IAM service. Background work such as replication and lifecycle expiry is done by another Zenko service, Backbeat. The server you start with `docker run` is a single instance: it doesn’t spread objects over machines or keep extra copies, so durability is whatever the disk under its volumes provides."
+  ],
+  "strengths": [
+    "Starts in seconds with `docker run`; the in-memory backend gives a throwaway S3 endpoint for tests and CI",
+    "The same S3 layer Scality ships with its RING storage, with broad API coverage: versioning, object lock, bucket policies, tagging, CORS and website hosting",
+    "Can keep object data in AWS S3, Azure Blob Storage or Google Cloud Storage behind one S3 endpoint, chosen per bucket or per object",
+    "Apache 2.0 and actively developed by Scality, with new releases several times a month"
+  ],
+  "limits": [
+    "Standalone it is one process on one machine, with no replication or erasure coding: not a replacement for a MinIO cluster",
+    "Leans on Scality’s wider stack: standalone, accounts come from a JSON file or environment variables, and lifecycle expiry and replication need Backbeat",
+    "Its public face is stale: the `zenko/cloudserver` image on Docker Hub was last updated in January 2023 and the Zenko site still shows 2019 posts; current images are on GitHub’s registry, `ghcr.io/scality/cloudserver`, and the docs still use the old image",
+    "Only accepts requests addressed to host names it knows (`localhost` and `127.0.0.1` by default); add others with the `ENDPOINT` variable or in `config.json`"
+  ],
+  "worksWith": [
+    { "id": "s3", "how": "speaks the API of" },
+    { "id": "azure-blob", "how": "can store object data in" },
+    { "id": "gcs", "how": "can store object data in" },
+    { "id": "mongodb", "how": "can keep its metadata in" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "A throwaway S3 endpoint for tests",
+    "source": [
+      "# in-memory backend: everything is gone when the container stops",
+      "# (the image is built for amd64; Docker emulates it on Apple silicon)",
+      "docker run -d --name cloudserver -p 8000:8000 --platform linux/amd64 \\",
+      "  -e S3BACKEND=mem \\",
+      "  -e SCALITY_ACCESS_KEY_ID=devkey -e SCALITY_SECRET_ACCESS_KEY=devsecret123 \\",
+      "  ghcr.io/scality/cloudserver:9.4.7",
+      "",
+      "export AWS_ACCESS_KEY_ID=devkey AWS_SECRET_ACCESS_KEY=devsecret123 AWS_DEFAULT_REGION=us-east-1",
+      "aws s3 mb s3://test-fixtures --endpoint-url http://localhost:8000",
+      "aws s3 cp ./fixtures/ s3://test-fixtures/ --recursive --endpoint-url http://localhost:8000",
+      "aws s3api put-bucket-versioning --bucket test-fixtures \\",
+      "  --versioning-configuration Status=Enabled --endpoint-url http://localhost:8000",
+      "",
+      "# to keep data instead, swap S3BACKEND=mem for:",
+      "#   -e S3BACKEND=file -e REMOTE_MANAGEMENT_DISABLE=1 \\",
+      "#   -v cs-data:/usr/src/app/localData -v cs-meta:/usr/src/app/localMetadata"
+    ]
+  },
+  "sections": [
+    {
+      "type": "text",
+      "title": "Moving from MinIO",
+      "body": [
+        "CloudServer is a good stand-in for MinIO in one common job: the S3 container in a Compose file or CI pipeline that tests code against S3. Swap the image, set `S3BACKEND=mem` (or `file` with two volumes), pass your keys as `SCALITY_ACCESS_KEY_ID` and `SCALITY_SECRET_ACCESS_KEY`, and add the service name other containers use, for example `-e ENDPOINT=s3`, so requests to `http://s3:8000` are accepted. Plain S3 calls work unchanged; anything that used MinIO’s own admin API through `mc admin` won’t.",
+        "It is not a replacement for a production MinIO cluster: the free server is a single node, and Scality’s distributed S3 storage is its commercial RING and ARTESCA products. To copy existing data anyway, define the MinIO endpoint and CloudServer as two S3 remotes in rclone, run `rclone sync minio:bucket cloudserver:bucket --checksum`, and compare both sides with `rclone check`. Users, policies and lifecycle rules don’t travel with the objects and need setting up again."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Scality, founded in 2009 by Jérôme Lecat, Giorgio Regni and three others, released the first version of RING, its distributed object and file storage software, in 2010. In June 2016 it published the code behind RING’s S3 interface as open source under the Apache 2.0 licence, as Scality S3 Server, a Node.js server that runs in a Docker container, so developers could build S3 applications and run them on premises, on AWS or both without code changes.",
+      "A year and 600,000 Docker pulls later, in 2017, Scality renamed it CloudServer and made it the core of Zenko, an open-source “multi-cloud data controller”: one S3 API in front of storage on premises and in AWS S3, Azure Blob Storage and Google Cloud Storage. Zenko also offered Orbit, a hosted portal for managing data placement and replication. A commercially supported Zenko followed in 2018.",
+      "The community side has since gone quiet: the Zenko website’s newest posts are from 2019 and the Docker Hub image stopped updating in early 2023. The code has not. CloudServer remains part of Scality’s products and gets new releases on GitHub several times a month."
+    ],
+    "choices": [
+      { "choice": "Open-source the S3 layer of the commercial product", "why": "Developers get the same S3 behaviour on a laptop as on Scality’s RING, so applications built against the free server move to the paid one unchanged." },
+      { "choice": "Pluggable metadata and data backends", "why": "One server can run in memory for tests, on a local disk, in front of the RING, or against public clouds, depending only on configuration." },
+      { "choice": "Store objects in their raw form in each cloud", "why": "Many tools compress, split or wrap data before sending it to the cloud, so only that tool can read it back. Zenko writes plain objects, which any client of the target cloud can read." }
+    ],
+    "timeline": [
+      { "year": "2009", "text": "Scality founded" },
+      { "year": "2010", "text": "First version of Scality RING released" },
+      { "year": "2016", "text": "S3 front end open-sourced as Scality S3 Server (June)" },
+      { "year": "2017", "text": "Renamed CloudServer; becomes the core of Zenko" },
+      { "year": "2018", "text": "Commercially supported Zenko released" },
+      { "year": "2026", "text": "9.4 releases continue on GitHub" }
+    ],
+    "sources": [
+      { "label": "Zenko: CloudServer", "url": "https://www.zenko.io/cloudserver/" },
+      { "label": "Wikipedia: Scality", "url": "https://en.wikipedia.org/wiki/Scality" },
+      { "label": "scality/cloudserver on GitHub", "url": "https://github.com/scality/cloudserver" },
+      { "label": "scality/cloudserver releases", "url": "https://github.com/scality/cloudserver/releases" },
+      { "label": "zenko/cloudserver on Docker Hub", "url": "https://hub.docker.com/r/zenko/cloudserver" },
+      { "label": "Zenko", "url": "https://www.zenko.io/" }
+    ]
+  },
+  "sources": [
+    { "label": "scality/cloudserver on GitHub", "url": "https://github.com/scality/cloudserver" },
+    { "label": "Zenko: CloudServer", "url": "https://www.zenko.io/cloudserver/" },
+    { "label": "CloudServer docs: Docker environment variables (9.4.7)", "url": "https://github.com/scality/cloudserver/blob/9.4.7/docs/DOCKER.rst" },
+    { "label": "CloudServer docs: Using public clouds as data backends (9.4.7)", "url": "https://github.com/scality/cloudserver/blob/9.4.7/docs/USING_PUBLIC_CLOUDS.rst" },
+    { "label": "CloudServer: backend and architecture notes (9.4.7)", "url": "https://github.com/scality/cloudserver/blob/9.4.7/CLAUDE.md" },
+    { "label": "CloudServer: S3 connector design (9.4.7)", "url": "https://github.com/scality/cloudserver/blob/9.4.7/DESIGN.md" },
+    { "label": "CloudServer: implemented S3 API handlers (9.4.7)", "url": "https://github.com/scality/cloudserver/tree/9.4.7/lib/api" },
+    { "label": "CloudServer: default config.json with restEndpoints (9.4.7)", "url": "https://github.com/scality/cloudserver/blob/9.4.7/config.json" },
+    { "label": "CloudServer docs: Bucket policies (9.4.7)", "url": "https://github.com/scality/cloudserver/blob/9.4.7/docs/BUCKET_POLICIES.md" },
+    { "label": "scality/backbeat on GitHub", "url": "https://github.com/scality/backbeat" },
+    { "label": "scality/cloudserver releases", "url": "https://github.com/scality/cloudserver/releases" },
+    { "label": "CloudServer container images on GitHub Packages", "url": "https://github.com/scality/cloudserver/pkgs/container/cloudserver" },
+    { "label": "zenko/cloudserver on Docker Hub", "url": "https://hub.docker.com/r/zenko/cloudserver" },
+    { "label": "Wikipedia: Scality", "url": "https://en.wikipedia.org/wiki/Scality" },
+    { "label": "Zenko", "url": "https://www.zenko.io/" },
+    { "label": "rclone: Amazon S3 and compatible storage", "url": "https://rclone.org/s3/" },
+    { "label": "rclone sync", "url": "https://rclone.org/commands/rclone_sync/" },
+    { "label": "rclone check", "url": "https://rclone.org/commands/rclone_check/" }
+  ],
+  "checked": "2026-10-05"
+}

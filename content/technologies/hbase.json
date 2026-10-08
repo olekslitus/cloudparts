@@ -1,0 +1,139 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Apache HBase",
+  "concepts": ["wide-column"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://hbase.apache.org/",
+  "repo": "https://github.com/apache/hbase",
+  "summary": "The Hadoop world’s Bigtable: huge sorted tables split into regions, each served by one RegionServer, with files kept in HDFS.",
+  "intro": [
+    "An HBase table is a set of rows sorted by row key (raw bytes), with columns grouped into column families. The table is cut into regions, each a contiguous range of row keys served by exactly one RegionServer. Regions split as they grow, and the HMaster assigns and rebalances them; ZooKeeper tracks which master is active. A client looks up the region in the `hbase:meta` catalog table, then talks to that RegionServer directly. Each write is appended to the server’s write-ahead log (WAL) in HDFS, then held in the MemStore for its column family, which is later flushed to an HFile (a format based on Bigtable’s SSTable) and compacted. Because one server owns each row, reads and writes are strongly consistent and every mutation is atomic within a row, but not across rows.",
+    "That design has a cost: when a RegionServer dies, its regions can’t be read until they are reassigned and recovered, and detecting the failure alone takes 20 to 30 seconds. Rows are sorted, so sequential keys such as timestamps send every write to one region; row keys are usually salted, hashed or reversed to spread the load. You access HBase through its Java API, REST or Thrift, and Apache Phoenix adds SQL and JDBC on top. HBase is free under Apache 2.0. HBase 3.0.0 (August 2026) requires JDK 17 and drops Hadoop 2; the 2.6 and 2.5 lines still get releases. Amazon EMR runs it, optionally with its files in S3; Azure HDInsight 5.1 ships the older HBase 2.4; Google Cloud Bigtable accepts a customised HBase client."
+  ],
+  "strengths": [
+    "Strongly consistent reads and writes, atomic per row, with check-and-put for compare-and-swap",
+    "Scales to billions of rows by splitting regions automatically and adding RegionServers",
+    "Rows sorted by key make scans over adjacent rows cheap",
+    "Fits the Hadoop stack: files in HDFS, and Spark, Hive, Impala and Flink can read and write tables",
+    "Code written against the HBase API can move to Google Cloud Bigtable"
+  ],
+  "limits": [
+    "A heavy stack to run: HDFS, ZooKeeper, HMaster and RegionServers; its own guide suggests it only for hundreds of millions of rows or more, on at least five DataNodes",
+    "When a RegionServer fails, its regions are unavailable until reassigned, and detection alone takes 20 to 30 seconds",
+    "No secondary indexes, typed columns or multi-row transactions, and a poorly chosen row key sends all traffic to one region",
+    "Its ecosystem is shrinking: Facebook moved Messenger off HBase in 2018, HDInsight still ships HBase 2.4, and Phoenix doesn’t yet support HBase 3.0",
+    "HBase 3.0 needs JDK 17, drops Hadoop 2 and puts the master in the client’s path for finding regions"
+  ],
+  "worksWith": [
+    { "id": "hadoop", "how": "keeps its WAL and HFiles in HDFS from" },
+    { "id": "spark", "how": "is read and written, via hbase-spark, by" },
+    { "id": "hive", "how": "is queried as external tables by" },
+    { "id": "impala", "how": "is queried with SQL by" },
+    { "id": "flink", "how": "is read and written, via a connector, by" },
+    { "id": "s3", "how": "can keep its HFiles, on Amazon EMR, in" },
+    { "id": "hudi", "how": "can serve as the record index for" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "A pre-split table with salted, reverse-timestamp row keys, in the HBase shell",
+    "source": [
+      "hbase shell <<'EOF'",
+      "# four regions from the start; keys begin with one hex salt character",
+      "create 'metrics', {NAME => 'd', VERSIONS => 1}, {SPLITS => ['4', '8', 'c']}",
+      "",
+      "# key = salt (first hex digit of md5(host)) # host # (Long.MAX_VALUE - epoch ms),",
+      "# so writes spread across regions and each host's newest rows sort first",
+      "put 'metrics', 'a#web-01#9223370245568575807', 'd:cpu', '0.72'",
+      "put 'metrics', 'a#web-01#9223370245568575807', 'd:mem', '0.41'",
+      "",
+      "get 'metrics', 'a#web-01#9223370245568575807'",
+      "scan 'metrics', {ROWPREFIXFILTER => 'a#web-01#', LIMIT => 10}",
+      "EOF"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "HBase or Cassandra?",
+      "intro": "Both store wide rows in sorted files, but they split and replicate data in opposite ways. From each project’s docs:",
+      "columns": ["Apache HBase", "Apache Cassandra"],
+      "rows": [
+        { "label": "Lineage", "values": ["Bigtable: one server owns each range of rows", "Dynamo plus Bigtable: equal nodes, each partition on several replicas"] },
+        { "label": "Consistency", "values": ["Strong, with atomic mutations within a row", "Chosen per request; conflicting writes resolve by timestamp"] },
+        { "label": "When a server fails", "values": ["Its regions are unreadable until reassigned (detection takes 20 to 30 seconds)", "Other replicas keep serving if the consistency level can still be met"] },
+        { "label": "Ordering", "values": ["Rows sorted by key across the whole table", "Partitions placed by hash; rows sorted only within a partition"] },
+        { "label": "Storage", "values": ["HFiles and WAL in HDFS, or S3 on Amazon EMR", "SSTables and commit log on each node’s own disks"] },
+        { "label": "Processes to run", "values": ["HDFS, ZooKeeper, HMaster, RegionServers", "One kind of node"] }
+      ],
+      "notes": [
+        "Facebook tested both in 2010 and chose HBase for Messages because of its simpler consistency model and its HDFS foundation; in 2018 it moved Messenger to MyRocks."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Where HBase runs today",
+      "items": [
+        { "name": "Self-managed", "tag": "Apache 2.0", "text": "3.0.0 for new clusters on JDK 17 and Hadoop 3, or the maintained 2.6 and 2.5 lines. You also run HDFS and ZooKeeper." },
+        { "name": "Amazon EMR", "tag": "HBase 2.6.4", "text": "EMR 7.14.0 includes HBase 2.6.4. Since EMR 5.2.0 the HBase root directory, store files and metadata can live in S3, so clusters are sized for compute; only one cluster at a time writes to that location, plus optional read replicas." },
+        { "name": "Azure HDInsight", "tag": "HBase 2.4.11", "text": "HDInsight 5.1 ships HBase 2.4.11 and Phoenix 5.1.2, a line the HBase project no longer lists for download. HDInsight 4.0 and 5.0 were retired on March 31, 2025; no retirement date is announced for 5.1." },
+        { "name": "Google Cloud Bigtable", "tag": "HBase-compatible client", "text": "Not HBase, but Google offers a customised HBase client for Java. Coprocessors, namespaces, snapshots and region management aren’t supported, since Bigtable manages its tablets itself." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Google’s 2006 Bigtable paper described a store of sorted rows on top of its file system. Hadoop had copied that file system as HDFS, but had no way to read and update single records in huge tables. In February 2007 Mike Cafarella posted code for “HBase, a BigTable-like file store” to Hadoop’s issue tracker. Jim Kellerman and Michael Stack, at the search start-up Powerset, took it forward as a Hadoop contrib module whose goal was a system “as similar to Google’s Bigtable as possible”. The first working version shipped with Hadoop 0.15.0 in October 2007.",
+      "HBase became a top-level Apache project in April 2010. That November Facebook chose it over MySQL and Cassandra for its new Messages system. HBase 1.0 followed in February 2015, when the ASF named Apple, Facebook, Pinterest, Salesforce, Xiaomi and Yahoo among its users.",
+      "Use has thinned since. In 2018 Facebook moved Messenger from HBase to MyRocks, to serve data from flash and fit its MySQL replication topology. Development continued: 2.0 came in 2018, and 3.0, eight years later, in August 2026."
+    ],
+    "choices": [
+      { "choice": "Copy Bigtable rather than invent a new design", "why": "The project’s stated goal was to stay as close to Bigtable as possible and avoid reinventing the wheel, so HFiles follow Bigtable’s SSTables and regions follow its tablets." },
+      { "choice": "Keep the files in HDFS", "why": "HDFS already gave replication, end-to-end checksums and rebalancing, so HBase didn’t need its own replication inside a cluster, and Hadoop teams already knew how to run it." },
+      { "choice": "One server per region", "why": "Routing all reads and writes for a row through one RegionServer orders every write and lets reads see the latest data. The price is a gap in availability while a failed server’s regions are recovered." }
+    ],
+    "timeline": [
+      { "year": "2006", "text": "Google publishes the Bigtable paper" },
+      { "year": "2007", "text": "Mike Cafarella posts HBase code; it ships in Hadoop 0.15.0" },
+      { "year": "2010", "text": "Top-level Apache project in April; Facebook picks it for Messages" },
+      { "year": "2015", "text": "HBase 1.0 is released in February" },
+      { "year": "2018", "text": "HBase 2.0; Facebook moves Messenger from HBase to MyRocks" },
+      { "year": "2026", "text": "HBase 3.0.0 requires JDK 17 and drops Hadoop 2" }
+    ],
+    "sources": [
+      { "label": "Chang et al.: Bigtable, a distributed storage system for structured data (OSDI 2006)", "url": "https://research.google/pubs/bigtable-a-distributed-storage-system-for-structured-data/" },
+      { "label": "Apache JIRA: HADOOP-1045, Code for HBase (Mike Cafarella, February 2007)", "url": "https://issues.apache.org/jira/browse/HADOOP-1045" },
+      { "label": "Hadoop wiki: HBase, goals and contributors at Powerset (January 2008 snapshot)", "url": "http://wiki.apache.org/hadoop/Hbase", "archive": "https://web.archive.org/web/20080120121200/http://wiki.apache.org:80/hadoop/Hbase" },
+      { "label": "Wikipedia: Apache HBase (began at Powerset)", "url": "https://en.wikipedia.org/wiki/Apache_HBase" },
+      { "label": "Hadoop 0.15.0 release (October 2007)", "url": "https://hadoop.apache.org/release/0.15.0.html" },
+      { "label": "ASF board minutes, April 21, 2010: Establish the Apache HBase Project", "url": "https://www.apache.org/foundation/records/minutes/2010/board_minutes_2010_04_21.txt" },
+      { "label": "Engineering at Meta: The underlying technology of Messages (Nov 2010)", "url": "https://engineering.fb.com/2010/11/15/core-infra/the-underlying-technology-of-messages/" },
+      { "label": "ASF: The Apache Software Foundation announces Apache HBase v1.0 (Feb 2015)", "url": "https://news.apache.org/foundation/entry/the_apache_software_foundation_announces72" },
+      { "label": "apache/hbase on GitHub: tag rel/2.0.0 (April 2018)", "url": "https://github.com/apache/hbase/releases/tag/rel/2.0.0" },
+      { "label": "Engineering at Meta: Migrating Messenger storage to optimize performance (June 2018)", "url": "https://engineering.fb.com/2018/06/26/core-infra/migrating-messenger-storage-to-optimize-performance/" },
+      { "label": "HBase user list: [ANNOUNCE] Apache HBase 3.0.0 is now available (August 2026)", "url": "https://lists.apache.org/thread/3cpovt16ngkso78hj2c0pdh7l9nrpnw5" }
+    ]
+  },
+  "sources": [
+    { "label": "Apache HBase Reference Guide (overview, when to use, catalog tables, master, WAL, regions, MemStore, HFile, row key design, region replicas)", "url": "https://hbase.apache.org/book.html" },
+    { "label": "Apache HBase: ACID semantics (atomic within a row, checkAndPut)", "url": "https://hbase.apache.org/acid-semantics.html" },
+    { "label": "Apache HBase downloads (3.0.0, 2.6.7, 2.5.16)", "url": "https://hbase.apache.org/downloads.html" },
+    { "label": "HBase user list: [ANNOUNCE] Apache HBase 3.0.0 (JDK 17, no Hadoop 2)", "url": "https://lists.apache.org/thread/3cpovt16ngkso78hj2c0pdh7l9nrpnw5" },
+    { "label": "Apache Phoenix downloads (supported HBase versions)", "url": "https://phoenix.apache.org/download.html" },
+    { "label": "Apache HBase connectors (Spark, Kafka proxy)", "url": "https://github.com/apache/hbase-connectors" },
+    { "label": "Amazon EMR Release Guide: Apache HBase (versions per release)", "url": "https://docs.aws.amazon.com/emr/latest/ReleaseGuide/emr-hbase.html" },
+    { "label": "Amazon EMR Release Guide: HBase on Amazon S3", "url": "https://docs.aws.amazon.com/emr/latest/ReleaseGuide/emr-hbase-s3.html" },
+    { "label": "Microsoft Learn: HDInsight versions and retirement dates", "url": "https://learn.microsoft.com/en-us/azure/hdinsight/hdinsight-component-versioning" },
+    { "label": "Microsoft Learn: HDInsight 5.x component versions (HBase 2.4.11, Phoenix 5.1.2)", "url": "https://learn.microsoft.com/en-us/azure/hdinsight/hdinsight-5x-component-versioning" },
+    { "label": "Google Cloud docs: Bigtable and the HBase API", "url": "https://docs.cloud.google.com/bigtable/docs/hbase-bigtable" },
+    { "label": "Google Cloud docs: HBase and Bigtable differences", "url": "https://docs.cloud.google.com/bigtable/docs/hbase-differences" },
+    { "label": "Hive wiki: HBase integration", "url": "https://cwiki.apache.org/confluence/display/Hive/HBaseIntegration" },
+    { "label": "Impala docs: Using Impala to query HBase tables", "url": "https://impala.apache.org/docs/build/html/topics/impala_hbase.html" },
+    { "label": "Flink docs: HBase SQL connector", "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/connectors/table/hbase/" },
+    { "label": "Hudi docs: Indexes (HBASE index type)", "url": "https://hudi.apache.org/docs/indexes" },
+    { "label": "Cassandra docs: Dynamo (replication, consistency levels, last write wins)", "url": "https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html" },
+    { "label": "Cassandra docs: Storage engine (partitions in token order)", "url": "https://cassandra.apache.org/doc/latest/cassandra/architecture/storage-engine.html" }
+  ],
+  "checked": "2026-10-06"
+}

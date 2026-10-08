@@ -1,0 +1,191 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "ksqlDB",
+  "concepts": ["stream-processing"],
+  "provider": "vendor",
+  "vendor": "Confluent (an IBM company)",
+  "license": "Confluent Community License (source-available, not OSI open source); Apache 2.0 until December 2018",
+  "website": "https://www.confluent.io/product/ksqldb/",
+  "repo": "https://github.com/confluentinc/ksql",
+  "summary": "Confluent’s SQL server for Kafka: queries that run forever, turning topics into new topics and into tables you can look up.",
+  "intro": [
+    "ksqlDB is a server, or a group of servers, that sits next to a Kafka cluster. You declare a `STREAM` or a `TABLE` over an existing topic and write SQL. A persistent query (`CREATE STREAM AS SELECT` or `CREATE TABLE AS SELECT`) is compiled into a Kafka Streams application that runs in the background on the servers, writing its results to a new topic and, for tables, keeping them in local state stores. Clients then ask in two ways: a push query (`EMIT CHANGES`) holds a connection open and streams every change, while a pull query returns the current value for a key and closes, like a database lookup. Servers with the same `ksql.service.id` share the work, and in interactive mode they agree on the statements to run through an internal command topic. ksqlDB can also run Kafka Connect connectors, embedded or on an existing Connect cluster.",
+    "The code is on GitHub under the Confluent Community License: you may use, change and redistribute it, but not offer it as a hosted service that competes with Confluent. The last standalone release, 0.29.0, came out in June 2023; ksqlDB now ships as part of Confluent Platform and as a managed service in Confluent Cloud, billed per Confluent Streaming Unit (CSU) per hour in clusters of 4 to 28 CSUs. For new work, Confluent Cloud’s docs now recommend its Flink service; ksqlDB “remains fully supported for existing applications”. Confluent has been part of IBM since March 2026."
+  ],
+  "strengths": [
+    "Stream processing in SQL: filters, joins and windowed aggregations over Kafka topics without writing Java",
+    "Tables you can query: a pull query answers a key lookup from state kept up to date as events arrive",
+    "Push queries stream every change to a client over one long-lived HTTP connection",
+    "Runs on Kafka Streams, so it inherits its local state stores, changelog backups and exactly-once mode",
+    "Can create and manage Kafka Connect connectors, such as a JDBC source, from the same SQL"
+  ],
+  "limits": [
+    "Not open source: the Confluent Community License forbids running it as a competing hosted service",
+    "Winding down: no standalone release since 0.29.0 (June 2023), and Confluent points new Confluent Cloud work to Flink",
+    "Pull queries are key lookups by default; scans need a setting, and the docs warn of deadlocks under many concurrent pull queries",
+    "Confluent Cloud limits: no user-defined functions, 40 persistent queries per cluster, no Enterprise clusters, and resizing goes through support",
+    "Kafka only: every source and result is a Kafka topic, and each persistent query adds internal topics and local state"
+  ],
+  "worksWith": [
+    { "id": "kafka", "how": "runs continuous SQL queries over topics in" },
+    { "id": "postgresql", "how": "pulls tables via a JDBC connector from" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "A stream, a table kept up to date by a persistent query, then pull and push queries",
+    "source": [
+      "-- register a stream over a topic (created with 6 partitions if missing)",
+      "CREATE STREAM pageviews (user_id VARCHAR KEY, page VARCHAR)",
+      "  WITH (KAFKA_TOPIC='pageviews', VALUE_FORMAT='JSON', PARTITIONS=6);",
+      "",
+      "INSERT INTO pageviews (user_id, page) VALUES ('u-42', '/pricing');",
+      "",
+      "-- persistent query: runs on the servers and keeps this table current",
+      "CREATE TABLE views_per_user AS",
+      "  SELECT user_id, COUNT(*) AS views",
+      "  FROM pageviews",
+      "  GROUP BY user_id;",
+      "",
+      "-- pull query: the value right now, then the query ends",
+      "SELECT views FROM views_per_user WHERE user_id = 'u-42';",
+      "",
+      "-- push query: stay connected and receive every change",
+      "SELECT user_id, views FROM views_per_user EMIT CHANGES;",
+      "",
+      "-- views per user per one-minute window",
+      "CREATE TABLE views_per_minute AS",
+      "  SELECT user_id, COUNT(*) AS views",
+      "  FROM pageviews",
+      "  WINDOW TUMBLING (SIZE 1 MINUTE)",
+      "  GROUP BY user_id;"
+    ]
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "Ways to run it in 2026",
+      "intro": "The same engine comes in three forms, and only two of them still get releases.",
+      "items": [
+        {
+          "name": "Standalone ksqlDB",
+          "tag": "frozen at 0.29.0",
+          "text": "The `confluentinc/ksqldb-server` image and the docs at docs.ksqldb.io. The last release was 0.29.0 in June 2023. The GitHub repository still gets fixes and dependency updates, but on Confluent Platform branches."
+        },
+        {
+          "name": "Confluent Platform",
+          "tag": "self-managed",
+          "text": "Ships as `cp-ksqldb-server`, versioned with the rest of the platform (7.x and 8.x lines in 2026). The code stays under the Confluent Community License; longer support comes with a paid Confluent Platform subscription."
+        },
+        {
+          "name": "Confluent Cloud",
+          "tag": "per CSU-hour",
+          "text": "Managed clusters of 4, 8, 12, 16, 20, 24 or 28 CSUs; 8 CSUs or more get high availability. Prices vary by cloud and region and are shown in the console. Supported for existing apps, with Flink recommended for new ones."
+        }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Kafka Streams made stream processing a library, but you still had to write Java. In August 2017 Confluent co-founder Neha Narkhede announced KSQL, “a streaming SQL engine for Apache Kafka”, as a developer preview. A query such as counting errors per one-minute tumbling window became a `CREATE TABLE ... AS SELECT` statement, which KSQL turned into a Kafka Streams application that ran indefinitely.",
+      "KSQL started under Apache 2.0. In December 2018, Jay Kreps moved it and other Confluent components to the new Confluent Community License: the code could still be downloaded, changed and redistributed, but “you cannot create a KSQL-as-a-service offering”, a rule aimed at cloud providers. In November 2019 a release “so significant that we’re giving it a new name” became ksqlDB. It added pull queries, which read the current value from a materialized table, and connector management, so one system could ingest, process and serve data.",
+      "Confluent then bet on Apache Flink. It agreed to buy Immerok, a managed Flink start-up, in January 2023, and made Flink generally available in Confluent Cloud in March 2024. ksqlDB’s last standalone release, 0.29.0, came out in June 2023. IBM completed its acquisition of Confluent on 17 March 2026."
+    ],
+    "choices": [
+      {
+        "choice": "SQL compiled to Kafka Streams, not a new engine",
+        "why": "KSQL reused Kafka Streams’ partitioning, local state and fault tolerance, so a SQL statement became an ordinary Streams application and Confluent didn’t have to build a second runtime."
+      },
+      {
+        "choice": "Streams and tables as SQL objects",
+        "why": "They map directly onto Kafka Streams’ `KStream` and `KTable`: a stream is a sequence of facts, a table the latest value per key."
+      },
+      {
+        "choice": "Push and pull queries",
+        "why": "Applications need both a live feed of changes and request-and-response lookups. Serving lookups from the state stores saves copying results into a separate database."
+      },
+      {
+        "choice": "A source-available licence",
+        "why": "Confluent wanted to keep cloud providers from selling KSQL as a service while leaving the code free for everyone else to use, change and embed."
+      }
+    ],
+    "timeline": [
+      { "year": "2017", "text": "KSQL announced as a developer preview in August" },
+      { "year": "2018", "text": "Moves from Apache 2.0 to the Confluent Community License in December" },
+      { "year": "2019", "text": "Renamed ksqlDB, adding pull queries and connector management" },
+      { "year": "2023", "text": "Confluent agrees to buy Immerok for Flink; last standalone release, 0.29.0" },
+      { "year": "2024", "text": "Flink becomes generally available in Confluent Cloud" },
+      { "year": "2026", "text": "IBM completes its acquisition of Confluent in March" }
+    ],
+    "sources": [
+      {
+        "label": "Neha Narkhede (Confluent): Introducing KSQL, streaming SQL for Apache Kafka (Aug 2017)",
+        "url": "https://www.confluent.io/blog/ksql-streaming-sql-for-apache-kafka/"
+      },
+      {
+        "label": "Jay Kreps (Confluent): License changes for Confluent Platform (Dec 2018)",
+        "url": "https://www.confluent.io/blog/license-changes-confluent-platform/"
+      },
+      { "label": "Jay Kreps (Confluent): Introducing ksqlDB (Nov 2019)", "url": "https://www.confluent.io/blog/intro-to-ksqldb-sql-database-streaming/" },
+      {
+        "label": "Jay Kreps (Confluent): Confluent + Immerok, cloud native Kafka meets cloud native Flink (Jan 2023)",
+        "url": "https://www.confluent.io/blog/cloud-kafka-meets-cloud-flink-with-confluent-and-immerok/"
+      },
+      {
+        "label": "Confluent blog: Confluent Cloud for Apache Flink is now generally available (Mar 2024)",
+        "url": "https://www.confluent.io/blog/serverless-flink-confluent-cloud-generally-available/"
+      },
+      { "label": "ksqlDB CHANGELOG (0.29.0, 22 June 2023)", "url": "https://github.com/confluentinc/ksql/blob/master/CHANGELOG.md" },
+      {
+        "label": "IBM press release: IBM completes acquisition of Confluent (17 March 2026)",
+        "url": "https://newsroom.ibm.com/2026-03-17-ibm-completes-acquisition-of-confluent,-making-real-time-data-the-engine-of-enterprise-ai-and-agents"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "ksqlDB docs: How it works (engine, Kafka Streams topologies, command topic, service id)",
+      "url": "https://docs.ksqldb.io/en/latest/operate-and-deploy/how-it-works/"
+    },
+    { "label": "ksqlDB docs: Queries (persistent, push and pull)", "url": "https://docs.ksqldb.io/en/latest/concepts/queries/" },
+    {
+      "label": "ksqlDB docs: SELECT (pull query): key lookups, table scans, deadlock warning",
+      "url": "https://docs.ksqldb.io/en/latest/developer-guide/ksqldb-reference/select-pull-query/"
+    },
+    { "label": "ksqlDB docs: CREATE STREAM", "url": "https://docs.ksqldb.io/en/latest/developer-guide/ksqldb-reference/create-stream/" },
+    {
+      "label": "ksqlDB docs: CREATE TABLE AS SELECT (windowed tables)",
+      "url": "https://docs.ksqldb.io/en/latest/developer-guide/ksqldb-reference/create-table-as-select/"
+    },
+    { "label": "ksqlDB docs: Processing guarantees (exactly-once)", "url": "https://docs.ksqldb.io/en/latest/operate-and-deploy/exactly-once-semantics/" },
+    { "label": "ksqlDB docs: Connectors (embedded or external Connect, JDBC)", "url": "https://docs.ksqldb.io/en/latest/concepts/connectors/" },
+    {
+      "label": "ksqlDB docs: CREATE CONNECTOR (JDBC source from PostgreSQL)",
+      "url": "https://docs.ksqldb.io/en/latest/developer-guide/ksqldb-reference/create-connector/"
+    },
+    { "label": "ksqlDB docs: Changelog (latest standalone version 0.29.0)", "url": "https://docs.ksqldb.io/en/latest/operate-and-deploy/changelog/" },
+    {
+      "label": "Confluent Cloud docs: ksqlDB overview (Flink recommended for new workloads, CSU sizes, limits)",
+      "url": "https://docs.confluent.io/cloud/current/ksqldb/overview.html"
+    },
+    { "label": "Confluent Platform docs: ksqlDB overview", "url": "https://docs.confluent.io/platform/current/ksqldb/overview.html" },
+    { "label": "Docker Hub: confluentinc/cp-ksqldb-server tags", "url": "https://hub.docker.com/r/confluentinc/cp-ksqldb-server/tags" },
+    {
+      "label": "Confluent Community License FAQ (source-available, what it forbids, support)",
+      "url": "https://www.confluent.io/confluent-community-license-faq/"
+    },
+    { "label": "ksqlDB repository LICENSE (Confluent Community License 1.0)", "url": "https://github.com/confluentinc/ksql/blob/master/LICENSE" },
+    {
+      "label": "ksqlDB repository: recent commits (fixes and dependency bumps merged across 7.x and 8.x branches)",
+      "url": "https://github.com/confluentinc/ksql/commits/master"
+    },
+    {
+      "label": "Confluent docs: JDBC source connector (PostgreSQL support)",
+      "url": "https://docs.confluent.io/kafka-connectors/jdbc/current/source-connector/overview.html"
+    },
+    {
+      "label": "IBM press release: IBM completes acquisition of Confluent (17 March 2026)",
+      "url": "https://newsroom.ibm.com/2026-03-17-ibm-completes-acquisition-of-confluent,-making-real-time-data-the-engine-of-enterprise-ai-and-agents"
+    }
+  ],
+  "checked": "2026-10-05"
+}

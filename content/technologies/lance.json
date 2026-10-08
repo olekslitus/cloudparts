@@ -1,0 +1,241 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Lance",
+  "concepts": [
+    "table-formats",
+    "file-formats",
+    "lakehouse"
+  ],
+  "kinds": ["columnar-files"],
+  "provider": "oss",
+  "vendor": "Lance community, started by LanceDB",
+  "license": "Apache 2.0",
+  "website": "https://lance.org/",
+  "repo": "https://github.com/lance-format/lance",
+  "summary": "A file and table format for AI data: columnar like Parquet, but fast at fetching single rows, with vector and full-text indexes, versions and room for images and video.",
+  "intro": [
+    "Parquet is built for scans: read a few columns of every row. AI workloads also need the opposite. Training samples random rows, search fetches the 10 nearest matches, and a pipeline backfills a new embedding column. Lance is a columnar file format that keeps scans fast but drops Parquet’s row groups, using encodings that let a reader jump straight to one row. Its authors measured this in a 2025 paper, and the project claims around 100× faster random access than Parquet.",
+    "On top of the files sits a table format, much like Iceberg or Delta Lake. Rows are grouped into fragments, and each fragment can have several data files that each hold some of its columns, so adding a column means writing new files rather than rewriting old ones. Every commit writes a new manifest in `_versions/`, which gives ACID transactions, time travel, tags and branches. Deletes are recorded in deletion files instead of rewriting data. Indexes are part of the spec and live in `_indices/`: vector indexes such as IVF_PQ and HNSW, full-text search, and scalar indexes such as B-tree and bitmap. Images, audio and video can sit in the same table as blobs, next to their embeddings and labels."
+  ],
+  "strengths": [
+    "Random reads of single rows are fast, so shuffled training and search don’t need a separate copy of the data",
+    "Vector, full-text and scalar indexes are stored with the table, so search runs on object storage without a separate vector database",
+    "Adding or backfilling a column writes only that column’s new files",
+    "Versions, tags and branches give reproducible training sets and easy rollbacks",
+    "Images, video, audio and embeddings live alongside ordinary columns"
+  ],
+  "limits": [
+    "Far fewer engines read it than Parquet or Iceberg",
+    "Compacting files to remove deleted rows moves rows to new addresses, so every index has to be remapped, and compaction can clash with index updates",
+    "Most tooling is Python and Rust; the Spark, Trino and Flink connectors are younger",
+    "Built for AI and search data; for plain BI tables, Parquet under Iceberg or Delta Lake is the safer default"
+  ],
+  "worksWith": [
+    {
+      "id": "s3",
+      "how": "stores tables in"
+    },
+    {
+      "id": "parquet",
+      "how": "converts data from"
+    }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Write a Lance table, search it and read an old version",
+    "source": [
+      "import lance",
+      "",
+      "# from a pandas DataFrame, Arrow table or Parquet dataset",
+      "ds = lance.write_dataset(images, \"s3://acme-ml/images.lance\")",
+      "",
+      "# a vector index, stored inside the table",
+      "ds.create_index(\"embedding\", index_type=\"IVF_PQ\", num_partitions=256, num_sub_vectors=16)",
+      "",
+      "# the 10 rows closest to a query vector",
+      "hits = ds.to_table(columns=[\"id\", \"label\"], nearest={\"column\": \"embedding\", \"q\": query, \"k\": 10})",
+      "",
+      "# every write makes a new version; tag one and read it later",
+      "ds.tags.create(\"train-v1\", ds.version)",
+      "old = lance.dataset(\"s3://acme-ml/images.lance\", version=\"train-v1\")"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Lance or Parquet in a table format?",
+      "corner": "",
+      "columns": [
+        "Parquet + Iceberg or Delta Lake",
+        "Lance"
+      ],
+      "rows": [
+        {
+          "label": "Best at",
+          "values": [
+            "Scanning a few columns of many rows",
+            "Scans and fetching individual rows by position"
+          ]
+        },
+        {
+          "label": "Inside a file",
+          "values": [
+            "Row groups, each with a chunk per column and min/max statistics",
+            "Large pages per column with no row groups; statistics live in indexes instead"
+          ]
+        },
+        {
+          "label": "Add a column with data",
+          "values": [
+            "Rewrite the files, or add it empty",
+            "Write new files holding just that column"
+          ]
+        },
+        {
+          "label": "Search",
+          "values": [
+            "Filters and partition pruning",
+            "Vector, full-text and scalar indexes stored in the table"
+          ]
+        },
+        {
+          "label": "Images and video",
+          "values": [
+            "Usually links to files elsewhere",
+            "Stored in the table as blobs, read lazily"
+          ]
+        },
+        {
+          "label": "Versions",
+          "values": [
+            "Snapshots and time travel",
+            "Versions, tags and branches"
+          ]
+        },
+        {
+          "label": "Who reads it",
+          "values": [
+            "Almost every engine and warehouse",
+            "Python (pandas, Polars, PyTorch, Ray), DuckDB, DataFusion, Spark, Trino, Flink"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "code",
+      "title": "Query and search a Lance table from DuckDB",
+      "intro": "DuckDB’s `lance` extension reads, writes and searches Lance tables with SQL.",
+      "lang": "sql",
+      "source": [
+        "INSTALL lance;",
+        "LOAD lance;",
+        "",
+        "COPY (FROM 'images.parquet') TO 's3://acme-ml/images.lance' (FORMAT lance);",
+        "",
+        "SELECT label, count(*) FROM 's3://acme-ml/images.lance' GROUP BY label;",
+        "",
+        "-- the 5 nearest rows to a query vector",
+        "SELECT id, label, _distance",
+        "FROM lance_vector_search('s3://acme-ml/images.lance', 'embedding', $query, k = 5)",
+        "ORDER BY _distance;"
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Around 2021, Chang She and Lei Xu asked why working with embeddings, images and video was still so much harder than working with tables. The standard formats were built for something else. Parquet is designed for scanning columns: its encodings aren’t “sliceable”, so reading one row usually means loading a whole page, which hurts shuffled training, search results and other point lookups. And when one column holds 4 KiB embeddings or whole images, no row group size works well. They decided to start from first principles, setting aside formats like Parquet and WebDataset, and the idea became LanceDB and its open format, Lance.",
+      "The first version paired a columnar file with a versioned table. In April 2024 the team announced Lance v2, a new file format, because v1 “still struggles in a number of cases”. In April 2025 a paper by Weston Pace, Chang She, Lei Xu and others measured its approach to random access against Parquet and Arrow.",
+      "As AI labs and companies such as Runway, Midjourney, Netflix, Uber and ByteDance adopted it, LanceDB set up formal community governance in November 2025, with a project management committee modelled on the Apache Way. The format moved to its own website (lance.org) and GitHub organization (lance-format), separate from LanceDB’s database."
+    ],
+    "choices": [
+      { "choice": "No row groups; fast single-row reads", "why": "Row groups force a size trade-off that wide values break. Lance stores large pages per column and uses encodings a reader can jump into, so fetching one row doesn’t mean decoding a whole page." },
+      { "choice": "Encodings are extensions, not part of the reader", "why": "Adding an encoding to Parquet means changing every reader across many implementations. In Lance v2 encodings are plug-ins, so new ones can arrive without a new file format." },
+      { "choice": "Add columns by writing new files", "why": "ML pipelines often backfill a new embedding or label column. Each fragment can hold several data files with different columns, so adding a column attaches new files instead of rewriting the table." },
+      { "choice": "Indexes are part of the table", "why": "Vector, full-text and scalar indexes live in the dataset’s `_indices/` folder and are versioned with it, so search runs straight from object storage without a separate vector database." }
+    ],
+    "timeline": [
+      { "year": "2021", "text": "Chang She and Lei Xu set out to build storage for multimodal AI data" },
+      { "year": "2022", "text": "The open-source Lance repository starts in July" },
+      { "year": "2024", "text": "Lance v2 file format announced in April" },
+      { "year": "2025", "text": "Paper on random access (April); LanceDB raises a $30M Series A in June" },
+      { "year": "2025", "text": "Community governance; the format moves to lance.org and the lance-format org" },
+      { "year": "2026", "text": "Apache Hudi 1.2 adds Lance as a file format for vector and multimodal data" }
+    ],
+    "sources": [
+      { "label": "Chang She: LanceDB raises $30M Series A, with the founding story (June 2025)", "url": "https://lancedb.com/blog/series-a-funding" },
+      { "label": "Weston Pace: Lance v2, a new columnar container format (April 2024)", "url": "https://lancedb.com/blog/lance-v2" },
+      { "label": "Lance: Efficient Random Access in Columnar Storage (arXiv, April 2025)", "url": "https://arxiv.org/abs/2504.15247" },
+      { "label": "Jack Ye: Introducing Lance community governance (November 2025)", "url": "https://lancedb.com/blog/lance-community-governance" },
+      { "label": "lance-format/lance on GitHub (repository created July 2022)", "url": "https://github.com/lance-format/lance" },
+      { "label": "Lance table format specification", "url": "https://lance.org/format/table/" },
+      { "label": "Apache Hudi 1.2 announcement (June 2026)", "url": "https://hudi.apache.org/blog/2026/06/07/apache-hudi-release-1-2-announcement/" }
+    ]
+  },
+  "sources": [
+    {
+      "label": "Lance homepage: 100× faster random access than Parquet",
+      "url": "https://lance.org/"
+    },
+    {
+      "label": "Lance file format: no row groups; statistics and indexes kept out of the file",
+      "url": "https://lance.org/format/file/"
+    },
+    {
+      "label": "Lance table format: fragments, data files, deletion files, ACID and time travel",
+      "url": "https://lance.org/format/table/"
+    },
+    {
+      "label": "Lance table format: dataset layout (_versions/, _deletions/, _indices/)",
+      "url": "https://lance.org/format/table/layout/"
+    },
+    {
+      "label": "Lance index formats: B-tree, bitmap, full-text search and vector indexes",
+      "url": "https://lance.org/format/index/"
+    },
+    {
+      "label": "Lance vector index format: IVF, PQ and HNSW",
+      "url": "https://lance.org/format/index/vector/"
+    },
+    {
+      "label": "Lance: Fragment Reuse Index (index remapping after compaction)",
+      "url": "https://lance.org/format/index/system/frag_reuse/"
+    },
+    {
+      "label": "Lance guide: Tags and branches",
+      "url": "https://lance.org/guide/tags_and_branches/"
+    },
+    {
+      "label": "Lance guide: Blob API (images, video, audio; lazy reads)",
+      "url": "https://lance.org/guide/blob/"
+    },
+    {
+      "label": "Lance guide: Read and write (pandas, PyArrow)",
+      "url": "https://lance.org/guide/read_and_write/"
+    },
+    {
+      "label": "Lance docs: Vector search",
+      "url": "https://lance.org/quickstart/vector-search/"
+    },
+    {
+      "label": "Lance integrations: DataFusion, PyTorch, DuckDB, Spark, Ray, Trino",
+      "url": "https://lance.org/integrations/"
+    },
+    {
+      "label": "Lance: Efficient Random Access in Columnar Storage (arXiv, April 2025)",
+      "url": "https://arxiv.org/abs/2504.15247"
+    },
+    {
+      "label": "DuckDB docs: Lance extension",
+      "url": "https://duckdb.org/docs/current/core_extensions/lance.html"
+    },
+    {
+      "label": "lance-format/lance README (integrations incl. Polars and Flink)",
+      "url": "https://github.com/lance-format/lance"
+    },
+    {
+      "label": "lance-format/lance-flink on GitHub",
+      "url": "https://github.com/lance-format/lance-flink"
+    }
+  ],
+  "checked": "2026-10-05"
+}

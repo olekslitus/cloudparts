@@ -1,0 +1,171 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Apache Fluss",
+  "concepts": ["stream", "lakehouse"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0 (since it was open-sourced in November 2024)",
+  "website": "https://fluss.apache.org/",
+  "repo": "https://github.com/apache/fluss",
+  "summary": "Streaming storage built for Flink: event logs and updatable tables in columnar Arrow format, with key lookups, and older data copied into Paimon, Iceberg, Hudi or Lance tables.",
+  "intro": [
+    "Where Kafka stores topics of opaque records, Fluss stores tables with a schema. A cluster has CoordinatorServers, which keep metadata and decide where data lives (one is active, elected through ZooKeeper), and TabletServers, which hold the data. A table is split into partitions, for example by date, and each partition into buckets. Each bucket is a replicated log with a leader and followers, built on an adapted copy of Kafka’s replication code. In a log table, clients write records as Apache Arrow column batches, so a reader that asks for three columns, or for rows matching a filter, gets only those from the server. A primary-key table adds a RocksDB store on the bucket leader: each upsert or delete is checked against the current row, the resulting change (insert, update before and after, delete) goes into the replicated log, and then RocksDB is updated. That gives you point lookups, partial updates and a ready-made changelog for downstream jobs. TabletServers move older log segments and RocksDB snapshots to S3, HDFS or similar, and clients download those files directly instead of streaming them through the servers.",
+    "A separate tiering service, which runs as a Flink job, copies tables into an open lake format (Paimon, Iceberg, Hudi or Lance) every few minutes (3 by default), with exactly-once commits. A query on the table then reads the lake snapshot plus the newer rows still in Fluss, which the project calls a union read. Flink (1.18 to 2.3) is the main engine; Spark 3.4 and 3.5, and Java, Rust, Python and C++ clients, also work, and 1.0 adds an HTTP gateway as a preview. Alibaba’s Flink team started Fluss in 2023 and open-sourced it in November 2024; it graduated to a top-level Apache project in July 2026, and 1.0 followed in September 2026. It is free to run; Alibaba Cloud offers it as a managed service and Ververica includes it in its self-managed Flink platform."
+  ],
+  "strengths": [
+    "Primary-key tables with server-side changelogs, partial updates and lookups move join and aggregation state out of Flink jobs; Flink 2.1+ turns eligible joins into delta joins that read Fluss tables instead of keeping both sides in state",
+    "Columnar Arrow logs let the server prune columns and skip batches by filter, so a job that needs a few columns of a wide table doesn’t receive the rest",
+    "Lake tiering into Paimon, Iceberg, Hudi or Lance keeps history in open formats other engines can read, and union reads combine it with second-fresh data",
+    "Run at large scale at Alibaba (the project reports 3 PB and 40 GB/s peak throughput in 2025) and in production at RedNote, JD.com, Ant Group and others"
+  ],
+  "limits": [
+    "Built around Flink: the tiering service is a Flink job, union reads are native only in Flink (Spark got batch union reads in 1.0), and other engines read the lake copy",
+    "Not a Kafka replacement for event transport: there is no Kafka protocol, so producers and consumers need Fluss clients, connectors or the preview gateway",
+    "More to operate: ZooKeeper 3.6 or newer (removal is on the roadmap), local disks with cross-server replication, and RocksDB state that must fit on the bucket leader’s disk and is rebuilt from a snapshot plus log replay when leadership moves",
+    "Schema changes are limited to adding nullable columns at the end; renames and type changes are still on the roadmap, and lake tables must never be altered from another engine",
+    "Young: 1.0 is from September 2026, the gateway is a preview, and features such as historical partition lookups work only with Paimon"
+  ],
+  "worksWith": [
+    { "id": "flink", "how": "serves tables, changelogs and lookups to" },
+    { "id": "rocksdb", "how": "keeps primary-key table state in" },
+    { "id": "spark", "how": "is read and written in batch and streams by" },
+    { "id": "paimon", "how": "tiers tables into" },
+    { "id": "iceberg", "how": "tiers tables into" },
+    { "id": "hudi", "how": "tiers tables into" },
+    { "id": "lance", "how": "tiers tables into" },
+    { "id": "arrow", "how": "stores log batches in the format of" },
+    { "id": "kafka", "how": "adapts the replication code of" },
+    { "id": "s3", "how": "moves log segments and snapshots to" },
+    { "id": "polaris", "how": "can register its Iceberg tables in" },
+    { "id": "kubernetes", "how": "is deployed with a Helm chart on" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "Flink SQL: a log table, a primary-key table tiered into the lake, lookups and a union read",
+    "source": [
+      "CREATE CATALOG fluss WITH (",
+      "  'type' = 'fluss',",
+      "  'bootstrap.servers' = 'coordinator-server:9123'",
+      ");",
+      "USE CATALOG fluss;",
+      "",
+      "-- append-only log table, stored as Arrow batches in 8 buckets",
+      "CREATE TABLE orders (",
+      "  order_id BIGINT,",
+      "  customer_id BIGINT,",
+      "  amount DECIMAL(10, 2),",
+      "  ts TIMESTAMP(3)",
+      ") WITH ('bucket.num' = '8');",
+      "",
+      "-- primary-key table, also copied into the lake format set on the cluster",
+      "CREATE TABLE customer_totals (",
+      "  customer_id BIGINT,",
+      "  orders BIGINT,",
+      "  revenue DECIMAL(18, 2),",
+      "  PRIMARY KEY (customer_id) NOT ENFORCED",
+      ") WITH (",
+      "  'bucket.num' = '8',",
+      "  'table.datalake.enabled' = 'true',",
+      "  'table.datalake.freshness' = '30s'",
+      ");",
+      "",
+      "-- streaming job: Fluss turns each upsert into a changelog entry",
+      "INSERT INTO customer_totals",
+      "SELECT customer_id, COUNT(*), SUM(amount) FROM orders GROUP BY customer_id;",
+      "",
+      "-- in another session",
+      "SET 'execution.runtime-mode' = 'batch';",
+      "SELECT * FROM customer_totals WHERE customer_id = 42;  -- point lookup in RocksDB",
+      "SELECT SUM(revenue) FROM customer_totals;               -- lake snapshot + newer rows in Fluss",
+      "SELECT COUNT(*) FROM customer_totals$lake;             -- lake copy only"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Fluss, Kafka and Paimon",
+      "intro": "Fluss sits between an event log and a lake table. Rows are summarised from Fluss’s own comparison page and from Jack Vanlightly’s reading of the code (he works at Confluent, which runs Flink but not Fluss).",
+      "corner": "",
+      "columns": ["Apache Kafka", "Apache Fluss", "Apache Paimon"],
+      "rows": [
+        { "label": "What it stores", "values": ["Ordered logs of records; the payload format is up to producers", "Log tables and primary-key tables with an enforced schema", "Append and primary-key tables as files in object storage"] },
+        { "label": "Reading part of the data", "values": ["Consumers fetch whole records", "The server prunes columns and skips batches by filter", "Engines read only the needed columns of the data files"] },
+        { "label": "Updates and lookups", "values": ["Appends only; state for joins and deduplication lives in the consumer", "Upserts, partial updates, deletes and key lookups; the server writes the changelog", "Upserts merged by writers and compaction; changelogs cost lookups or full compactions"] },
+        { "label": "Freshness", "values": ["Seconds", "Sub-second", "Minutes"] },
+        { "label": "Older data", "values": ["Tiered storage, but historical reads still pass through the brokers", "Clients read tiered segments directly, and tables are copied into a lake format", "Is the long-term store"] },
+        { "label": "Who can use it", "values": ["Clients in almost every language", "Flink and Spark connectors; Java, Rust, Python and C++ clients", "Flink, Spark, Trino and other lake engines"] }
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Three places a Fluss table’s data lives",
+      "items": [
+        { "name": "TabletServer disks", "tag": "hot", "text": "The newest log segments, replicated to follower servers, and the RocksDB state of primary-key tables, which isn’t tiered and must fit on disk. `table.log.local-ttl` limits how much log stays local." },
+        { "name": "Remote storage", "tag": "S3, HDFS, OSS", "text": "Older log segments and periodic RocksDB snapshots, uploaded by the TabletServers. Readers catching up download segments straight from storage, and a new bucket leader restores state from the latest snapshot." },
+        { "name": "Lake tables", "tag": "Paimon, Iceberg, Hudi, Lance", "text": "Written by the tiering service, a Flink job, every `table.datalake.freshness` interval (3 minutes by default). Other engines query them as ordinary lake tables, and the lake’s own retention rules apply." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "At Alibaba most real-time warehouses were built from Flink jobs reading Kafka, and the Flink team saw the same problems again and again: Kafka can’t update a record, so jobs keep huge state to deduplicate; it can’t be queried for debugging; backfills from tiered storage pass through the brokers; and every consumer reads every column, although Alibaba’s Flink SQL jobs used only 49% of upstream columns on average. Lakehouse formats such as Paimon, also born in the Flink community, fixed updates and history but were file-based, so minutes were their practical floor.",
+      "In July 2023 Jark Wu and the Flink team at Alibaba Cloud started Fluss, short for “Flink Unified Streaming Storage” and also German for river. After more than a year inside Alibaba it was announced at Flink Forward Berlin in 2024 and open-sourced under Apache 2.0 on 29 November 2024 in Shanghai. Alibaba donated it to the Apache Software Foundation, where it entered the Incubator on 5 June 2025.",
+      "It graduated to a top-level project on 16 July 2026, with 157 contributors, and 1.0 in September 2026 recast it as a real-time data layer for AI applications as well as Flink."
+    ],
+    "choices": [
+      { "choice": "Tables with schemas instead of byte streams", "why": "Knowing the columns lets the server store Arrow batches and return only the columns and rows a query needs, which cuts the network traffic Kafka spends sending whole records." },
+      { "choice": "Kafka’s replication protocol, adapted", "why": "Rather than invent a new log, Fluss copied and adapted Kafka’s proven leader-follower replication for each bucket, then added the table layer on top." },
+      { "choice": "RocksDB behind primary-key tables", "why": "Reading the current row before each write lets the server produce an exact changelog cheaply, something Paimon could only do with lookups or full compactions, and makes the table usable for lookup joins." },
+      { "choice": "Hand old data to open lake formats", "why": "Instead of building its own long-term format, Fluss tiers data into Paimon and later Iceberg, Hudi and Lance, so history is stored once in a form every lake engine can read." }
+    ],
+    "timeline": [
+      { "year": "2023", "text": "Alibaba Cloud’s Flink team starts Fluss in July" },
+      { "year": "2024", "text": "Announced at Flink Forward Berlin; open-sourced on 29 November" },
+      { "year": "2025", "text": "Enters the Apache Incubator on 5 June" },
+      { "year": "2025", "text": "0.8.0 in November, the first Apache release" },
+      { "year": "2026", "text": "Graduates to a top-level Apache project on 16 July" },
+      { "year": "2026", "text": "Fluss 1.0 in September adds an HTTP gateway and Hudi tiering" }
+    ],
+    "sources": [
+      { "label": "Fluss blog: Why Fluss? Top 4 challenges of using Kafka for real-time analytics (December 2024)", "url": "https://fluss.apache.org/blog/why-fluss/" },
+      { "label": "Fluss blog: Fluss is now open source (29 November 2024)", "url": "https://fluss.apache.org/blog/fluss-open-source/" },
+      { "label": "Fluss blog: Fluss joins the Apache Incubator (July 2025; history since July 2023)", "url": "https://fluss.apache.org/blog/fluss-joins-asf/" },
+      { "label": "Apache Incubator: Fluss incubation status (entered 2025-06-05, graduated 2026-07-16)", "url": "https://incubator.apache.org/projects/fluss.html" },
+      { "label": "Fluss blog: Apache Fluss graduates to a top-level project (August 2026)", "url": "https://fluss.apache.org/blog/apache-fluss-graduates-to-top-level-project/" },
+      { "label": "Fluss blog: Announcing Apache Fluss 1.0 (September 2026)", "url": "https://fluss.apache.org/blog/releases/1.0/" },
+      { "label": "Jack Vanlightly: Understanding Apache Fluss (September 2025)", "url": "https://jack-vanlightly.com/blog/2025/9/2/understanding-apache-fluss" }
+    ]
+  },
+  "sources": [
+    { "label": "Fluss docs: Architecture (CoordinatorServer, TabletServer, ZooKeeper, LogStore, KvStore)", "url": "https://fluss.apache.org/docs/concepts/architecture/" },
+    { "label": "Fluss docs: Log tables (Arrow format, column pruning)", "url": "https://fluss.apache.org/docs/table-design/table-types/log-table/" },
+    { "label": "Fluss docs: Primary key tables (upserts, partial updates, changelog)", "url": "https://fluss.apache.org/docs/table-design/table-types/pk-table/" },
+    { "label": "Fluss docs: Merge engines", "url": "https://fluss.apache.org/docs/table-design/merge-engines/" },
+    { "label": "Fluss docs: Flink reads (filter pushdown, point queries, COUNT pushdown)", "url": "https://fluss.apache.org/docs/engine-flink/reads/" },
+    { "label": "Fluss docs: Flink delta joins (Flink 2.1+, Fluss 0.8+)", "url": "https://fluss.apache.org/docs/engine-flink/delta-joins/" },
+    { "label": "Fluss docs: Flink getting started (Flink 1.18 to 2.3)", "url": "https://fluss.apache.org/docs/engine-flink/getting-started/" },
+    { "label": "Fluss docs: Flink DDL (adding columns: nullable, at the end)", "url": "https://fluss.apache.org/docs/engine-flink/ddl/" },
+    { "label": "Fluss docs: Spark getting started (Spark 3.4 and 3.5)", "url": "https://fluss.apache.org/docs/engine-spark/getting-started/" },
+    { "label": "Fluss docs: Streaming lakehouse overview", "url": "https://fluss.apache.org/docs/streaming-lakehouse/overview/" },
+    { "label": "Fluss docs: Tiering service (Flink job, exactly-once, 3-minute default freshness)", "url": "https://fluss.apache.org/docs/streaming-lakehouse/tiering-service/" },
+    { "label": "Fluss docs: Union read", "url": "https://fluss.apache.org/docs/streaming-lakehouse/union-read/" },
+    { "label": "Fluss docs: Iceberg (catalogs, including REST)", "url": "https://fluss.apache.org/docs/streaming-lakehouse/datalake-formats/iceberg/" },
+    { "label": "Fluss docs: Paimon (schema evolution through Fluss)", "url": "https://fluss.apache.org/docs/streaming-lakehouse/datalake-formats/paimon/" },
+    { "label": "Fluss docs: Polaris as the Iceberg catalog", "url": "https://fluss.apache.org/docs/streaming-lakehouse/datalake-catalogs/polaris/" },
+    { "label": "Fluss docs: Remote storage", "url": "https://fluss.apache.org/docs/maintenance/tiered-storage/remote-storage/" },
+    { "label": "Fluss docs: Installation and deployment overview (ZooKeeper, remote and lake storage)", "url": "https://fluss.apache.org/docs/install-deploy/overview/" },
+    { "label": "Fluss docs: Deploying a distributed cluster (ZooKeeper 3.6+)", "url": "https://fluss.apache.org/docs/install-deploy/deploying-distributed-cluster/" },
+    { "label": "Fluss docs: Deploying with Helm", "url": "https://fluss.apache.org/docs/install-deploy/deploying-with-helm/" },
+    { "label": "Fluss docs: Gateway (preview in 1.0)", "url": "https://fluss.apache.org/docs/gateway/" },
+    { "label": "Fluss roadmap (ZooKeeper removal, diskless storage, full schema evolution)", "url": "https://fluss.apache.org/roadmap/" },
+    { "label": "Apache Fluss vs Apache Kafka (project comparison page)", "url": "https://fluss.apache.org/compare/kafka/" },
+    { "label": "Fluss blog: Announcing Apache Fluss 1.0 (TTL, pushdown, gateway, Hudi, historical partitions)", "url": "https://fluss.apache.org/blog/releases/1.0/" },
+    { "label": "Fluss blog: Fluss joins the Apache Incubator (scale at Alibaba)", "url": "https://fluss.apache.org/blog/fluss-joins-asf/" },
+    { "label": "Fluss user stories: Alibaba Cloud (managed Fluss)", "url": "https://fluss.apache.org/user-stories/alibaba-cloud/" },
+    { "label": "Fluss user stories: Ververica (self-managed platform)", "url": "https://fluss.apache.org/user-stories/ververica/" },
+    { "label": "Jack Vanlightly: Understanding Apache Fluss (internals, Kafka-derived replication, RocksDB, tiering)", "url": "https://jack-vanlightly.com/blog/2025/9/2/understanding-apache-fluss" },
+    { "label": "GitHub: apache/fluss (Apache 2.0)", "url": "https://github.com/apache/fluss" },
+    { "label": "GitHub: Apache Fluss 1.0.0 release (September 2026)", "url": "https://github.com/apache/fluss/releases/tag/v1.0.0" }
+  ],
+  "checked": "2026-10-06"
+}

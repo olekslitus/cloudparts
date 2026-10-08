@@ -1,0 +1,148 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Rolling deployments",
+  "category": "delivery",
+  "order": 70,
+  "summary": "Replace the instances of a service a few at a time, so it keeps serving while the new version takes over.",
+  "howItWorks": "A service runs as several identical instances behind a load balancer. A rolling deployment replaces them in batches: start one or more instances of the new version, wait until their health checks pass, take the same number of old instances out of the load balancer, stop them, and repeat until none of the old version is left. Two settings decide the pace. One says how many extra instances may run during the update (Kubernetes calls it `maxSurge`, Amazon ECS `maximumPercent`); the other says how many may be missing (`maxUnavailable`, or ECS `minimumHealthyPercent`). Kubernetes defaults to 25% for both, so a 4-pod service may briefly run 5 pods, or drop to 3 ready ones, while it moves. A readiness probe or load balancer health check is what stops a broken version: new instances that never report ready never get traffic, and the rollout stalls instead of replacing the healthy ones. For the minutes it takes, old and new versions serve side by side, so every change has to work alongside the previous version: database schema, message formats and APIs included. Rolling back means rolling forward to the old version, batch by batch, with the same wait.",
+  "analogy": "Changing the tyres on a bus one wheel at a time while it keeps driving its route. It never stops, but for a while it runs on a mix of old and new tyres, and swapping back takes just as long.",
+  "useWhen": [
+    "Stateless services with several instances behind a load balancer",
+    "You can’t afford a second full copy of the service during a release",
+    "Changes are backward compatible, so old and new versions can serve side by side"
+  ],
+  "avoidWhen": [
+    "You need instant rollback; rolling back is another rollout of the same length",
+    "The new version can’t coexist with the old one, for example a breaking schema or protocol change",
+    "A single instance, where replacing it in place means downtime"
+  ],
+  "example": "A checkout API runs 8 pods on Kubernetes with `maxSurge: 2` and `maxUnavailable: 0`. The deploy starts 2 new pods; once their readiness probes pass, the Deployment stops 2 old ones, and so on. Four batches of about 40 seconds each finish the release in under 3 minutes, and the service never drops below 8 ready pods. During those 3 minutes some requests hit version 41 and some version 42, so the team shipped the new optional field before the code that requires it.",
+  "providers": {
+    "aws": "ECS rolling update (`minimumHealthyPercent`, `maximumPercent`); Deployments on EKS; EC2 Auto Scaling instance refresh; CodeDeploy in-place (OneAtATime, HalfAtATime)",
+    "gcp": "Deployments on GKE; Compute Engine managed instance group rolling updates",
+    "azure": "Deployments on AKS; Virtual Machine Scale Sets rolling upgrade policy",
+    "oss": "Kubernetes Deployment with the RollingUpdate strategy (the default); Argo Rollouts for finer control"
+  },
+  "snippet": {
+    "lang": "yaml",
+    "source": [
+      "apiVersion: apps/v1",
+      "kind: Deployment",
+      "metadata:",
+      "  name: checkout",
+      "spec:",
+      "  replicas: 8",
+      "  strategy:",
+      "    type: RollingUpdate",
+      "    rollingUpdate:",
+      "      maxSurge: 2          # up to 10 pods during the update",
+      "      maxUnavailable: 0    # never fewer than 8 ready pods",
+      "  selector:",
+      "    matchLabels: { app: checkout }",
+      "  template:",
+      "    metadata:",
+      "      labels: { app: checkout }",
+      "    spec:",
+      "      containers:",
+      "        - name: checkout",
+      "          image: registry.example.com/checkout:42   # change the tag to start a rollout",
+      "          readinessProbe:                          # no traffic until this passes",
+      "            httpGet: { path: /healthz, port: 8080 }",
+      "# kubectl rollout status deployment/checkout",
+      "# kubectl rollout undo deployment/checkout    # rollback is another rolling update"
+    ]
+  },
+  "related": ["blue-green", "canary", "lb", "autoscaling", "containers"],
+  "diagram": {
+    "caption": "The load balancer spreads requests over four instances while they are replaced one at a time: each leaves the pool, restarts on v2 and rejoins once healthy, so the other three keep serving. A request already on its way to an instance as it stops is lost; that is why real rollouts drain connections first.",
+    "h": 290,
+    "nodes": [
+      {
+        "id": "users",
+        "x": 100,
+        "y": 145,
+        "label": "Users",
+        "sub": "requests",
+        "emit": {"every": 380, "jitter": 0.3, "req": true},
+        "out": ["lb"]
+      },
+      {
+        "id": "lb",
+        "x": 320,
+        "y": 145,
+        "label": "Load balancer",
+        "sub": "healthy instances only",
+        "concept": "lb",
+        "out": ["i1", "i2", "i3", "i4"]
+      },
+      {"id": "i1", "x": 600, "y": 40, "label": "Instance 1", "sub": "v1 → v2", "mode": "reply", "delay": 120},
+      {"id": "i2", "x": 600, "y": 110, "label": "Instance 2", "sub": "v1 → v2", "mode": "reply", "delay": 120},
+      {"id": "i3", "x": 600, "y": 180, "label": "Instance 3", "sub": "v1 → v2", "mode": "reply", "delay": 120},
+      {"id": "i4", "x": 600, "y": 250, "label": "Instance 4", "sub": "v1 → v2", "mode": "reply", "delay": 120}
+    ],
+    "events": [
+      {"node": "i1", "at": 2000, "every": 18000, "dur": 3000, "text": "replacing with v2", "back": "v2 ready"},
+      {"node": "i2", "at": 5500, "every": 18000, "dur": 3000, "text": "replacing with v2", "back": "v2 ready"},
+      {"node": "i3", "at": 9000, "every": 18000, "dur": 3000, "text": "replacing with v2", "back": "v2 ready"},
+      {"node": "i4", "at": 12500, "every": 18000, "dur": 3000, "text": "replacing with v2", "back": "v2 ready"}
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "The same two knobs on different platforms",
+      "intro": "Every rolling deployment trades speed against spare capacity: how many extra instances you may add, and how many you may lose, at any moment.",
+      "corner": "Platform",
+      "columns": ["Extra capacity allowed", "Capacity you may lose", "Defaults"],
+      "rows": [
+        { "label": "Kubernetes Deployment", "values": ["`maxSurge`", "`maxUnavailable`", "25% and 25%"] },
+        { "label": "Amazon ECS rolling update", "values": ["`maximumPercent`", "`minimumHealthyPercent`", "200% and 100%: start new tasks before stopping old ones"] },
+        { "label": "EC2 Auto Scaling instance refresh", "values": ["Maximum healthy percentage", "Minimum healthy percentage", "100% and 90% without an instance maintenance policy"] },
+        { "label": "CodeDeploy in-place (EC2)", "values": ["None: instances are updated where they stand", "Minimum healthy hosts", "OneAtATime"] }
+      ],
+      "notes": [
+        "Setting extra capacity to zero (no surge) means each batch takes capacity away; setting the loss to zero means you need room for the extra instances. At least one of the two has to allow movement or the rollout can’t start."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Before services ran on fleets, a release often meant a maintenance window: stop the application, copy the new version, start it again. Once a service ran on many identical machines behind a load balancer, there was a cheaper way to stay up: take a few machines out, upgrade them, put them back, and move on to the next few.",
+      "Amazon built this into Apollo, the internal deployment engine its service teams shared after the company split its software into small services. In 2014 Werner Vogels described how Apollo could “perform a rolling update across a fleet where only a fraction of the hosts are taken offline at a time”, striping each batch across data centers and halting a deployment when too many hosts failed. It had handled 50 million deployments in the previous 12 months, and that November AWS released CodeDeploy, based on it, with one-at-a-time and half-at-a-time configurations.",
+      "Kubernetes made the pattern the default for containers. It added the Deployment object in version 1.2 in March 2016, handling rollouts and rollback for you, and its RollingUpdate strategy, with `maxSurge` and `maxUnavailable`, became the default way most teams ship to Kubernetes. Its limits are also why tools such as Argo Rollouts exist: a plain rolling update can stall on failing health checks but can’t check business metrics or shift traffic by percentage."
+    ],
+    "choices": [
+      { "choice": "Replace a fraction at a time instead of all at once", "why": "Keeping most of the fleet on the old version means the service stays up and a bad version only ever reaches one batch before health checks stop it." },
+      { "choice": "Gate each batch on health checks", "why": "A new instance gets traffic only once it reports ready. If it never does, the rollout stops before it removes more healthy instances; Apollo halted deployments once failed hosts crossed a threshold." },
+      { "choice": "Bound both extra and missing capacity", "why": "Teams with spare room want speed (surge ahead), teams at capacity can’t add instances (replace in place). Two percentages cover both cases without separate strategies." }
+    ],
+    "timeline": [
+      { "year": "2014", "text": "Werner Vogels describes Amazon’s Apollo and its rolling updates; AWS launches CodeDeploy in November" },
+      { "year": "2016", "text": "Kubernetes 1.2 adds the Deployment API (beta) for rollouts and rollback" },
+      { "year": "2017", "text": "Deployment reaches general availability in the apps/v1 API with Kubernetes 1.9" },
+      { "year": "2025", "text": "Amazon ECS adds built-in blue/green alongside its rolling updates" }
+    ],
+    "sources": [
+      { "label": "Werner Vogels: The story of Apollo, Amazon’s deployment engine (Nov 2014)", "url": "https://www.allthingsdistributed.com/2014/11/apollo-amazon-deployment-engine.html" },
+      { "label": "AWS What’s New: Introducing AWS CodeDeploy (Nov 2014)", "url": "https://aws.amazon.com/about-aws/whats-new/2014/11/12/introducing-aws-codedeploy" },
+      { "label": "Kubernetes blog: Kubernetes 1.2, easier application deployment and management (Mar 2016)", "url": "https://kubernetes.io/blog/2016/03/kubernetes-1-2-even-more-performance-upgrades-plus-easier-application-deployment-and-management/" },
+      { "label": "Kubernetes blog: Kubernetes 1.9, apps workloads GA (Dec 2017)", "url": "https://kubernetes.io/blog/2017/12/kubernetes-19-workloads-expanded-ecosystem/" },
+      { "label": "Argo Rollouts docs: Why Argo Rollouts? (limits of the rolling update)", "url": "https://argoproj.github.io/argo-rollouts/" },
+      { "label": "AWS What’s New: Amazon ECS enables built-in blue/green deployments (Jul 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/07/amazon-ecs-built-in-blue-green-deployments/" }
+    ]
+  },
+  "sources": [
+    { "label": "Kubernetes docs: Deployments (RollingUpdate, maxSurge, maxUnavailable, rollout undo)", "url": "https://kubernetes.io/docs/concepts/workloads/controllers/deployment/" },
+    { "label": "Kubernetes docs: Configure liveness, readiness and startup probes", "url": "https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/" },
+    { "label": "Amazon ECS docs: Deploy services by replacing tasks (rolling update, circuit breaker)", "url": "https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-type-ecs.html" },
+    { "label": "Amazon ECS API reference: DeploymentConfiguration (default 100% and 200%)", "url": "https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_DeploymentConfiguration.html" },
+    { "label": "EC2 Auto Scaling docs: Use an instance refresh to update instances", "url": "https://docs.aws.amazon.com/autoscaling/ec2/userguide/asg-instance-refresh.html" },
+    { "label": "EC2 Auto Scaling docs: Instance refresh default values", "url": "https://docs.aws.amazon.com/autoscaling/ec2/userguide/understand-instance-refresh-default-values.html" },
+    { "label": "CodeDeploy docs: Deployment configurations (OneAtATime, HalfAtATime)", "url": "https://docs.aws.amazon.com/codedeploy/latest/userguide/deployment-configurations.html" },
+    { "label": "Google Cloud docs: Automatically apply VM configuration updates in a MIG (rolling updates)", "url": "https://cloud.google.com/compute/docs/instance-groups/rolling-out-updates-to-managed-instance-groups" },
+    { "label": "Microsoft Learn: Upgrade policy modes for Virtual Machine Scale Sets (rolling)", "url": "https://learn.microsoft.com/en-us/azure/virtual-machine-scale-sets/virtual-machine-scale-sets-upgrade-policy" },
+    { "label": "Elastic Load Balancing docs: Target group attributes (deregistration delay)", "url": "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/edit-target-group-attributes.html" },
+    { "label": "Clare Liguori, Amazon Builders’ Library: Automating safe, hands-off deployments (backward compatibility with a mixed fleet)", "url": "https://builder.aws.com/content/3ErTKQOTKc5NIw031UePBPxTQ6I/automating-safe-hands-off-deployments" },
+    { "label": "Argo Rollouts docs: Overview", "url": "https://argoproj.github.io/argo-rollouts/" }
+  ]
+}

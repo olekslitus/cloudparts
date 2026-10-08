@@ -1,0 +1,128 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "PGO (Crunchy Postgres for Kubernetes)",
+  "concepts": ["relational", "orchestration"],
+  "provider": "oss",
+  "vendor": "Crunchy Data (joining Snowflake, announced June 2025)",
+  "license": "Apache 2.0 for the operator code. Crunchy’s prebuilt images are under the Crunchy Data Developer Program terms: free for development, but free in production only for individuals and organisations with fewer than 50 employees",
+  "website": "https://www.crunchydata.com/products/crunchy-postgresql-for-kubernetes",
+  "repo": "https://github.com/CrunchyData/postgres-operator",
+  "summary": "Crunchy Data’s Postgres operator: Patroni in every pod for failover, pgBackRest for backups, and a declarative `PostgresCluster` resource on top.",
+  "intro": [
+    "PGO adds a `PostgresCluster` resource to Kubernetes. The operator itself is one Deployment with one container; from your spec it creates each Postgres instance as its own `StatefulSet`, plus Services (`hippo-primary`, `hippo-replicas`), Secrets with connection details, an optional PgBouncer Deployment, and a pgBackRest repository host. Failover isn’t the operator’s job. Patroni runs in every Postgres pod and keeps the primary’s ID in annotations on a Kubernetes Endpoints object that acts as a lease: the primary must keep renewing it, and if it misses the deadline the replicas compare WAL positions and the most up-to-date one takes the lease. So clusters keep running even if PGO is down. Backups use pgBackRest: full, differential and incremental backups, delta restores, and up to four repositories at once on a Kubernetes volume, Amazon S3 (or S3-compatible storage such as MinIO), Google Cloud Storage or Azure Blob Storage. Schedules become Kubernetes CronJobs.",
+    "Crunchy Postgres for Kubernetes is the product built around it: PGO plus Crunchy’s images of PostgreSQL 14 to 18 with Patroni, pgBackRest, PgBouncer and extensions such as PostGIS, pgAudit, pg_cron, pgvector and the Apache-licensed TimescaleDB, and a monitoring stack built on pgMonitor, Prometheus and Grafana. The licences differ. The operator code is Apache 2.0, but the default install pulls images from Crunchy’s Developer Portal, and those images may be used in production for free only by individuals and organisations with fewer than 50 employees; bigger organisations may use them only for development, and nobody may redistribute them or use them to serve third parties. The alternatives are a Crunchy subscription or your own images, which PGO 6.0 documents building from community PGDG packages. Snowflake announced it would acquire Crunchy Data on June 2, 2025, to build Snowflake Postgres. Neither announcement says anything specific about PGO; Crunchy has kept shipping it, with 6.0 in December 2025 and patch releases through 2026."
+  ],
+  "strengths": [
+    "A long track record: the repository dates from 2017, Crunchy calls it one of the first Kubernetes operators, and Percona built its own Postgres operator on PGO’s code",
+    "pgBackRest backups suited to very large databases: incremental and differential backups, delta restores, and up to four repositories mixing local volumes and clouds",
+    "Failover by Patroni with Kubernetes as its store, so the operator is not a single point of failure and no separate etcd is needed",
+    "A curated distribution: tested images with common extensions, TLS everywhere by default, PgBouncer, standby clusters across Kubernetes clusters, and Kustomize, Helm and OLM installers"
+  ],
+  "limits": [
+    "The free images aren’t free for production at organisations with 50 or more employees: they need a Crunchy subscription or must build and patch their own images",
+    "One company steers it, and that company is joining Snowflake, whose announced plans centre on its own managed Snowflake Postgres",
+    "More moving parts than CloudNativePG: Patroni, a pgBackRest repository host and a StatefulSet per instance; PGO 6.0 also introduced a `v1` API that existing `v1beta1` users migrate to",
+    "The Developer Program updates only the latest two major versions of Crunchy Postgres for Kubernetes and of PostgreSQL"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "runs highly available clusters of" },
+    { "id": "patroni", "how": "leaves failover decisions to" },
+    { "id": "kubernetes", "how": "runs Postgres clusters as StatefulSets on" },
+    { "id": "s3", "how": "stores pgBackRest backups in" },
+    { "id": "gcs", "how": "stores pgBackRest backups in" },
+    { "id": "azure-blob", "how": "stores pgBackRest backups in" },
+    { "id": "minio", "how": "can store pgBackRest backups in" },
+    { "id": "prometheus", "how": "collects pgMonitor metrics with" },
+    { "id": "grafana", "how": "charts its pgMonitor metrics in" }
+  ],
+  "snippet": {
+    "lang": "yaml",
+    "title": "Three instances, PgBouncer, and pgBackRest backups to S3 on a weekly full, daily differential schedule",
+    "source": [
+      "apiVersion: postgres-operator.crunchydata.com/v1",
+      "kind: PostgresCluster",
+      "metadata:",
+      "  name: hippo",
+      "spec:",
+      "  postgresVersion: 18",
+      "  instances:",
+      "    - name: instance1",
+      "      replicas: 3                # Patroni picks one primary",
+      "      dataVolumeClaimSpec:",
+      "        accessModes: [\"ReadWriteOnce\"]",
+      "        resources:",
+      "          requests:",
+      "            storage: 50Gi",
+      "  proxy:",
+      "    pgBouncer: {}                # creates a hippo-pgbouncer Service",
+      "  backups:",
+      "    pgbackrest:",
+      "      configuration:",
+      "      - secret:",
+      "          name: pgo-s3-creds",
+      "      global:",
+      "        repo1-path: /pgbackrest/postgres-operator/hippo/repo1",
+      "        repo1-retention-full: \"14\"",
+      "        repo1-retention-full-type: time   # keep full backups for 14 days",
+      "      repos:",
+      "      - name: repo1",
+      "        s3:",
+      "          bucket: acme-pg-backups",
+      "          endpoint: s3.eu-central-1.amazonaws.com",
+      "          region: eu-central-1",
+      "        schedules:",
+      "          full: \"0 1 * * 0\"           # Sundays at 01:00",
+      "          differential: \"0 1 * * 1-6\" # other days at 01:00"
+    ]
+  },
+  "history": {
+    "story": [
+      "Crunchy Data grew out of a 2012 bet that companies would choose PostgreSQL as their main relational database. In its own words, what began as the simple idea of running Postgres in a container became one of the first stateful Kubernetes operators; the operator’s repository went public in February 2017. Early versions were imperative: you drove them with a `pgo` command-line tool modelled on `kubectl`, with commands such as `pgo create cluster hippo` and `pgo backup hippo`.",
+      "By 2021 teams wanted to keep their databases in Git like everything else. PGO 5.0, released in July 2021, was redesigned around a single declarative `PostgresCluster` resource and Kubernetes server-side apply, tested with Argo CD, and made self-healing: delete the PgBouncer Deployment by mistake and the operator recreates it. It kept the earlier architecture in which Patroni inside each cluster handles failover and pgBackRest handles backups, so a cluster survives the operator being down. Percona’s Operator for PostgreSQL is based on this code.",
+      "On June 2, 2025, Snowflake announced it would acquire Crunchy Data to bring a managed Snowflake Postgres to its platform. Crunchy said its team would keep providing the Postgres technology its customers rely on. PGO 6.0 followed in December 2025 with a `v1` API, volumes that grow automatically, and documented steps to build your own images from community packages."
+    ],
+    "choices": [
+      { "choice": "Let Patroni, not the operator, decide failover", "why": "If HA lives inside each Postgres cluster, the operator only maintains the desired definition and is not a single point of failure; Patroni stores its leader lease in the Kubernetes API, so no extra etcd is needed." },
+      { "choice": "pgBackRest for backups", "why": "Crunchy’s customers ran terabyte-size databases; pgBackRest offers incremental and differential backups, delta restores that rebuild a failed node without a full copy, and several repositories at once." },
+      { "choice": "From a CLI to a declarative resource", "why": "The `pgo` tool suited people at a terminal but not GitOps. Version 5 describes the whole cluster in one resource that the operator keeps reconciled." },
+      { "choice": "Ship a certified distribution of images", "why": "Crunchy builds every component from upstream source and tests it together, and the terms on those images, not the Apache-licensed operator, are where its commercial model sits." }
+    ],
+    "timeline": [
+      { "year": "2012", "text": "Crunchy Data starts as a PostgreSQL company" },
+      { "year": "2017", "text": "Postgres Operator repository published on GitHub in February" },
+      { "year": "2021", "text": "PGO 5.0 in July: a fully declarative `PostgresCluster` API" },
+      { "year": "2025", "text": "Snowflake announces it will acquire Crunchy Data (June 2); PGO 6.0 in December adds the `v1` API" },
+      { "year": "2026", "text": "6.0.x patch releases continue with PostgreSQL 18 and Patroni 4.1" }
+    ],
+    "sources": [
+      { "label": "Crunchy Data blog: Crunchy Data joins Snowflake (Jun 2, 2025): 2012 origins, early stateful operator", "url": "https://www.crunchydata.com/blog/crunchy-data-joins-snowflake" },
+      { "label": "Crunchy Data blog: The next generation of Kubernetes native Postgres (Jul 2021): PGO 5.0, the old `pgo` CLI", "url": "https://www.crunchydata.com/blog/the-next-generation-of-kubernetes-native-postgres" },
+      { "label": "PostgreSQL news: PGO, the Crunchy Postgres Operator v5 released (2021)", "url": "https://www.postgresql.org/about/news/pgo-the-crunchy-postgres-operator-v5-released-fully-declarative-postgres-2258/" },
+      { "label": "CrunchyData/postgres-operator on GitHub (created February 2017)", "url": "https://github.com/CrunchyData/postgres-operator" },
+      { "label": "Snowflake press release: Snowflake acquires Crunchy Data to bring enterprise ready Postgres offering to the AI Data Cloud (Jun 2, 2025)", "url": "https://www.snowflake.com/en/news/press-releases/snowflake-acquires-crunchy-data-to-bring-enterprise-ready-postgres-offering-to-the-ai-data-cloud/" },
+      { "label": "Crunchy Postgres for Kubernetes 6.0.x release notes", "url": "https://access.crunchydata.com/documentation/postgres-operator/6.0/releases/6.0.x" },
+      { "label": "PGO v6.0.0 release on GitHub (Dec 2025)", "url": "https://github.com/CrunchyData/postgres-operator/releases/tag/v6.0.0" },
+      { "label": "Percona Operator for PostgreSQL README (based on Crunchy’s PGO)", "url": "https://github.com/percona/percona-postgresql-operator" }
+    ]
+  },
+  "sources": [
+    { "label": "PGO README: features, included components, supported platforms, licence and image terms", "url": "https://github.com/CrunchyData/postgres-operator" },
+    { "label": "PGO LICENSE (Apache 2.0)", "url": "https://github.com/CrunchyData/postgres-operator/blob/main/LICENSE.md" },
+    { "label": "Crunchy Data Developer Program terms of use (production use, redistribution, latest two versions)", "url": "https://www.crunchydata.com/developers/terms-of-use" },
+    { "label": "Crunchy Postgres for Kubernetes docs: Overview (PGO as a single-container Deployment, certified images)", "url": "https://access.crunchydata.com/documentation/postgres-operator/latest/overview" },
+    { "label": "PGO docs: High availability (Patroni lease on an Endpoints object, synchronous replication, rolling updates)", "url": "https://access.crunchydata.com/documentation/postgres-operator/latest/architecture/high-availability" },
+    { "label": "PGO source: instance controller (a StatefulSet per instance)", "url": "https://github.com/CrunchyData/postgres-operator/blob/main/internal/controller/postgrescluster/instance.go" },
+    { "label": "PGO docs: High availability tutorial (`replicas`, `hippo-primary` and `hippo-replicas` Services)", "url": "https://access.crunchydata.com/documentation/postgres-operator/latest/tutorials/day-two/high-availability" },
+    { "label": "PGO docs: Backup configuration (pgBackRest, four repositories, S3, MinIO, GCS, Azure)", "url": "https://access.crunchydata.com/documentation/postgres-operator/latest/tutorials/backups-disaster-recovery/backups" },
+    { "label": "PGO docs: Backup management (schedules as CronJobs, retention)", "url": "https://access.crunchydata.com/documentation/postgres-operator/latest/tutorials/backups-disaster-recovery/backup-management" },
+    { "label": "PGO docs: Connection pooling (`spec.proxy.pgBouncer`)", "url": "https://access.crunchydata.com/documentation/postgres-operator/latest/tutorials/basic-setup/connection-pooling" },
+    { "label": "PGO example manifests: S3 backups", "url": "https://github.com/CrunchyData/postgres-operator-examples/blob/main/kustomize/s3/postgres.yaml" },
+    { "label": "Crunchy Postgres for Kubernetes: Supported platforms (Kubernetes 1.32 to 1.36, PostgreSQL 14 to 18)", "url": "https://access.crunchydata.com/documentation/postgres-operator/latest/overview/supported-platforms" },
+    { "label": "Crunchy Postgres for Kubernetes 6.0.x release notes (component versions, `v1` API, build your own images)", "url": "https://access.crunchydata.com/documentation/postgres-operator/6.0/releases/6.0.x" },
+    { "label": "PGO releases on GitHub (6.0.0 in Dec 2025, patches through 2026)", "url": "https://github.com/CrunchyData/postgres-operator/releases" },
+    { "label": "Crunchy Data blog: Crunchy Data joins Snowflake (Jun 2025)", "url": "https://www.crunchydata.com/blog/crunchy-data-joins-snowflake" },
+    { "label": "Snowflake press release: Snowflake acquires Crunchy Data (Jun 2, 2025)", "url": "https://www.snowflake.com/en/news/press-releases/snowflake-acquires-crunchy-data-to-bring-enterprise-ready-postgres-offering-to-the-ai-data-cloud/" },
+    { "label": "Percona Operator for PostgreSQL README (based on Crunchy’s PGO)", "url": "https://github.com/percona/percona-postgresql-operator" }
+  ],
+  "checked": "2026-10-06"
+}

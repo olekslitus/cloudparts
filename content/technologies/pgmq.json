@@ -1,0 +1,122 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "pgmq",
+  "concepts": ["queue"],
+  "provider": "oss",
+  "vendor": "pgmq community (started at Tembo)",
+  "license": "PostgreSQL licence",
+  "website": "https://pgmq.github.io/pgmq/",
+  "repo": "https://github.com/pgmq/pgmq",
+  "summary": "An SQS-style message queue made of SQL functions and tables inside Postgres.",
+  "intro": [
+    "pgmq is a set of SQL functions and tables that lives inside Postgres, installed as an extension or from a plain SQL file, with no background worker. Each queue is a table, `pgmq.q_<name>`, and each message a JSON row. `pgmq.send` inserts a row. `pgmq.read` takes the oldest visible rows with `FOR UPDATE SKIP LOCKED` and moves their visibility timeout (`vt`) into the future, so other readers skip them. If the consumer doesn’t call `pgmq.delete` or `pgmq.archive` before the timeout, the message becomes visible again and its `read_ct` goes up. `archive` moves the row to a matching `pgmq.a_<name>` table for audit or replay. The API copies Amazon SQS on purpose: delayed sends, batch sends and reads, `pop`, `set_vt`, and long polling with `read_with_poll`.",
+    "Because a queue is an ordinary table, a message can be sent in the same transaction as the data it describes, and backups, replicas and SQL tools cover it too. pgmq is free under the PostgreSQL licence and supports Postgres 14 to 18. Tembo built it in 2023; since May 2025 it has lived in its own `pgmq` organization on GitHub. Supabase Queues is pgmq with a dashboard and API permissions, at no extra cost. Newer versions add FIFO reads by message group, topic routing with `*` and `#` wildcards, and partitioned queues whose old partitions pg_partman drops."
+  ],
+  "strengths": [
+    "Nothing new to run: queues live in the Postgres you already back up and monitor, and the plain-SQL install works where you can’t add extensions",
+    "Send a message in the same transaction as your data, so no message goes out for a row that rolled back",
+    "SQS-style visibility timeouts recover from crashed consumers without a watcher process",
+    "Any language with a Postgres driver can use it; there are official Rust and Python clients and about twenty community ones",
+    "Archive tables keep processed messages for audit or replay"
+  ],
+  "limits": [
+    "Every read is an `UPDATE` and every delete leaves a dead row, so busy queues depend on VACUUM, which can’t clean up rows that a long-running transaction might still see",
+    "No retry policy or dead-letter queue: a failing message reappears after every timeout until you check `read_ct` and archive or move it yourself",
+    "Each message goes to one reader; topic routing copies it into every matching queue instead of sharing one log",
+    "Partitioned queues need pg_partman and its background worker in `shared_preload_libraries`, and if traffic outruns the pre-created partitions, maintenance stops for that queue",
+    "Every send, read and delete is a write on the primary, competing with your application for the same database"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "runs as SQL functions inside" },
+    { "id": "sqs", "how": "copies the visibility-timeout API of" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "Send, read with a 30-second visibility timeout, then archive",
+    "source": [
+      "CREATE EXTENSION pgmq;",
+      "SELECT pgmq.create('receipts');",
+      "",
+      "-- enqueue in the same transaction as the order",
+      "BEGIN;",
+      "INSERT INTO orders (id, status) VALUES (4812, 'paid');",
+      "SELECT pgmq.send('receipts', '{\"order_id\": 4812}');",
+      "COMMIT;",
+      "",
+      "-- worker: take up to 10 messages, hidden from other workers for 30 s",
+      "SELECT msg_id, read_ct, message FROM pgmq.read('receipts', 30, 10);",
+      "",
+      "-- done: move it to pgmq.a_receipts (or pgmq.delete to drop it)",
+      "SELECT pgmq.archive('receipts', 1);"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "pgmq, PgQue and PgQueuer",
+      "intro": "All three keep queues in Postgres tables. They differ in what a reader gets, which languages can join in, and how old rows are cleaned up.",
+      "columns": ["pgmq", "PgQue", "PgQueuer"],
+      "rows": [
+        { "label": "Model", "values": ["Message queue: each message goes to one reader", "Shared event log: every subscribed consumer sees every event", "Job queue: Python workers run a handler per job"] },
+        { "label": "What you install", "values": ["SQL objects, as an extension or a plain SQL file", "One PL/pgSQL file, plus a scheduler that calls the ticker", "A Python package; `pgq install` creates its tables"] },
+        { "label": "Languages", "values": ["Any, through SQL; official Rust and Python clients", "Any, through SQL; first-party Python, Go and TypeScript clients", "Python 3.10+, async handlers"] },
+        { "label": "Handing out work", "values": ["`FOR UPDATE SKIP LOCKED`, then a visibility timeout", "Batches between ticks, found by comparing two transaction snapshots; no row locks", "`FOR UPDATE SKIP LOCKED`, then status `picked` with a heartbeat"] },
+        { "label": "Delivery", "values": ["Exactly once within the visibility timeout, then at least once", "At least once, in batches; about 52 ms median wait at the default 100 ms tick", "At least once; handlers must be idempotent"] },
+        { "label": "Retries", "values": ["The message reappears after the timeout; track `read_ct` yourself", "`nack` schedules a retry; a dead-letter queue after the limit", "`RetryRequested` with a delay, or hold failed jobs for review"] },
+        { "label": "Finished messages", "values": ["Deleted, or moved to an archive table", "Stay in the log; `ack` moves the consumer’s cursor", "Deleted from the queue; the outcome is appended to a log table"] },
+        { "label": "Dead rows and cleanup", "values": ["Updates and deletes leave dead rows for VACUUM; optional partitions dropped by pg_partman", "None on the hot path: three tables rotate and the oldest is emptied with `TRUNCATE`", "Deletes leave dead rows; `pgq autovac` makes autovacuum aggressive"] },
+        { "label": "Licence and maturity", "values": ["PostgreSQL licence; 1.0 in November 2023", "Apache 2.0; 0.x, first release April 2026", "MIT; 1.0 in May 2026"] }
+      ],
+      "notes": ["PgQue’s latency figure comes from its own committed benchmark."]
+    }
+  ],
+  "history": {
+    "story": [
+      "By 2023 many teams ran job queues on Postgres tables with `SELECT … FOR UPDATE SKIP LOCKED`, each with its own schema and, often, a watcher process to rescue jobs stuck “in progress”. Tembo, a startup selling managed Postgres, needed a queue between the control plane and data plane of its cloud: the control plane publishes tasks such as “create postgres cluster”. Rather than add Kafka, RabbitMQ or SQS to its stack, it built a Postgres extension and shared it.",
+      "Founding engineer Adam Hendel announced PGMQ on 3 August 2023. It borrowed the visibility timeout from SQS and RSMQ, so a crashed consumer’s message simply reappears and no background worker is needed, and added optional archive tables for retention. Version 1.0 followed in November 2023. In December 2024 Supabase launched Supabase Queues on top of it, noting that Tembo had licensed the extension under the OSI-approved PostgreSQL licence.",
+      "Tembo’s website now sells cloud coding agents rather than managed Postgres. In May 2025 pgmq moved to its own GitHub organization, where releases continue: FIFO queues arrived in 1.9 and AMQP-style topic routing in 1.11, both in early 2026."
+    ],
+    "choices": [
+      { "choice": "A visibility timeout instead of an “in progress” flag", "why": "Marking rows as in progress needs an outside process to find jobs stuck after a crash. With a timeout set on read, an unfinished message becomes visible again on its own, so the queue regulates itself." },
+      { "choice": "SQL functions as the whole interface", "why": "Tembo wanted a familiar SQL interface with API parity to SQS and RSMQ, so any language with a Postgres driver can send and read without a new protocol or broker." },
+      { "choice": "One table per queue, plus an archive table", "why": "Messages can be inspected with plain SQL, and archiving instead of deleting gives opt-in retention for debugging and replay." },
+      { "choice": "`FOR UPDATE SKIP LOCKED` on read", "why": "`FOR UPDATE` stops two consumers getting the same message, and `SKIP LOCKED` lets many consumers share a queue without waiting on each other’s locks." }
+    ],
+    "timeline": [
+      { "year": "2023", "text": "Tembo announces PGMQ in August; 1.0 follows in November" },
+      { "year": "2024", "text": "Supabase launches Supabase Queues on pgmq" },
+      { "year": "2025", "text": "Project moves to the independent pgmq GitHub organization" },
+      { "year": "2026", "text": "FIFO queues (1.9) and topic routing (1.11) added" }
+    ],
+    "sources": [
+      { "label": "Tembo blog: Introducing PGMQ, Simple Message Queues built on Postgres (Aug 2023)", "url": "https://tembo.io/blog/introducing-pgmq", "archive": "https://web.archive.org/web/20231204054249/https://tembo.io/blog/introducing-pgmq/" },
+      { "label": "Tembo blog: PGMQ, Lightweight Message Queue on Postgres with No Background Worker (Nov 2023)", "url": "https://tembo.io/blog/pgmq-self-regulating-queue", "archive": "https://web.archive.org/web/20240122013250/https://tembo.io/blog/pgmq-self-regulating-queue/" },
+      { "label": "pgmq v1.0.0 release (Nov 2023)", "url": "https://github.com/pgmq/pgmq/releases/tag/v1.0.0" },
+      { "label": "Supabase blog: Supabase Queues (Dec 2024)", "url": "https://supabase.com/blog/supabase-queues" },
+      { "label": "pgmq pull request #397: update org reference on readme (May 2025)", "url": "https://github.com/pgmq/pgmq/pull/397" },
+      { "label": "pgmq v1.9.0 and v1.11.0 releases: FIFO queues and topic routing (2026)", "url": "https://github.com/pgmq/pgmq/releases/tag/v1.11.0" },
+      { "label": "Tembo: Run any coding agent in the cloud", "url": "https://www.tembo.io/" }
+    ]
+  },
+  "sources": [
+    { "label": "pgmq README", "url": "https://github.com/pgmq/pgmq/blob/main/README.md" },
+    { "label": "pgmq: Installation (extension or SQL only)", "url": "https://github.com/pgmq/pgmq/blob/main/INSTALLATION.md" },
+    { "label": "pgmq source: pgmq.sql (read, read_with_poll, pop, set_vt, enable_notify_insert)", "url": "https://github.com/pgmq/pgmq/blob/main/pgmq-extension/sql/pgmq.sql" },
+    { "label": "pgmq docs: Partitioned queues", "url": "https://github.com/pgmq/pgmq/blob/main/docs/partitioned-queues.md" },
+    { "label": "pgmq docs: Topic-based routing", "url": "https://github.com/pgmq/pgmq/blob/main/docs/topics.md" },
+    { "label": "pgmq docs: FIFO queues", "url": "https://github.com/pgmq/pgmq/blob/main/docs/fifo-queues.md" },
+    { "label": "pgmq v1.9.0 release: FIFO queues", "url": "https://github.com/pgmq/pgmq/releases/tag/v1.9.0" },
+    { "label": "pgmq LICENSE (PostgreSQL licence)", "url": "https://github.com/pgmq/pgmq/blob/main/LICENSE" },
+    { "label": "Supabase docs: Queues", "url": "https://supabase.com/docs/guides/queues" },
+    { "label": "PostgreSQL docs: Routine vacuuming", "url": "https://www.postgresql.org/docs/current/routine-vacuuming.html" },
+    { "label": "Brandur: Postgres job queues and failure by MVCC (2015)", "url": "https://brandur.org/postgres-queues" },
+    { "label": "PgQue README (model, latency, retries)", "url": "https://github.com/NikolayS/pgque/blob/main/README.md" },
+    { "label": "PgQue docs: Concepts and heritage (snapshots, rotation, delivery)", "url": "https://github.com/NikolayS/pgque/blob/main/docs/concepts.md" },
+    { "label": "PgQueuer README", "url": "https://github.com/janbjorge/pgqueuer/blob/main/README.md" },
+    { "label": "PgQueuer docs: Architecture", "url": "https://github.com/janbjorge/pgqueuer/blob/main/docs/reference/architecture.md" },
+    { "label": "PgQueuer docs: Performance tuning (autovacuum)", "url": "https://github.com/janbjorge/pgqueuer/blob/main/docs/guides/performance-tuning.md" },
+    { "label": "PgQueuer ADR-0004: Delivery is at-least-once", "url": "https://github.com/janbjorge/pgqueuer/blob/main/docs/adr/ADR-0004-delivery-is-at-least-once.md" },
+    { "label": "PgQueuer docs: Database-level retry", "url": "https://github.com/janbjorge/pgqueuer/blob/main/docs/guides/retry.md" }
+  ],
+  "checked": "2026-10-06"
+}

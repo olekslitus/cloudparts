@@ -1,0 +1,178 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Backup & restore",
+  "category": "storage",
+  "order": 40,
+  "summary": "Copies of your data kept apart from the original, so you can get it back after a deletion, corruption, ransomware or a lost region.",
+  "howItWorks": "A backup is a copy kept somewhere the original can’t take down with it. A full backup copies everything; an incremental copies only what changed since the last backup, and a differential what changed since the last full one. Nightly backups stay small, but a restore needs the full backup plus every piece after it. A snapshot freezes a disk or volume at one instant by tracking changed blocks. Kept on the same disk, array or file system, it dies with the original and isn’t a backup; Amazon EBS snapshots count because they’re stored separately in S3, though they still sit in the same account and region until you copy them out. Databases add point-in-time recovery: restore a base backup, replay the write-ahead log (WAL) archived since, and stop just before the mistake. Two numbers set the design: the recovery point objective (RPO), how much recent data you can afford to lose, and the recovery time objective (RTO), how long you can afford to be down. The 3-2-1 rule asks for three copies, on two kinds of media, one of them off site. Because ransomware hunts for backups to delete or encrypt, keep at least one copy offline or immutable, locked so that nobody, not even an administrator, can delete it before a set date. And test restores on a schedule: a backup you’ve never restored is a guess.",
+  "analogy": "A copy of your passport kept in a different bag. Keep it in the same bag (a snapshot on the same disk) and one thief takes both, and you only find out the copy is unreadable on the day you need it.",
+  "useWhen": [
+    "Any data you can’t recreate: databases, uploaded files, cluster and configuration state",
+    "Undoing mistakes that replication faithfully copies, like a dropped table, a bad migration or a corrupted file",
+    "Ransomware and stolen credentials: a locked copy the attacker can’t delete",
+    "Rules that require keeping records for a fixed number of years"
+  ],
+  "avoidWhen": [
+    "Staying up through a failure: a restore takes minutes to hours, so use replicas and failover for that, and backups for what replicas can’t undo",
+    "Data you can cheaply rebuild from its source, such as caches, build outputs and derived tables"
+  ],
+  "example": "A shop runs PostgreSQL in one region. pgBackRest takes a full backup every Sunday and an incremental every night, and archives each WAL file as it fills, with `archive_timeout = 60s`, to an S3 bucket in a second region with Object Lock. At 09:42 a migration drops the orders table: the team restores Sunday’s full backup and the incrementals onto a new server, replays WAL up to 09:41, and loses no orders. If the whole region went down instead, the same restore would run in the second region and lose at most about a minute of orders, the WAL not yet archived (the RPO); the time spent copying data back is the RTO.",
+  "providers": {
+    "aws": "AWS Backup (backup vaults, cross-Region copy, Vault Lock, restore testing); EBS snapshots; RDS automated backups and point-in-time restore; S3 Object Lock",
+    "gcp": "Backup and DR Service (backup vaults with enforced retention); Compute Engine disk snapshots; Cloud SQL point-in-time recovery",
+    "azure": "Azure Backup (Recovery Services vaults and Backup vaults, immutable vaults), including AKS backup",
+    "oss": "Velero (Kubernetes); restic, Kopia, BorgBackup (deduplicated file backups); pgBackRest, WAL-G, Barman (PostgreSQL); rsync for plain copies"
+  },
+  "snippet": {
+    "lang": "bash",
+    "source": [
+      "# postgresql.conf: hand every finished WAL file to pgBackRest",
+      "#   archive_mode = on",
+      "#   archive_command = 'pgbackrest --stanza=main archive-push %p'",
+      "",
+      "# a full backup on Sunday, incrementals on the other nights",
+      "pgbackrest --stanza=main --type=full backup",
+      "pgbackrest --stanza=main --type=incr backup",
+      "",
+      "# the orders table was dropped at 09:42: with PostgreSQL stopped,",
+      "# restore the latest backup and replay WAL up to 09:41",
+      "pgbackrest --stanza=main --delta --type=time \\",
+      "  \"--target=2026-10-06 09:41:00+00\" --target-action=promote restore"
+    ]
+  },
+  "related": ["object", "block", "relational", "orchestration"],
+  "diagram": {
+    "caption": "The app writes through one database address. The primary appends each write to its log, and an archiver ships the log in batches to locked object storage in region B; the “behind” count is what a disaster would lose (the RPO). When region A fails, writes fail until a new database has been restored from the backup and the address points at it (the RTO). Then the loop starts over.",
+    "h": 285,
+    "zones": [
+      { "x": 320, "y": 14, "w": 280, "h": 128, "label": "Region A" },
+      { "x": 320, "y": 172, "w": 430, "h": 100, "label": "Region B" }
+    ],
+    "nodes": [
+      {
+        "id": "app",
+        "x": 80,
+        "y": 150,
+        "label": "App",
+        "sub": "writes orders",
+        "emit": { "every": 520, "jitter": 0.3, "req": true, "color": 0 },
+        "out": ["endpoint"]
+      },
+      {
+        "id": "endpoint",
+        "x": 215,
+        "y": 150,
+        "label": "DB address",
+        "sub": "one hostname",
+        "out": ["primary", "restored"]
+      },
+      {
+        "id": "primary",
+        "x": 480,
+        "y": 82,
+        "kind": "log",
+        "cells": 8,
+        "label": "Primary database",
+        "sub": "write-ahead log",
+        "concept": "relational",
+        "readers": [{ "to": "vault", "every": 2000, "batch": 5, "name": "archive" }]
+      },
+      {
+        "id": "vault",
+        "x": 650,
+        "y": 228,
+        "label": "Backup storage",
+        "sub": "object store · locked",
+        "concept": "object",
+        "mode": "sink",
+        "emit": { "phases": [[8000, null], [2000, 200], [4000, null]], "to": ["restored"], "color": 2 }
+      },
+      {
+        "id": "restored",
+        "x": 450,
+        "y": 228,
+        "label": "Restored database",
+        "sub": "built from the backup",
+        "concept": "relational",
+        "mode": "reply",
+        "delay": 40
+      }
+    ],
+    "events": [
+      { "node": "primary", "at": 8000, "every": 14000, "dur": 6000, "text": "region A down", "back": "region A back" },
+      { "node": "restored", "at": 0, "every": 14000, "dur": 8000, "text": "not running", "back": "restoring" },
+      { "node": "endpoint", "at": 8000, "every": 14000, "dur": 2000, "text": "no database", "back": "points at restore" }
+    ]
+  },
+  "history": {
+    "story": [
+      "For most of computing history a backup meant tape. In 1953 IBM introduced the vacuum-column tape drive for its 701 computer, and for more than 30 years magnetic tape dominated offline storage: cheap per byte, and easy to carry off site. Unix made the routine explicit. In Seventh Edition Unix (1979), `dump` copied to tape every file changed since the last dump at a lower level: level 0 copied everything, higher levels only the changes, the full-plus-incremental scheme still in use.",
+      "Networks and databases changed what a copy could be. In 1996 Andrew Tridgell and Paul Mackerras described rsync, which updates a remote copy over a slow link by sending only the parts that differ. PostgreSQL 8.0 (2005) added WAL archiving and point-in-time recovery, so a database could be backed up continuously and restored to any moment. restic (first released in 2015) and BorgBackup (forked from Attic in 2015) split files into content-defined chunks and store each chunk only once, so every backup reads as a full one but stores only what changed.",
+      "The cloud made snapshots an API call: Amazon EBS launched in 2008 with snapshots stored in S3, and AWS Backup (2019) put one policy over many services. Then ransomware changed the threat. Many variants look for reachable backups and delete or encrypt them before demanding payment, so the answer became copies that nobody can delete before a date: S3 Object Lock (2018), AWS Backup Vault Lock, and immutable vaults in Google Cloud and Azure."
+    ],
+    "choices": [
+      { "choice": "A full copy, then only the changes", "why": "Copying everything every night takes too long and too much tape. Dump levels copied only files changed since a lower-level dump, at the price that a restore needs every piece of the chain." },
+      { "choice": "Keep a copy somewhere else", "why": "A fire, a theft or a failed disk takes everything kept in one place, including backups on the same drive. The 3-2-1 rule, from photographer Peter Krogh’s The DAM Book and adopted by US-CERT, asks for three copies on two media with one off site." },
+      { "choice": "A base backup plus the log, not frequent full copies", "why": "Replaying archived WAL over one base backup gives continuous protection without a perfectly consistent snapshot, and replay can stop at any moment, which turns a backup into a time machine." },
+      { "choice": "Make the copy impossible to delete", "why": "Once attackers began deleting backups before encrypting data, keeping a copy was no longer enough. Write-once retention locks put a copy beyond the reach of a stolen administrator account." }
+    ],
+    "timeline": [
+      { "year": "1953", "text": "IBM introduces the vacuum-column tape drive with the 701" },
+      { "year": "1979", "text": "Seventh Edition Unix ships `dump` with incremental levels 0 to 9" },
+      { "year": "1996", "text": "Tridgell and Mackerras publish the rsync algorithm" },
+      { "year": "2005", "text": "PostgreSQL 8.0 adds WAL archiving and point-in-time recovery" },
+      { "year": "2008", "text": "Amazon EBS launches with snapshots to S3" },
+      { "year": "2015", "text": "restic and BorgBackup bring deduplicated, chunked backups" },
+      { "year": "2018", "text": "S3 Object Lock offers write-once retention for backups" },
+      { "year": "2019", "text": "AWS Backup launches" }
+    ],
+    "sources": [
+      { "label": "IBM History: Magnetic tape (1953 vacuum column for the IBM 701)", "url": "https://www.ibm.com/history/magnetic-tape" },
+      { "label": "Seventh Edition Unix manual: dump(1M) (1979), via TUHS", "url": "https://www.tuhs.org/cgi-bin/utree.pl?file=V7/usr/man/man1/dump.1m" },
+      { "label": "Tridgell and Mackerras: The rsync algorithm (ANU technical report TR-CS-96-05, 1996)", "url": "https://openresearch-repository.anu.edu.au/handle/1885/40765" },
+      { "label": "The rsync algorithm (HTML version)", "url": "https://rsync.samba.org/tech_report/" },
+      { "label": "PostgreSQL 8.0 release notes: point-in-time recovery (Jan 2005)", "url": "https://www.postgresql.org/docs/release/8.0.0/" },
+      { "label": "restic v0.1.0 release on GitHub (Sep 2015)", "url": "https://github.com/restic/restic/releases/tag/v0.1.0" },
+      { "label": "restic design: content-defined chunking with Rabin fingerprints", "url": "https://github.com/restic/restic/blob/master/doc/design.rst" },
+      { "label": "BorgBackup FAQ: why Borg was forked from Attic (May 2015)", "url": "https://github.com/borgbackup/borg/blob/1.4-maint/docs/faq.rst" },
+      { "label": "borgbackup/borg README: deduplication with content-defined chunking, only changes are stored", "url": "https://github.com/borgbackup/borg" },
+      { "label": "AWS News Blog: Amazon Elastic Block Store, snapshots to S3 (Aug 2008)", "url": "https://aws.amazon.com/blogs/aws/amazon-elastic/" },
+      { "label": "AWS What’s New: Amazon S3 Object Lock (Nov 2018)", "url": "https://aws.amazon.com/about-aws/whats-new/2018/11/s3-object-lock/" },
+      { "label": "AWS What’s New: Introducing AWS Backup (Jan 2019)", "url": "https://aws.amazon.com/about-aws/whats-new/2019/01/introducing-aws-backup/" },
+      { "label": "AWS Backup Developer Guide: Vault Lock", "url": "https://docs.aws.amazon.com/aws-backup/latest/devguide/vault-lock.html" },
+      { "label": "Google Cloud: Backup vaults for immutable and indelible backups", "url": "https://cloud.google.com/backup-disaster-recovery/docs/concepts/backup-vault" },
+      { "label": "Microsoft Learn: Immutable vault for Azure Backup", "url": "https://learn.microsoft.com/en-us/azure/backup/backup-azure-immutable-vault-concept" },
+      { "label": "US-CERT: Data Backup Options (2012), the 3-2-1 rule citing Krogh’s The DAM Book", "url": "https://www.cisa.gov/sites/default/files/publications/data_backup_options.pdf" },
+      { "label": "CISA #StopRansomware Guide: ransomware deletes or encrypts accessible backups", "url": "https://www.cisa.gov/stopransomware/ransomware-guide" },
+      { "label": "PostgreSQL docs: Continuous archiving and point-in-time recovery", "url": "https://www.postgresql.org/docs/current/continuous-archiving.html" }
+    ]
+  },
+  "sources": [
+    { "label": "pgBackRest User Guide: full, differential and incremental backups; archive-push; point-in-time restore", "url": "https://pgbackrest.org/user-guide.html" },
+    { "label": "PostgreSQL docs: Continuous archiving and point-in-time recovery (base backup plus WAL replay)", "url": "https://www.postgresql.org/docs/current/continuous-archiving.html" },
+    { "label": "PostgreSQL docs: Write-ahead log settings (`archive_timeout`)", "url": "https://www.postgresql.org/docs/current/runtime-config-wal.html" },
+    { "label": "Amazon EBS User Guide: snapshots are incremental backups stored in Amazon S3", "url": "https://docs.aws.amazon.com/ebs/latest/userguide/ebs-snapshots.html" },
+    { "label": "AWS whitepaper: Disaster recovery of workloads on AWS, definitions of RTO and RPO", "url": "https://docs.aws.amazon.com/whitepapers/latest/disaster-recovery-workloads-on-aws/business-continuity-plan-bcp.html" },
+    { "label": "US-CERT: Data Backup Options (2012), the 3-2-1 rule and backups on the same drive", "url": "https://www.cisa.gov/sites/default/files/publications/data_backup_options.pdf" },
+    { "label": "CISA #StopRansomware Guide: offline, encrypted backups and regular restore tests", "url": "https://www.cisa.gov/stopransomware/ransomware-guide" },
+    { "label": "AWS Backup Developer Guide: What is AWS Backup?", "url": "https://docs.aws.amazon.com/aws-backup/latest/devguide/whatisbackup.html" },
+    { "label": "AWS Backup Developer Guide: Vault Lock (compliance mode, not even the root user can delete)", "url": "https://docs.aws.amazon.com/aws-backup/latest/devguide/vault-lock.html" },
+    { "label": "AWS Backup Developer Guide: Creating backup copies across AWS Regions", "url": "https://docs.aws.amazon.com/aws-backup/latest/devguide/cross-region-backup.html" },
+    { "label": "AWS Backup Developer Guide: Restore testing", "url": "https://docs.aws.amazon.com/aws-backup/latest/devguide/restore-testing.html" },
+    { "label": "Amazon RDS User Guide: Restoring a DB instance to a specified time", "url": "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_PIT.html" },
+    { "label": "Amazon S3 User Guide: Locking objects with Object Lock (WORM, compliance mode)", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html" },
+    { "label": "Google Cloud: Backup and DR overview", "url": "https://cloud.google.com/backup-disaster-recovery/docs/concepts/backup-dr" },
+    { "label": "Google Cloud: Backup vaults for immutable and indelible backups", "url": "https://cloud.google.com/backup-disaster-recovery/docs/concepts/backup-vault" },
+    { "label": "Google Cloud: About disk snapshots (incremental)", "url": "https://cloud.google.com/compute/docs/disks/snapshots" },
+    { "label": "Google Cloud: Cloud SQL for PostgreSQL point-in-time recovery", "url": "https://cloud.google.com/sql/docs/postgres/backup-recovery/pitr" },
+    { "label": "Microsoft Learn: What is Azure Backup? (Recovery Services and Backup vaults)", "url": "https://learn.microsoft.com/en-us/azure/backup/backup-overview" },
+    { "label": "Microsoft Learn: Immutable vault for Azure Backup", "url": "https://learn.microsoft.com/en-us/azure/backup/backup-azure-immutable-vault-concept" },
+    { "label": "Microsoft Learn: Azure Kubernetes Service backup overview", "url": "https://learn.microsoft.com/en-us/azure/backup/azure-kubernetes-service-backup-overview" },
+    { "label": "Velero docs: How Velero works", "url": "https://velero.io/docs/v1.18/how-velero-works/" },
+    { "label": "restic/restic on GitHub (BSD-2-Clause)", "url": "https://github.com/restic/restic" },
+    { "label": "kopia/kopia on GitHub: encrypted, deduplicated snapshots to cloud storage", "url": "https://github.com/kopia/kopia" },
+    { "label": "borgbackup/borg on GitHub: deduplicating backup with content-defined chunking", "url": "https://github.com/borgbackup/borg" },
+    { "label": "wal-g/wal-g on GitHub", "url": "https://github.com/wal-g/wal-g" },
+    { "label": "EnterpriseDB/barman on GitHub: Backup and Recovery Manager for PostgreSQL", "url": "https://github.com/EnterpriseDB/barman" }
+  ]
+}

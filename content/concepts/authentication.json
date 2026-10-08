@@ -1,0 +1,187 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Authentication",
+  "category": "security",
+  "order": 10,
+  "summary": "Proving who a user is, before anyone decides what they may do.",
+  "howItWorks": "Authentication answers “who are you?”; authorization (see IAM) then answers “what may you do?”. A user proves identity with something they know (a password), something they have (a phone or security key) or something they are (a fingerprint), and multi-factor authentication (MFA) asks for two of them. A password is never stored as typed: the server keeps a salted, deliberately slow hash such as Argon2id or bcrypt, so a stolen database can’t simply be read back. After a successful login the app has to remember the user on every later request. It can hand the browser a random session ID in a cookie and keep the session on the server, which is easy to revoke, or it can issue a signed token such as a JSON Web Token (JWT) that any service can check without a lookup, which is hard to revoke before it expires. Most apps no longer check passwords themselves: they redirect the user to an identity provider (Google, Microsoft Entra ID or a customer’s own directory) using OpenID Connect or SAML, and get back a signed statement of who the user is. Passkeys go further and replace the password with a key pair: the private key never leaves the user’s device and only signs challenges for the site it was created for, which makes it resistant to phishing.",
+  "analogy": "Checking in at a hotel. The front desk checks your passport once (authentication) and gives you a key card (the session). The card opens your room and the gym but not the kitchen (authorization), and it stops working when you check out.",
+  "useWhen": [
+    "Any app where users have their own data, settings or permissions",
+    "Selling to companies whose IT team wants staff to sign in through their own directory (SAML or OIDC single sign-on) and be removed automatically when they leave (SCIM)",
+    "Protecting admin and high-value accounts with MFA or passkeys"
+  ],
+  "avoidWhen": [
+    "Writing your own password storage, reset emails and MFA when a maintained library or provider does it; the details are easy to get wrong",
+    "Treating a valid login as permission: being signed in says who someone is, not what they may touch",
+    "Long-lived JWTs as sessions when you need instant logout or account suspension, unless you add a deny list"
+  ],
+  "example": "A project-management SaaS lets individuals sign up with email and a passkey, or with a password plus a code from an authenticator app. When a 2,000-person company buys it, their IT team connects the app to the company directory: employees click “Sign in with SSO”, the app redirects them to the company’s identity provider over SAML or OIDC, and the app never sees their passwords. SCIM pushes joiners and leavers, so an employee who leaves on Friday loses access when the directory disables them, not when someone remembers to delete the account.",
+  "providers": {
+    "aws": "Amazon Cognito (user pools for sign-in, identity pools for AWS credentials); IAM Identity Center for staff SSO into AWS",
+    "gcp": "Identity Platform (Firebase Authentication plus SAML, OIDC and multi-tenancy); Firebase Authentication",
+    "azure": "Microsoft Entra ID for staff; Microsoft Entra External ID for customers (Azure AD B2C no longer sold to new customers since May 2025)",
+    "oss": "Keycloak (Apache 2.0, CNCF), Ory Kratos and Hydra (Apache 2.0), authentik (MIT core), Supabase Auth (MIT), Better Auth (MIT); hosted: Auth0, WorkOS"
+  },
+  "snippet": {
+    "lang": "http",
+    "source": [
+      "# 1. The app redirects the browser to the identity provider (OIDC authorization code flow with PKCE)",
+      "GET /authorize?response_type=code",
+      "    &client_id=s6BhdRkqt3",
+      "    &redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback",
+      "    &scope=openid%20email",
+      "    &state=af0ifjsldkj",
+      "    &code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+      "    &code_challenge_method=S256 HTTP/1.1",
+      "Host: login.example.com",
+      "",
+      "# 2. After the user signs in, the provider sends the browser back with a one-time code",
+      "HTTP/1.1 302 Found",
+      "Location: https://app.example.com/callback?code=SplxlOBeZQQYbYS6WxSbIA&state=af0ifjsldkj",
+      "",
+      "# 3. The app's server swaps the code for tokens, proving it started the flow",
+      "POST /token HTTP/1.1",
+      "Host: login.example.com",
+      "Content-Type: application/x-www-form-urlencoded",
+      "",
+      "grant_type=authorization_code&code=SplxlOBeZQQYbYS6WxSbIA",
+      "&redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback",
+      "&client_id=s6BhdRkqt3&code_verifier=dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+      "",
+      "# 4. The id_token is a signed JWT saying who the user is; the app checks it and starts a session",
+      "HTTP/1.1 200 OK",
+      "Content-Type: application/json",
+      "",
+      "{ \"access_token\": \"SlAV32hkKG\", \"token_type\": \"Bearer\", \"expires_in\": 3600,",
+      "  \"id_token\": \"eyJhbGciOiJSUzI1NiIsImtpZCI6IjFlOWdkazcifQ...\" }"
+    ]
+  },
+  "related": ["iam", "secrets", "remote-access", "apigw"],
+  "diagram": {
+    "caption": "Most requests carry a valid session cookie and go straight to the app. Requests without one are redirected to the identity provider; after the user signs in, the browser comes back with a code, the app swaps it for tokens and starts a session. The slow round trips are logins.",
+    "h": 260,
+    "nodes": [
+      {
+        "id": "browser",
+        "x": 105,
+        "y": 130,
+        "label": "Browser",
+        "sub": "user",
+        "emit": { "every": 650, "jitter": 0.4, "req": true, "cycle": true },
+        "out": ["app"]
+      },
+      {
+        "id": "app",
+        "x": 330,
+        "y": 130,
+        "label": "App",
+        "sub": "session cookie?",
+        "mode": "gate",
+        "p": 0.75,
+        "allowText": "session ok",
+        "denyText": "no session: redirect",
+        "deny": "idp",
+        "out": ["pages"]
+      },
+      {
+        "id": "pages",
+        "x": 600,
+        "y": 70,
+        "label": "Pages and API",
+        "sub": "signed-in user",
+        "mode": "reply",
+        "delay": 90
+      },
+      {
+        "id": "idp",
+        "x": 600,
+        "y": 195,
+        "label": "Identity provider",
+        "sub": "login, code, tokens",
+        "mode": "reply",
+        "delay": 1100
+      }
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "The standards you’ll meet",
+      "intro": "They solve different problems and are often used together: a B2B app might take OIDC logins from individuals, SAML from enterprise customers, SCIM for provisioning and WebAuthn for passkeys.",
+      "corner": "Standard",
+      "columns": ["What it does", "Format", "Typical use"],
+      "rows": [
+        { "label": "OAuth 2.0 (RFC 6749, 2012)", "values": ["Lets an app get limited access to an API on a user’s behalf. Authorization, not login.", "HTTP redirects; access tokens", "“Allow this app to read your calendar”"] },
+        { "label": "OpenID Connect (2014)", "values": ["An identity layer on top of OAuth 2.0: adds an ID token saying who signed in", "JSON; ID token is a JWT", "“Sign in with Google”, modern enterprise SSO"] },
+        { "label": "SAML 2.0 (2005)", "values": ["Single sign-on: the identity provider sends a signed assertion about the user", "XML", "Enterprise SSO from a company directory"] },
+        { "label": "SCIM 2.0 (RFC 7643/7644, 2015)", "values": ["Creates, updates and deactivates accounts from a directory", "JSON over REST", "Joiners and leavers synced automatically"] },
+        { "label": "WebAuthn / FIDO2 (2019)", "values": ["Sign-in with a key pair held by the device, scoped to one site", "Browser API; public-key signatures", "Passkeys and security keys"] }
+      ],
+      "notes": ["A JWT (RFC 7519) is just a signed, compact token format; OIDC uses it, but so do many home-grown session schemes."]
+    }
+  ],
+  "history": {
+    "story": [
+      "Passwords came with time-sharing. Robert Morris and Ken Thompson’s 1979 account of Unix password security recalls that the first Unix kept everyone’s actual passwords in a file that had to be guarded, and that on MIT’s CTSS an editing mix-up once printed the password file on every terminal at login. Unix moved to storing only an encrypted form, made it deliberately slow, and added a 12-bit random salt so that identical passwords looked different and precomputed attacks stopped working. bcrypt (Provos and Mazières, 1999) made the slowness adjustable as hardware got faster, and Argon2, winner of the 2013 to 2015 Password Hashing Competition, also made attackers pay in memory.",
+      "As people collected accounts on dozens of sites, the work moved to identity providers. SAML 2.0 (2005) let a company’s directory vouch for its staff at other organisations’ apps. OAuth 2.0 (2012) standardised how an app gets limited access to an API on a user’s behalf; it is an authorization protocol and says nothing about who the user is. OpenID Connect, ratified in February 2014, added a proper identity layer on top: an ID token, a signed JWT that says who signed in, to whom, and when.",
+      "Passwords and one-time codes can be typed into a fake site, so the industry moved to public-key credentials. The W3C published Web Authentication (WebAuthn) as a Recommendation in March 2019, and in May 2022 Apple, Google and Microsoft committed to passkeys that sync across a user’s devices. NIST’s 2025 guidelines now tell US federal systems to offer a phishing-resistant option, and to stop forcing periodic password changes and composition rules."
+    ],
+    "choices": [
+      { "choice": "Store a salted, slow hash, never the password", "why": "A password file will eventually leak. Morris and Thompson salted and slowed down Unix’s hashes so a stolen file would be expensive to crack; bcrypt and Argon2 let that cost grow with hardware." },
+      { "choice": "Delegate login to an identity provider", "why": "With redirects (SAML, OIDC) the app never sees the user’s password, users keep one login, and an employer can switch off access centrally when someone leaves." },
+      { "choice": "Build identity on OAuth 2.0 instead of a new protocol", "why": "Sites already used OAuth to call each other’s APIs. OpenID Connect reused that machinery for login, adding only a signed ID token, so libraries and providers could support both." },
+      { "choice": "Key pairs bound to a site, not shared secrets", "why": "A password or SMS code can be typed into a fake site. A WebAuthn credential is scoped to the site that created it and only signs a challenge, so there is nothing reusable to steal." }
+    ],
+    "timeline": [
+      { "year": "1979", "text": "Morris and Thompson describe salted, slow password hashing in Unix" },
+      { "year": "1999", "text": "Provos and Mazières present bcrypt, with an adjustable cost" },
+      { "year": "2005", "text": "SAML 2.0 becomes an OASIS Standard" },
+      { "year": "2012", "text": "OAuth 2.0 published as RFC 6749" },
+      { "year": "2014", "text": "OpenID Connect ratified by the OpenID Foundation" },
+      { "year": "2015", "text": "Argon2 wins the Password Hashing Competition; JWT and SCIM 2.0 published as RFCs" },
+      { "year": "2019", "text": "WebAuthn becomes a W3C Recommendation" },
+      { "year": "2022", "text": "Apple, Google and Microsoft commit to passkeys" }
+    ],
+    "sources": [
+      { "label": "Morris and Thompson: Password Security, A Case History (Communications of the ACM, November 1979)", "url": "https://www.cs.unibo.it/~sacerdot/doc/papers/Morris-PasswordSecurity.pdf" },
+      { "label": "Provos and Mazières: A Future-Adaptable Password Scheme (USENIX 1999), the bcrypt paper", "url": "https://www.usenix.org/legacy/events/usenix99/provos.html" },
+      { "label": "Password Hashing Competition: Argon2 selected as winner (2013 to 2015)", "url": "https://www.password-hashing.net/" },
+      { "label": "OASIS: SAML V2.0 technical overview (SAML 2.0 specifications, March 2005)", "url": "https://docs.oasis-open.org/security/saml/Post2.0/sstc-saml-tech-overview-2.0.html" },
+      { "label": "OASIS: Assertions and Protocols for SAML V2.0 (OASIS Standard, 15 March 2005)", "url": "https://docs.oasis-open.org/security/saml/v2.0/saml-core-2.0-os.pdf" },
+      { "label": "RFC 6749: The OAuth 2.0 Authorization Framework (Oct 2012)", "url": "https://www.rfc-editor.org/rfc/rfc6749" },
+      { "label": "OpenID Foundation: The OpenID Foundation launches the OpenID Connect standard (Feb 2014)", "url": "https://openid.net/the-openid-foundation-launches-the-openid-connect-standard/" },
+      { "label": "RFC 7519: JSON Web Token (May 2015)", "url": "https://www.rfc-editor.org/rfc/rfc7519" },
+      { "label": "RFC 7644: SCIM Protocol (Sept 2015)", "url": "https://www.rfc-editor.org/rfc/rfc7644" },
+      { "label": "W3C: Web Authentication Level 1 (Recommendation, 4 March 2019)", "url": "https://www.w3.org/TR/2019/REC-webauthn-1-20190304/" },
+      { "label": "FIDO Alliance: Apple, Google and Microsoft commit to expanded support for FIDO standard (May 2022)", "url": "https://fidoalliance.org/apple-google-and-microsoft-commit-to-expanded-support-for-fido-standard-to-accelerate-availability-of-passwordless-sign-ins/" },
+      { "label": "NIST SP 800-63B-4: Authentication and Authenticator Management (July 2025)", "url": "https://csrc.nist.gov/pubs/sp/800/63/b/4/final" }
+    ]
+  },
+  "sources": [
+    { "label": "OWASP: Password Storage Cheat Sheet (Argon2id, scrypt, bcrypt’s 72-byte limit, PBKDF2)", "url": "https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html" },
+    { "label": "OWASP: Session Management Cheat Sheet (session ID entropy, HttpOnly and Secure cookies)", "url": "https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html" },
+    { "label": "OWASP: JSON Web Token Cheat Sheet (JWT sessions need a deny list to revoke)", "url": "https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_Cheat_Sheet.html" },
+    { "label": "RFC 6749: The OAuth 2.0 Authorization Framework (authorization code example)", "url": "https://www.rfc-editor.org/rfc/rfc6749" },
+    { "label": "OpenID Connect Core 1.0 (identity layer on top of OAuth 2.0, ID token, code flow examples)", "url": "https://openid.net/specs/openid-connect-core-1_0.html" },
+    { "label": "RFC 7636: Proof Key for Code Exchange (PKCE)", "url": "https://www.rfc-editor.org/rfc/rfc7636" },
+    { "label": "RFC 9700: Best Current Practice for OAuth 2.0 Security (Jan 2025: PKCE, no implicit grant)", "url": "https://www.rfc-editor.org/rfc/rfc9700" },
+    { "label": "RFC 7643: SCIM Core Schema", "url": "https://www.rfc-editor.org/rfc/rfc7643" },
+    { "label": "W3C: Web Authentication Level 3 (public key credentials scoped to a relying party)", "url": "https://www.w3.org/TR/webauthn-3/" },
+    { "label": "NIST SP 800-63B-4 (phishing-resistant option at AAL2, no composition rules or forced periodic changes)", "url": "https://pages.nist.gov/800-63-4/sp800-63b.html" },
+    { "label": "Microsoft Security Blog: MFA blocks over 99.9% of account compromise attacks (Aug 2019)", "url": "https://www.microsoft.com/en-us/security/blog/2019/08/20/one-simple-action-you-can-take-to-prevent-99-9-percent-of-account-attacks/" },
+    { "label": "Amazon Cognito Developer Guide: What is Amazon Cognito? (user pools and identity pools)", "url": "https://docs.aws.amazon.com/cognito/latest/developerguide/what-is-amazon-cognito.html" },
+    { "label": "AWS docs: What is IAM Identity Center?", "url": "https://docs.aws.amazon.com/singlesignon/latest/userguide/what-is.html" },
+    { "label": "Google Cloud: Differences between Identity Platform and Firebase Authentication", "url": "https://cloud.google.com/identity-platform/docs/product-comparison" },
+    { "label": "Microsoft Learn: What is Microsoft Entra ID?", "url": "https://learn.microsoft.com/en-us/entra/fundamentals/whatis" },
+    { "label": "Microsoft Learn: Introduction to Microsoft Entra External ID", "url": "https://learn.microsoft.com/en-us/entra/external-id/external-identities-overview" },
+    { "label": "Microsoft Learn: What is Azure AD B2C? (no longer sold to new customers from May 1, 2025)", "url": "https://learn.microsoft.com/en-us/azure/active-directory-b2c/overview" },
+    { "label": "keycloak/keycloak on GitHub (Apache 2.0)", "url": "https://github.com/keycloak/keycloak" },
+    { "label": "CNCF: Keycloak (accepted at Incubating level, April 2023)", "url": "https://www.cncf.io/projects/keycloak/" },
+    { "label": "ory/kratos on GitHub (Apache 2.0)", "url": "https://github.com/ory/kratos" },
+    { "label": "ory/hydra on GitHub: OpenID Certified OAuth 2 and OIDC provider (Apache 2.0)", "url": "https://github.com/ory/hydra" },
+    { "label": "goauthentik/authentik on GitHub: LICENSE (MIT outside the enterprise directory)", "url": "https://github.com/goauthentik/authentik/blob/main/LICENSE" },
+    { "label": "supabase/auth on GitHub (MIT, derived from Netlify’s GoTrue)", "url": "https://github.com/supabase/auth" },
+    { "label": "better-auth/better-auth on GitHub (MIT)", "url": "https://github.com/better-auth/better-auth" }
+  ]
+}

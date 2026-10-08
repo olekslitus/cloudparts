@@ -1,0 +1,179 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "HashiCorp Boundary",
+  "concepts": ["remote-access", "iam"],
+  "provider": "vendor",
+  "vendor": "HashiCorp, an IBM company",
+  "license": "Business Source License 1.1 since 0.14 (source-available, not OSI open source); MPL 2.0 before the August 2023 change",
+  "website": "https://www.hashicorp.com/en/products/boundary",
+  "repo": "https://github.com/hashicorp/boundary",
+  "summary": "An identity-aware proxy: users sign in once and get one proxied session to one private host or database, with credentials fetched per session.",
+  "intro": [
+    "Boundary is a single Go binary that runs as a controller, a worker, or both. Controllers serve the API and admin UI, log users in through OIDC, LDAP or password auth methods, check their roles, and keep all configuration and session state in PostgreSQL. They don’t talk to each other, so you run several behind a load balancer. Workers carry the traffic. When a user picks a target (a host and port they are allowed to reach), the Boundary CLI or Desktop app opens a local port, and the connection runs from there to an ingress worker, through any intermediate workers, to an egress worker that can reach the target. Downstream workers dial out to the worker above them, so a chain can cross firewalls that allow no inbound traffic. Nothing is installed on the targets. Hosts can be listed by hand or synced from AWS, Azure or Google Cloud by tag or label with dynamic host catalogs.",
+    "Credentials come from credential stores: Boundary’s own static store or HashiCorp Vault. With brokering, the controller fetches a credential when the session starts, for example a fresh PostgreSQL user from Vault’s database engine, and hands it to the user; it is revoked when the session ends. With injection, the worker logs in to an SSH or RDP target on the user’s behalf, so the user never sees the credential, and the worker can record the session to an S3-compatible bucket. Every session has a maximum duration, and a target can cap how many connections it allows. Injection, multi-hop chains and transparent sessions need HCP Boundary or Boundary Enterprise, and recording needs HCP Boundary Plus or Enterprise. HashiCorp moved Boundary from MPL 2.0 to the Business Source License with version 0.14 in 2023, and Boundary 1.0 (June 2026) ships only as Enterprise builds and in HCP; the free Community Edition’s latest release is 0.21.3."
+  ],
+  "strengths": [
+    "Users get a proxied connection to one target, not a route into the network, and use their usual clients (`ssh`, `psql`, `kubectl`, RDP)",
+    "With Vault, each session can get its own short-lived database user or SSH certificate that is revoked when the session ends",
+    "Dynamic host catalogs pick up new EC2, Azure and Compute Engine machines by tag or label, with no agent on the hosts",
+    "Controllers are stateless on top of PostgreSQL, and everything can be configured through a Terraform provider"
+  ],
+  "limits": [
+    "No longer OSI open source, and the free Community Edition has stayed on the 0.21 line while 1.0 ships only to HCP and Enterprise",
+    "Much of what sets it apart is paid: credential injection, SSH and RDP targets, multi-hop workers and transparent sessions need HCP or Enterprise; session recording needs HCP Plus or Enterprise",
+    "Self-managed means running controllers, workers, PostgreSQL, a KMS and TLS; HCP Boundary hosts the control plane, but you still run workers inside private networks",
+    "Brokered credentials are shown to the user, and TCP targets such as databases can only use brokering",
+    "Permissions are checked only when a session starts; removing a role doesn’t end live sessions until they expire or someone cancels them"
+  ],
+  "worksWith": [
+    { "id": "vault", "how": "fetches per-session credentials from" },
+    { "id": "postgresql", "how": "keeps its configuration and state in" },
+    { "id": "ec2", "how": "discovers hosts by tag in" },
+    { "id": "aws-vpc", "how": "reaches private subnets through workers in" },
+    { "id": "s3", "how": "stores session recordings in" },
+    { "id": "terraform", "how": "is configured as code with" },
+    { "id": "kubernetes", "how": "proxies `kubectl` sessions to" }
+  ],
+  "snippet": {
+    "lang": "hcl",
+    "title": "A PostgreSQL target with hosts synced from AWS and per-session users from Vault",
+    "source": [
+      "resource \"boundary_host_catalog_plugin\" \"aws\" {",
+      "  scope_id        = boundary_scope.project.id",
+      "  plugin_name     = \"aws\"",
+      "  attributes_json = jsonencode({",
+      "    region                      = \"eu-west-1\"",
+      "    role_arn                    = \"arn:aws:iam::123456789012:role/boundary-discovery\"",
+      "    disable_credential_rotation = true",
+      "  })",
+      "}",
+      "resource \"boundary_host_set_plugin\" \"orders_db\" {",
+      "  host_catalog_id = boundary_host_catalog_plugin.aws.id",
+      "  attributes_json = jsonencode({ filters = [\"tag:service=orders-db\"] })",
+      "}",
+      "resource \"boundary_credential_store_vault\" \"vault\" {",
+      "  scope_id = boundary_scope.project.id",
+      "  address  = \"https://vault.internal:8200\"",
+      "  token    = var.vault_token # periodic token Boundary keeps renewed",
+      "}",
+      "resource \"boundary_credential_library_vault\" \"analyst\" {",
+      "  credential_store_id = boundary_credential_store_vault.vault.id",
+      "  path                = \"database/creds/analyst\" # Vault creates a new DB user",
+      "  credential_type     = \"username_password\"",
+      "}",
+      "resource \"boundary_target\" \"orders_db\" {",
+      "  name                           = \"orders-db\"",
+      "  type                           = \"tcp\"",
+      "  scope_id                       = boundary_scope.project.id",
+      "  default_port                   = 5432",
+      "  session_max_seconds            = 3600",
+      "  host_source_ids                = [boundary_host_set_plugin.orders_db.id]",
+      "  brokered_credential_source_ids = [boundary_credential_library_vault.analyst.id]",
+      "  egress_worker_filter           = \"\\\"eu-west-1\\\" in \\\"/tags/region\\\"\"",
+      "}",
+      "# Then: boundary connect postgres -target-name orders-db -target-scope-name prod -dbname orders"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Community, HCP and Enterprise",
+      "intro": "The same CLI and Desktop client work with every edition. What differs is who runs the control plane, which version you get, and which features unlock.",
+      "corner": "Feature",
+      "columns": ["Community", "HCP Boundary", "Enterprise"],
+      "rows": [
+        { "label": "Control plane", "values": ["You run it", "HashiCorp runs it; you run workers for private networks", "You run it"] },
+        { "label": "Latest version", "values": ["0.21.3 (April 2026)", "1.0.x", "1.0.x"] },
+        { "label": "Licence", "values": ["BUSL 1.1, free", "HashiCorp-hosted service (Standard and Plus tiers)", "Commercial licence"] },
+        { "label": "TCP targets, OIDC and LDAP login, brokered credentials", "values": ["Yes", "Yes", "Yes"] },
+        { "label": "Dynamic host catalogs (AWS, Azure, Google Cloud)", "values": ["Yes", "Yes", "Yes"] },
+        { "label": "SSH and RDP targets with credential injection", "values": ["No", "Yes", "Yes"] },
+        { "label": "Multi-hop worker chains", "values": ["No", "Yes", "Yes"] },
+        { "label": "Transparent sessions (Client Agent)", "values": ["No", "Yes", "Yes"] },
+        { "label": "Session recording and playback", "values": ["No", "Plus only", "Yes"] }
+      ],
+      "notes": [
+        "Community features are taken from the 0.21.x docs, the last line that ships a Community build; releases.hashicorp.com lists 1.0.0 to 1.0.2 only as `+ent` builds."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Other ways to do the same job",
+      "items": [
+        { "name": "AWS Session Manager and EC2 Instance Connect Endpoint", "tag": "AWS only", "text": "Shell and port forwarding to instances without inbound ports or public IPs, controlled by IAM, with no extra servers to run. Session Manager can log sessions to S3 or CloudWatch." },
+        { "name": "Google Identity-Aware Proxy", "tag": "Google Cloud only", "text": "Checks IAM before tunnelling TCP to a VM with no external IP; OS Login maps SSH access to IAM instead of copied keys." },
+        { "name": "Azure Bastion", "tag": "Azure only", "text": "A managed service in your virtual network that gives RDP and SSH over TLS to VMs that have no public IP." },
+        { "name": "Teleport", "tag": "AGPL source", "text": "Similar identity-aware proxy with a certificate authority for short-lived certificates. The source is AGPL-3.0, but the Community Edition binaries are licensed only to companies under 100 employees and $10M revenue." },
+        { "name": "OpenSSH bastion with `ProxyJump`", "tag": "free", "text": "One hardened jump host and `ssh -J`. Simple and fully open source, but users reach the network, keys are long-lived, and auditing is up to you." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "By 2020 the usual way to reach private servers was an SSH bastion host or a VPN. In HashiCorp’s announcement, engineer Jeff Mitchell listed the problems: once users are on these private networks they can access any system, not just the one they need; if the VPN or SSH credentials are lost or stolen, the whole network is exposed; and the approach suits static data centres badly, not clouds where hosts come and go all the time. Patching over it with internal firewall rules was, in his words, time consuming and wasteful.",
+      "HashiCorp announced Boundary on October 14, 2020, the day it tagged version 0.1.0. Access would be decided by identity at the application layer: users authenticate to Boundary, and workers proxy a session to one target, with no agent on the hosts. In 2021 Boundary gained credential stores, starting with Vault, so a session could get its own leased credential that Boundary revokes at the end, and dynamic host catalogs that discover AWS and Azure machines.",
+      "Later features went mostly to HCP and Enterprise: multi-hop worker chains in January 2023 (HCP only at first) and SSH session recording in June 2023. Boundary moved to the Business Source License from version 0.14, IBM completed its purchase of HashiCorp in 2025, and Boundary 1.0 arrived in June 2026 with RDP session recording, released only for HCP and Enterprise. HashiCorp now pitches it as the gate for AI agents that need infrastructure access."
+    ],
+    "choices": [
+      { "choice": "Proxy single sessions instead of granting network access", "why": "A VPN or bastion puts users on a network where they can reach any system. Proxying one connection to one authorized target keeps the rest of the network out of reach, even with a stolen login." },
+      { "choice": "Split controllers from workers", "why": "Controllers handle the API, logins and permissions, while workers sit next to the targets and only move traffic. Workers can live inside private networks and dial out, and stateless controllers share one PostgreSQL database." },
+      { "choice": "No agent on the target hosts", "why": "Managed databases, cloud services and short-lived containers can’t always run an agent. Proxying at the network level means anything with an address and port can be a target." },
+      { "choice": "Fetch credentials from Vault per session", "why": "Rather than storing passwords itself, Boundary asks Vault for a credential when the session starts and revokes it when the session ends, so each session gets its own short-lived login." }
+    ],
+    "timeline": [
+      { "year": "2020", "text": "Announced on October 14, the same day as the 0.1.0 release" },
+      { "year": "2021", "text": "Vault credential stores in June; AWS and Azure host discovery in November" },
+      { "year": "2023", "text": "Multi-hop workers in January and SSH session recording in June, not in Community" },
+      { "year": "2023", "text": "Version 0.14 in October is the first under the Business Source License" },
+      { "year": "2025", "text": "IBM completes its acquisition of HashiCorp" },
+      { "year": "2026", "text": "Boundary 1.0 in June, released only for HCP and Enterprise" }
+    ],
+    "sources": [
+      { "label": "HashiCorp blog: Announcing HashiCorp Boundary (Jeff Mitchell, Oct 2020)", "url": "https://www.hashicorp.com/en/blog/hashicorp-boundary" },
+      { "label": "GitHub: Boundary v0.1.0 release (Oct 14, 2020)", "url": "https://github.com/hashicorp/boundary/releases/tag/v0.1.0" },
+      { "label": "Boundary CHANGELOG (0.4.0 credential stores, 0.7.0 dynamic hosts, 0.12.0 multi-hop, 0.13.0 session recording, 0.14.0)", "url": "https://github.com/hashicorp/boundary/blob/main/CHANGELOG.md" },
+      { "label": "HashiCorp blog: HashiCorp adopts Business Source License (Aug 2023)", "url": "https://www.hashicorp.com/en/blog/hashicorp-adopts-business-source-license", "archive": "https://web.archive.org/web/20250304013523/https://www.hashicorp.com/en/blog/hashicorp-adopts-business-source-license" },
+      { "label": "IBM newsroom: IBM completes acquisition of HashiCorp (Feb 2025)", "url": "https://newsroom.ibm.com/2025-02-27-ibm-completes-acquisition-of-hashicorp,-creates-comprehensive,-end-to-end-hybrid-cloud-platform" },
+      { "label": "HashiCorp blog: Boundary 1.0 releases RDP session recording (Jun 2026)", "url": "https://www.hashicorp.com/en/blog/boundary-1-releases-with-rdp-session-recording-and-improved-management" },
+      { "label": "HashiCorp blog: Secure AI agents with HashiCorp Boundary (Sep 2026)", "url": "https://www.hashicorp.com/en/blog/secure-ai-agents-with-hashicorp-boundary" }
+    ]
+  },
+  "sources": [
+    { "label": "Boundary docs: What is Boundary? (editions feature table)", "url": "https://developer.hashicorp.com/boundary/docs/what-is-boundary" },
+    { "label": "Boundary docs: Workers (control plane, data plane, client)", "url": "https://developer.hashicorp.com/boundary/docs/concepts/workers" },
+    { "label": "Boundary docs: Multi-hop sessions (ingress, intermediate, egress workers)", "url": "https://developer.hashicorp.com/boundary/docs/workers/multi-hop" },
+    { "label": "Boundary docs: Recommended architecture (stateless controllers, PostgreSQL)", "url": "https://developer.hashicorp.com/boundary/docs/architecture/recommended-architecture" },
+    { "label": "Boundary docs: Configure controllers (PostgreSQL, KMS, TLS)", "url": "https://developer.hashicorp.com/boundary/docs/deploy/self-managed/configure-controllers" },
+    { "label": "Boundary docs: Targets domain model", "url": "https://developer.hashicorp.com/boundary/docs/domain-model/targets" },
+    { "label": "Boundary docs: Sessions (limits, revocation, permissions checked at start)", "url": "https://developer.hashicorp.com/boundary/docs/domain-model/sessions" },
+    { "label": "Boundary docs: AWS dynamic host catalogs", "url": "https://developer.hashicorp.com/boundary/docs/hosts/aws" },
+    { "label": "Boundary docs: Azure dynamic host catalogs", "url": "https://developer.hashicorp.com/boundary/docs/hosts/azure" },
+    { "label": "Boundary docs: GCP dynamic host catalogs", "url": "https://developer.hashicorp.com/boundary/docs/hosts/gcp" },
+    { "label": "Boundary docs: Credential management (brokering and injection)", "url": "https://developer.hashicorp.com/boundary/docs/concepts/credential-management" },
+    { "label": "Boundary docs: Vault integration", "url": "https://developer.hashicorp.com/boundary/docs/vault" },
+    { "label": "Boundary docs: Configure credential injection (SSH and RDP only)", "url": "https://developer.hashicorp.com/boundary/docs/credentials/configure-credential-injection" },
+    { "label": "Boundary docs: Session recording", "url": "https://developer.hashicorp.com/boundary/docs/session-recording" },
+    { "label": "Boundary docs: Desktop client", "url": "https://developer.hashicorp.com/boundary/docs/desktop" },
+    { "label": "Boundary docs: Transparent sessions", "url": "https://developer.hashicorp.com/boundary/docs/concepts/transparent-sessions" },
+    { "label": "Boundary docs: Terraform patterns for targets", "url": "https://developer.hashicorp.com/boundary/docs/deploy/terraform-patterns/terraform-targets" },
+    { "label": "Boundary docs: boundary connect postgres", "url": "https://developer.hashicorp.com/boundary/docs/commands/connect/postgres" },
+    { "label": "Boundary docs: Connect to Kubernetes with a TCP target", "url": "https://developer.hashicorp.com/boundary/docs/targets/create/tcp/kubernetes" },
+    { "label": "Boundary docs: Release notes 1.0.x (editions: HCP and Enterprise)", "url": "https://developer.hashicorp.com/boundary/docs/updates/release-notes" },
+    { "label": "Boundary 0.21.x docs: SSH targets (HCP Boundary or Boundary Enterprise)", "url": "https://developer.hashicorp.com/boundary/docs/v0.21.x/targets/create/ssh" },
+    { "label": "Boundary 0.21.x docs: Session recording (HCP Plus and Enterprise)", "url": "https://developer.hashicorp.com/boundary/docs/v0.21.x/session-recording" },
+    { "label": "Boundary 0.21.x docs: Multi-hop sessions (HCP and Enterprise)", "url": "https://developer.hashicorp.com/boundary/docs/v0.21.x/workers/multi-hop" },
+    { "label": "Boundary 0.21.x docs: Transparent sessions (HCP and Enterprise)", "url": "https://developer.hashicorp.com/boundary/docs/v0.21.x/concepts/transparent-sessions" },
+    { "label": "HashiCorp releases: Boundary builds (1.0.x only as +ent)", "url": "https://releases.hashicorp.com/boundary/" },
+    { "label": "GitHub: hashicorp/boundary LICENSE (BUSL 1.1 for 0.14.0 and later)", "url": "https://github.com/hashicorp/boundary/blob/main/LICENSE" },
+    { "label": "Terraform Registry: Boundary provider, boundary_target", "url": "https://registry.terraform.io/providers/hashicorp/boundary/latest/docs/resources/target" },
+    { "label": "AWS docs: AWS Systems Manager Session Manager", "url": "https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager.html" },
+    { "label": "AWS docs: Connect using EC2 Instance Connect Endpoint", "url": "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/connect-using-eice.html" },
+    { "label": "Google Cloud docs: Using IAP for TCP forwarding", "url": "https://cloud.google.com/iap/docs/using-tcp-forwarding" },
+    { "label": "Google Cloud docs: About OS Login", "url": "https://cloud.google.com/compute/docs/oslogin" },
+    { "label": "Microsoft Learn: What is Azure Bastion?", "url": "https://learn.microsoft.com/en-us/azure/bastion/bastion-overview" },
+    { "label": "GitHub: gravitational/teleport README (licensing)", "url": "https://github.com/gravitational/teleport" },
+    { "label": "GitHub: Teleport Community Edition license", "url": "https://github.com/gravitational/teleport/blob/master/build.assets/LICENSE-community" },
+    { "label": "OpenSSH 7.3 release notes: ProxyJump", "url": "https://www.openssh.com/txt/release-7.3" }
+  ],
+  "checked": "2026-10-05"
+}

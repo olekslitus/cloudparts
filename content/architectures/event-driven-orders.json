@@ -1,0 +1,71 @@
+{
+  "$schema": "../../.astro/collections/architectures.schema.json",
+  "title": "Event-driven order processing",
+  "order": 50,
+  "summary": "Checkout publishes one event to Kafka; payments, inventory and email each consume it at their own pace.",
+  "intro": "Instead of the checkout service calling payments, inventory and email one after another, and failing if any of them is slow, it records a single fact (“order placed”) in a Kafka topic and returns. Each downstream service reads the topic with its own offset. A slow email sender falls behind without holding anyone else up, and a new service can be added later and replay the history from the start.",
+  "fits": "Several teams owning separate services around shared business events",
+  "diagram": {
+    "caption": "Checkout appends order events to one Kafka topic. Three consumers read it independently: watch the email sender fall behind and catch up in bursts while payments keeps pace.",
+    "w": 880,
+    "h": 320,
+    "nodes": [
+      { "id": "checkout", "x": 90, "y": 120, "label": "Checkout API", "sub": "order placed", "emit": { "every": 420, "jitter": 0.3, "cycle": true }, "out": ["kafka"] },
+      {
+        "id": "kafka", "x": 345, "y": 120, "label": "Apache Kafka", "sub": "topic: orders", "tech": "kafka",
+        "kind": "log", "cells": 10, "retain": 60,
+        "readers": [
+          { "to": "payments", "every": 450, "name": "payments" },
+          { "to": "inventory", "every": 650, "name": "inventory" },
+          { "to": "email", "every": 2200, "batch": 4, "name": "email" }
+        ]
+      },
+      { "id": "payments", "x": 620, "y": 50, "label": "Payments service", "sub": "charges the card", "out": ["db"] },
+      { "id": "db", "x": 800, "y": 50, "label": "PostgreSQL", "sub": "payments", "tech": "postgresql", "mode": "reply", "delay": 40 },
+      { "id": "inventory", "x": 620, "y": 160, "label": "Inventory service", "sub": "reserves stock", "mode": "sink" },
+      {
+        "id": "email", "x": 620, "y": 265, "label": "Email sender", "sub": "AWS Lambda", "tech": "lambda",
+        "kind": "pool", "max": 4, "work": 500, "idle": 2500, "cold": 350
+      }
+    ]
+  },
+  "steps": [
+    {
+      "title": "Checkout records one event",
+      "text": "When an order is placed, checkout appends an `OrderPlaced` event, keyed by order id, to the `orders` topic and responds to the customer. It doesn’t know or care who reads it.",
+      "nodes": ["checkout", "kafka"]
+    },
+    {
+      "title": "Each consumer keeps its own place",
+      "text": "Payments, inventory and email are separate consumer groups. Kafka tracks an offset for each, so they read the same events independently and at different speeds.",
+      "nodes": ["payments", "inventory", "email"]
+    },
+    {
+      "title": "Slow consumers catch up later",
+      "text": "The email sender polls every couple of seconds and takes several events at once. It’s often behind, which is fine: the events wait in the topic, and nothing upstream slows down.",
+      "nodes": ["email"]
+    },
+    {
+      "title": "Results go to each service’s own store",
+      "text": "Payments writes charges to its own PostgreSQL database. Services never share a database; if one needs another’s data, it reads the events or publishes its own.",
+      "nodes": ["payments", "db"]
+    }
+  ],
+  "good": [
+    "Services are decoupled in time: one being slow or down doesn’t break checkout",
+    "Adding a consumer (fraud checks, analytics) needs no change to checkout",
+    "The topic is a replayable history, useful for rebuilding a service’s state or backfilling a new one",
+    "Keying by order id keeps each order’s events in order within a partition"
+  ],
+  "watch": [
+    "Consumers must be idempotent: after a crash, Kafka redelivers events since the last committed offset",
+    "Eventual consistency: right after checkout, inventory may not have reserved stock yet",
+    "Tracing one order across services needs correlation ids and good observability",
+    "Event schemas become a contract between teams; change them carefully, with a schema registry and Avro or Protobuf"
+  ],
+  "swaps": [
+    { "text": "On AWS without running Kafka: publish to SNS and fan out to one SQS queue per service, or use EventBridge rules.", "techs": ["sns", "sqs", "eventbridge"] },
+    { "text": "If the steps must happen in order with compensation on failure (refund if stock runs out), use a workflow engine instead.", "techs": ["temporal", "step-functions"] },
+    { "text": "To avoid losing events when the database write succeeds but the publish fails, write to an outbox table and stream it to Kafka with change data capture.", "techs": ["postgresql", "kafka"] }
+  ]
+}

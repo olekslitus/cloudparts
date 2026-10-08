@@ -1,0 +1,386 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Service discovery & mesh",
+  "category": "network",
+  "order": 60,
+  "summary": "How services find each other’s healthy instances, and a layer of proxies that secures and steers the calls between them.",
+  "howItWorks": "Service discovery starts with a registry. Each instance registers its address when it starts, the registry runs health checks, and instances that fail drop out. Callers look up a name through DNS or an API and get back only healthy addresses, so no one hard-codes IPs. A service mesh adds a proxy next to every instance (a sidecar) or on every node. Apps talk to their local proxy, and the proxies talk to each other over mutual TLS (mTLS): both sides present a certificate that proves which service they are. The proxies also retry failed calls, enforce timeouts and split traffic by weight between versions. A control plane watches the registry and pushes routes, access rules and short-lived certificates to every proxy.",
+  "analogy": "A company directory plus a mailroom. The directory says which desk each team sits at today, and stops listing people who are out sick. The mailroom collects every letter, checks the sender’s badge, seals it, resends the ones that get lost, and can send one letter in ten to the team’s new office.",
+  "useWhen": [
+    "Instances come and go (containers, autoscaling), so addresses change all the time",
+    "Every service-to-service call must be encrypted and authenticated without changing app code",
+    "Canary releases: sending a small share of calls to a new version and watching its errors",
+    "Many services in different languages need the same retries, timeouts and metrics"
+  ],
+  "avoidWhen": [
+    "A handful of services: DNS names, a load balancer or the platform’s built-in discovery are enough",
+    "Small teams: a mesh adds a control plane, a proxy per pod or node, certificate rotation and new places for calls to fail",
+    "Hops where the extra proxy on each side of a call costs latency you can’t spare"
+  ],
+  "example": "`checkout` calls `payments`. Each payments pod is registered with a `/health` check, and checkout’s proxy only ever connects to pods that pass it, over mTLS. When a pod fails its check, calls go to the others. To ship payments v2, the team adds a route that sends 10% of calls to it, watches the error rate, then moves to 100%. A batch job without a mesh certificate is refused at the payments proxy.",
+  "providers": {
+    "aws": "Cloud Map (registry: DNS or API lookups, with health checks); ECS Service Connect (a managed proxy in each task, with TLS from AWS Private CA); VPC Lattice (service-to-service networking across VPCs and accounts, with auth policies). App Mesh reached end of support on September 30, 2026",
+    "gcp": "Cloud Service Mesh (formerly Anthos Service Mesh and Traffic Director: Istio APIs on GKE, Google Cloud APIs for VMs, Envoy or proxyless gRPC); Service Directory (registry, resolved over DNS, HTTP and gRPC)",
+    "azure": "Istio-based service mesh add-on for AKS (sidecar mode; no ambient mode yet). The Open Service Mesh add-on is retired, with support ending September 30, 2027",
+    "oss": "Consul (registry, DNS interface and Envoy-based mesh); Istio (sidecar or sidecar-less ambient mode); Linkerd (Rust micro-proxies; stable builds come from vendors such as Buoyant); Cilium service mesh (eBPF plus Envoy); Kuma; Kubernetes Service DNS for plain discovery"
+  },
+  "snippet": {
+    "lang": "yaml",
+    "source": [
+      "# Kubernetes Gateway API for service mesh (GAMMA): the route attaches to a Service.",
+      "# Calls to payments go 90% to v1 and 10% to v2; the mesh’s proxies do the split.",
+      "apiVersion: gateway.networking.k8s.io/v1",
+      "kind: HTTPRoute",
+      "metadata:",
+      "  name: payments-canary",
+      "  namespace: shop",
+      "spec:",
+      "  parentRefs:",
+      "    - name: payments",
+      "      kind: Service",
+      "      group: core",
+      "      port: 8080",
+      "  rules:",
+      "    - backendRefs:",
+      "        - name: payments-v1",
+      "          port: 8080",
+      "          weight: 90",
+      "        - name: payments-v2",
+      "          port: 8080",
+      "          weight: 10"
+    ]
+  },
+  "related": [
+    "dns",
+    "lb",
+    "apigw",
+    "orchestration"
+  , "rpc",
+    "coordination"
+  ],
+  "diagram": {
+    "caption": "Checkout’s proxy spreads calls over the payments pods, and each pod’s proxy checks for a mesh certificate before passing the call on. The batch job has none and is refused. When pod 2 fails its health check, calls go only to pod 1 until it recovers.",
+    "h": 290,
+    "zones": [
+      {
+        "x": 380,
+        "y": 8,
+        "w": 365,
+        "h": 112,
+        "label": "Payments pod 1"
+      },
+      {
+        "x": 380,
+        "y": 132,
+        "w": 365,
+        "h": 112,
+        "label": "Payments pod 2"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "chk",
+        "x": 95,
+        "y": 140,
+        "label": "Checkout",
+        "sub": "calls payments",
+        "emit": {
+          "every": 650,
+          "jitter": 0.3,
+          "req": true,
+          "color": 0,
+          "type": "mtls"
+        },
+        "out": [
+          "px"
+        ]
+      },
+      {
+        "id": "job",
+        "x": 95,
+        "y": 255,
+        "label": "Batch job",
+        "sub": "no mesh certificate",
+        "emit": {
+          "every": 2600,
+          "jitter": 0.3,
+          "req": true,
+          "color": 3,
+          "type": "plain"
+        },
+        "out": [
+          "pp2"
+        ]
+      },
+      {
+        "id": "px",
+        "x": 270,
+        "y": 140,
+        "label": "Checkout proxy",
+        "sub": "mTLS · retries",
+        "route": "rr",
+        "out": [
+          "pp1",
+          "pp2"
+        ]
+      },
+      {
+        "id": "pp1",
+        "x": 475,
+        "y": 80,
+        "label": "Proxy",
+        "sub": "checks identity",
+        "mode": "gate",
+        "allowTypes": [
+          "mtls"
+        ],
+        "denyText": "refused: no cert",
+        "out": [
+          "a1"
+        ]
+      },
+      {
+        "id": "pp2",
+        "x": 475,
+        "y": 205,
+        "label": "Proxy",
+        "sub": "checks identity",
+        "mode": "gate",
+        "allowTypes": [
+          "mtls"
+        ],
+        "denyText": "refused: no cert",
+        "out": [
+          "a2"
+        ]
+      },
+      {
+        "id": "a1",
+        "x": 650,
+        "y": 80,
+        "label": "Payments",
+        "sub": "10.0.2.11:8080",
+        "mode": "reply",
+        "delay": 120,
+        "emit": {
+          "every": 2400,
+          "jitter": 0.2,
+          "color": 2,
+          "to": [
+            "cp"
+          ]
+        }
+      },
+      {
+        "id": "a2",
+        "x": 650,
+        "y": 205,
+        "label": "Payments",
+        "sub": "10.0.2.12:8080",
+        "mode": "reply",
+        "delay": 120,
+        "emit": {
+          "every": 2400,
+          "jitter": 0.2,
+          "color": 2,
+          "to": [
+            "cp"
+          ]
+        }
+      },
+      {
+        "id": "cp",
+        "x": 830,
+        "y": 142,
+        "label": "Control plane",
+        "sub": "registry · certificates",
+        "mode": "sink"
+      }
+    ],
+    "events": [
+      {
+        "node": "pp2",
+        "at": 4000,
+        "every": 12000,
+        "dur": 4500,
+        "text": "health check failed",
+        "back": "healthy"
+      }
+    ],
+    "w": 920,
+    "wide": true
+  },
+  "history": {
+    "story": [
+      "Once an application is split into many services on machines that come and go, every caller has two questions: where are the healthy copies of the service I need, and how do I call them safely? Round-robin DNS names were cached by clients long after a server died, and a central load balancer became one more thing that could take everything down. Yahoo’s ZooKeeper, described in a 2010 paper, gave teams a consistent place to register and watch servers, but every language needed its own client library.",
+      "In 2013 Airbnb described SmartStack, which moved discovery out of the app: a process on each machine read the registry and configured a local HAProxy, so apps just called localhost. HashiCorp released Consul in April 2014 with a registry, health checks and a DNS interface. Linkerd, from Buoyant, made its first release in January 2016, and in September Lyft open-sourced Envoy, a proxy that runs next to every service, built on the belief that “the network should be transparent to applications”.",
+      "In May 2017 Google, IBM and Lyft announced Istio, a control plane that programs Envoy sidecars with routes, policies and mutual TLS certificates. Since then the trend has been toward fewer proxies and more managed services: Istio’s ambient mode, generally available in November 2024, replaces sidecars with a per-node proxy, and AWS ended support for App Mesh on September 30, 2026, pointing users to ECS Service Connect."
+    ],
+    "choices": [
+      {
+        "choice": "Proxies outside the app instead of libraries inside it",
+        "why": "Airbnb found it had to rewrite in-app discovery for every language it used, and Lyft wanted one network layer for PHP, Python and the rest. A separate process works with any language and can be upgraded without redeploying the apps."
+      },
+      {
+        "choice": "A registry with health checks instead of static server lists",
+        "why": "Instances appear and disappear with deploys and failures. Registering on start and dropping out on a failed check means callers stop being sent to dead servers without anyone editing configuration."
+      },
+      {
+        "choice": "Identity from certificates, not IP addresses",
+        "why": "Istio’s launch post called the secure network a “common fallacy of distributed computing”. With mutual TLS, each proxy proves which service it speaks for, so access rules name services, wherever they run."
+      },
+      {
+        "choice": "A control plane separate from the data plane",
+        "why": "The control plane computes routes and certificates; the proxies only carry traffic. Proxies cache what they were given, so in Consul, for example, connections are still authorized when the control plane is unreachable."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "2010",
+        "text": "Yahoo’s ZooKeeper paper describes a coordination service teams use as a registry"
+      },
+      {
+        "year": "2013",
+        "text": "Airbnb publishes SmartStack: a registry plus a local HAProxy on every machine"
+      },
+      {
+        "year": "2014",
+        "text": "HashiCorp releases Consul with health checks and a DNS interface"
+      },
+      {
+        "year": "2016",
+        "text": "Linkerd’s first release in January; Lyft open-sources Envoy in September"
+      },
+      {
+        "year": "2017",
+        "text": "Google, IBM and Lyft announce Istio"
+      },
+      {
+        "year": "2024",
+        "text": "Istio’s sidecar-less ambient mode becomes generally available"
+      },
+      {
+        "year": "2026",
+        "text": "AWS App Mesh reaches end of support on September 30"
+      }
+    ],
+    "sources": [
+      {
+        "label": "USENIX ATC 2010: ZooKeeper, wait-free coordination for Internet-scale systems (Yahoo)",
+        "url": "https://www.usenix.org/conference/usenix-atc-10/zookeeper-wait-free-coordination-internet-scale-systems"
+      },
+      {
+        "label": "Airbnb Tech Blog: SmartStack, service discovery in the cloud (Oct 2013)",
+        "url": "https://medium.com/airbnb-engineering/smartstack-service-discovery-in-the-cloud-4b8a080de619",
+        "archive": "https://web.archive.org/web/20240215060111/https://medium.com/airbnb-engineering/smartstack-service-discovery-in-the-cloud-4b8a080de619"
+      },
+      {
+        "label": "HashiCorp blog: Consul announcement (Armon Dadgar, Apr 2014)",
+        "url": "https://www.hashicorp.com/en/blog/consul-announcement"
+      },
+      {
+        "label": "GitHub: linkerd/linkerd release-0.0.7 (Jan 2016)",
+        "url": "https://github.com/linkerd/linkerd/releases/tag/release-0.0.7"
+      },
+      {
+        "label": "Linkerd blog: Linkerd joins the CNCF (William Morgan, Jan 2017)",
+        "url": "https://linkerd.io/2017/01/24/linkerd-joins-the-cloud-native-computing-foundation/"
+      },
+      {
+        "label": "Lyft Engineering: Announcing Envoy, C++ L7 proxy and communication bus (Matt Klein, Sep 2016)",
+        "url": "https://eng.lyft.com/announcing-envoy-c-l7-proxy-and-communication-bus-92520b6c8191",
+        "archive": "https://web.archive.org/web/20261005001839/https://eng.lyft.com/announcing-envoy-c-l7-proxy-and-communication-bus-92520b6c8191"
+      },
+      {
+        "label": "Istio: Introducing Istio, the 0.1 announcement (May 2017)",
+        "url": "https://istio.io/latest/news/releases/0.x/announcing-0.1/"
+      },
+      {
+        "label": "Istio: Announcing Istio 1.24, ambient mode generally available (Nov 2024)",
+        "url": "https://istio.io/latest/news/releases/1.24.x/announcing-1.24/"
+      },
+      {
+        "label": "AWS App Mesh docs: What is App Mesh? (end of support notice)",
+        "url": "https://docs.aws.amazon.com/app-mesh/latest/userguide/what-is-app-mesh.html"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "Consul docs: What is Consul? (registry, health checks, DNS, mTLS)",
+      "url": "https://developer.hashicorp.com/consul/docs/intro"
+    },
+    {
+      "label": "Consul docs: Service intentions (cached by proxies)",
+      "url": "https://developer.hashicorp.com/consul/docs/secure-mesh/intention"
+    },
+    {
+      "label": "Kubernetes docs: DNS for Services and Pods",
+      "url": "https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/"
+    },
+    {
+      "label": "AWS Cloud Map docs: What is AWS Cloud Map?",
+      "url": "https://docs.aws.amazon.com/cloud-map/latest/dg/what-is-cloud-map.html"
+    },
+    {
+      "label": "AWS App Mesh docs: What is App Mesh? (end of support September 30, 2026)",
+      "url": "https://docs.aws.amazon.com/app-mesh/latest/userguide/what-is-app-mesh.html"
+    },
+    {
+      "label": "Amazon ECS docs: Service Connect (proxy per task, TLS with AWS Private CA)",
+      "url": "https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-connect.html"
+    },
+    {
+      "label": "Amazon VPC Lattice docs: What is VPC Lattice?",
+      "url": "https://docs.aws.amazon.com/vpc-lattice/latest/ug/what-is-vpc-lattice.html"
+    },
+    {
+      "label": "Google Cloud docs: Cloud Service Mesh overview",
+      "url": "https://cloud.google.com/service-mesh/docs/overview"
+    },
+    {
+      "label": "Google Cloud docs: Service Directory overview",
+      "url": "https://cloud.google.com/service-directory/docs/overview"
+    },
+    {
+      "label": "Microsoft Learn: Istio-based service mesh add-on for AKS",
+      "url": "https://learn.microsoft.com/en-us/azure/aks/istio-about"
+    },
+    {
+      "label": "Microsoft Learn: Open Service Mesh add-on in AKS (retirement notice)",
+      "url": "https://learn.microsoft.com/en-us/azure/aks/open-service-mesh-about"
+    },
+    {
+      "label": "Istio docs: What is Istio? (sidecar and ambient modes, retries)",
+      "url": "https://istio.io/latest/docs/overview/what-is-istio/"
+    },
+    {
+      "label": "Istio docs: Ambient mode overview (ztunnel per node, waypoint proxies)",
+      "url": "https://istio.io/latest/docs/ambient/overview/"
+    },
+    {
+      "label": "Linkerd docs: Overview (Rust micro-proxies)",
+      "url": "https://linkerd.io/2/overview/"
+    },
+    {
+      "label": "Linkerd: Releases and versions (no project stable artifacts since February 2024)",
+      "url": "https://linkerd.io/releases/"
+    },
+    {
+      "label": "Cilium docs: Service Mesh (eBPF datapath, Envoy for L7)",
+      "url": "https://docs.cilium.io/en/stable/network/servicemesh/"
+    },
+    {
+      "label": "CNCF: Kuma (Sandbox project)",
+      "url": "https://www.cncf.io/projects/kuma/"
+    },
+    {
+      "label": "Gateway API docs: Gateway API for service mesh (GAMMA)",
+      "url": "https://gateway-api.sigs.k8s.io/concepts/gamma/"
+    },
+    {
+      "label": "Gateway API docs: HTTP traffic splitting (weights)",
+      "url": "https://gateway-api.sigs.k8s.io/guides/traffic-splitting/"
+    }
+  ]
+}

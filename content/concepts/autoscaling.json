@@ -1,0 +1,123 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Autoscaling",
+  "category": "compute",
+  "order": 50,
+  "summary": "Add machines when load rises, remove them when it falls.",
+  "howItWorks": "An autoscaler watches a metric such as CPU, requests per instance or queue depth, and changes how many copies of a service run to keep that metric near a target. You set a minimum for availability, a maximum as a cost ceiling, and how fast it may react. New capacity takes time to boot, so scaling out always lags a sudden spike a little. More copies only help with the part of the work that can run in parallel: a shared database or lock caps the gain (Amdahl’s law).",
+  "analogy": "A supermarket opening more checkout lanes when the lines get long, and closing them after the rush.",
+  "useWhen": [
+    "Traffic with a daily or weekly shape",
+    "Batch backlogs that should drain faster when they’re deep",
+    "Keeping cost proportional to real usage"
+  ],
+  "avoidWhen": [
+    "Stateful servers that can’t be added or removed without moving data",
+    "Spikes shorter than your boot time; pre-scale or put a queue in front"
+  ],
+  "example": "A dashboard API runs 2 instances overnight and 8 at 9 a.m., when every field office logs in. The only rule is “keep average CPU at 60%”.",
+  "providers": {
+    "aws": "EC2 Auto Scaling, Application Auto Scaling",
+    "gcp": "Managed instance groups",
+    "azure": "Virtual Machine Scale Sets",
+    "oss": "Kubernetes HPA, KEDA, Karpenter"
+  },
+  "snippet": {
+    "lang": "yaml",
+    "source": [
+      "apiVersion: autoscaling/v2",
+      "kind: HorizontalPodAutoscaler",
+      "metadata: { name: api }",
+      "spec:",
+      "  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: api }",
+      "  minReplicas: 2",
+      "  maxReplicas: 8",
+      "  metrics:",
+      "    - type: Resource",
+      "      resource: { name: cpu, target: { type: Utilization, averageUtilization: 60 } }"
+    ]
+  },
+  "related": ["serverless","lb","orchestration","vm","amdahls-law"],
+  "diagram": {
+    "caption": "As traffic ramps up, the group adds instances, each taking a moment to boot. Once the peak passes it scales back down to its minimum of 2.",
+    "h": 250,
+    "nodes": [
+      {
+        "id": "load",
+        "x": 100,
+        "y": 125,
+        "label": "Traffic",
+        "sub": "daily peak",
+        "emit": {"req":true,"color":0,"jitter":0.3,"phases":[[4200,750],[6500,130],[4500,420],[3500,900]]},
+        "out": ["lb"]
+      },
+      {
+        "id": "lb",
+        "x": 300,
+        "y": 125,
+        "label": "Load balancer",
+        "sub": "distributes",
+        "out": ["grp"],
+        "concept": "lb"
+      },
+      {
+        "id": "grp",
+        "x": 555,
+        "y": 125,
+        "kind": "pool",
+        "label": "Instance group",
+        "sub": "min 2 · max 8 · CPU 60%",
+        "min": 2,
+        "max": 8,
+        "work": 850,
+        "idle": 2600,
+        "cold": 1200,
+        "coldText": "+1 instance",
+        "scaleText": "−1 instance"
+      }
+    ]
+  },
+  "history": {
+    "story": [
+      "With physical servers, capacity was bought for the busiest day and sat idle the rest of the time. Rented cloud machines made it possible to change capacity by the hour, but someone still had to watch the load and add or remove them. On May 18, 2009, AWS launched Auto Scaling together with CloudWatch monitoring and Elastic Load Balancing: you defined “scaling triggers” on CloudWatch metrics, and EC2 instances in an Auto Scaling group were launched or terminated to match the load, so you weren’t paying for idle ones.",
+      "The weak spot was lag: a new machine takes time to boot, so purely reactive rules trail every spike. AWS made rules simpler with target tracking in 2017, which works like a thermostat for a metric, and added predictive scaling in 2018, forecasting daily and weekly patterns to add capacity ahead of peaks. Containers moved the idea up a layer. Kubernetes 1.1 added the Horizontal Pod Autoscaler in 2015 to scale pods on CPU, KEDA later scaled them on events such as queue length, and node autoscalers like Karpenter (2021) add machines when pods don’t fit.",
+      "Serverless platforms take autoscaling to its end point, scaling per request and down to zero. In 2026 Kubernetes 1.37 turned on scale-to-zero by default for pods scaled on external or object metrics, such as queue consumers."
+    ],
+    "choices": [
+      { "choice": "Scale on a metric between a minimum and a maximum", "why": "A metric such as CPU or queue depth stands in for demand. The floor keeps the service available when the metric is misleading, and the ceiling caps the bill if something runs away." },
+      { "choice": "A target value instead of hand-set thresholds", "why": "Step rules, such as adding two instances above 70% CPU, take trial and error to tune. With target tracking you name the level you want and the autoscaler works out how much to add or remove." },
+      { "choice": "Predict as well as react", "why": "Because new capacity takes time to start, waiting for the metric to rise means users see the spike first. Forecasting regular patterns lets capacity arrive before the morning rush." },
+      { "choice": "Scale containers and machines separately", "why": "Pods start in seconds while new machines take much longer, so Kubernetes scales replicas with one autoscaler and nodes with another, each reacting at its own speed." }
+    ],
+    "timeline": [
+      { "year": "2009", "text": "AWS Auto Scaling launches alongside CloudWatch and Elastic Load Balancing" },
+      { "year": "2015", "text": "Kubernetes 1.1 adds the Horizontal Pod Autoscaler (beta)" },
+      { "year": "2017", "text": "Target tracking policies arrive for EC2 Auto Scaling" },
+      { "year": "2018", "text": "Predictive scaling forecasts load with machine learning" },
+      { "year": "2020", "text": "KEDA, event-driven autoscaling for Kubernetes, joins the CNCF" },
+      { "year": "2021", "text": "Karpenter launches nodes directly for unschedulable pods" },
+      { "year": "2026", "text": "Kubernetes 1.37 enables pod autoscaling to zero by default (beta)" }
+    ],
+    "sources": [
+      { "label": "AWS News Blog: Elastic Load Balancing, Auto Scaling and CloudWatch (May 2009)", "url": "https://aws.amazon.com/blogs/aws/new-aws-load-balancing-automatic-scaling-and-cloud-monitoring-services/" },
+      { "label": "AWS News Blog: Target tracking policies for EC2 Auto Scaling (Jul 2017)", "url": "https://aws.amazon.com/blogs/aws/new-target-tracking-policies-for-ec2-auto-scaling/" },
+      { "label": "AWS News Blog: Predictive scaling for EC2 (Nov 2018)", "url": "https://aws.amazon.com/blogs/aws/new-predictive-scaling-for-ec2-powered-by-machine-learning/" },
+      { "label": "Kubernetes Blog: Kubernetes 1.1, horizontal pod autoscaling in beta (Nov 2015)", "url": "https://kubernetes.io/blog/2015/11/kubernetes-1-1-performance-upgrades-improved-tooling-and-a-growing-community/" },
+      { "label": "CNCF: KEDA project (accepted Mar 2020)", "url": "https://www.cncf.io/projects/keda/" },
+      { "label": "AWS News Blog: Introducing Karpenter (Nov 2021)", "url": "https://aws.amazon.com/blogs/aws/introducing-karpenter-an-open-source-high-performance-kubernetes-cluster-autoscaler/" },
+      { "label": "Kubernetes Blog: v1.37, scale workloads to zero with the HPA (Sep 2026)", "url": "https://kubernetes.io/blog/2026/09/02/kubernetes-v1-37-hpa-scale-to-zero-beta/" }
+    ]
+  },
+  "sources": [
+    { "label": "Amazon EC2 Auto Scaling docs: What is Amazon EC2 Auto Scaling?", "url": "https://docs.aws.amazon.com/autoscaling/ec2/userguide/what-is-amazon-ec2-auto-scaling.html" },
+    { "label": "Amazon EC2 Auto Scaling docs: Target tracking scaling policies", "url": "https://docs.aws.amazon.com/autoscaling/ec2/userguide/as-scaling-target-tracking.html" },
+    { "label": "Amazon EC2 Auto Scaling docs: Default instance warmup", "url": "https://docs.aws.amazon.com/autoscaling/ec2/userguide/ec2-auto-scaling-default-instance-warmup.html" },
+    { "label": "Application Auto Scaling docs: What is Application Auto Scaling?", "url": "https://docs.aws.amazon.com/autoscaling/application/userguide/what-is-application-auto-scaling.html" },
+    { "label": "Compute Engine docs: Autoscaling groups of instances (managed instance groups)", "url": "https://docs.cloud.google.com/compute/docs/autoscaler" },
+    { "label": "Azure docs: Virtual Machine Scale Sets overview", "url": "https://learn.microsoft.com/en-us/azure/virtual-machine-scale-sets/overview" },
+    { "label": "Kubernetes docs: Horizontal Pod Autoscaling", "url": "https://kubernetes.io/docs/concepts/workloads/autoscaling/horizontal-pod-autoscale/" },
+    { "label": "KEDA", "url": "https://keda.sh/" },
+    { "label": "Karpenter docs: Overview", "url": "https://karpenter.sh/docs/" },
+    { "label": "John L. Gustafson: Reevaluating Amdahl’s Law (Amdahl’s formula)", "url": "http://www.johngustafson.net/pubs/pub13/amdahl.htm" }
+  ]
+}

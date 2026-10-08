@@ -1,0 +1,234 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Fluentd",
+  "concepts": ["logs", "observability"],
+  "provider": "oss",
+  "vendor": "Cloud Native Computing Foundation",
+  "license": "Apache 2.0",
+  "website": "https://www.fluentd.org/",
+  "repo": "https://github.com/fluent/fluentd",
+  "summary": "A CNCF graduated log collector that tags each event, routes it by tag through plugins, and buffers it until the destination accepts it.",
+  "intro": [
+    "Fluentd is a daemon you run on every server (as a forwarder) or on a few central machines (as an aggregator). Every event it handles has three parts: a tag such as `nginx.access` that says where it came from, a timestamp, and a record, which is a JSON object. `<source>` blocks bring events in (tail a file, listen for HTTP or syslog, or accept the `forward` protocol from other Fluentd and Fluent Bit agents), `<filter>` blocks change or drop them, and `<match>` blocks send every event whose tag matches a pattern to an output. In front of each output sits a buffer: events collect into chunks, in memory or in files on disk, and a chunk is sent when it is full or its time slot closes. If the destination is down, Fluentd retries with exponential backoff, by default for up to 72 hours.",
+    "Its docs describe it as C underneath with a thin Ruby layer, and almost everything is a plugin: more than 1,000 external plugins are published as Ruby gems. Because of Ruby’s global interpreter lock one process uses about one CPU core, so busy hosts run several worker processes. Fluentd is free under Apache 2.0, with no paid edition; ClearCode maintains it and ships the `fluent-package` installers, and sells support. Its sibling Fluent Bit, written in C, does a similar job in about 450 KB of memory against Fluentd’s 60 MB or more, and speaks the same `forward` protocol, so the two can be mixed in one pipeline."
+  ],
+  "strengths": [
+    "Tag-based routing keeps one config readable with many inputs and outputs: a `<match>` pattern decides where each kind of event goes",
+    "Retries with backoff ride out long outages, and since v1.19 file buffers move chunks that still fail to a backup directory instead of throwing them away",
+    "A very large plugin catalogue; `fluent-package` bundles outputs for S3, Kafka, Elasticsearch, OpenSearch and Prometheus, plus an OpenTelemetry (OTLP) plugin",
+    "Vendor-neutral and fully Apache 2.0 under the CNCF, with LTS packages: the v6 LTS series is supported until the end of 2027"
+  ],
+  "limits": [
+    "Heavier than its alternatives: more than 60 MB per process plus a Ruby runtime and gem dependencies. The Fluent Bit docs note that cloud providers have switched from Fluentd to Fluent Bit",
+    "Ruby’s global interpreter lock limits one process to about one CPU core; the single-process tuning guide covers up to about 5,000 messages a second, beyond that you configure `multi workers`",
+    "A memory buffer loses whatever it holds if Fluentd crashes; only a file buffer survives a restart, and you have to choose it per output",
+    "Built for logs: metrics and traces only arrive through plugins, unlike the OpenTelemetry Collector, which handles all three natively",
+    "Most plugins are external gems maintained outside the core project, so their quality and release pace vary"
+  ],
+  "worksWith": [
+    { "id": "s3", "how": "uploads hourly log files to" },
+    { "id": "kafka", "how": "produces log events to" },
+    { "id": "kubernetes", "how": "collects container logs as a DaemonSet in" },
+    { "id": "prometheus", "how": "exposes its own metrics for scraping by" },
+    { "id": "opentelemetry", "how": "receives and forwards OTLP data from" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Tail an nginx log, tag it, and ship hourly files to S3 through a disk buffer",
+    "source": [
+      "cat > fluent.conf <<'EOF'",
+      "<source>",
+      "  @type tail",
+      "  path /var/log/nginx/access.log",
+      "  pos_file /var/log/fluent/nginx-access.pos   # remembers how far it has read",
+      "  tag nginx.access",
+      "  <parse>",
+      "    @type nginx",
+      "  </parse>",
+      "</source>",
+      "",
+      "<filter nginx.**>",
+      "  @type record_transformer",
+      "  <record>",
+      "    hostname \"#{Socket.gethostname}\"",
+      "  </record>",
+      "</filter>",
+      "",
+      "<match nginx.**>",
+      "  @type s3",
+      "  s3_bucket my-app-logs",
+      "  s3_region eu-west-1",
+      "  path logs/nginx/",
+      "  <buffer tag,time>",
+      "    @type file                 # survives restarts; @type memory would not",
+      "    path /var/log/fluent/s3",
+      "    timekey 3600               # one object per hour",
+      "    timekey_wait 10m           # wait for late events before uploading",
+      "  </buffer>",
+      "</match>",
+      "EOF",
+      "",
+      "fluentd --dry-run -c fluent.conf && fluentd -c fluent.conf"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Choosing a telemetry agent",
+      "intro": "All five read from many sources, change data in flight and write it to many destinations. They differ in runtime, in the shape of data they were built around, and in who steers them.",
+      "corner": "",
+      "columns": ["Fluentd", "Logstash", "Telegraf", "OpenTelemetry Collector", "Vector"],
+      "rows": [
+        { "label": "Written in", "values": ["C and Ruby", "Java and JRuby; downloads bundle a JDK", "Go; one static binary", "Go", "Rust"] },
+        { "label": "Licence", "values": ["Apache 2.0", "Apache 2.0, plus `x-pack` features under the Elastic License", "MIT", "Apache 2.0", "MPL 2.0"] },
+        {
+          "label": "Steward",
+          "values": [
+            "CNCF (graduated 2019)",
+            "Elastic",
+            "InfluxData",
+            "CNCF (graduated 2026)",
+            "Datadog (bought its maker, Timber, in 2021)"
+          ]
+        },
+        {
+          "label": "Built around",
+          "values": [
+            "Log events: tag, time, JSON record",
+            "Events of any shape, mostly logs",
+            "Metrics: measurement, tags, fields, time",
+            "Traces, metrics and logs in OTLP",
+            "Logs and metrics"
+          ]
+        },
+        {
+          "label": "Config",
+          "values": [
+            "Own syntax: `<source>`, `<filter>`, `<match>`",
+            "Own DSL: `input`, `filter`, `output`",
+            "TOML",
+            "YAML",
+            "YAML, TOML or JSON"
+          ]
+        },
+        {
+          "label": "Plugins",
+          "values": [
+            "1,000+ external Ruby gems",
+            "200+ Ruby gems",
+            "400+ compiled in; others run as external programs via `execd`",
+            "Core and contrib distributions, or build your own with OCB",
+            "Built-in sources, transforms and sinks; VRL for custom logic"
+          ]
+        },
+        {
+          "label": "Buffer by default, and the durable option",
+          "values": [
+            "Memory or file, chosen per output",
+            "Memory; persistent queue on disk is opt-in",
+            "Memory; disk buffer is experimental (since 1.32)",
+            "Memory; persistent queue with the `file_storage` extension",
+            "Memory (500 events per sink); disk buffer optional"
+          ]
+        }
+      ],
+      "notes": [
+        "Plugin counts are the projects’ own: Fluent Bit’s comparison page for Fluentd, the Logstash README, and InfluxData’s Telegraf docs (the Telegraf README still says 300+).",
+        "Vector’s README lists traces as “coming soon”; its data model has log and metric events only."
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Fluentd or Fluent Bit?",
+      "intro": "Both are CNCF graduated projects under the Fluentd umbrella, both are Apache 2.0, and both can act as a forwarder or an aggregator. Fluent Bit started in 2014 as a lightweight processor for embedded Linux and gateways.",
+      "corner": "",
+      "columns": ["Fluentd", "Fluent Bit"],
+      "rows": [
+        { "label": "Runs on", "values": ["Containers and servers", "Embedded Linux, containers and servers"] },
+        { "label": "Language", "values": ["C and Ruby", "C"] },
+        { "label": "Memory", "values": ["More than 60 MB", "About 450 KB"] },
+        { "label": "Dependencies", "values": ["A Ruby gem that depends on other gems", "None, unless a plugin needs one"] },
+        { "label": "Plugins", "values": ["Over 1,000 external plugins", "Over 100 built-in plugins"] },
+        { "label": "Signals", "values": ["Logs; OpenTelemetry through plugins", "Logs, metrics, traces and profiles; native OTLP in and out"] }
+      ],
+      "notes": [
+        "Figures from the Fluent Bit manual’s “Fluentd and Fluent Bit” page. Pick Fluentd when you need a plugin only it has; otherwise Fluent Bit is the lighter default for a per-node agent."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "By 2011 a typical web company had logs in many formats on many servers, and wanted them in many places: files, databases, Hadoop, search engines. Every new pair of source and destination meant another script. Sadayuki Furuhashi, co-founder of Treasure Data, a cloud service for big data, made the first commit to Fluentd in June 2011 to build what the project calls a “Unified Logging Layer”: one place that collects events and hands them to whatever needs them.",
+      "As maintainer Kiyoto Tamura put it in 2014, with M inputs and N outputs there are M×N possible paths for log data; with a plugin for each input and each output, you need only M+N. Records became JSON, picked because almost everything can read it, not because it is fast.",
+      "Fluentd joined the CNCF in November 2016 and in April 2019 became its sixth graduated project, after Kubernetes, Prometheus, Envoy, CoreDNS and containerd. Its C sibling Fluent Bit, begun in 2014 by Eduardo Silva in the same team, has since replaced Fluentd at several cloud providers. ClearCode maintains Fluentd today, and in 2023 its `fluent-package` installers replaced Treasure Data’s `td-agent`."
+    ],
+    "choices": [
+      { "choice": "Every event is a tag, a time and a JSON record", "why": "JSON was chosen for how widely it is understood: databases and Hadoop could take it as it was. The tag let Fluentd route events without looking inside them." },
+      { "choice": "Plugins on both sides", "why": "With an input plugin per source and an output plugin per destination, connecting M sources to N destinations takes M+N pieces instead of M×N custom paths." },
+      { "choice": "A buffer in front of every output", "why": "Destinations go down. Collecting events into chunks that wait in a queue, in memory or on disk, and retrying with backoff keeps a slow or failed backend from losing logs or stalling the inputs." }
+    ],
+    "timeline": [
+      { "year": "2011", "text": "First commit in June; v0.10.0 tagged in October" },
+      { "year": "2014", "text": "Eduardo Silva starts Fluent Bit, a lightweight C sibling" },
+      { "year": "2016", "text": "Accepted as a CNCF project in November" },
+      { "year": "2017", "text": "Fluentd v1.0 released in December" },
+      { "year": "2019", "text": "Graduates from the CNCF in April" },
+      { "year": "2023", "text": "`td-agent` becomes `fluent-package`; td-agent 4 support ends in December" },
+      { "year": "2025", "text": "`fluent-package` v6 LTS ships with Fluentd v1.19 in August" }
+    ],
+    "sources": [
+      { "label": "CNCF: Fluentd graduation announcement (April 2019)", "url": "https://www.cncf.io/announcements/2019/04/11/cncf-announces-fluentd-graduation/" },
+      { "label": "Fluentd blog: Unified Logging Layer, by Kiyoto Tamura (August 2014)", "url": "https://www.fluentd.org/blog/unified-logging-layer" },
+      { "label": "GitHub: Fluentd’s first commit by Sadayuki Furuhashi (June 2011)", "url": "https://github.com/fluent/fluentd/commit/5c14d05ff4" },
+      { "label": "GitHub: Fluentd v0.10.0 tag (October 2011)", "url": "https://github.com/fluent/fluentd/tree/v0.10.0" },
+      { "label": "GitHub: Fluentd v1.0.0 release (December 2017)", "url": "https://github.com/fluent/fluentd/releases/tag/v1.0.0" },
+      { "label": "Fluent Bit manual: What is Fluent Bit? (created in 2014 by Eduardo Silva)", "url": "https://docs.fluentbit.io/manual/about/what-is-fluent-bit" },
+      { "label": "Fluentd blog: EOL schedule for td-agent 4 (August 2023)", "url": "https://www.fluentd.org/blog/schedule-for-td-agent-4-eol/" },
+      { "label": "Fluentd blog: fluent-package v6.0.0 released (August 2025)", "url": "https://www.fluentd.org/blog/fluent-package-v6.0.0-has-been-released/" },
+      { "label": "Fluent Bit manual: Fluentd and Fluent Bit (cloud providers switched to Fluent Bit)", "url": "https://docs.fluentbit.io/manual/about/fluentd-and-fluent-bit" }
+    ]
+  },
+  "sources": [
+    { "label": "Fluentd docs: Quickstart (C with a thin Ruby wrapper)", "url": "https://docs.fluentd.org/quickstart" },
+    { "label": "Fluentd docs: Life of a Fluentd event (tag, time, record)", "url": "https://docs.fluentd.org/quickstart/life-of-a-fluentd-event" },
+    { "label": "Fluentd docs: Config file syntax and `--dry-run`", "url": "https://docs.fluentd.org/configuration/config-file" },
+    { "label": "Fluentd docs: Buffer plugins (chunks, retries, 72-hour default, backup since v1.19)", "url": "https://docs.fluentd.org/buffer" },
+    { "label": "Fluentd docs: High availability (forwarders and aggregators)", "url": "https://docs.fluentd.org/deployment/high-availability" },
+    { "label": "Fluentd docs: Performance tuning, single process (GIL, 5,000 messages a second)", "url": "https://docs.fluentd.org/deployment/performance-tuning-single-process" },
+    { "label": "Fluentd docs: Multi process workers", "url": "https://docs.fluentd.org/deployment/multi-process-workers" },
+    { "label": "Fluentd docs: Kubernetes (DaemonSet)", "url": "https://docs.fluentd.org/container-deployment/kubernetes" },
+    { "label": "Fluentd docs: Monitoring by Prometheus", "url": "https://docs.fluentd.org/monitoring-fluentd/monitoring-prometheus" },
+    { "label": "Fluentd docs: in_tail", "url": "https://docs.fluentd.org/input/tail" },
+    { "label": "Fluentd docs: nginx parser", "url": "https://docs.fluentd.org/parser/nginx" },
+    { "label": "Fluentd docs: record_transformer filter", "url": "https://docs.fluentd.org/filter/record_transformer" },
+    { "label": "Fluentd docs: out_s3", "url": "https://docs.fluentd.org/output/s3" },
+    { "label": "Fluentd docs: Kafka output (`kafka2`)", "url": "https://docs.fluentd.org/output/kafka" },
+    { "label": "Fluentd docs: Install fluent-package (Apache 2.0, under the CNCF)", "url": "https://docs.fluentd.org/installation/install-fluent-package" },
+    { "label": "fluent-package-builder: Gemfile of bundled plugins", "url": "https://github.com/fluent/fluent-package-builder/blob/master/fluent-package/Gemfile" },
+    { "label": "fluent-plugin-opentelemetry (OTLP input and output)", "url": "https://github.com/fluent-plugins-nursery/fluent-plugin-opentelemetry" },
+    { "label": "Fluentd blog: fluent-package v6.0.0 released (LTS until the end of 2027)", "url": "https://www.fluentd.org/blog/fluent-package-v6.0.0-has-been-released/" },
+    { "label": "Fluentd blog: EOL schedule for td-agent 4 (ClearCode maintains Fluentd)", "url": "https://www.fluentd.org/blog/schedule-for-td-agent-4-eol/" },
+    { "label": "GitHub: fluent/fluentd LICENSE (Apache 2.0)", "url": "https://github.com/fluent/fluentd/blob/master/LICENSE" },
+    { "label": "Fluent Bit manual: Fluentd and Fluent Bit (comparison table)", "url": "https://docs.fluentbit.io/manual/about/fluentd-and-fluent-bit" },
+    { "label": "Fluent Bit manual: What is Fluent Bit?", "url": "https://docs.fluentbit.io/manual/about/what-is-fluent-bit" },
+    { "label": "Fluent Bit manual: Forward output (interoperability with Fluentd)", "url": "https://docs.fluentbit.io/manual/data-pipeline/outputs/forward" },
+    { "label": "CNCF: Fluentd graduation announcement (April 2019)", "url": "https://www.cncf.io/announcements/2019/04/11/cncf-announces-fluentd-graduation/" },
+    { "label": "Logstash README (200+ plugins)", "url": "https://github.com/elastic/logstash/blob/main/README.md" },
+    { "label": "Logstash LICENSE.txt (Apache 2.0 outside `x-pack`, Elastic License inside)", "url": "https://github.com/elastic/logstash/blob/main/LICENSE.txt" },
+    { "label": "Logstash docs: Persistent queues", "url": "https://www.elastic.co/docs/reference/logstash/persistent-queues" },
+    { "label": "Logstash docs: Getting started (bundled JDK)", "url": "https://www.elastic.co/docs/reference/logstash/getting-started-with-logstash" },
+    { "label": "Telegraf docs (400+ plugins)", "url": "https://docs.influxdata.com/telegraf/v1/" },
+    { "label": "Telegraf docs: Metrics (InfluxDB data model)", "url": "https://github.com/influxdata/telegraf/blob/master/docs/METRICS.md" },
+    { "label": "Telegraf docs: External plugins (`execd`)", "url": "https://github.com/influxdata/telegraf/blob/master/docs/EXTERNAL_PLUGINS.md" },
+    { "label": "Telegraf changelog: v1.32.0 adds an experimental disk buffer", "url": "https://github.com/influxdata/telegraf/blob/master/CHANGELOG.md" },
+    { "label": "OpenTelemetry docs: Collector distributions and OCB", "url": "https://opentelemetry.io/docs/collector/distributions/" },
+    { "label": "OpenTelemetry Collector: exporterhelper (sending queue and persistent storage)", "url": "https://github.com/open-telemetry/opentelemetry-collector/blob/main/exporter/exporterhelper/README.md" },
+    { "label": "CNCF: OpenTelemetry graduation announcement (May 2026)", "url": "https://www.cncf.io/announcements/2026/05/21/cloud-native-computing-foundation-announces-opentelemetrys-graduation-solidifying-status-as-the-de-facto-observability-standard/" },
+    { "label": "Vector README (Rust; logs, metrics, traces “coming soon”)", "url": "https://github.com/vectordotdev/vector/blob/master/README.md" },
+    { "label": "Vector docs: Data model", "url": "https://vector.dev/docs/architecture/data-model/" },
+    { "label": "Vector docs: Buffering model", "url": "https://vector.dev/docs/architecture/buffering-model/" },
+    { "label": "Vector docs: Configuration (YAML, TOML, JSON)", "url": "https://vector.dev/docs/reference/configuration/" },
+    { "label": "Datadog press release: Datadog acquires Timber Technologies (February 2021)", "url": "https://www.datadoghq.com/about/latest-news/press-releases/datadog-acquires-timber-technologies/" }
+  ],
+  "checked": "2026-10-06"
+}

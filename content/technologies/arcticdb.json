@@ -1,0 +1,101 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "ArcticDB",
+  "concepts": ["tsdb","bitemporal"],
+  "provider": "vendor",
+  "vendor": "Man Group (licensed through ArcticDB Limited)",
+  "license": "Business Source License 1.1 (source-available, not OSI open source): free for non-commercial, personal and academic use, while any business use, even in research or development, needs a commercial licence. Each version becomes Apache 2.0 two years after its release; 1.0 converted in March 2025",
+  "website": "https://arcticdb.io/",
+  "repo": "https://github.com/man-group/ArcticDB",
+  "summary": "Man Group’s serverless DataFrame database: a Python library with a C++ engine that stores versioned pandas DataFrames directly in S3, Azure Blob Storage or local LMDB.",
+  "intro": [
+    "ArcticDB has no server. It is a Python package whose C++ engine turns pandas DataFrames, Series and NumPy arrays into its own columnar format, slices them by rows and by columns, compresses the pieces and writes them straight to S3-compatible object storage, Azure Blob Storage or LMDB on local disk. Each dataset is a symbol inside a library, and symbols share nothing, so many clients can work on different symbols in parallel and capacity grows with the storage rather than a cluster. Frames can be wide as well as long: Man Group says one symbol can hold a 20-year history of more than 400,000 securities, and its launch announcement spoke of hundreds of thousands of columns.",
+    "Every `write`, `append` or `update` creates a new version instead of changing data in place. Storage is layered: a mutable reference key points to the latest version, versions form an immutable linked list, each version points to a B-tree index, and the index points to immutable data segments, so unchanged segments are shared between versions. Reading with `as_of` returns a symbol as it was at an earlier version or time, and a snapshot names the current version of many symbols at once. Reads filter by date range and columns, and a lazy, pandas-like API pushes filters and aggregations into the C++ engine; results come back as pandas, Arrow or Polars. There is no SQL.",
+    "Man Group built ArcticDB for its quant researchers and runs its front-office time-series analysis on it, and Bloomberg integrated it into its BQuant platform after a 2023 agreement. The source is on GitHub, but under the BSL any business use needs a paid licence from ArcticDB Limited until a version turns Apache 2.0, two years after it ships."
+  ],
+  "strengths": [
+    "No server to run: `pip install arcticdb` and point it at a bucket or a local folder",
+    "Versions and time travel by default, plus multi-symbol snapshots for reproducible research and backtests",
+    "Handles frames that are huge in both directions: billions of rows, hundreds of thousands of columns",
+    "Pandas in, pandas out, with filtering and aggregation run in a multi-threaded C++ engine"
+  ],
+  "limits": [
+    "Source-available, not open source: business use, even for research or development, needs a commercial licence until a version converts",
+    "No transactions or isolation: concurrent writers to one symbol are last-writer-wins, so applications must coordinate them or use staged writes",
+    "Python only, and no SQL",
+    "Each write keeps a version, so storage grows; Man’s enterprise tools add pruning and compaction"
+  ],
+  "worksWith": [
+    { "id": "s3", "how": "stores versioned DataFrames in" },
+    { "id": "azure-blob", "how": "stores versioned DataFrames in" },
+    { "id": "ceph", "how": "is tested against the S3 API of" },
+    { "id": "arrow", "how": "can return reads as" },
+    { "id": "polars", "how": "can return reads as" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Write, append, slice and time-travel a symbol",
+    "source": [
+      "import arcticdb as adb",
+      "import pandas as pd",
+      "",
+      "ac = adb.Arctic(\"s3://s3.eu-west-1.amazonaws.com:my-bucket?aws_auth=true\")",
+      "# or on local disk: adb.Arctic(\"lmdb:///tmp/arctic\")",
+      "lib = ac.get_library(\"prices\", create_if_missing=True)",
+      "",
+      "lib.write(\"EURUSD\", df)            # version 0 (df has a DatetimeIndex)",
+      "lib.append(\"EURUSD\", next_day_df)  # version 1; must start after the last row",
+      "",
+      "# a date range and two columns, read straight from object storage",
+      "recent = lib.read(\"EURUSD\",",
+      "                  date_range=(pd.Timestamp(\"2026-10-01\"), None),",
+      "                  columns=[\"bid\", \"ask\"]).data",
+      "",
+      "before = lib.read(\"EURUSD\", as_of=0).data  # as it was before the append",
+      "lib.snapshot(\"eod-2026-10-06\")             # pin every symbol’s current version"
+    ]
+  },
+  "history": {
+    "story": [
+      "Man Group, a quantitative investment firm, began building Arctic in 2012: a Python datastore for time series and tick data that kept pandas DataFrames in MongoDB. It underpinned Man’s research and trading from its first release, was open-sourced on GitHub in 2015 under the LGPL, and went on to more than a million downloads.",
+      "In 2018 Man started a ground-up rewrite to get past Arctic’s limits. ArcticDB dropped MongoDB for ordinary S3-compatible storage, moved the engine to C++ for an order-of-magnitude speedup, and kept Arctic’s pandas-centred Python API. In February 2023 Man signed a multi-year development agreement with Bloomberg, which built ArcticDB into BQuant, its analytics platform for quants. Version 1.0 shipped in March 2023 under the Business Source License, with a paid licence for production use.",
+      "Arctic is now in maintenance mode, and ArcticDB has shipped steadily since, reaching the 6.x series in 2026. Because each version’s licence turns into Apache 2.0 after two years, 1.0 became Apache 2.0 on March 16, 2025, and every version up to 4.5 had converted by August 2026."
+    ],
+    "choices": [
+      { "choice": "No server: clients talk to storage directly", "why": "Pulling compressed data straight from object storage means there is no server to run or overload, and capacity scales with the bucket. The cost is no transactions: writers to the same symbol must coordinate themselves." },
+      { "choice": "Immutable versions in storage", "why": "Research and backtests need data as it was on a given day. Writing new versions instead of updating in place gives point-in-time reads, and a version once written can’t be corrupted by later updates." },
+      { "choice": "Tile frames by rows and columns", "why": "Man’s data is wide as well as long, such as modelling a whole corporate bond universe, so segments are cut in both directions and a read can fetch a date range of just a few columns." },
+      { "choice": "A Python API, not SQL", "why": "The users are quants in Jupyter and pandas. Man’s CTO Gary Collier argued that DataFrames emerge as the unit of analysis in modern data science, and ArcticDB makes them a first-class concern." }
+    ],
+    "timeline": [
+      { "year": "2012", "text": "Man Group starts Arctic, a pandas datastore on MongoDB" },
+      { "year": "2015", "text": "Arctic is open-sourced on GitHub under the LGPL" },
+      { "year": "2018", "text": "Ground-up rewrite begins: a C++ engine on S3, without MongoDB" },
+      { "year": "2023", "text": "Bloomberg agreement in February; ArcticDB 1.0 under BSL 1.1 in March" },
+      { "year": "2025", "text": "ArcticDB 1.0 converts to Apache 2.0, two years after release" },
+      { "year": "2026", "text": "6.x releases; every version up to 4.5 is now Apache 2.0" }
+    ],
+    "sources": [
+      { "label": "ArcticDB docs: History of ArcticDB", "url": "https://docs.arcticdb.io/latest/history/" },
+      { "label": "man-group/arctic on GitHub (LGPL 2.1, now in maintenance mode)", "url": "https://github.com/man-group/arctic" },
+      { "label": "Man Group press release: Man Group brings DataFrame database product ArcticDB to market with Bloomberg (Feb 27, 2023)", "url": "https://www.man.com/man-group-brings-powerful-dataframe-database-product-arcticdb-to-market-with-bloomberg" },
+      { "label": "PyPI: arcticdb 1.0.0 (Mar 16, 2023)", "url": "https://pypi.org/project/arcticdb/1.0.0/" },
+      { "label": "ArcticDB README: licence conversion dates per version", "url": "https://github.com/man-group/ArcticDB#license" },
+      { "label": "ArcticDB LICENSE.txt (BSL 1.1, two-year change date, Apache 2.0)", "url": "https://github.com/man-group/ArcticDB/blob/master/LICENSE.txt" }
+    ]
+  },
+  "sources": [
+    { "label": "ArcticDB README: features, storage backends, licence", "url": "https://github.com/man-group/ArcticDB" },
+    { "label": "ArcticDB LICENSE.txt (Business Source License 1.1)", "url": "https://github.com/man-group/ArcticDB/blob/master/LICENSE.txt" },
+    { "label": "ArcticDB docs: Licensing and commercial FAQs (business use needs a commercial agreement)", "url": "https://docs.arcticdb.io/latest/licensing/" },
+    { "label": "ArcticDB docs: Architecture (C++ engine, no server)", "url": "https://docs.arcticdb.io/latest/technical/architecture/" },
+    { "label": "ArcticDB docs: On-disk storage format (reference, version, index and data layers)", "url": "https://docs.arcticdb.io/latest/technical/on_disk_storage/" },
+    { "label": "ArcticDB docs: FAQ (concurrency, last-writer-wins, de-duplication, Python only, no SQL)", "url": "https://docs.arcticdb.io/latest/faq/" },
+    { "label": "ArcticDB docs: Fundamentals (write, append, update, as_of)", "url": "https://docs.arcticdb.io/latest/tutorials/fundamentals/" },
+    { "label": "ArcticDB docs: Snapshots", "url": "https://docs.arcticdb.io/latest/tutorials/snapshots/" },
+    { "label": "ArcticDB source: OutputFormat (pandas, PyArrow, Polars)", "url": "https://github.com/man-group/ArcticDB/blob/master/python/arcticdb/options.py" },
+    { "label": "Man Group press release: ArcticDB to market with Bloomberg (Feb 2023)", "url": "https://www.man.com/man-group-brings-powerful-dataframe-database-product-arcticdb-to-market-with-bloomberg" },
+    { "label": "ArcticDB website: plans and Bloomberg BQuant integration", "url": "https://arcticdb.io/" }
+  ],
+  "checked": "2026-10-06"
+}

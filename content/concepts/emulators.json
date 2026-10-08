@@ -1,0 +1,172 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Local cloud emulators",
+  "category": "delivery",
+  "order": 90,
+  "summary": "A process on your laptop or CI runner that answers a cloud provider’s API, so tests and dev loops run with no account, no bill and no network.",
+  "howItWorks": "A cloud SDK turns every call, such as `put_item` or `send_message`, into an HTTP request to the provider’s regional endpoint. An emulator is a server that listens on `localhost` and implements the same operations with the same request and response formats. You change one setting, not your code: `AWS_ENDPOINT_URL=http://localhost:4566` for the AWS SDKs and CLI, `PUBSUB_EMULATOR_HOST` for Google’s Pub/Sub clients, or a connection string with Azurite’s well-known development account for Azure Storage. Some emulators fake one service (DynamoDB Local, the Pub/Sub emulator, Azurite); others put dozens behind one port and route each request by the API it names (LocalStack, Floci). State lives in memory or a local file and is usually gone after a restart, which gives every test run a clean cloud. Any dummy key is accepted, and IAM policies aren’t checked unless you switch that on. Where faking is hard, emulators start real engines in Docker: a Lambda function runs in a container built from AWS’s runtime image, and an emulated RDS database can be a real PostgreSQL. The catch is fidelity. Operations finish instantly, throughput settings and quotas are ignored, reads that are only eventually consistent in the cloud look strongly consistent, error messages can differ, and whole services or newer features may be missing. A mock replaces the client inside your test process; an emulator is a separate server, so the real SDK, its serialisation and tools like Terraform are exercised too. It still isn’t the cloud, so teams keep a smaller suite that runs against a real account before release.",
+  "analogy": "A flight simulator. The controls, instruments and checklists are the real ones, so pilots can practise for hours with no fuel and no risk. It never quite reproduces real weather or a failing engine, though, so they still fly the real aircraft before carrying passengers.",
+  "useWhen": [
+    "Integration tests in CI that call cloud APIs, with no shared account, no credentials in the pipeline and nothing to clean up",
+    "A fast inner loop: create a bucket, queue or table in milliseconds and reset everything with a restart",
+    "Trying infrastructure as code (Terraform, CDK, SAM) against a throwaway target before it touches a real account",
+    "Giving new contributors or AI coding agents a sandbox with no real credentials and nothing to bill"
+  ],
+  "avoidWhen": [
+    "Testing IAM policies, quotas, throttling, latency or scaling: emulators skip or simplify them by default",
+    "Services or features the emulator covers only partly; read its coverage page before building on it",
+    "As the only test before production: keep a smaller suite that runs against a real account",
+    "Load and performance tests: a container on a laptop says nothing about cloud throughput"
+  ],
+  "example": "In CI, a job starts an emulator container on port 4566 and sets `AWS_ENDPOINT_URL=http://localhost:4566` with the dummy keys `test`/`test`. Each test creates the `orders` table and the `receipts` queue, places an order and checks that the item and the message exist, then deletes both. The 40 tests finish in under a minute with no AWS account and nothing left behind. A nightly job runs the same suite against a real staging account; it is the one that catches a missing `sqs:SendMessage` permission, because the emulator, with IAM checks off, let the call through.",
+  "providers": {
+    "aws": "No general emulator. DynamoDB Local (JAR, Maven or Docker); `sam local` runs Lambda functions and API routes in Docker; the Lambda Runtime Interface Emulator tests container-image functions; Step Functions Local still downloads, but AWS now marks it unsupported and points to the TestState API",
+    "gcp": "`gcloud beta emulators` for Pub/Sub, Datastore, Firestore, Bigtable and Spanner; the Firebase Local Emulator Suite for Firestore, Realtime Database, Auth, Storage, Hosting and Functions",
+    "azure": "Azurite (open source: Blob, Queue and Table; replaces the deprecated Windows-only Storage Emulator); the Cosmos DB emulator for Windows plus a Linux Docker preview for the NoSQL API; Docker emulators for Service Bus and Event Hubs; Azure Functions Core Tools runs functions locally",
+    "oss": "LocalStack (AWS, plus Snowflake; the latest image needs a free or paid account since March 2026); Floci (MIT: AWS, Azure, Google Cloud and Oracle Cloud); moto (Python mocks with a standalone server mode); fake-gcs-server for Cloud Storage; S3-compatible servers such as Garage or SeaweedFS stand in for S3 alone"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "# Start an emulator first, e.g.  docker run -d -p 4566:4566 floci/floci:latest",
+      "# (or LocalStack with LOCALSTACK_AUTH_TOKEN set). The code under test doesn't change.",
+      "import os",
+      "import boto3",
+      "import pytest",
+      "",
+      "os.environ.setdefault(\"AWS_ENDPOINT_URL\", \"http://localhost:4566\")  # every service, one port",
+      "os.environ.setdefault(\"AWS_ACCESS_KEY_ID\", \"test\")                # dummy keys, no account",
+      "os.environ.setdefault(\"AWS_SECRET_ACCESS_KEY\", \"test\")",
+      "os.environ.setdefault(\"AWS_DEFAULT_REGION\", \"us-east-1\")",
+      "",
+      "def place_order(ddb, sqs, queue_url, order_id):  # the code under test",
+      "    ddb.put_item(TableName=\"orders\", Item={\"id\": {\"S\": order_id}})",
+      "    sqs.send_message(QueueUrl=queue_url, MessageBody=order_id)",
+      "",
+      "@pytest.fixture",
+      "def aws():",
+      "    ddb, sqs = boto3.client(\"dynamodb\"), boto3.client(\"sqs\")",
+      "    ddb.create_table(TableName=\"orders\", BillingMode=\"PAY_PER_REQUEST\",",
+      "                     AttributeDefinitions=[{\"AttributeName\": \"id\", \"AttributeType\": \"S\"}],",
+      "                     KeySchema=[{\"AttributeName\": \"id\", \"KeyType\": \"HASH\"}])",
+      "    url = sqs.create_queue(QueueName=\"receipts\")[\"QueueUrl\"]",
+      "    yield ddb, sqs, url",
+      "    ddb.delete_table(TableName=\"orders\")  # a clean cloud for the next test",
+      "    sqs.delete_queue(QueueUrl=url)",
+      "",
+      "def test_place_order(aws):",
+      "    ddb, sqs, url = aws",
+      "    place_order(ddb, sqs, url, \"4812\")",
+      "    assert \"Item\" in ddb.get_item(TableName=\"orders\", Key={\"id\": {\"S\": \"4812\"}})",
+      "    assert len(sqs.receive_message(QueueUrl=url, WaitTimeSeconds=1)[\"Messages\"]) == 1"
+    ]
+  },
+  "related": ["cicd", "iac", "serverless", "iam", "serverless-architecture"],
+  "diagram": {
+    "caption": "Tests use the normal AWS SDK, pointed at one local port. The emulator reads which API each request is for and answers from in-memory state in milliseconds. Lambda calls are the exception: the first one waits while a container starts to run the function.",
+    "h": 290,
+    "zones": [
+      { "x": 200, "y": 12, "w": 550, "h": 266, "label": "Emulator container on the laptop or CI runner" }
+    ],
+    "nodes": [
+      {
+        "id": "tests",
+        "x": 95,
+        "y": 145,
+        "label": "Test suite",
+        "sub": "pytest · boto3",
+        "concept": "cicd",
+        "emit": {
+          "every": 520,
+          "jitter": 0.35,
+          "req": true,
+          "types": ["s3", "sqs", "ddb", "ddb", "lambda"],
+          "colorByType": { "s3": 0, "sqs": 1, "ddb": 2, "lambda": 3 }
+        },
+        "out": ["gw"]
+      },
+      {
+        "id": "gw",
+        "x": 320,
+        "y": 145,
+        "label": "localhost:4566",
+        "sub": "any key · IAM off",
+        "route": "type",
+        "rules": { "s3": ["s3"], "sqs": ["sqs"], "ddb": ["ddb"], "lambda": ["fn"] },
+        "out": ["s3", "sqs", "ddb", "fn"]
+      },
+      { "id": "s3", "x": 610, "y": 48, "label": "S3 API", "sub": "objects in memory", "mode": "reply", "delay": 15, "concept": "object" },
+      { "id": "sqs", "x": 610, "y": 106, "label": "SQS API", "sub": "queues in memory", "mode": "reply", "delay": 15, "concept": "queue" },
+      { "id": "ddb", "x": 610, "y": 164, "label": "DynamoDB API", "sub": "tables in memory", "mode": "reply", "delay": 15, "concept": "key-value" },
+      {
+        "id": "fn",
+        "x": 610,
+        "y": 232,
+        "kind": "pool",
+        "label": "Lambda API",
+        "sub": "function in a Docker container",
+        "max": 2,
+        "work": 350,
+        "cold": 1200,
+        "coldText": "docker run",
+        "idle": 5000,
+        "concept": "serverless"
+      }
+    ]
+  },
+  "history": {
+    "story": [
+      "Testing code that talks to a cloud once meant two bad options: deploy to a real account and wait, pay and clean up, or mock the client and hope the mock behaved like the service. Google App Engine launched in April 2008 with an SDK that included a “fully featured local development environment”, so the platform could run on a laptop. Microsoft’s Azure SDK shipped a Storage Emulator that faked Blob, Queue and Table storage on top of a local SQL Server database.",
+      "In 2013 the open-source moto project began mocking AWS calls in Python tests, and that September AWS released DynamoDB Local so developers could write DynamoDB code “while sitting in a tree, on the beach, or in the desert”. In August 2016 Waldemar Hummer’s first commit of LocalStack, at Atlassian, put eight AWS APIs on a laptop at once; the team’s stated aim was to make train commutes productive. Google and Microsoft followed with emulators of their own, and LocalStack grew into a company that sells an AWS and a Snowflake emulator.",
+      "In March 2026 LocalStack stopped updating its free open-source image and required an account for its latest releases. Floci, an MIT-licensed replacement, shipped 1.0 that same month and now pitches emulators as a safe cloud for AI coding agents."
+    ],
+    "choices": [
+      { "choice": "Speak the real wire protocol instead of mocking a library", "why": "An in-process mock works for one language. A server on a port works with every SDK, the CLI and IaC tools, and the code under test changes only its endpoint. moto added a standalone server mode for exactly this reason." },
+      { "choice": "Keep state in memory and throw it away", "why": "Tests want a clean, fast cloud every time. DynamoDB Local can run fully in memory, and LocalStack’s state is ephemeral unless persistence is switched on." },
+      { "choice": "Accept any credentials and skip IAM by default", "why": "The point is to need no account. DynamoDB Local uses the access key only to name its database file and ignores the secret key; LocalStack and Floci evaluate IAM policies only when you enable it." },
+      { "choice": "Run real engines where faking falls short", "why": "Re-implementing a function runtime or a database is hard to get right, so `sam local`, LocalStack and Floci run Lambda functions in containers built from AWS’s runtime images, and Floci backs RDS with real PostgreSQL or MySQL." }
+    ],
+    "timeline": [
+      { "year": "2008", "text": "App Engine ships with an SDK and a local development environment" },
+      { "year": "2013", "text": "moto starts mocking AWS in February; DynamoDB Local arrives in September" },
+      { "year": "2016", "text": "LocalStack is open-sourced at Atlassian with eight AWS APIs" },
+      { "year": "2024", "text": "LocalStack adds an emulator for Snowflake, beyond the cloud providers" },
+      { "year": "2026", "text": "LocalStack gates its latest image behind accounts; Floci 1.0 ships under MIT" }
+    ],
+    "sources": [
+      { "label": "Google App Engine blog: Introducing Google App Engine (April 2008)", "url": "http://googleappengine.blogspot.com/2008/04/introducing-google-app-engine-our-new.html" },
+      { "label": "AWS News Blog: DynamoDB Local for desktop development (Jeff Barr, September 2013)", "url": "https://aws.amazon.com/blogs/aws/dynamodb-local-for-desktop-development/" },
+      { "label": "getmoto/moto on GitHub (repository created February 2013)", "url": "https://github.com/getmoto/moto" },
+      { "label": "LocalStack blog: 30k stars, 40M pulls, with a brief history of LocalStack (May 2021)", "url": "https://blog.localstack.cloud/2021-05-06-localstack-40k-stars/" },
+      { "label": "LocalStack blog: Introducing LocalStack for Snowflake (May 2024)", "url": "https://blog.localstack.cloud/2024-05-22-introducing-localstack-for-snowflake/" },
+      { "label": "LocalStack blog: The road ahead for LocalStack (December 2025)", "url": "https://blog.localstack.cloud/the-road-ahead-for-localstack/" },
+      { "label": "Floci Chronicle: 30 days of Floci (Hector Ventura, April 2026)", "url": "https://floci.io/chronicle/30-days-of-floci/" }
+    ]
+  },
+  "sources": [
+    { "label": "AWS SDKs and Tools reference: Service-specific endpoints (`AWS_ENDPOINT_URL`)", "url": "https://docs.aws.amazon.com/sdkref/latest/guide/feature-ss-endpoints.html" },
+    { "label": "DynamoDB docs: Setting up DynamoDB local (JAR, Maven, Docker)", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DynamoDBLocal.html" },
+    { "label": "DynamoDB docs: DynamoDB local usage notes (differences from the web service)", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DynamoDBLocal.UsageNotes.html" },
+    { "label": "AWS SAM docs: Introduction to testing with sam local", "url": "https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/using-sam-cli-local.html" },
+    { "label": "AWS SAM docs: sam local invoke (builds the function in a local Docker container)", "url": "https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/using-sam-cli-local-invoke.html" },
+    { "label": "AWS Step Functions docs: Step Functions Local (unsupported)", "url": "https://docs.aws.amazon.com/step-functions/latest/dg/sfn-local.html" },
+    { "label": "AWS Lambda Runtime Interface Emulator on GitHub", "url": "https://github.com/aws/aws-lambda-runtime-interface-emulator" },
+    { "label": "gcloud reference: gcloud beta emulators", "url": "https://cloud.google.com/sdk/gcloud/reference/beta/emulators" },
+    { "label": "Pub/Sub docs: Testing apps locally with the emulator (limitations)", "url": "https://cloud.google.com/pubsub/docs/emulator" },
+    { "label": "Firebase docs: Local Emulator Suite", "url": "https://firebase.google.com/docs/emulator-suite" },
+    { "label": "Microsoft Learn: Use the Azurite emulator for local Azure Storage development", "url": "https://learn.microsoft.com/en-us/azure/storage/common/storage-use-azurite" },
+    { "label": "Microsoft Learn: Use the Azure Storage Emulator (deprecated; SQL Server LocalDB, Windows only)", "url": "https://learn.microsoft.com/en-us/azure/storage/common/storage-use-emulator" },
+    { "label": "Microsoft Learn: Azure Cosmos DB emulator (differences from the cloud service)", "url": "https://learn.microsoft.com/en-us/azure/cosmos-db/emulator" },
+    { "label": "Microsoft Learn: Linux-based Cosmos DB emulator, vNext (NoSQL API, preview)", "url": "https://learn.microsoft.com/en-us/azure/cosmos-db/emulator-linux" },
+    { "label": "Microsoft Learn: Azure Service Bus emulator overview", "url": "https://learn.microsoft.com/en-us/azure/service-bus-messaging/overview-emulator" },
+    { "label": "Microsoft Learn: Azure Event Hubs emulator overview", "url": "https://learn.microsoft.com/en-us/azure/event-hubs/overview-emulator" },
+    { "label": "Microsoft Learn: Develop Azure Functions locally using Core Tools", "url": "https://learn.microsoft.com/en-us/azure/azure-functions/functions-run-local" },
+    { "label": "LocalStack docs: IAM policy enforcement (disabled by default)", "url": "https://docs.localstack.cloud/aws/developer-tools/security-testing/iam-policy-enforcement/" },
+    { "label": "LocalStack docs: Persistence (state is ephemeral by default)", "url": "https://docs.localstack.cloud/aws/developer-tools/snapshots/persistence/" },
+    { "label": "LocalStack blog: LocalStack for AWS is moving to a single image (March 2026)", "url": "https://blog.localstack.cloud/localstack-single-image-next-steps/" },
+    { "label": "Floci README (services, real Docker integration, LocalStack migration)", "url": "https://github.com/floci-io/floci" },
+    { "label": "Floci docs: IAM enforcement mode (off by default)", "url": "https://floci.io/floci/services/iam/" },
+    { "label": "Moto docs: Server mode", "url": "https://docs.getmoto.org/en/latest/docs/server_mode.html" },
+    { "label": "fake-gcs-server on GitHub", "url": "https://github.com/fsouza/fake-gcs-server" }
+  ]
+}

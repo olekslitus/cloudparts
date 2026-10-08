@@ -1,0 +1,166 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Apache Druid",
+  "concepts": ["olap"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0 (GPLv2 until February 2015)",
+  "website": "https://druid.apache.org/",
+  "repo": "https://github.com/apache/druid",
+  "summary": "An open-source real-time analytics database that makes Kafka and Kinesis events queryable within seconds and serves fast slice-and-dice queries to dashboards and APIs.",
+  "intro": [
+    "Druid stores each table, called a datasource, as segments: columnar files that each cover one time interval, such as an hour or a day, and ideally hold 300 to 700 MB. Every string column gets a dictionary, the encoded values, and a compressed bitmap for each distinct value, so a filter becomes AND and OR operations on bitmaps. A cluster splits the work across services. The Overlord hands ingestion tasks to Middle Managers, which run each task in its own JVM; for Kafka and Kinesis a supervisor keeps tasks reading partitions, tracking offsets so every event is ingested exactly once, and new rows are queryable as soon as a task has indexed them. Tasks then publish finished segments to deep storage, which Druid doesn’t provide: S3, Google Cloud Storage, Azure Blob Storage or HDFS. The Coordinator assigns segments to Historical servers, which download and cache them on local disk, and Brokers split each query across Historicals and running tasks and merge the results. A PostgreSQL or MySQL database holds segment and task metadata, and ZooKeeper handles leader election and service discovery. Rollup is on by default: rows with the same dimension values and the same truncated timestamp are stored as one row.",
+    "You query with Druid SQL or native JSON queries over HTTP; batch loads and rewrites use SQL `INSERT` and `REPLACE` statements run by the multi-stage query engine, and segments kept only in deep storage can still be queried, more slowly. Druid 38.0.0, released on 1 October 2026, runs on Java 21 or 25. Druid is free under Apache 2.0. Imply, founded in 2015 by Druid’s original creators, sells Imply Polaris, a managed Druid service on AWS: Starter projects (up to 25 GB) start at $100 a month and Standard at $600, with usage billed by the hour per project size, for example $1.30 an hour for an A.01 project with 100 GB of capacity (list prices, checked 6 October 2026)."
+  ],
+  "strengths": [
+    "Events from Kafka or Kinesis are queryable within seconds, with exactly-once ingestion based on partition offsets or shard sequence numbers",
+    "Time partitioning plus bitmap indexes let filtered queries skip most data, and built-in sketches give fast approximate distinct counts and quantiles on high-cardinality columns",
+    "Rollup at ingestion can cut row counts by orders of magnitude for metrics and event counts",
+    "Deep storage keeps every segment, so lost servers are rebuilt by downloading again, and cold data can be queried from deep storage instead of adding Historicals",
+    "Scales by adding servers: the cluster rebalances segments by itself and is designed to keep serving through configuration changes and upgrades"
+  ],
+  "limits": [
+    "Many moving parts: Coordinator, Overlord, Broker, Router, Historical and Middle Manager services, plus ZooKeeper, a metadata database and deep storage, each a JVM to size and tune",
+    "No updates of single records by primary key and no `UPDATE` statement: you overwrite whole time ranges with `REPLACE` or a reindexing job",
+    "Rollup is irreversible: once rows are combined at ingestion, individual events can’t be queried",
+    "Joins are limited: the native engine broadcasts every table except the leftmost, which must fit in memory; the Dart engine’s sort-merge joins are still experimental",
+    "Streaming and repeated ingestion leave many small or overlapping segments, so compaction has to be set up and watched"
+  ],
+  "worksWith": [
+    { "id": "kafka", "how": "ingests topics, exactly once, from" },
+    { "id": "kinesis", "how": "ingests streams, exactly once, from" },
+    { "id": "s3", "how": "keeps segments (deep storage) in" },
+    { "id": "gcs", "how": "can keep segments (deep storage) in" },
+    { "id": "hadoop", "how": "can keep segments in HDFS, part of" },
+    { "id": "postgresql", "how": "keeps cluster metadata in" },
+    { "id": "mysql", "how": "can keep cluster metadata in" },
+    { "id": "kubernetes", "how": "can run ingestion tasks as jobs on" },
+    { "id": "iceberg", "how": "can ingest tables, via an extension, from" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "In the web console: load the sample Wikipedia edits with rollup, then query them",
+    "source": [
+      "-- Batch ingestion with rollup: one row per channel, page and minute",
+      "REPLACE INTO wiki_edits OVERWRITE ALL",
+      "SELECT",
+      "  TIME_FLOOR(TIME_PARSE(\"timestamp\"), 'PT1M') AS __time,",
+      "  channel,",
+      "  page,",
+      "  COUNT(*) AS edits,",
+      "  SUM(added) AS chars_added",
+      "FROM TABLE(",
+      "  EXTERN(",
+      "    inputSource => '{\"type\":\"http\",\"uris\":[\"https://druid.apache.org/data/wikipedia.json.gz\"]}',",
+      "    inputFormat => '{\"type\":\"json\"}'",
+      "  )",
+      ") EXTEND (\"timestamp\" VARCHAR, channel VARCHAR, page VARCHAR, added BIGINT)",
+      "GROUP BY 1, 2, 3",
+      "PARTITIONED BY DAY",
+      "CLUSTERED BY channel;",
+      "",
+      "-- Busiest channels in one hour of the sample day",
+      "SELECT channel, SUM(edits) AS edits, SUM(chars_added) AS chars_added",
+      "FROM wiki_edits",
+      "WHERE __time >= TIMESTAMP '2015-09-12 10:00:00'",
+      "  AND __time < TIMESTAMP '2015-09-12 11:00:00'",
+      "GROUP BY channel",
+      "ORDER BY edits DESC",
+      "LIMIT 5;"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Druid, Pinot and ClickHouse",
+      "intro": "The three open-source databases most often compared for user-facing analytics. All are Apache 2.0 licensed; they differ in how many pieces you run, how they pre-aggregate and how they handle changed rows.",
+      "columns": ["Apache Druid", "Apache Pinot", "ClickHouse"],
+      "rows": [
+        { "label": "Built at", "values": ["Metamarkets, for ad analytics dashboards (2011)", "LinkedIn, for member-facing features such as Who Viewed Profile", "Yandex, for the Yandex.Metrica web analytics service"] },
+        { "label": "Cluster pieces", "values": ["Six service types, plus ZooKeeper, a metadata database and deep storage", "Controllers, brokers and servers, coordinated by Apache Helix on ZooKeeper", "One binary; replicated clusters add ClickHouse Keeper"] },
+        { "label": "Pre-aggregation", "values": ["Rollup at ingestion, on by default", "Star-tree index of pre-aggregated values across several columns", "Incremental materialized views that write into a second table"] },
+        { "label": "Changing rows", "values": ["No updates by key; overwrite whole time ranges", "Native upserts during stream ingestion", "Mutations and lightweight deletes; not cheap row-level edits"] },
+        { "label": "Managed service", "values": ["Imply Polaris", "StarTree Cloud", "ClickHouse Cloud"] }
+      ],
+      "notes": ["Compiled from each project’s documentation. It says nothing about speed; compare on your own data and queries."]
+    },
+    {
+      "type": "cards",
+      "title": "Ways to run it",
+      "intro": "Imply list prices, checked on 6 October 2026. Polaris also bills for data ingested and processed and for file storage.",
+      "items": [
+        { "name": "Self-managed Druid", "tag": "Apache 2.0", "text": "Free. Download a release or use the Kubernetes extension to run ingestion tasks as jobs. A single machine for the quickstart needs at least 6 GiB of RAM; production clusters typically run master, query and data servers separately." },
+        { "name": "Imply Polaris Starter", "tag": "from $100/month", "text": "Managed Druid for proofs of concept: projects up to 25 GB, variable performance." },
+        { "name": "Imply Polaris Standard", "tag": "from $600/month", "text": "Production projects up to 9.6 TB, a 99.9% uptime SLA and private networking. Projects are billed hourly by size, from $0.80 an hour (D.04) to $124.80 (A.96)." },
+        { "name": "Imply Polaris Custom", "tag": "contact sales", "text": "Unlimited project size, a 99.95% SLA and scheduled upgrades." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Metamarkets sold ad analytics dashboards whose customers wanted to drill into billions of events along any combination of dimensions, in under a second. Over a year it tried Greenplum, InfoBright, MySQL and HBase. Pre-computing every aggregation into a key-value store kept queries fast, but as dimensions grew the batch jobs ran past 24 hours, far too late for fresh data. So in April 2011 Eric Tschetter introduced Druid, a distributed, in-memory OLAP store the company had built itself.",
+      "Metamarkets open-sourced Druid in October 2012 under GPLv2, with Netflix evaluating it for real-time monitoring. A 2014 SIGMOD paper by Fangjin Yang, Tschetter, Xavier Léauté, Gian Merlino and colleagues described the design: real-time nodes that hand off immutable segments to deep storage and historical nodes that serve them. The name comes from the shape-shifting druid class in role-playing games.",
+      "In February 2015 Druid switched to Apache 2.0 to invite community governance, and that year its creators founded Imply. Druid entered the Apache Incubator in 2018 and graduated in December 2019."
+    ],
+    "choices": [
+      { "choice": "Summarise rows at ingestion (rollup)", "why": "Grouping raw impressions by timestamp and the chosen dimensions made Metamarkets’ data set often about 100 times smaller, while still letting users slice it any way at query time." },
+      { "choice": "Immutable segments in deep storage", "why": "Historical nodes only read data that never changes, so they give consistent reads and scan segments in parallel without locks. A permanent copy in S3 or HDFS means servers can be replaced by downloading segments again." },
+      { "choice": "Bitmap indexes for every dimension value", "why": "Users filtered on arbitrary combinations of dimensions. Boolean operations on compressed bitmaps, a technique from search engines, answer those filters without scanning rows." },
+      { "choice": "Separate node types for fresh and historical data", "why": "Real-time nodes keep recent events in a queryable in-memory index and hand off finished segments, so ingestion and queries over older data scale independently." }
+    ],
+    "timeline": [
+      { "year": "2011", "text": "Metamarkets introduces Druid in April" },
+      { "year": "2012", "text": "Open-sourced under GPLv2 in October" },
+      { "year": "2014", "text": "SIGMOD paper describes the architecture" },
+      { "year": "2015", "text": "Relicensed under Apache 2.0; its creators found Imply" },
+      { "year": "2018", "text": "Enters the Apache Incubator in February" },
+      { "year": "2019", "text": "Graduates to a top-level Apache project in December" },
+      { "year": "2026", "text": "Druid 38 drops Java 17 and ZooKeeper-based segment discovery" }
+    ],
+    "sources": [
+      { "label": "Eric Tschetter (Metamarkets): Introducing Druid, real-time analytics at a billion rows per second (April 2011)", "url": "https://github.com/druid-io/druid-io.github.io/blob/src/_posts/2011-04-30-introducing-druid.md" },
+      { "label": "Eric Tschetter (Metamarkets): Introducing Druid, the open-source release (October 2012)", "url": "https://github.com/druid-io/druid-io.github.io/blob/src/_posts/2012-10-24-introducing-druid.md" },
+      { "label": "Druid repository: first LICENSE commit, GPLv2 (October 2012)", "url": "https://github.com/apache/druid/commit/27999caca0842ac63570f8c8360696f1bcc25cf5" },
+      { "label": "Yang et al.: Druid, A Real-time Analytical Data Store (SIGMOD 2014)", "url": "http://static.druid.io/docs/druid.pdf" },
+      { "label": "Fangjin Yang, Xavier Léauté and Eric Tschetter: Towards a community led Druid (February 2015)", "url": "https://github.com/druid-io/druid-io.github.io/blob/src/_posts/2015-02-20-towards-a-community-led-druid.md" },
+      { "label": "Druid repository: LICENSE changed to Apache 2.0 (January 2015)", "url": "https://github.com/apache/druid/commit/d05032b98a01724773014f2689b1498b44a8e1d0" },
+      { "label": "Imply: Company (founded in 2015 by Druid’s original creators)", "url": "https://imply.io/company/" },
+      { "label": "Apache Incubator: Druid project status (entered 2018-02-28, graduated 2019-12-18)", "url": "https://incubator.apache.org/projects/druid.html" },
+      { "label": "Apache Druid 38.0.0 release notes (October 2026)", "url": "https://github.com/apache/druid/releases/tag/druid-38.0.0" }
+    ]
+  },
+  "sources": [
+    { "label": "Druid docs: Introduction to Apache Druid (features, when to use it)", "url": "https://druid.apache.org/docs/latest/design/" },
+    { "label": "Druid docs: Architecture (services, deep storage, metadata storage, ZooKeeper)", "url": "https://druid.apache.org/docs/latest/design/architecture" },
+    { "label": "Druid docs: Segments (time intervals, 300 to 700 MB, dictionaries and bitmaps, compaction)", "url": "https://druid.apache.org/docs/latest/design/segments" },
+    { "label": "Druid docs: Deep storage", "url": "https://druid.apache.org/docs/latest/design/deep-storage" },
+    { "label": "Druid docs: Metadata storage", "url": "https://druid.apache.org/docs/latest/design/metadata-storage" },
+    { "label": "Druid docs: Data rollup", "url": "https://druid.apache.org/docs/latest/ingestion/rollup" },
+    { "label": "Druid docs: Apache Kafka ingestion (supervisors, exactly-once)", "url": "https://druid.apache.org/docs/latest/ingestion/kafka-ingestion" },
+    { "label": "Druid docs: Amazon Kinesis ingestion", "url": "https://druid.apache.org/docs/latest/ingestion/kinesis-ingestion" },
+    { "label": "Druid docs: SQL-based ingestion (multi-stage query engine)", "url": "https://druid.apache.org/docs/latest/multi-stage-query/" },
+    { "label": "Druid docs: SQL-based ingestion reference (EXTERN, EXTEND)", "url": "https://druid.apache.org/docs/latest/multi-stage-query/reference" },
+    { "label": "Druid docs: SQL-based ingestion query examples (rollup)", "url": "https://druid.apache.org/docs/latest/multi-stage-query/examples" },
+    { "label": "Druid docs: Query from deep storage", "url": "https://druid.apache.org/docs/latest/querying/query-deep-storage" },
+    { "label": "Druid docs: Data updates (no single-record updates, no UPDATE statement)", "url": "https://druid.apache.org/docs/latest/data-management/update" },
+    { "label": "Druid docs: Datasources (join limitations, broadcast hash join)", "url": "https://druid.apache.org/docs/latest/querying/datasource" },
+    { "label": "Druid docs: SQL queries using the Dart engine (experimental)", "url": "https://druid.apache.org/docs/latest/querying/dart" },
+    { "label": "Druid docs: MM-less Druid in Kubernetes", "url": "https://druid.apache.org/docs/latest/development/extensions-core/k8s-jobs" },
+    { "label": "Druid docs: Iceberg extension", "url": "https://druid.apache.org/docs/latest/development/extensions-contrib/iceberg" },
+    { "label": "Druid docs: Local quickstart (6 GiB of RAM)", "url": "https://druid.apache.org/docs/latest/tutorials/" },
+    { "label": "Apache Druid 38.0.0 release notes (Java 21 and 25, ZooKeeper changes)", "url": "https://github.com/apache/druid/releases/tag/druid-38.0.0" },
+    { "label": "Druid on GitHub (Apache 2.0)", "url": "https://github.com/apache/druid" },
+    { "label": "Imply: Polaris pricing", "url": "https://imply.io/pricing/" },
+    { "label": "Apache Pinot docs: Introduction (built at LinkedIn)", "url": "https://docs.pinot.apache.org/" },
+    { "label": "Apache Pinot docs: Architecture (controller, broker, server, Helix, ZooKeeper)", "url": "https://docs.pinot.apache.org/basics/architecture" },
+    { "label": "Apache Pinot docs: Star-tree index", "url": "https://docs.pinot.apache.org/basics/indexing/star-tree-index" },
+    { "label": "Apache Pinot docs: Stream ingestion with upsert", "url": "https://docs.pinot.apache.org/manage-data/data-import/upsert-and-dedup/upsert" },
+    { "label": "StarTree docs: StarTree Cloud, built on Apache Pinot", "url": "https://docs.startree.ai/" },
+    { "label": "ClickHouse: Our story (Yandex.Metrica)", "url": "https://clickhouse.com/company/our-story" },
+    { "label": "ClickHouse docs: ClickHouse Keeper", "url": "https://clickhouse.com/docs/guides/sre/keeper/clickhouse-keeper" },
+    { "label": "ClickHouse docs: Incremental materialized views", "url": "https://clickhouse.com/docs/materialized-view/incremental-materialized-view" },
+    { "label": "ClickHouse docs: Updating and deleting data with mutations", "url": "https://clickhouse.com/docs/guides/developer/mutations" },
+    { "label": "ClickHouse Cloud docs: Overview", "url": "https://clickhouse.com/docs/cloud/overview" }
+  ],
+  "checked": "2026-10-06"
+}

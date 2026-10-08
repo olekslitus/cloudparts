@@ -1,0 +1,115 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Google Kubernetes Engine",
+  "concepts": ["orchestration"],
+  "parent": { "id": "kubernetes", "as": "managed" },
+  "provider": "gcp",
+  "vendor": "Google",
+  "license": "Proprietary",
+  "website": "https://cloud.google.com/kubernetes-engine",
+  "summary": "Google’s managed Kubernetes, the oldest one: Google runs the control plane, and in Autopilot mode the nodes too.",
+  "intro": [
+    "In GKE, Google runs each cluster’s control plane: the Kubernetes API server, the scheduler, the controllers and the database that holds cluster state. That database is etcd running on the control plane VMs, or Google’s Spanner, but every cluster serves the etcd API, so the Kubernetes API server talks to both the same way. A zonal cluster has its control plane in one zone; a regional cluster keeps replicas in several zones, so it stays reachable through a zone outage and during upgrades. Google upgrades the control plane on a schedule set by the release channel you pick: Rapid, Regular (the default), Stable or Extended.",
+    "GKE has two modes. In Standard mode you design node pools, groups of Compute Engine VMs with a machine type you choose, and pay for those VMs whether Pods fill them or not. In Autopilot mode, launched in 2021 and now Google’s recommendation, Google creates, sizes, patches and repairs the nodes, and for general-purpose Pods you pay per second for the CPU, memory and storage each Pod requests. Since 2025 a Standard cluster can also run selected workloads in Autopilot mode. For untrusted code, GKE Sandbox runs a Pod inside gVisor, a user-space kernel that answers most system calls itself, or, on recent versions, inside its own microVM using Kata Containers."
+  ],
+  "strengths": [
+    "Autopilot’s per-Pod billing means you don’t pay for half-empty nodes on general-purpose workloads",
+    "The free tier credits one zonal or Autopilot cluster’s fee each month per billing account",
+    "Very large clusters: Google announced support for 65,000 nodes in November 2024",
+    "Built-in sandboxing with gVisor or microVMs for multi-tenant or untrusted workloads"
+  ],
+  "limits": [
+    "A flat $0.10 per cluster per hour, rising to $0.60 while a cluster on the Extended channel sits in extended support",
+    "Autopilot gives up node access: no SSH to the VMs, and Pods must fit its security and configuration constraints (privileged Pods need Standard)",
+    "The free tier doesn’t cover regional Standard clusters, and the zonal control plane SLA is only 99.5%",
+    "Clusters are upgraded automatically; maintenance windows and exclusions shape the timing, but staying on one minor version for long needs the paid Extended channel"
+  ],
+  "worksWith": [
+    { "id": "kubernetes", "how": "runs a certified, upstream build of" },
+    { "id": "gvisor", "how": "sandboxes untrusted Pods with" },
+    { "id": "kata-containers", "how": "runs each Pod in a microVM with" },
+    { "id": "etcd", "how": "can keep cluster state in" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Create an Autopilot cluster and run a Pod in a gVisor sandbox",
+    "source": [
+      "gcloud container clusters create-auto demo --location=us-central1",
+      "gcloud container clusters get-credentials demo --location=us-central1",
+      "",
+      "# Autopilot supports gVisor by default; Standard needs a sandbox-enabled node pool",
+      "kubectl apply -f - <<'EOF'",
+      "apiVersion: v1",
+      "kind: Pod",
+      "metadata: { name: untrusted }",
+      "spec:",
+      "  runtimeClassName: gvisor",
+      "  containers:",
+      "    - name: app",
+      "      image: nginx",
+      "EOF"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "What a cluster costs (checked 2026-10-06)",
+      "intro": "Every cluster pays the same management fee whatever its size or mode. Compute is billed on top: per node in Standard, per Pod request in Autopilot.",
+      "columns": ["Price", "Notes"],
+      "rows": [
+        { "label": "Cluster management fee", "values": ["$0.10 per cluster per hour", "Billed per second; same for zonal, regional and Autopilot"] },
+        { "label": "Free tier", "values": ["$74.40 credit a month", "Per billing account; zonal and Autopilot clusters only"] },
+        { "label": "Extended support period", "values": ["+$0.50 per cluster per hour", "Extended channel only, up to 24 months on one minor version"] },
+        { "label": "Standard compute", "values": ["Compute Engine VM prices", "You pay for every node in your node pools"] },
+        { "label": "Autopilot compute", "values": ["Per Pod request, per second", "CPU, memory and ephemeral storage; node-based pricing plus a premium for specific hardware"] }
+      ],
+      "notes": ["From the GKE pricing page, checked on 2026-10-06. The control plane SLA is 99.95% for Autopilot and regional clusters and 99.5% for zonal clusters."]
+    }
+  ],
+  "history": {
+    "story": [
+      "Google ran its own services in containers on an internal cluster manager called Borg for about a decade before Kubernetes. After open-sourcing Kubernetes in June 2014, it wanted Google Cloud customers to be able to use it without running it themselves. On November 4, 2014 it announced an alpha of Google Container Engine, a managed cluster manager for Docker containers built on Kubernetes. The name started with C, but Google used the acronym GKE from the start “in a nod to Kubernetes”.",
+      "Container Engine left beta and became generally available on August 26, 2015. In November 2017, after joining the CNCF’s Certified Kubernetes program, Google renamed it Google Kubernetes Engine. Around the same time it dropped its cluster management fee, which had been $0.15 per hour for clusters of six or more nodes; in June 2020 it brought back a flat $0.10 per hour together with a financially backed SLA.",
+      "In February 2021 Google launched Autopilot, a second mode where Google also runs the nodes and bills by Pod. It has since become the default recommendation, and in 2025 Google started letting Standard clusters run Autopilot workloads too. Scale kept growing with AI training: GKE announced support for 65,000-node clusters in November 2024. In September 2025 Google moved GKE to a single paid tier that includes multi-cluster features such as Fleets, Config Management and Policy Controller at no extra cost."
+    ],
+    "choices": [
+      { "choice": "Run upstream Kubernetes, not a Borg service", "why": "Google wanted customers to run the same open-source system anywhere. GKE runs certified Kubernetes, and Google says it puts the improvements needed for scale, such as those behind 65,000-node clusters, into open-source Kubernetes." },
+      { "choice": "Two modes instead of one", "why": "Some teams want full control of node pools and machine types; others find that much choice “overwhelming or unnecessary”. Autopilot lets Google own the nodes and charge per Pod, while Standard stays for teams that need the control." },
+      { "choice": "Serve the etcd API whatever the backing store", "why": "Kubernetes expects etcd. Exposing the etcd API on every control plane lets Google back some clusters with Spanner instead, without changing Kubernetes itself." },
+      { "choice": "A user-space kernel for untrusted Pods", "why": "Containers share the host kernel, so a kernel bug can let one tenant escape. GKE Sandbox puts gVisor between the Pod and the host kernel without changing the application." }
+    ],
+    "timeline": [
+      { "year": "2014", "text": "Google Container Engine alpha announced on November 4" },
+      { "year": "2015", "text": "Generally available on August 26, with a 99.5% uptime SLA" },
+      { "year": "2017", "text": "Renamed Google Kubernetes Engine; cluster fee dropped" },
+      { "year": "2020", "text": "GKE Sandbox (gVisor) generally available; $0.10 per hour fee and SLA from June 6" },
+      { "year": "2021", "text": "Autopilot mode launches on February 24" },
+      { "year": "2024", "text": "Support for 65,000-node clusters announced" },
+      { "year": "2025", "text": "Single pricing tier; Autopilot workloads allowed in Standard clusters" }
+    ],
+    "sources": [
+      { "label": "Google Cloud Platform Blog: Unleashing containers and Kubernetes with Google Container Engine (Nov 2014)", "url": "https://cloudplatform.googleblog.com/2014/11/unleashing-containers-and-kubernetes-with-google-compute-engine.html" },
+      { "label": "TechCrunch: Google’s Container Engine is now generally available (Aug 2015)", "url": "https://techcrunch.com/2015/08/26/googles-container-engine-for-running-docker-containers-on-its-cloud-platform-is-now-generally-avaiable/" },
+      { "label": "Google Cloud Blog: Introducing Certified Kubernetes (and Google Kubernetes Engine!) (Nov 2017)", "url": "https://cloud.google.com/blog/products/gcp/introducing-certified-kubernetes-and-google-kubernetes-engine" },
+      { "label": "The Register: Google reintroduces management fee for Kubernetes clusters (Mar 2020)", "url": "https://www.theregister.com/2020/03/05/google_reintroduces_management_fee_for_kubernetes_clusters/" },
+      { "label": "Google Cloud Blog: GKE Sandbox generally available (Feb 2020)", "url": "https://cloud.google.com/blog/products/containers-kubernetes/gke-sandbox-bring-defense-in-depth-to-your-pods" },
+      { "label": "Google Cloud Blog: Introducing GKE Autopilot (Feb 2021)", "url": "https://cloud.google.com/blog/products/containers-kubernetes/introducing-gke-autopilot" },
+      { "label": "Google Cloud Blog: 65,000 nodes and counting (Nov 2024)", "url": "https://cloud.google.com/blog/products/containers-kubernetes/gke-65k-nodes-and-counting" },
+      { "label": "Google Cloud Blog: Happy birthday, GKE! New features and better pricing (Aug 2025)", "url": "https://cloud.google.com/blog/products/containers-kubernetes/gke-gets-new-pricing-and-capabilities-on-10th-birthday" },
+      { "label": "GKE docs: Cluster architecture (etcd or Spanner behind the etcd API)", "url": "https://cloud.google.com/kubernetes-engine/docs/concepts/cluster-architecture" }
+    ]
+  },
+  "sources": [
+    { "label": "GKE pricing (checked 2026-10-06)", "url": "https://cloud.google.com/kubernetes-engine/pricing" },
+    { "label": "GKE docs: Cluster architecture", "url": "https://cloud.google.com/kubernetes-engine/docs/concepts/cluster-architecture" },
+    { "label": "GKE docs: Regional clusters", "url": "https://cloud.google.com/kubernetes-engine/docs/concepts/regional-clusters" },
+    { "label": "GKE docs: About release channels", "url": "https://cloud.google.com/kubernetes-engine/docs/concepts/release-channels" },
+    { "label": "GKE docs: Autopilot overview", "url": "https://cloud.google.com/kubernetes-engine/docs/concepts/autopilot-overview" },
+    { "label": "GKE docs: About GKE modes of operation (Autopilot workloads in Standard clusters)", "url": "https://cloud.google.com/kubernetes-engine/docs/concepts/choose-cluster-mode" },
+    { "label": "GKE docs: Create an Autopilot cluster", "url": "https://cloud.google.com/kubernetes-engine/docs/how-to/creating-an-autopilot-cluster" },
+    { "label": "GKE docs: About GKE Sandbox (gVisor and microVMs)", "url": "https://cloud.google.com/kubernetes-engine/docs/concepts/sandbox-pods" },
+    { "label": "GKE docs: Harden workload isolation with GKE Sandbox", "url": "https://cloud.google.com/kubernetes-engine/docs/how-to/sandbox-pods" },
+    { "label": "Google Cloud Blog: 65,000 nodes and counting (Nov 2024)", "url": "https://cloud.google.com/blog/products/containers-kubernetes/gke-65k-nodes-and-counting" }
+  ],
+  "checked": "2026-10-06"
+}

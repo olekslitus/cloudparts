@@ -1,0 +1,78 @@
+{
+  "$schema": "../../.astro/collections/architectures.schema.json",
+  "title": "Open lakehouse on Iceberg",
+  "order": 20,
+  "summary": "Kafka streams events into Spark, which writes Iceberg tables on S3 that Trino queries for dashboards.",
+  "intro": "This is the common shape when many teams and many engines need the same data. Events flow through Kafka, a Spark job turns them into rows, and Iceberg makes a pile of Parquet files on S3 behave like database tables, with snapshots and safe concurrent writes. Because Iceberg is an open table format, the streaming job, the SQL engine behind dashboards and a data scientist’s notebook can all read and write the same tables without copying them.",
+  "fits": "Several teams, terabytes to petabytes, more than one engine",
+  "diagram": {
+    "caption": "Services publish order events to Kafka. Spark reads them in micro-batches and commits them to an Iceberg table whose files live on S3. Dashboard queries run on Trino, which reads the same table.",
+    "w": 860,
+    "h": 340,
+    "nodes": [
+      {
+        "id": "apps", "x": 95, "y": 70, "label": "Services", "sub": "order events",
+        "emit": { "every": 260, "jitter": 0.3, "cycle": true }, "out": ["kafka"]
+      },
+      {
+        "id": "kafka", "x": 340, "y": 85, "label": "Apache Kafka", "sub": "topic: orders", "tech": "kafka",
+        "kind": "log", "cells": 9, "retain": 40,
+        "readers": [{ "to": "spark", "every": 900, "batch": 4, "name": "Spark job" }]
+      },
+      {
+        "id": "spark", "x": 600, "y": 85, "label": "Apache Spark", "sub": "Structured Streaming", "tech": "spark",
+        "kind": "pool", "min": 1, "max": 3, "work": 500, "idle": 4000, "out": ["iceberg"]
+      },
+      { "id": "iceberg", "x": 600, "y": 235, "label": "Apache Iceberg", "sub": "table: orders", "tech": "iceberg", "out": ["s3"] },
+      { "id": "s3", "x": 785, "y": 235, "label": "Amazon S3", "sub": "Parquet + metadata", "tech": "s3", "mode": "reply", "delay": 120 },
+      {
+        "id": "dash", "x": 95, "y": 280, "label": "Dashboards", "sub": "BI tool",
+        "emit": { "every": 1300, "jitter": 0.4, "req": true, "color": 1 }, "out": ["trino"]
+      },
+      {
+        "id": "trino", "x": 340, "y": 280, "label": "Trino", "sub": "SQL query engine", "tech": "trino",
+        "kind": "pool", "min": 1, "max": 3, "work": 450, "idle": 4000, "out": ["iceberg"]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "title": "Services publish events",
+      "text": "Each order service appends events to a Kafka topic and moves on. Kafka keeps them for days, so the downstream job can fall behind, restart or be replaced without losing anything.",
+      "nodes": ["apps", "kafka"]
+    },
+    {
+      "title": "Spark reads in micro-batches",
+      "text": "A Spark Structured Streaming job reads a batch of new events every few seconds, tracking its own offset in the topic, and cleans and reshapes them into rows.",
+      "nodes": ["spark"]
+    },
+    {
+      "title": "Iceberg commits a snapshot",
+      "text": "Spark writes the rows as new Parquet files on S3, then asks the catalog to swap the table’s pointer to a new metadata file that lists them. That swap is atomic: readers see all of a batch or none of it.",
+      "nodes": ["iceberg", "s3"]
+    },
+    {
+      "title": "Trino answers dashboard queries",
+      "text": "Trino loads the table’s current metadata, prunes files using partition and column statistics, and reads only the matching Parquet from S3. Spark keeps writing while it reads; snapshot isolation keeps the two from tripping over each other.",
+      "nodes": ["dash", "trino", "iceberg", "s3"]
+    }
+  ],
+  "good": [
+    "Storage and compute are separate: S3 holds the data once, and each engine scales on its own",
+    "No lock-in to one engine; Spark, Trino, Flink, DuckDB, Snowflake and others read Iceberg",
+    "Snapshots give time travel, rollback and safe concurrent writers",
+    "Kafka decouples producers from the pipeline, so either side can change or fail independently"
+  ],
+  "watch": [
+    "Streaming writes create many small files; schedule compaction and snapshot expiry or queries slow down",
+    "You run a catalog (REST, Glue, Nessie or similar), and it must be highly available",
+    "Several moving parts (Kafka, Spark, Trino, the catalog) means real operational work for a small team",
+    "Freshness is minutes, not milliseconds; for sub-second dashboards a real-time database fits better"
+  ],
+  "swaps": [
+    { "text": "Don’t want to run Trino? Athena queries the same Iceberg tables serverlessly, billed per terabyte scanned.", "techs": ["athena"] },
+    { "text": "On AWS without running Kafka, Kinesis Data Streams can feed the job, or write to Iceberg tables directly.", "techs": ["kinesis"] },
+    { "text": "If you’re on Databricks, Delta Lake plays Iceberg’s role, and UniForm can expose the same tables to Iceberg readers.", "techs": ["delta-lake", "databricks"] },
+    { "text": "For one team and modest data, DuckLake gives you the same table features with far less to run.", "techs": ["ducklake", "duckdb"] }
+  ]
+}

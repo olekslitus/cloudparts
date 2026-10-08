@@ -1,0 +1,150 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Firebolt",
+  "concepts": ["olap", "warehouse"],
+  "provider": "vendor",
+  "vendor": "Firebolt Analytics Inc.",
+  "license": "Proprietary. Firebolt Core, the free self-hosted engine, ships as binaries only under the Elastic License 2.0 (source-available terms, not OSI open source; a custom licence before July 2025). SDKs, dbt adapter and Kubernetes operator are Apache 2.0",
+  "website": "https://www.firebolt.io/",
+  "summary": "A cloud data warehouse built for low-latency, high-concurrency queries behind apps and dashboards, also free to self-host as Firebolt Core.",
+  "intro": [
+    "Firebolt keeps table data in object storage (S3 in the managed service) as immutable files called tablets, each sorted on the table’s `PRIMARY INDEX`. A sparse index with one entry per granule of 8,192 rows lets a scan binary-search to the few granules that can match, and every compute node caches the tablets it reads on local SSD. Compute comes as engines: an engine is one or more clusters of S, M, L or XL nodes, and any engine can query any database, so loading and serving can run on separate engines over the same data. Two features target the latency of repeated, app-style queries: aggregating indexes, which precompute a `GROUP BY` and are updated in the same transaction as the base table, and caching of subresults such as join hash tables across queries. The SQL dialect follows PostgreSQL, and the engine also reads Iceberg tables in place.",
+    "The managed service runs in six AWS regions and bills engines per second in Firebolt Units (FBUs): a storage-optimized S node is 8 FBUs an hour, and compute-optimized nodes, with smaller SSD caches, are half that. On the Standard edition an FBU costs $0.23 an hour in US regions, so an S node is $1.84 an hour; Enterprise adds multi-cluster auto-scaling, PrivateLink and HIPAA at $0.35 per FBU. Storage is passed through at S3 cost, $27.07 per TiB-month in US East. Firebolt Core, launched in June 2025, is the same query engine as a free Docker image for laptops or your own clusters, under the Elastic License 2.0, which forbids offering it as a hosted service. In 2026 Firebolt’s site describes the engine as open source “in preview”, but the source repository its build guide points to is not public."
+  ],
+  "strengths": [
+    "Built for many concurrent, repetitive queries: aggregating indexes stay consistent with every write, and subresult caching reuses work across queries",
+    "Engines scale up (node type), out (nodes) and for concurrency (clusters) online, and several engines can share one copy of the data",
+    "PostgreSQL-compliant SQL, including its error behaviour, rather than a vendor dialect",
+    "The same engine runs free on a laptop or your own hardware as Firebolt Core, with no usage limits",
+    "Reads Iceberg tables in place and can mount whole catalogs (REST, Glue, Unity, Snowflake Open Catalog) as databases"
+  ],
+  "limits": [
+    "Not open source today: Core is a closed binary under the Elastic License 2.0, and the announced open-source release was still a preview with a waitlist in October 2026",
+    "Engines bill while running, and `AUTO_STOP` defaults to 20 minutes of idle time; L and XL nodes need a request to support",
+    "Deleted data keeps costing storage for a fixed 7-day recovery window that can’t be changed",
+    "The managed service is AWS only, in six regions; multi-cluster auto-scaling and PrivateLink need the Enterprise edition at about 50% more per FBU",
+    "Fast queries depend on choosing primary and aggregating indexes well; a filter on a transformed column or outside the index keys reads much more data"
+  ],
+  "worksWith": [
+    { "id": "s3", "how": "keeps tables in and caches them from" },
+    { "id": "iceberg", "how": "queries and exports tables in" },
+    { "id": "clickhouse", "how": "forked its original runtime from" },
+    { "id": "postgresql", "how": "follows the SQL dialect of" },
+    { "id": "kubernetes", "how": "self-hosts through an operator on" },
+    { "id": "dbt", "how": "is a warehouse target for" },
+    { "id": "ducklake", "how": "can read tables from (experimental)" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "An engine, a table sorted for its filters, and an aggregating index the planner uses automatically",
+    "source": [
+      "CREATE ENGINE IF NOT EXISTS serving WITH",
+      "  TYPE = S FAMILY = STORAGE_OPTIMIZED NODES = 2",
+      "  MIN_CLUSTERS = 1 MAX_CLUSTERS = 1 AUTO_STOP = 5;",
+      "USE ENGINE serving;",
+      "",
+      "CREATE TABLE page_views (",
+      "  tenant_id  INT,",
+      "  viewed_at  TIMESTAMP,",
+      "  page       TEXT,",
+      "  user_id    BIGINT,",
+      "  load_ms    INT",
+      ") PRIMARY INDEX tenant_id, viewed_at;",
+      "",
+      "CREATE AGGREGATING INDEX page_views_daily ON page_views (",
+      "  tenant_id, DATE_TRUNC('day', viewed_at), page,",
+      "  COUNT(*), COUNT(DISTINCT user_id), SUM(load_ms)",
+      ");",
+      "",
+      "-- served from page_views_daily, not by scanning page_views",
+      "SELECT page, COUNT(*) AS views",
+      "FROM page_views",
+      "WHERE tenant_id = 42",
+      "GROUP BY page",
+      "ORDER BY views DESC",
+      "LIMIT 10;"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Node types and list prices",
+      "intro": "Standard edition, US regions, per node per hour, billed per second while the engine runs. Checked 6 October 2026.",
+      "corner": "Node type",
+      "columns": ["Storage-optimized: vCPU, RAM, SSD cache", "Storage-optimized price", "Compute-optimized price"],
+      "rows": [
+        { "label": "S", "values": ["8 vCPU, 64 GB, 1,875 GB", "$1.84 (8 FBU)", "$0.92 (4 FBU)"] },
+        { "label": "M", "values": ["16 vCPU, 128 GB, 3,750 GB", "$3.68 (16 FBU)", "$1.84 (8 FBU)"] },
+        { "label": "L", "values": ["32 vCPU, 256 GB, 7,500 GB", "$7.36 (32 FBU)", "$3.68 (16 FBU)"] },
+        { "label": "XL", "values": ["64 vCPU, 512 GB, 15,000 GB", "$14.72 (64 FBU)", "$7.36 (32 FBU)"] }
+      ],
+      "notes": [
+        "An engine costs node price × nodes × clusters. Enterprise is $0.35 per FBU in the US; outside the US, Standard is $0.28 and Enterprise $0.42. Committed-use discounts go through sales.",
+        "The pricing calculator lists a compute-optimized S node with 8 vCPU, 16 GB of RAM and a 475 GB SSD cache.",
+        "Storage is $27.07 per TiB-month in US East, US West and Ireland, $28.84 in Frankfurt and $29.43 in Singapore and Mumbai. New accounts get $200 in credits."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Ways to run it",
+      "items": [
+        { "name": "Managed service", "tag": "Standard, Enterprise, Dedicated", "text": "Firebolt runs engines and storage in its AWS account in six regions. Dedicated adds single-tenant infrastructure; its price is by quote." },
+        { "name": "Firebolt Core", "tag": "free, Elastic License 2.0", "text": "The same query engine as a multi-arch Docker image, from one laptop to a multi-node cluster. Needs Linux 6.1 or newer for `io_uring`; queries go over HTTP on port 3473. Can’t be resold as a hosted service." },
+        { "name": "Kubernetes operator", "tag": "self-managed, 2026", "text": "Apache 2.0 operator and Helm chart that run engines, a metadata service backed by PostgreSQL and a gateway in your own cluster, over S3, GCS or Azure Blob Storage." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Eldad Farkash, Saar Bitner and Ariel Yaroshevich had built the BI company Sisense, where cloud data warehouses struggled with terabytes of data behind interactive dashboards. They founded Firebolt in 2019 to make warehouse queries fast and cheap enough for user-facing workloads, and came out of stealth in December 2020 with $37 million.",
+      "Writing a warehouse from scratch would have taken years, so the team assembled one and had production customers in under 18 months. The runtime was a hard fork of ClickHouse, chosen for its vectorised speed and basic scale-out. The SQL parser and planner started from Hyrise, an academic database from HPI, because it was also C++ and simple to extend, and the logical plan was redesigned along the lines of Apache Calcite. Firebolt then replaced ClickHouse’s distributed execution with its own shuffle-based stages and rewrote most functions to behave like PostgreSQL.",
+      "A $100 million Series C in January 2022 valued the company at $1.4 billion, and Mosha Pasumansky joined from Google BigQuery as CTO. In June 2025 Firebolt released Firebolt Core, the engine as a free download, and said it kept it closed so it couldn’t easily be copied; its licence became the Elastic License 2.0 that July."
+    ],
+    "choices": [
+      { "choice": "Fork the ClickHouse runtime instead of writing one", "why": "ClickHouse was fast, battle-tested and already did basic distributed queries, which let a small startup ship quickly. A hard fork left Firebolt free to change interfaces and replace whole layers later." },
+      { "choice": "Planner and runtime in the same language", "why": "Much database work happens where planner and runtime meet. With a C++ runtime, a C++ planner (from Hyrise rather than Java-based Calcite) let engineers work across both without switching stacks." },
+      { "choice": "PostgreSQL semantics over ClickHouse’s dialect", "why": "PostgreSQL is widely known, close to ANSI SQL and raises errors early, for example on overflow. Matching it meant overhauling scalar and aggregate functions without giving up vectorised speed." },
+      { "choice": "Maintain aggregating indexes in the same transaction", "why": "Apps run the same aggregations constantly. Updating precomputed groups incrementally on every write moves work from reads to writes, so reads after a commit never hit a stale or recomputing index." }
+    ],
+    "timeline": [
+      { "year": "2019", "text": "Founded by former Sisense executives" },
+      { "year": "2020", "text": "Leaves stealth in December with $37 million" },
+      { "year": "2022", "text": "$100 million Series C at a $1.4 billion valuation" },
+      { "year": "2024", "text": "Describes rebuilding the forked runtime for PostgreSQL compliance" },
+      { "year": "2025", "text": "Firebolt Core released in June; Elastic License 2.0 from July" },
+      { "year": "2026", "text": "Kubernetes operator published; open-source engine announced as preview" }
+    ],
+    "sources": [
+      { "label": "TechCrunch: Firebolt raises $37M to take on Snowflake, Amazon and Google (December 2020)", "url": "https://techcrunch.com/2020/12/09/firebolt-raises-37m-to-take-on-snowflake-amazon-and-google-with-a-new-approach-to-data-warehousing/" },
+      { "label": "TechCrunch: Firebolt raises $100M at a $1.4B valuation (January 2022)", "url": "https://techcrunch.com/2022/01/26/firebolt-a-data-warehouse-startup-raises-100m-at-a-1-4b-valuation-for-faster-cheaper-analytics-on-large-data-sets/" },
+      { "label": "Pasumansky and Wagner: Assembling a Query Engine From Spare Parts (CDMS 2022)", "url": "https://cdmsworkshop.github.io/2022/Proceedings/ShortPapers/Paper1_MoshaPasumansky.pdf" },
+      { "label": "Firebolt blog: Making a query engine Postgres compliant, part I (September 2024)", "url": "https://www.firebolt.io/blog/making-a-query-engine-postgres-compliant-part-i-functions" },
+      { "label": "Firebolt blog: Introducing Firebolt Core (June 2025)", "url": "https://www.firebolt.io/blog/introducing-firebolt-core" },
+      { "label": "GitHub: firebolt-core LICENSE.md history (custom terms June 2025, Elastic License 2.0 July 2025)", "url": "https://github.com/firebolt-db/firebolt-core/commits/main/LICENSE.md" }
+    ]
+  },
+  "sources": [
+    { "label": "Firebolt homepage (deployment modes, connectivity, OSS preview, storage-optimized node sizes)", "url": "https://www.firebolt.io/" },
+    { "label": "Firebolt pricing (calculator, per-second billing, $200 credits, FAQ)", "url": "https://www.firebolt.io/pricing" },
+    { "label": "Firebolt docs: Pricing and billing (editions, FBU prices, storage prices, 7-day retention)", "url": "https://docs.firebolt.io/managed-service/billing" },
+    { "label": "Firebolt docs: Engine consumption (FBUs per node type)", "url": "https://docs.firebolt.io/managed-service/engine-consumption" },
+    { "label": "Firebolt docs: Engine fundamentals (type, family, nodes, clusters, L and XL by request)", "url": "https://docs.firebolt.io/managed-service/engine-fundamentals" },
+    { "label": "Firebolt docs: CREATE ENGINE (AUTO_STOP default)", "url": "https://docs.firebolt.io/reference-sql/commands/engines/create-engine" },
+    { "label": "Firebolt docs: Available regions", "url": "https://docs.firebolt.io/managed-service/available-regions" },
+    { "label": "Firebolt docs: Storage and indexing (tablets, granules, SSD cache)", "url": "https://docs.firebolt.io/performance-and-observability/storage-and-indexing" },
+    { "label": "Firebolt docs: Primary index", "url": "https://docs.firebolt.io/performance-and-observability/storage-and-indexing/primary-index" },
+    { "label": "Firebolt docs: Aggregating index", "url": "https://docs.firebolt.io/performance-and-observability/storage-and-indexing/aggregating-index" },
+    { "label": "Firebolt docs: Iceberg (catalog types, CREATE ICEBERG DATABASE, export)", "url": "https://docs.firebolt.io/guides/iceberg-and-data-lake/iceberg" },
+    { "label": "Firebolt docs: Query DuckLake tables (experimental)", "url": "https://docs.firebolt.io/guides/iceberg-and-data-lake/ducklake" },
+    { "label": "Firebolt docs: Self-managed (operator and Helm chart are open source)", "url": "https://docs.firebolt.io/self-managed" },
+    { "label": "Firebolt docs: Firebolt Operator architecture (metadata PostgreSQL, gateway)", "url": "https://docs.firebolt.io/self-managed/firebolt-operator/architecture" },
+    { "label": "Firebolt docs: Standalone binaries (object storage options, build from a source repository)", "url": "https://docs.firebolt.io/self-managed/standalone-binaries/overview" },
+    { "label": "Firebolt blog: How we built Firebolt (aggregating indexes, history-based planning, subresult caching)", "url": "https://www.firebolt.io/blog/how-we-built-firebolt" },
+    { "label": "GitHub: firebolt-core README (Docker image, requirements, HTTP port 3473)", "url": "https://github.com/firebolt-db/firebolt-core" },
+    { "label": "GitHub: firebolt-core LICENSE.md (Elastic License 2.0)", "url": "https://github.com/firebolt-db/firebolt-core/blob/main/LICENSE.md" },
+    { "label": "GitHub: firebolt-kubernetes-operator (Apache 2.0)", "url": "https://github.com/firebolt-db/firebolt-kubernetes-operator" },
+    { "label": "GitHub: dbt-firebolt adapter (Apache 2.0)", "url": "https://github.com/firebolt-db/dbt-firebolt" },
+    { "label": "Firebolt: About (founded 2019, leadership)", "url": "https://www.firebolt.io/about" }
+  ],
+  "checked": "2026-10-06"
+}

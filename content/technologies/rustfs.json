@@ -1,0 +1,115 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "RustFS",
+  "concepts": ["object"],
+  "provider": "oss",
+  "vendor": "RustFS, Inc.",
+  "license": "Apache 2.0",
+  "website": "https://rustfs.com/",
+  "repo": "https://github.com/rustfs/rustfs",
+  "summary": "A young Rust reimplementation of MinIO’s design: S3-compatible, erasure-coded, Apache 2.0, and generally available since September 2026.",
+  "intro": [
+    "RustFS follows MinIO’s storage model closely. Drives are grouped into erasure sets of up to 16, and each object is split with Reed-Solomon coding into data and parity shards across one set, so it survives losing as many drives as it has parity shards. There is no separate metadata database: each object’s metadata sits in an `xl.meta` file next to its shards on every drive, in MinIO’s format, and small objects are stored inline in that file. A HighwayHash checksum on every shard catches silent corruption, and a background scanner heals damaged or missing shards. Capacity grows by adding a whole new pool of drives, not single disks.",
+    "Around that core it ships most of what MinIO users expect: IAM users, groups and policies, OIDC login, versioning, Object Lock, lifecycle rules with tiering to remote S3, bucket and site replication, event notifications, server-side encryption with keys in Vault or AWS KMS, and a web console on port 9001. It also speaks OpenStack Swift, WebDAV, FTPS and SFTP, and a preview S3 Tables feature serves an Iceberg REST catalog. Its compatibility gate runs Ceph’s S3 test suite: 455 standard cases pass, 17 are still planned and 270 are excluded (August 2026). Version 1.0.0 shipped on 16 September 2026, after about 100 alpha releases from July 2025, a beta in April 2026 and release candidates in August."
+  ],
+  "strengths": [
+    "The closest thing to a drop-in MinIO replacement: the same storage model, the same ports (9000 and 9001), similar flags, a console, and an importer for MinIO bucket metadata and IAM config",
+    "Apache 2.0 instead of AGPLv3, so you can embed or modify it without publishing your changes",
+    "MinIO’s feature set is largely there: versioning, Object Lock, lifecycle tiering, bucket and site replication, notifications, IAM and OIDC",
+    "Easy to install: a single binary, a Docker image, RPM and DEB packages, a Helm chart and a Kubernetes operator"
+  ],
+  "limits": [
+    "Very new: 1.0.0 came out on 16 September 2026 and the first beta only in April 2026, so few teams have run it in production for long",
+    "Running on MinIO’s existing drives is still marked preview, objects that MinIO encrypted can’t be read by the default build, and the switch is one-way",
+    "Inherits MinIO’s layout rules: an erasure set’s width is fixed once created, capacity grows a pool at a time, and a single-drive install can’t be expanded in place",
+    "S3 coverage is a tested subset: bucket access logging and ownership controls are still planned, ACLs are deliberately unsupported, and S3 Tables is a preview",
+    "Built mainly by one company, whose marketing promises “100% native S3 compatibility” while its own docs describe a tested subset"
+  ],
+  "worksWith": [
+    { "id": "s3", "how": "speaks the API of" },
+    { "id": "s3-tables", "how": "implements a preview of the API of" },
+    { "id": "kubernetes", "how": "can run on" },
+    { "id": "vault", "how": "can keep its encryption keys in" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Run RustFS in Docker with your own credentials, then use the aws CLI",
+    "source": [
+      "export AWS_ACCESS_KEY_ID=backup-admin",
+      "export AWS_SECRET_ACCESS_KEY=\"$(openssl rand -base64 24)\"",
+      "",
+      "# never keep the well-known default rustfsadmin / rustfsadmin",
+      "docker run -d --name rustfs --restart unless-stopped \\",
+      "  -p 9000:9000 -p 9001:9001 -v rustfs-data:/data \\",
+      "  -e RUSTFS_ACCESS_KEY=\"$AWS_ACCESS_KEY_ID\" \\",
+      "  -e RUSTFS_SECRET_KEY=\"$AWS_SECRET_ACCESS_KEY\" \\",
+      "  -e RUSTFS_CONSOLE_ENABLE=true \\",
+      "  rustfs/rustfs:1.0.1 /data",
+      "",
+      "curl --fail http://localhost:9000/health",
+      "aws s3 mb s3://backups --endpoint-url http://localhost:9000",
+      "aws s3 cp --recursive ./exports/ s3://backups/2026-10-05/ --endpoint-url http://localhost:9000",
+      "# web console: http://localhost:9001"
+    ]
+  },
+  "sections": [
+    {
+      "type": "text",
+      "title": "Moving from MinIO",
+      "body": [
+        "RustFS is the most direct swap: the same model, the same ports and similar flags, and its README says its pool and erasure-set rules follow MinIO’s, though it picks parity differently. The safe route is a new RustFS deployment filled over S3: RustFS’s own migration guide uses `mc mirror --watch` to keep copying new objects until you switch endpoints, then `mc diff` to check, and `rclone sync` works the same way. Users and policies need recreating unless you import them.",
+        "The faster route is to start RustFS on MinIO’s drives. At startup it imports MinIO’s bucket metadata and IAM config, and its interop doc says it reads unencrypted MinIO objects. But the README still labels MinIO on-disk compatibility a preview, objects MinIO encrypted need a non-default `rio-v2` build and the same master key (and can’t be read at all if MinIO used KES), and MinIO can’t read the drives back once RustFS has written to them. Take a backup first."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "RustFS set out to rebuild MinIO’s proven design in Rust, aiming for memory safety, no garbage-collection pauses and an Apache 2.0 licence instead of the AGPLv3 that MinIO had adopted in 2021. The first code was written in 2024, and the team, now RustFS, Inc., worked on it until it open-sourced the project in July 2025.",
+      "The timing helped. As MinIO pulled back from its community edition and then archived it in April 2026, RustFS pitched itself as the replacement: it published a guide to migrating with `mc mirror`, added a mode that starts directly on MinIO’s drives, and pledged that its core repository would stay open source permanently. It passed 10,000 GitHub stars in October 2025 and 30,000 in July 2026.",
+      "After about 100 alpha releases, the project declared a beta in April 2026, release candidates in August and 1.0.0 GA on 16 September 2026, which it describes as the point where its core object storage is stable enough for production. Next on its roadmap are S3 Vectors and a RustFS 2.0 aimed at AI data centres."
+    ],
+    "choices": [
+      { "choice": "Reimplement MinIO’s design rather than invent a new one", "why": "Erasure sets, pools and the `xl.meta` format were proven at scale and familiar to operators. Matching them, down to the on-disk format, makes moving from MinIO and learning RustFS easier." },
+      { "choice": "Rust instead of Go", "why": "The project wanted memory safety without a garbage collector, to avoid collection pauses and keep latency steady under load." },
+      { "choice": "Apache 2.0 instead of AGPLv3", "why": "A permissive licence lets companies embed and modify RustFS without publishing their changes, which is RustFS’s main pitch against MinIO." }
+    ],
+    "timeline": [
+      { "year": "2024", "text": "Work on RustFS begins" },
+      { "year": "2025", "text": "Open-sourced under Apache 2.0 with the first alpha (July)" },
+      { "year": "2025", "text": "Passes 10,000 GitHub stars (October)" },
+      { "year": "2026", "text": "Beta in April, as MinIO archives its repository" },
+      { "year": "2026", "text": "1.0.0 GA after release candidates (September)" }
+    ],
+    "sources": [
+      { "label": "RustFS blog: Announcing RustFS 1.0.0 GA", "url": "https://rustfs.com/blog/announcing-rustfs-1-0-0-ga/" },
+      { "label": "RustFS: About (project timeline)", "url": "https://rustfs.com/about/" },
+      { "label": "RustFS blog: Announcing RustFS Beta", "url": "https://rustfs.com/blog/announcing-rustfs-beta-the-high-performance-s3-compatible-open-source-storage-for-the-ai-era/" },
+      { "label": "RustFS blog: A safe harbor for the future", "url": "https://rustfs.com/blog/a-safe-harbor-for-the-future-rustfss-unwavering-commitment-to-open-source/" },
+      { "label": "RustFS blog: Migrating from MinIO to RustFS", "url": "https://rustfs.com/blog/migrating-from-minio-to-rustfs-a-technical-guide/" },
+      { "label": "RustFS release 1.0.0-alpha.1 (July 2025)", "url": "https://github.com/rustfs/rustfs/releases/tag/1.0.0-alpha.1" },
+      { "label": "RustFS release 1.0.0 (September 2026)", "url": "https://github.com/rustfs/rustfs/releases/tag/1.0.0" },
+      { "label": "minio/minio on GitHub (archived)", "url": "https://github.com/minio/minio" },
+      { "label": "Wikipedia: MinIO", "url": "https://en.wikipedia.org/wiki/MinIO" }
+    ]
+  },
+  "sources": [
+    { "label": "RustFS", "url": "https://rustfs.com/" },
+    { "label": "rustfs/rustfs on GitHub (README, feature status)", "url": "https://github.com/rustfs/rustfs" },
+    { "label": "rustfs/rustfs: LICENSE", "url": "https://github.com/rustfs/rustfs/blob/main/LICENSE" },
+    { "label": "RustFS release 1.0.0", "url": "https://github.com/rustfs/rustfs/releases/tag/1.0.0" },
+    { "label": "RustFS release 1.0.1", "url": "https://github.com/rustfs/rustfs/releases/tag/1.0.1" },
+    { "label": "RustFS release 1.0.0-beta.1", "url": "https://github.com/rustfs/rustfs/releases/tag/1.0.0-beta.1" },
+    { "label": "RustFS docs: S3 compatibility matrix", "url": "https://docs.rustfs.com/en/reference/s3-compatibility" },
+    { "label": "RustFS docs: Docker installation", "url": "https://docs.rustfs.com/en/installation/container/docker" },
+    { "label": "RustFS docs: Kubernetes operator", "url": "https://docs.rustfs.com/en/installation/cloud-native/operator" },
+    { "label": "RustFS repo: Erasure coding design", "url": "https://github.com/rustfs/rustfs/blob/main/docs/architecture/erasure-coding.md" },
+    { "label": "RustFS repo: MinIO on-disk format interoperability", "url": "https://github.com/rustfs/rustfs/blob/main/docs/architecture/minio-file-format-compat.md" },
+    { "label": "RustFS: About", "url": "https://rustfs.com/about/" },
+    { "label": "RustFS blog: Announcing RustFS 1.0.0 GA", "url": "https://rustfs.com/blog/announcing-rustfs-1-0-0-ga/" },
+    { "label": "RustFS blog: Migrating from MinIO to RustFS", "url": "https://rustfs.com/blog/migrating-from-minio-to-rustfs-a-technical-guide/" },
+    { "label": "RustFS blog: Drop-in binary replacement from MinIO", "url": "https://rustfs.com/blog/binary-replacement-a-simple-way-to-migrate-from-minio-to-rustfs/" },
+    { "label": "RustFS blog: Install RustFS with RPM and DEB packages", "url": "https://rustfs.com/blog/install-rustfs-with-rpm-and-deb-packages/" },
+    { "label": "rclone docs: rclone sync", "url": "https://rclone.org/commands/rclone_sync/" }
+  ],
+  "checked": "2026-10-05"
+}

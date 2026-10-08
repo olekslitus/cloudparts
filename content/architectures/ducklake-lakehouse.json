@@ -1,0 +1,73 @@
+{
+  "$schema": "../../.astro/collections/architectures.schema.json",
+  "title": "Small lakehouse on DuckLake",
+  "order": 10,
+  "summary": "DuckDB writes and queries tables whose catalog lives in PostgreSQL and whose data sits as Parquet on S3.",
+  "intro": "A lakehouse doesn’t need a fleet of servers. Here a nightly job and a handful of analysts all use DuckDB, an engine that runs inside their own process, and share one set of tables through DuckLake. The catalog that says which Parquet files make up each table, and every past snapshot, is just a few tables in a PostgreSQL database. The data is plain Parquet in an S3 bucket. There’s nothing else to run.",
+  "fits": "One team, gigabytes to a few terabytes",
+  "diagram": {
+    "caption": "A nightly load writes new rows: DuckLake commits the snapshot to PostgreSQL and the data to S3 as Parquet. Analysts’ queries look up the current files in the catalog and read them from S3.",
+    "w": 820,
+    "h": 320,
+    "zones": [{ "x": 590, "y": 30, "w": 210, "h": 262, "label": "Where the lake lives" }],
+    "nodes": [
+      {
+        "id": "load", "x": 100, "y": 80, "label": "Nightly load", "sub": "CSV exports",
+        "emit": { "phases": [[1800, 320], [3600, null]], "cycle": true }, "out": ["writer"]
+      },
+      { "id": "writer", "x": 290, "y": 80, "label": "DuckDB", "sub": "INSERT INTO orders", "tech": "duckdb", "out": ["lake"] },
+      {
+        "id": "analysts", "x": 100, "y": 245, "label": "Analysts", "sub": "notebooks · BI",
+        "emit": { "every": 1100, "jitter": 0.4, "req": true, "color": 1 }, "out": ["reader"]
+      },
+      { "id": "reader", "x": 290, "y": 245, "label": "DuckDB", "sub": "SELECT … AT VERSION", "tech": "duckdb", "out": ["lake"] },
+      { "id": "lake", "x": 470, "y": 162, "label": "DuckLake", "sub": "ducklake extension", "tech": "ducklake", "route": "fanout", "out": ["catalog", "files"] },
+      { "id": "catalog", "x": 695, "y": 95, "label": "PostgreSQL", "sub": "catalog · snapshots", "tech": "postgresql", "mode": "reply", "delay": 30 },
+      { "id": "files", "x": 695, "y": 230, "label": "Amazon S3", "sub": "Parquet data files", "tech": "s3", "mode": "reply", "delay": 140 }
+    ]
+  },
+  "steps": [
+    {
+      "title": "Load runs inside DuckDB",
+      "text": "The nightly job is a script that starts DuckDB, runs `ATTACH 'ducklake:postgres:…'`, and inserts the day’s CSV exports. No cluster starts up; the work happens in the job’s own process.",
+      "nodes": ["load", "writer"]
+    },
+    {
+      "title": "Data lands as Parquet",
+      "text": "DuckLake writes the new rows as Parquet files under the bucket’s data path. Existing files are never changed, so a half-finished load can’t corrupt what readers see.",
+      "nodes": ["lake", "files"]
+    },
+    {
+      "title": "One transaction commits the snapshot",
+      "text": "The list of new files, their statistics and a new snapshot id go into the catalog tables in PostgreSQL in a single transaction. The moment it commits, every reader sees the new data; until then, nobody does.",
+      "nodes": ["catalog"]
+    },
+    {
+      "title": "Queries ask the catalog, then read files",
+      "text": "An analyst’s DuckDB asks PostgreSQL which files belong to the current snapshot and uses their min/max statistics to skip files that can’t match. It then reads only the Parquet it needs from S3. `AT (VERSION => n)` reads an older snapshot instead.",
+      "nodes": ["analysts", "reader", "lake", "catalog", "files"]
+    }
+  ],
+  "good": [
+    "Almost nothing to operate: one PostgreSQL database and a bucket, both of which you may already run",
+    "Commits are database transactions, so loads that touch several tables are atomic",
+    "Readers scale out for free: each analyst’s laptop or notebook is its own engine",
+    "The data is ordinary Parquet, so other tools can read the files, and tables can be copied out to Iceberg later"
+  ],
+  "watch": [
+    "Every query and commit touches PostgreSQL; size and back it up like the critical system it now is",
+    "Each DuckDB runs on one machine, so a single query is limited to what that machine can scan",
+    "Few engines besides DuckDB read DuckLake today; if Spark or Trino must join in, Iceberg is the safer choice",
+    "Many tiny loads still make many small files; use data inlining or run compaction regularly"
+  ],
+  "swaps": [
+    { "text": "Everything on one machine? Keep the catalog in SQLite (or a DuckDB file) next to the data, and skip PostgreSQL entirely.", "techs": ["sqlite"] },
+    { "text": "Avoid egress fees or stay on your own hardware by pointing the data path at another S3-compatible store.", "techs": ["r2", "silo", "seaweedfs", "garage"] },
+    { "text": "Need many different engines on the same tables? Build the same shape on Iceberg with a REST catalog instead.", "techs": ["iceberg", "trino", "spark"] }
+  ],
+  "sources": [
+    { "label": "DuckLake spec: Queries (file pruning with per-file column statistics)", "url": "https://ducklake.select/docs/stable/specification/queries" },
+    { "label": "DuckLake docs: Time travel (AT (VERSION => n))", "url": "https://ducklake.select/docs/stable/duckdb/usage/time_travel" },
+    { "label": "DuckLake docs: Merge adjacent files (compaction)", "url": "https://ducklake.select/docs/stable/duckdb/maintenance/merge_adjacent_files" }
+  ]
+}

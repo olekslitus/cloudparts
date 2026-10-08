@@ -1,0 +1,204 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Serverless architecture",
+  "category": "design",
+  "order": 30,
+  "summary": "Build an application from managed services and short-lived functions, so none of the servers are yours to run.",
+  "howItWorks": "A serverless architecture builds an application from two kinds of parts that someone else operates. The first is backend as a service (BaaS): hosted databases, sign-in, file storage, queues and other services that your code, and sometimes the browser itself, calls over an API. The second is functions as a service (FaaS): your own code, cut into handlers that a platform such as AWS Lambda starts when an event arrives (an HTTP request through an API gateway, a new file, a queue message, a schedule) and stops when the work is done. Nothing of yours runs while there are no events, so idle time costs little or nothing, and capacity follows traffic without anyone resizing a cluster. The shape of the code changes too. A function can’t count on keeping state between invocations, so state lives in the managed services. Steps are chained through events, queues and workflow services instead of in-process calls. Some logic moves into the client, which may read a database directly under per-user access rules (Firebase Security Rules, for example). The costs are real. Every hop is a network call and some are billed per call, so chatty designs get slow and expensive. Platform limits shape the design: Lambda stops a function after 15 minutes and allows 1,000 concurrent executions by default. And the app is wired to one vendor’s services, which makes it harder to move and to run on a laptop.",
+  "analogy": "Throwing a party in a rented hall with caterers instead of cooking at home. You choose the menu and the guest list; staff turn up when guests do and leave when they go, and you pay per guest. But you can’t rearrange their kitchen, and moving the party means hiring everyone again.",
+  "useWhen": [
+    "Event-driven products that react to uploads, messages, webhooks and schedules",
+    "Spiky, unpredictable or low traffic, where idle servers would cost more than they earn",
+    "Small teams that would rather ship features than run servers, databases and patching",
+    "Glue between managed services in one cloud"
+  ],
+  "avoidWhen": [
+    "Steady high load or lots of data passed between steps: Prime Video’s stream-monitoring service hit a hard scaling limit at about 5% of its expected load and cut costs by 90% by moving into one process",
+    "Long-running or stateful work, like jobs longer than the function timeout or game state held in memory",
+    "You must stay portable across clouds or run fully on your own hardware",
+    "Latency-critical paths that can’t absorb the occasional cold start"
+  ],
+  "example": "Mike Roberts’s classic example is an online pet store. The traditional version is one server application that handles sign-in, browsing, search and purchases in front of a database. The serverless version deletes most of it. Sign-in moves to a hosted auth service such as Auth0, and the browser reads product listings straight from a hosted database such as Firebase. Only search and purchase stay as server code, each a function behind an API gateway; purchase stays on the server for security. The browser grows into a single-page app that keeps track of the session itself.",
+  "providers": {
+    "aws": "Lambda with API Gateway, SQS, SNS, EventBridge, Step Functions, DynamoDB and Cognito",
+    "gcp": "Cloud Run and Cloud Run functions with Pub/Sub, Eventarc, Workflows, Firestore and Firebase",
+    "azure": "Azure Functions with API Management, Service Bus and Azure Cosmos DB serverless",
+    "oss": "SST (MIT) to define and deploy the wiring; Knative for functions on Kubernetes; Supabase (Apache 2.0), an open-source Firebase-style backend"
+  },
+  "snippet": {
+    "lang": "ts",
+    "source": [
+      "// sst.config.ts: the whole backend is managed services plus three functions",
+      "const products = new sst.aws.Dynamo(\"Products\", {",
+      "  fields: { sku: \"string\" },",
+      "  primaryIndex: { hashKey: \"sku\" },",
+      "});",
+      "",
+      "const orders = new sst.aws.Queue(\"Orders\");",
+      "orders.subscribe(\"src/fulfil.handler\");        // runs once per message",
+      "",
+      "const api = new sst.aws.ApiGatewayV2(\"Api\", { link: [products, orders] });",
+      "api.route(\"GET /search\", \"src/search.handler\");      // reads Products",
+      "api.route(\"POST /checkout\", \"src/checkout.handler\"); // charges, then queues the order"
+    ]
+  },
+  "related": ["serverless", "monolith", "microservices", "apigw", "eventbus", "workflow", "authentication", "emulators"],
+  "diagram": {
+    "caption": "The pet store without servers of its own. The browser reads listings straight from the hosted database; search and checkout go through the gateway, which rejects calls without a valid token, to functions that start on demand (amber marks a cold start).",
+    "h": 280,
+    "nodes": [
+      {
+        "id": "read",
+        "x": 95,
+        "y": 50,
+        "label": "Browser",
+        "sub": "reads listings",
+        "emit": {"every": 800, "jitter": 0.4, "req": true, "color": 0},
+        "out": ["db"]
+      },
+      {
+        "id": "web",
+        "x": 95,
+        "y": 185,
+        "label": "Browser",
+        "sub": "search · checkout",
+        "emit": {"every": 650, "jitter": 0.45, "req": true, "types": ["search", "buy"], "colorByType": {"search": 1, "buy": 2}},
+        "out": ["gw"]
+      },
+      {
+        "id": "gw",
+        "x": 275,
+        "y": 185,
+        "label": "API gateway",
+        "sub": "checks auth token",
+        "concept": "apigw",
+        "mode": "gate",
+        "p": 0.9,
+        "denyText": "401",
+        "route": "type",
+        "rules": {"search": ["fn-s"], "buy": ["fn-b"]}
+      },
+      {
+        "id": "fn-s",
+        "x": 465,
+        "y": 130,
+        "kind": "pool",
+        "label": "Search function",
+        "concept": "serverless",
+        "max": 4,
+        "work": 350,
+        "idle": 2500,
+        "cold": 450,
+        "out": ["db"]
+      },
+      {
+        "id": "fn-b",
+        "x": 465,
+        "y": 240,
+        "kind": "pool",
+        "label": "Checkout function",
+        "concept": "serverless",
+        "max": 3,
+        "work": 500,
+        "idle": 2500,
+        "cold": 450,
+        "out": ["pay"]
+      },
+      {
+        "id": "db",
+        "x": 670,
+        "y": 50,
+        "label": "Hosted database",
+        "sub": "per-user access rules",
+        "concept": "document",
+        "mode": "reply",
+        "delay": 60
+      },
+      {
+        "id": "pay",
+        "x": 670,
+        "y": 240,
+        "label": "Payments API",
+        "sub": "third-party service",
+        "mode": "reply",
+        "delay": 160
+      }
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Who runs what in the pet store",
+      "intro": "Following Roberts’s example: the same features, moved out of one server application.",
+      "corner": "Feature",
+      "columns": ["Traditional three-tier", "Serverless"],
+      "rows": [
+        { "label": "Sign-in", "values": ["Code in the server application", "A hosted auth service (BaaS), such as Auth0 or Cognito"] },
+        { "label": "Browsing products", "values": ["The server reads the database and renders pages", "The browser reads a hosted database directly, under access rules"] },
+        { "label": "Search", "values": ["The server application", "A function behind an API gateway"] },
+        { "label": "Purchase", "values": ["The server application", "A separate function behind the gateway, kept server-side for security"] },
+        { "label": "Session and page flow", "values": ["The server", "The single-page app in the browser"] },
+        { "label": "Always-on servers you run", "values": ["The application server and the database", "None"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "The word came before the platforms. In October 2012 Ken Fromm, then at Iron.io, wrote that cloud apps were “moving into a serverless world”, adding that the phrase doesn’t mean servers are gone, only that developers no longer have to think much about them. The parts already existed: hosted “mobile backend as a service” products such as Parse and Firebase gave apps a database and sign-in without a server of their own.",
+      "AWS Lambda, announced on 13 November 2014, added the missing piece: your own code, run on demand when an S3 upload, a Kinesis record or a DynamoDB update arrived, with nothing to configure or scale. According to Mike Roberts, the term caught on in 2015, growing after Amazon API Gateway launched that July and let functions answer HTTP. By the end of 2015 the JAWS project had renamed itself the Serverless Framework, and by mid-2016 “serverless” was the usual name for the area. Roberts’s article on Martin Fowler’s site, last updated in May 2018, gave the standard definition: applications built from BaaS and FaaS, with no always-on server component of your own.",
+      "Academics split on it. In December 2018 Joseph Hellerstein and colleagues at Berkeley argued in “One Step Forward, Two Steps Back” that first-generation serverless was a bad fit for data-heavy and distributed work. In February 2019 another Berkeley group, including David Patterson and Ion Stoica, predicted that serverless computing “will grow to dominate the future of cloud computing.” In 2023 Prime Video’s write-up of moving a monitoring service from Step Functions and Lambda to a single process, cutting its costs by 90%, became the best-known case for where the style doesn’t fit."
+    ],
+    "choices": [
+      {
+        "choice": "Buy the backend instead of building it",
+        "why": "Roberts’s pet store replaces its own sign-in with Auth0 and its own data layer with a hosted database. Less code to write and run, at the price of depending on vendors you can’t change."
+      },
+      {
+        "choice": "Functions start on events and keep no state",
+        "why": "Because a platform can start and stop each function freely, it can scale to traffic and bill only for work done. In return, state must live in a database, cache or queue, never in the function."
+      },
+      {
+        "choice": "Let the client do more",
+        "why": "With per-user access rules on the database, the browser can read data directly, so there is less server code. Some logic then moves into the client, and Roberts warns it may be repeated across web and mobile apps."
+      },
+      {
+        "choice": "Accept one vendor’s platform",
+        "why": "Roberts calls lock-in a legitimate concern but still recommends picking one vendor and using its services fully, since staying cloud-agnostic often costs more."
+      }
+    ],
+    "timeline": [
+      { "year": "2012", "text": "Ken Fromm writes “Why The Future Of Software And Apps Is Serverless”" },
+      { "year": "2014", "text": "AWS announces Lambda" },
+      { "year": "2015", "text": "Amazon API Gateway launches; JAWS becomes the Serverless Framework" },
+      { "year": "2018", "text": "Mike Roberts’s “Serverless Architectures” reaches its final major version; Hellerstein et al. publish “One Step Forward, Two Steps Back”" },
+      { "year": "2019", "text": "Berkeley’s “Cloud Programming Simplified” predicts serverless will dominate cloud computing" },
+      { "year": "2023", "text": "Prime Video moves a monitoring service from serverless parts to one process, cutting costs 90%" }
+    ],
+    "sources": [
+      { "label": "Ken Fromm: Why The Future Of Software And Apps Is Serverless (ReadWrite, Oct 2012)", "url": "https://readwrite.com/why-the-future-of-software-and-apps-is-serverless/" },
+      { "label": "Mike Roberts: Serverless Architectures (martinfowler.com, May 2018), including “Origin of ‘Serverless’”", "url": "https://martinfowler.com/articles/serverless.html" },
+      { "label": "AWS News Blog: AWS Lambda, Run Code in the Cloud (13 Nov 2014)", "url": "https://aws.amazon.com/blogs/aws/run-code-cloud/" },
+      { "label": "Hellerstein et al.: Serverless Computing: One Step Forward, Two Steps Back (arXiv, Dec 2018)", "url": "https://arxiv.org/abs/1812.03651" },
+      { "label": "Jonas et al.: Cloud Programming Simplified: A Berkeley View on Serverless Computing (UCB/EECS-2019-3, Feb 2019)", "url": "https://www2.eecs.berkeley.edu/Pubs/TechRpts/2019/EECS-2019-3.html" },
+      { "label": "Marcin Kolny, Prime Video Tech: Scaling up the Prime Video audio/video monitoring service and reducing costs by 90% (Mar 2023)", "url": "https://www.primevideotech.com/video-streaming/scaling-up-the-prime-video-audio-video-monitoring-service-and-reducing-costs-by-90", "archive": "https://web.archive.org/web/20230506020443/https://www.primevideotech.com/video-streaming/scaling-up-the-prime-video-audio-video-monitoring-service-and-reducing-costs-by-90" }
+    ]
+  },
+  "sources": [
+    { "label": "Mike Roberts: Serverless Architectures (martinfowler.com, May 2018), on BaaS, FaaS, the pet store example and drawbacks", "url": "https://martinfowler.com/articles/serverless.html" },
+    { "label": "Firebase docs: Firebase Security Rules", "url": "https://firebase.google.com/docs/rules" },
+    { "label": "Lambda docs: Quotas (15-minute timeout, 1,000 concurrent executions by default)", "url": "https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html" },
+    { "label": "AWS Lambda pricing (per request and per millisecond)", "url": "https://aws.amazon.com/lambda/pricing/" },
+    { "label": "Marcin Kolny, Prime Video Tech: Scaling up the Prime Video audio/video monitoring service and reducing costs by 90% (Mar 2023)", "url": "https://www.primevideotech.com/video-streaming/scaling-up-the-prime-video-audio-video-monitoring-service-and-reducing-costs-by-90", "archive": "https://web.archive.org/web/20230506020443/https://www.primevideotech.com/video-streaming/scaling-up-the-prime-video-audio-video-monitoring-service-and-reducing-costs-by-90" },
+    { "label": "AWS: Serverless on AWS", "url": "https://aws.amazon.com/serverless/" },
+    { "label": "Amazon Cognito Developer Guide: What is Amazon Cognito?", "url": "https://docs.aws.amazon.com/cognito/latest/developerguide/what-is-amazon-cognito.html" },
+    { "label": "Google Cloud: Serverless computing", "url": "https://cloud.google.com/serverless" },
+    { "label": "Azure Architecture Center: Serverless Functions overview", "url": "https://learn.microsoft.com/en-us/azure/architecture/serverless-quest/serverless-overview" },
+    { "label": "Microsoft Learn: Azure Cosmos DB serverless account type", "url": "https://learn.microsoft.com/en-us/azure/cosmos-db/serverless" },
+    { "label": "SST docs: ApiGatewayV2 component", "url": "https://sst.dev/docs/component/aws/apigatewayv2/" },
+    { "label": "SST docs: Dynamo component", "url": "https://sst.dev/docs/component/aws/dynamo/" },
+    { "label": "SST docs: Queue component", "url": "https://sst.dev/docs/component/aws/queue/" },
+    { "label": "SST on GitHub: MIT licence", "url": "https://github.com/anomalyco/sst/blob/dev/LICENSE" },
+    { "label": "Knative docs", "url": "https://knative.dev/docs/" },
+    { "label": "supabase/supabase on GitHub (Apache-2.0)", "url": "https://github.com/supabase/supabase" }
+  ]
+}

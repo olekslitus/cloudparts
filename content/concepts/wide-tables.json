@@ -1,0 +1,107 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Wide tables",
+  "category": "modeling",
+  "order": 10,
+  "summary": "One row per entity and moment, with a typed column for every attribute or metric, so related values sit side by side.",
+  "howItWorks": "A wide table gives every attribute its own column. For telemetry that means one row per device per timestamp, with columns such as `cpu`, `mem_bytes` and `disk_read`. Reading several metrics together is a plain `SELECT` with no joins, and each column holds one type, so the database can check it, index it and compress it well. Column stores keep each column separately, so a query reads only the columns it names and a 300-column table costs little when a chart needs three. The price is the schema. Every new metric is an `ALTER TABLE ... ADD COLUMN`, and when readings arrive at different times most cells are NULL. That hurts less than it looks: in PostgreSQL a NULL costs about one bit in the row’s null bitmap, and in compressed columnar chunks long runs of NULLs shrink to almost nothing. Width has hard limits, though: 1,600 columns in PostgreSQL, 10,000 in BigQuery. Two other things share the name. In analytics, a wide table often means “one big table”, a fact table with all its dimensions pre-joined so dashboards never join. And a wide-column store such as Cassandra or Bigtable is something else again: there “wide” means a partition can hold a huge number of sorted cells, not that the table declares many columns.",
+  "analogy": "A spreadsheet with a column for every question on a form. One person’s answers are one row. Adding a question means adding a column for everyone, and people who skipped it leave blanks.",
+  "useWhen": [
+    "The metrics are known and change rarely, such as host metrics or a fixed sensor payload",
+    "Queries read several metrics of the same entity and moment together",
+    "Values arrive together, so rows are mostly full",
+    "Dashboards on a columnar warehouse, where one pre-joined table saves joins on every query"
+  ],
+  "avoidWhen": [
+    "Metrics are user-defined, differ per tenant or appear every week, so each one is a migration",
+    "Each reading arrives on its own, leaving rows almost entirely NULL",
+    "Entities can have thousands of possible attributes, past the column limit"
+  ],
+  "example": "A data-center agent reports CPU, memory, disk reads and writes, and network in and out for 5,000 hosts every 10 seconds. One `host_metrics` row per host per 10 seconds holds all six as typed columns: about 43 million rows a day, and the “host health” panel is a single `SELECT` over one host and time range. When the team adds GPU temperature, they run `ALTER TABLE host_metrics ADD COLUMN gpu_temp real`. PostgreSQL does that instantly, because a new column with no default needs no table rewrite, but every ingest job, query and dashboard that lists columns still has to learn about it.",
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "CREATE TABLE host_metrics (",
+      "  time       timestamptz NOT NULL,",
+      "  host_id    int         NOT NULL,",
+      "  cpu        real,",
+      "  mem_bytes  bigint,",
+      "  disk_read  bigint,",
+      "  disk_write bigint",
+      ");",
+      "",
+      "-- several metrics of one host: one row each, no joins",
+      "SELECT time, cpu, mem_bytes",
+      "FROM host_metrics",
+      "WHERE host_id = 42 AND time > now() - interval '1 hour';",
+      "",
+      "-- a new metric is a schema change",
+      "ALTER TABLE host_metrics ADD COLUMN gpu_temp real;"
+    ]
+  },
+  "related": ["narrow-tables","hybrid-tables","wide-column","warehouse"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "Three things called “wide”",
+      "intro": "The word means different things in time-series modeling, in warehouses and in NoSQL databases.",
+      "columns": ["Wide table", "One big table (analytics)", "Wide-column store"],
+      "rows": [
+        { "label": "What is wide", "values": ["Many declared columns, one per attribute or metric", "Every dimension attribute copied onto each fact row", "A partition holding many sorted rows or cells"] },
+        { "label": "Schema", "values": ["Declared up front; a new metric means `ALTER TABLE`", "Rebuilt by the transformation job when sources change", "Declared columns in CQL; only column families in Bigtable and HBase"] },
+        { "label": "Where you meet it", "values": ["Host and sensor tables in PostgreSQL or TimescaleDB; InfluxDB points with several fields", "Dashboards on BigQuery, Snowflake or Redshift", "Cassandra, ScyllaDB, Bigtable, HBase"] },
+        { "label": "Main cost", "values": ["Migrations, and sparse NULLs when values arrive apart", "Storage and rebuild time: Fivetran’s Redshift test grew from about 30 GB to over 90 GB", "One table per query; no joins and few ad-hoc filters"] }
+      ],
+      "notes": [
+        "Fivetran’s 2022 test on TPC-DS data found one big table about 25% faster than a star schema on Snowflake, 25 to 30% on Redshift and about 50% on BigQuery, for BI-style queries. Fivetran sells data pipelines, and it ran each warehouse on its own rather than against each other."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Wide is how most data starts. A paper form, a spreadsheet or a statistics package keeps one row per subject and one column per question, and pandas still calls this the “record” or “wide” format. Relational design pulled the other way: normalization splits records so each fact is stored once, and Hadley Wickham’s 2014 “Tidy Data” paper restated Codd’s third normal form for analysts as one variable per column and one observation per row.",
+      "Data warehouses brought width back on purpose. Ralph Kimball’s dimensional modeling describes dimension tables as “wide, flat denormalized tables”, because analysts filter and group on descriptive attributes. Column stores then made width cheap: C-Store, from Michael Stonebraker’s group in 2005, stored data by column rather than by row, so a query reads only the columns it touches. On columnar warehouses some teams go further and pre-join everything into one big table; Fivetran’s 2022 test found it 25 to 50% faster than a star schema, at about three times the disk on Redshift.",
+      "Time-series databases inherited both habits. A 2024 guide from Timescale (now TigerData) says wide tables of 200 or more columns are common, and lists the costs: each new metric is an `ALTER TABLE`, and a dropped column’s data stays on disk until rows are rewritten, which in append-only time series may be never. Its docs now place wide tables at one end of a range, with medium and narrow layouts as the alternatives."
+    ],
+    "choices": [
+      { "choice": "One typed column per metric", "why": "The database knows each value’s type, so it can validate inserts, index a column and compress a run of similar values well, and nothing needs casting at query time." },
+      { "choice": "Accept NULLs rather than add tables", "why": "When readings arrive at different times, rows have empty cells. A NULL costs about a bit in PostgreSQL’s null bitmap and next to nothing in compressed columnar chunks, so a sparse wide table is usually cheaper than splitting it." },
+      { "choice": "Denormalize for reads (one big table)", "why": "On columnar warehouses, joining at query time can cost more than storing repeated dimension values, which compress well. Teams model a star schema in the transformation step, then join it once into a wide table for dashboards." }
+    ],
+    "timeline": [
+      { "year": "2005", "text": "C-Store paper: a relational database that stores each column separately" },
+      { "year": "2006", "text": "Google’s Bigtable paper; “wide-column” later names a different idea" },
+      { "year": "2007", "text": "Wickham’s reshape package names the wide-to-long step “melting”" },
+      { "year": "2014", "text": "“Tidy Data”: one variable per column, one observation per row" },
+      { "year": "2022", "text": "Fivetran benchmarks one big table against a star schema" },
+      { "year": "2024", "text": "Timescale guide compares narrow, medium and wide time-series tables" }
+    ],
+    "sources": [
+      { "label": "Stonebraker et al.: C-Store, a column-oriented DBMS (VLDB 2005)", "url": "https://www.vldb.org/conf/2005/papers/p553-stonebraker.pdf" },
+      { "label": "Chang et al.: Bigtable, a distributed storage system for structured data (OSDI 2006)", "url": "https://research.google/pubs/bigtable-a-distributed-storage-system-for-structured-data/" },
+      { "label": "Hadley Wickham: Reshaping data with the reshape package (Journal of Statistical Software, 2007)", "url": "https://www.jstatsoft.org/article/view/v021i12" },
+      { "label": "Hadley Wickham: Tidy Data (Journal of Statistical Software, 2014)", "url": "https://www.jstatsoft.org/article/view/v059i10" },
+      { "label": "tidyr vignette: Tidy data (Codd’s third normal form in statistical language)", "url": "https://tidyr.tidyverse.org/articles/tidy-data.html" },
+      { "label": "pandas user guide: Reshaping and pivot tables (“record” or “wide” format)", "url": "https://pandas.pydata.org/docs/user_guide/reshaping.html" },
+      { "label": "Kimball Group: Dimension table structure (“wide, flat denormalized tables”)", "url": "https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/kimball-techniques/dimensional-modeling-techniques/dimension-table-structure/" },
+      { "label": "Michael Kaminsky, Fivetran blog: Data warehouse modeling, star schema vs. OBT (Aug 2022)", "url": "https://fivetran.com/blog/obt-star-schema" },
+      { "label": "Chris Engelbert and Carlota Soto, Timescale: Designing your database schema, wide vs. narrow Postgres tables (Mar 2024)", "url": "https://www.tigerdata.com/learn/designing-your-database-schema-wide-vs-narrow-postgres-tables" },
+      { "label": "TigerData docs: Wide, narrow, and medium tables", "url": "https://www.tigerdata.com/docs/learn/data-model/wide-narrow-medium-tables" }
+    ]
+  },
+  "sources": [
+    { "label": "TigerData docs: Wide, narrow, and medium tables (advantages, ALTER TABLE, columnar compression)", "url": "https://www.tigerdata.com/docs/learn/data-model/wide-narrow-medium-tables" },
+    { "label": "Timescale: Designing your database schema, wide vs. narrow Postgres tables (200+ columns, NULLs compress well, dropped columns stay on disk)", "url": "https://www.tigerdata.com/learn/designing-your-database-schema-wide-vs-narrow-postgres-tables" },
+    { "label": "PostgreSQL docs: Appendix K, limits (1,600 columns per table)", "url": "https://www.postgresql.org/docs/current/limits.html" },
+    { "label": "PostgreSQL docs: ALTER TABLE (ADD COLUMN without a rewrite; DROP COLUMN does not reclaim space)", "url": "https://www.postgresql.org/docs/current/sql-altertable.html" },
+    { "label": "PostgreSQL docs: Database page layout (the null bitmap)", "url": "https://www.postgresql.org/docs/current/storage-page-layout.html" },
+    { "label": "BigQuery docs: Quotas and limits (10,000 columns per table)", "url": "https://cloud.google.com/bigquery/quotas" },
+    { "label": "Stonebraker et al.: C-Store, a column-oriented DBMS (VLDB 2005)", "url": "https://www.vldb.org/conf/2005/papers/p553-stonebraker.pdf" },
+    { "label": "InfluxDB docs: Line protocol (a point’s field set)", "url": "https://docs.influxdata.com/influxdb/v2/reference/syntax/line-protocol/" },
+    { "label": "Kimball Group: Dimension table structure", "url": "https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/kimball-techniques/dimensional-modeling-techniques/dimension-table-structure/" },
+    { "label": "Michael Kaminsky, Fivetran blog: Data warehouse modeling, star schema vs. OBT (Aug 2022)", "url": "https://fivetran.com/blog/obt-star-schema" },
+    { "label": "DB-Engines: Wide column stores", "url": "https://db-engines.com/en/article/Wide+Column+Stores" },
+    { "label": "Google Cloud: Bigtable overview (a sorted key-value map)", "url": "https://cloud.google.com/bigtable/docs/overview" },
+    { "label": "Cassandra docs: CQL data definition", "url": "https://cassandra.apache.org/doc/latest/cassandra/developing/cql/ddl.html" }
+  ]
+}

@@ -1,0 +1,157 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Emergent schema (JSON columns)",
+  "category": "modeling",
+  "order": 40,
+  "summary": "Keep the fields you know as columns and the rest in a JSON column, then promote keys to real columns once the data shows which ones matter.",
+  "howItWorks": "Some fields are certain from day one: an ID, an owner, a type, a timestamp. Those become ordinary typed columns. Everything that varies, or that you can’t predict yet, goes into one JSON column, such as `props jsonb` in PostgreSQL. New keys need no migration, and the real shape of the data emerges from what gets written. You query keys with operators like `props->>'plan'` or containment, `props @> '{\"plan\":\"pro\"}'`, and index them two ways: one GIN index over the whole column answers containment on any key, while an expression index on `(props->>'country')` serves one key and is smaller. The weak spots are the ones columns used to cover. JSON has no date type, nothing stops a typo’d key, and the planner keeps no statistics on keys inside the column, so it guesses (0.5% selectivity for an equality test, in PostgreSQL’s defaults) and can pick a terrible join. When a key turns out to be hot (filtered, joined or aggregated all the time), promote it: a generated column that extracts and casts it, or a real column you backfill, gets a type, constraints, a plain index and statistics. JSON also repeats every key name in every row, so a key present in most rows usually costs less as a column.",
+  "analogy": "A paper form with a few printed boxes and a big “notes” area. Clerks write whatever they need in the notes. Once you notice half of them write “allergies” there, you print an allergies box on the next batch of forms.",
+  "useWhen": [
+    "A relational app where some records carry varying or user-supplied fields: event properties, integration payloads, product specs",
+    "Early in a product, when you don’t yet know which fields will matter",
+    "Storing an API payload as received, next to the few fields you query"
+  ],
+  "avoidWhen": [
+    "Fields that are present in most rows and used in filters, joins or reports; make them columns",
+    "Data that needs foreign keys, exact decimal types or strict validation on every field",
+    "Analytics over billions of rows on many keys; a columnar store or extracted columns will be much faster"
+  ],
+  "example": "A product-analytics service stores 2 billion events in PostgreSQL with `account_id`, `type` and `at` as columns and customer-defined properties in `props jsonb`. A GIN index with `jsonb_path_ops` answers “events where plan is pro” on any key. A monthly check of `jsonb_object_keys` shows `amount` in 70% of purchase events and in every revenue report, so it becomes a stored generated `numeric` column with its own index, and the planner stops underestimating revenue queries. Heap, which runs this kind of system, reported saving about 30% of disk by pulling 45 commonly used fields out of JSONB into columns.",
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "-- PostgreSQL: known fields as columns, the rest in jsonb",
+      "CREATE TABLE event (",
+      "  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,",
+      "  account_id bigint      NOT NULL,",
+      "  type       text        NOT NULL,",
+      "  at         timestamptz NOT NULL DEFAULT now(),",
+      "  props      jsonb       NOT NULL DEFAULT '{}',",
+      "  CHECK (jsonb_typeof(props) = 'object')",
+      ");",
+      "",
+      "-- One GIN index answers containment on any key",
+      "CREATE INDEX event_props ON event USING gin (props jsonb_path_ops);",
+      "SELECT count(*) FROM event WHERE props @> '{\"plan\": \"pro\"}';",
+      "",
+      "-- Let the data say which keys matter",
+      "SELECT k, count(*) FROM event, jsonb_object_keys(props) AS k",
+      "GROUP BY k ORDER BY count(*) DESC LIMIT 20;",
+      "",
+      "-- A key you filter on: an expression index (ANALYZE then keeps its statistics)",
+      "CREATE INDEX event_country ON event ((props->>'country'));",
+      "-- or statistics alone, without an index (PostgreSQL 14+)",
+      "CREATE STATISTICS event_device ON (props->>'device') FROM event;",
+      "",
+      "-- A hot key: promote it to a typed column (STORED rewrites the table)",
+      "ALTER TABLE event ADD COLUMN amount numeric",
+      "  GENERATED ALWAYS AS ((props->>'amount')::numeric) STORED;",
+      "CREATE INDEX event_amount ON event (amount);"
+    ]
+  },
+  "related": ["eav","document","wide-tables","hybrid-tables","relational"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "JSON columns in the common SQL databases",
+      "corner": "Database",
+      "columns": ["Storage","Indexing","Validation"],
+      "rows": [
+        {
+          "label": "PostgreSQL",
+          "values": [
+            "`json` keeps the exact text and reparses it; `jsonb` (since 9.4) is a decomposed binary form that is faster to query but drops key order, whitespace and duplicate keys",
+            "GIN on the whole column (`jsonb_ops`, or the smaller `jsonb_path_ops` for `@>` and JSON path); B-tree expression indexes on single keys; generated columns (stored since 12, virtual by default since 18)",
+            "`CHECK` constraints on expressions; JSON Schema through extensions such as Supabase’s `pg_jsonschema`"
+          ]
+        },
+        {
+          "label": "MySQL",
+          "values": [
+            "Native `JSON` type since 5.7.8 (2015), validated on write and stored in a binary format that can look up a key without reading the whole document",
+            "JSON columns aren’t indexed directly: index a generated column that extracts a scalar, or use a multi-valued index on a JSON array (InnoDB)",
+            "`JSON_SCHEMA_VALID()` (JSON Schema draft 4) inside a `CHECK` constraint"
+          ]
+        },
+        {
+          "label": "SQLite",
+          "values": [
+            "No JSON column type: JSON is text, or since 3.45.0 (2024) a binary JSONB blob; JSON functions and the `->` and `->>` operators are built in since 3.38.0 (2022)",
+            "Expression indexes, or generated columns (since 3.31.0), which can be indexed like ordinary columns",
+            "`CHECK (json_valid(...))` and other expressions"
+          ]
+        }
+      ],
+      "notes": [
+        "Adding a stored generated column in PostgreSQL rewrites the whole table and its indexes, and fails if any row’s value can’t be cast; a virtual generated column (PostgreSQL 18) needs no rewrite."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "When the database finds the schema itself",
+      "intro": "Some engines do the promotion automatically, extracting frequent keys into hidden columns.",
+      "items": [
+        { "name": "Snowflake VARIANT", "tag": "commercial", "text": "When semi-structured data is loaded into a VARIANT column, Snowflake extracts as much of it as it can into columnar form, by default up to 200 elements per partition, and keeps the rest as one parsed column. Elements with even one JSON `null` aren’t extracted." },
+        { "name": "Umbra’s JSON tiles", "tag": "research, 2021", "text": "Durner, Leis and Neumann’s JSON tiles detect the most important keys while loading, store them in columns, and keep statistics on frequent keys so the optimizer can plan joins. It won a SIGMOD 2021 best paper award." },
+        { "name": "DuckDB `read_json`", "tag": "open source", "text": "DuckDB samples 20,480 objects by default to infer column names and types, turning JSON files into typed columns. Objects with many rarely-present fields become a MAP instead of hundreds of columns." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Relational databases ask for the schema first; web apps increasingly had data whose shape changed weekly. Teams tried EAV tables, then XML columns, then plain text holding JSON. PostgreSQL added a `json` type in 9.2 (2012), which only checked and stored text, and `jsonb` in 9.4 (2014), a binary form that could be indexed with GIN. MySQL followed with a native `JSON` type in 5.7.8 (2015), and SQLite made its JSON functions standard in 3.38 (2022) and added binary JSONB in 3.45 (2024).",
+      "The first wave stored everything in JSON and learned the cost. In 2016 Dan Robinson of Heap described a query that ran about 2,000 times slower on JSONB than on columns because PostgreSQL keeps no statistics on keys inside JSONB, and a table that took twice the disk because every row repeats its key names. The advice that emerged was the hybrid: columns for common fields, JSON for the long tail. Databases added the pieces to promote keys: generated columns in PostgreSQL 12 (2019), statistics on expressions in 14 (2021), virtual generated columns in 18 (2025).",
+      "The name comes from database research. In 2015 Minh-Duc Pham, Linnea Passing, Orri Erling and Peter Boncz showed how to detect an “emergent” relational schema in RDF data, tables of properties that often occur together, and found it explained well over 90% of the triples in a wide range of datasets. The same idea for JSON appears in Umbra’s JSON tiles (2021), which extract frequent keys into columns automatically, and in Snowflake’s subcolumnarization of VARIANT data."
+    ],
+    "choices": [
+      { "choice": "Columns for the stable core, JSON for the rest", "why": "IDs, owners and timestamps are known up front and used everywhere; the varying tail isn’t. Splitting them keeps joins and constraints on the core while new keys need no migration." },
+      { "choice": "`jsonb` over `json`", "why": "PostgreSQL’s `json` stores an exact copy of the text and reparses it on every access. `jsonb` pays a little at insert to decompose the document, then supports indexing and fast key access; it gives up key order, whitespace and duplicate keys." },
+      { "choice": "Index by containment or by key", "why": "A GIN index over the whole column answers questions about any key but stores every key and value; an expression index on one key is smaller and faster. `jsonb_path_ops` hashes each path and value, making GIN indexes smaller and more selective for containment." },
+      { "choice": "Promote hot keys instead of designing everything up front", "why": "The planner has no statistics on JSON keys and key names repeat in every row. Once usage shows which keys matter, a generated or real column gets a type, constraints, statistics and plain indexes, without guessing on day one." }
+    ],
+    "timeline": [
+      { "year": "2012", "text": "PostgreSQL 9.2 adds a `json` data type" },
+      { "year": "2014", "text": "PostgreSQL 9.4 adds binary, indexable `jsonb`" },
+      { "year": "2015", "text": "MySQL 5.7.8 adds a native `JSON` type; Pham, Boncz and colleagues publish emergent relational schemas for RDF" },
+      { "year": "2016", "text": "Heap’s “When To Avoid JSONB In A PostgreSQL Schema” on missing statistics" },
+      { "year": "2019", "text": "PostgreSQL 12 adds stored generated columns" },
+      { "year": "2021", "text": "JSON tiles in Umbra extract frequent keys automatically; PostgreSQL 14 adds statistics on expressions" },
+      { "year": "2025", "text": "PostgreSQL 18 makes generated columns virtual by default" }
+    ],
+    "sources": [
+      { "label": "PostgreSQL 9.2 release notes: add a JSON data type (Sep 2012)", "url": "https://www.postgresql.org/docs/9.2/release-9-2.html" },
+      { "label": "PostgreSQL 9.4 release notes: add jsonb (Dec 2014)", "url": "https://www.postgresql.org/docs/9.4/release-9-4.html" },
+      { "label": "MySQL 5.7.8 release notes: native JSON data type (Aug 2015)", "url": "https://dev.mysql.com/doc/relnotes/mysql/5.7/en/news-5-7-8.html" },
+      { "label": "SQLite docs: JSON functions (built in since 3.38.0; JSONB since 3.45.0)", "url": "https://sqlite.org/json1.html" },
+      { "label": "Heap: When To Avoid JSONB In A PostgreSQL Schema, by Dan Robinson (Sep 2016)", "url": "https://www.heap.io/blog/when-to-avoid-jsonb-in-a-postgresql-schema" },
+      { "label": "PostgreSQL 12 release notes: generated columns (Oct 2019)", "url": "https://www.postgresql.org/docs/12/release-12.html" },
+      { "label": "PostgreSQL 14 release notes: extended statistics on expressions (Sep 2021)", "url": "https://www.postgresql.org/docs/14/release-14.html" },
+      { "label": "PostgreSQL 18 release notes: virtual generated columns (Sep 2025)", "url": "https://www.postgresql.org/docs/18/release-18.html" },
+      { "label": "Pham, Passing, Erling and Boncz: Deriving an Emergent Relational Schema from RDF Data (WWW 2015)", "url": "https://ir.cwi.nl/pub/23379/23379B.pdf" },
+      { "label": "Durner, Leis and Neumann: JSON Tiles: Fast Analytics on Semi-Structured Data (SIGMOD 2021)", "url": "https://db.cit.tum.de/~durner/papers/json-tiles-sigmod21.pdf" },
+      { "label": "Snowflake docs: Considerations for semi-structured data stored in VARIANT (subcolumnarization)", "url": "https://docs.snowflake.com/en/user-guide/semistructured-considerations" }
+    ]
+  },
+  "sources": [
+    { "label": "PostgreSQL docs: JSON types (json vs jsonb, containment, GIN indexing, jsonb_path_ops)", "url": "https://www.postgresql.org/docs/current/datatype-json.html" },
+    { "label": "PostgreSQL docs: Indexes on expressions", "url": "https://www.postgresql.org/docs/current/indexes-expressional.html" },
+    { "label": "PostgreSQL docs: Generated columns (stored and virtual)", "url": "https://www.postgresql.org/docs/current/ddl-generated-columns.html" },
+    { "label": "PostgreSQL docs: ALTER TABLE (adding a stored generated column rewrites the table)", "url": "https://www.postgresql.org/docs/current/sql-altertable.html" },
+    { "label": "PostgreSQL docs: CREATE STATISTICS (expression statistics; 0.5% default selectivity)", "url": "https://www.postgresql.org/docs/current/sql-createstatistics.html" },
+    { "label": "PostgreSQL 9.4 release notes: add jsonb (Dec 2014)", "url": "https://www.postgresql.org/docs/9.4/release-9-4.html" },
+    { "label": "PostgreSQL 12 release notes: generated columns (Oct 2019)", "url": "https://www.postgresql.org/docs/12/release-12.html" },
+    { "label": "PostgreSQL 18 release notes: virtual generated columns (Sep 2025)", "url": "https://www.postgresql.org/docs/18/release-18.html" },
+    { "label": "supabase/pg_jsonschema on GitHub: JSON Schema validation for json and jsonb", "url": "https://github.com/supabase/pg_jsonschema" },
+    { "label": "MySQL 8.4 Reference Manual: The JSON data type (binary format, indexing via generated columns, multi-valued indexes)", "url": "https://dev.mysql.com/doc/refman/8.4/en/json.html" },
+    { "label": "MySQL 8.4 Reference Manual: JSON schema validation functions (JSON_SCHEMA_VALID, draft 4)", "url": "https://dev.mysql.com/doc/refman/8.4/en/json-validation-functions.html" },
+    { "label": "MySQL 5.7.8 release notes: native JSON data type (Aug 2015)", "url": "https://dev.mysql.com/doc/relnotes/mysql/5.7/en/news-5-7-8.html" },
+    { "label": "SQLite docs: JSON functions and operators, JSONB", "url": "https://sqlite.org/json1.html" },
+    { "label": "SQLite docs: Generated columns (since 3.31.0, indexable)", "url": "https://sqlite.org/gencol.html" },
+    { "label": "Heap: When To Avoid JSONB In A PostgreSQL Schema, by Dan Robinson (Sep 2016)", "url": "https://www.heap.io/blog/when-to-avoid-jsonb-in-a-postgresql-schema" },
+    { "label": "Snowflake docs: Considerations for semi-structured data stored in VARIANT", "url": "https://docs.snowflake.com/en/user-guide/semistructured-considerations" },
+    { "label": "Durner, Leis and Neumann: JSON Tiles: Fast Analytics on Semi-Structured Data (SIGMOD 2021)", "url": "https://db.cit.tum.de/~durner/papers/json-tiles-sigmod21.pdf" },
+    { "label": "SIGMOD 2021 best paper awards", "url": "https://sigmodconf.hosting.acm.org/2021/sigmod_best_papers.shtml" },
+    { "label": "DuckDB docs: Loading JSON (auto-detection, sample_size, MAP inference)", "url": "https://duckdb.org/docs/current/data/json/loading_json.html" },
+    { "label": "Pham, Passing, Erling and Boncz: Deriving an Emergent Relational Schema from RDF Data (WWW 2015)", "url": "https://ir.cwi.nl/pub/23379/23379B.pdf" }
+  ]
+}

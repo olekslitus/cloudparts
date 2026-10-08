@@ -1,0 +1,186 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "HashiCorp Nomad",
+  "concepts": ["orchestration"],
+  "provider": "vendor",
+  "vendor": "HashiCorp, an IBM company",
+  "license": "Business Source License 1.1 since Nomad 1.7 (source-available, not OSI open source); MPL 2.0 up to 1.6.x",
+  "website": "https://developer.hashicorp.com/nomad",
+  "repo": "https://github.com/hashicorp/nomad",
+  "summary": "A scheduler in one binary that places containers, plain executables, Java apps and VMs across a cluster.",
+  "intro": [
+    "Nomad is a single Go binary that runs on every machine, either as a server or as a client. Three or five servers per region form a Raft group: they accept jobs, elect a leader and keep the cluster state replicated among themselves, so there is no separate database like etcd to run. Clients register their CPU, memory, devices and installed task drivers with the servers, send heartbeats, and run whatever is allocated to them. A job, written in HCL, holds groups of tasks that must run together on one machine; each task names a driver: `docker`, `exec` (isolated with the operating system’s cgroups and namespaces), `raw_exec` (no isolation, off by default), `java` or `qemu` for full virtual machines. The scheduler filters out nodes that fail the job’s constraints, then ranks the rest by bin packing, filling busy machines before empty ones, unless the operator switches the cluster or a node pool to the `spread` algorithm.",
+    "Nomad schedules and restarts work; most other things it delegates. Since 1.3 it has basic built-in service discovery, but HashiCorp still recommends Consul for health-filtered DNS and service mesh in production. For secrets, each task gets a signed workload identity (a JWT) that Vault can trust, so Vault hands the task a token with only its own policies; since 1.10 this is the only way to log in to Vault. Nomad moved from MPL 2.0 to the Business Source License with version 1.7 in December 2023, and IBM completed its purchase of HashiCorp in February 2025. There is a free Community Edition and a paid Enterprise edition, but no managed cloud version: you run the servers yourself."
+  ],
+  "strengths": [
+    "One binary for servers and clients, with no external database or coordination service to operate",
+    "Runs more than containers: plain executables, Java apps, Windows apps such as IIS and QEMU virtual machines sit in the same cluster through task drivers",
+    "Clients use the host network and dynamic ports by default, so no overlay network is needed to join an existing enterprise network",
+    "Several regions can be federated, so a job can be submitted to any region from one place"
+  ],
+  "limits": [
+    "No longer OSI open source: the BUSL forbids offering it as a competing hosted or embedded product",
+    "No managed service from HashiCorp or the big clouds, unlike Kubernetes with EKS, GKE and AKS; you run, back up and upgrade the servers",
+    "Production setups usually add Consul for service discovery and mesh and Vault for secrets, so “one binary” often becomes three systems",
+    "Audit logging, resource quotas, Sentinel policies, multiregion deployments and automated backups need Nomad Enterprise",
+    "A far smaller ecosystem than Kubernetes: Nomad Pack exists, but most vendors ship Helm charts and Kubernetes operators first"
+  ],
+  "worksWith": [
+    { "id": "consul", "how": "registers services and health checks in" },
+    { "id": "vault", "how": "gets task secrets via workload identity from" },
+    { "id": "docker", "how": "runs containers through" },
+    { "id": "terraform", "how": "can have its jobs and ACLs managed by" }
+  ],
+  "snippet": {
+    "lang": "hcl",
+    "title": "A web service on Docker with native service discovery and a Vault secret",
+    "source": [
+      "job \"web\" {",
+      "  datacenters = [\"dc1\", \"dc2\"]",
+      "",
+      "  group \"web\" {",
+      "    count = 3",
+      "",
+      "    spread {",
+      "      attribute = \"${node.datacenter}\" # don’t bin-pack all copies into one DC",
+      "    }",
+      "",
+      "    network {",
+      "      port \"http\" { to = 8080 } # dynamic host port mapped to 8080 in the container",
+      "    }",
+      "",
+      "    service {",
+      "      name     = \"web\"",
+      "      port     = \"http\"",
+      "      provider = \"nomad\" # built-in discovery; \"consul\" for production meshes",
+      "    }",
+      "",
+      "    task \"app\" {",
+      "      driver = \"docker\"",
+      "      config {",
+      "        image = \"ghcr.io/acme/web:1.4.2\"",
+      "        ports = [\"http\"]",
+      "      }",
+      "",
+      "      vault {} # log in to Vault with this task’s workload identity",
+      "",
+      "      template {",
+      "        data        = \"{{ with secret \\\"secret/data/web\\\" }}DB_PASSWORD={{ .Data.data.db_password }}{{ end }}\"",
+      "        destination = \"secrets/app.env\"",
+      "        env         = true",
+      "      }",
+      "",
+      "      resources {",
+      "        cpu    = 500 # MHz",
+      "        memory = 256 # MB",
+      "      }",
+      "    }",
+      "  }",
+      "}"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Nomad and Kubernetes compared",
+      "intro": "Both take a declared desired state and keep a cluster matching it. They differ in how much they include and how much you have to run.",
+      "columns": ["Nomad", "Kubernetes"],
+      "rows": [
+        { "label": "Processes to run", "values": ["One `nomad` binary, started as a server or a client agent", "Control plane: kube-apiserver, etcd, kube-scheduler, kube-controller-manager; on each node: kubelet, a container runtime and usually kube-proxy"] },
+        { "label": "Where cluster state lives", "values": ["Replicated with Raft among the 3 or 5 servers of each region", "In etcd, a separate key-value store"] },
+        { "label": "What it can run", "values": ["Containers, isolated or raw executables, Java apps and QEMU VMs, through task drivers", "Containers in Pods, through a container runtime such as containerd"] },
+        { "label": "Networking", "values": ["Host network with dynamic ports by default; no overlay required", "An IP per Pod, virtual IPs for Services, usually an overlay network and an ingress controller"] },
+        { "label": "Service discovery", "values": ["Basic built-in discovery since 1.3; Consul recommended for production", "Built in: Services with stable addresses"] },
+        { "label": "Secrets", "values": ["Nomad Variables, encrypted in Raft; Vault through workload identity", "Secret objects in the API; the docs suggest external secret store providers"] },
+        { "label": "Job format", "values": ["HCL jobspec: job, groups, tasks", "YAML manifests: Deployment, Service, ConfigMap, Secret and more"] },
+        { "label": "Documented scale", "values": ["HashiCorp cites production clusters above 10,000 nodes and a 2-million-container test (2020)", "Supports up to 5,000 nodes, 150,000 Pods and 300,000 containers per cluster"] },
+        { "label": "Managed offerings", "values": ["None; self-managed Community or Enterprise", "Amazon EKS, Google GKE, Azure AKS and others"] },
+        { "label": "Packaging", "values": ["Nomad Pack", "Helm charts and operators"] },
+        { "label": "Licence and governance", "values": ["BUSL 1.1, owned by IBM (HashiCorp)", "Apache 2.0, a graduated CNCF project"] }
+      ],
+      "notes": [
+        "The Nomad column’s scale figures and its own comparison come from HashiCorp’s documentation; the Kubernetes limits are from the Kubernetes docs’ large-cluster guidance."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Editions",
+      "items": [
+        { "name": "Community Edition", "tag": "free, BUSL", "text": "The full scheduler, task drivers, ACLs, Variables, native service discovery, workload identity and federation. From 2.0, HashiCorp backports security and bug fixes to Community releases for two years." },
+        { "name": "Enterprise", "tag": "paid", "text": "Adds Autopilot upgrades and redundancy zones, non-voting read servers, automated snapshots, audit logging, resource quotas, Sentinel policies, multiregion deployments, dynamic application sizing and multiple Vault or Consul clusters. An Enterprise cluster can’t be downgraded to Community." },
+        { "name": "Managed (HCP)", "tag": "not offered", "text": "HashiCorp Cloud Platform runs Vault, Packer, Boundary and others as managed services, but has no Nomad service. Every Nomad cluster is self-managed." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "On September 28, 2015, HashiCorp’s Armon Dadgar announced Nomad, “a cluster manager and scheduler designed for microservices and batch workloads”. Developers declare in a job file what to run and how much CPU, memory and disk it needs; Nomad finds machines with room and packs as many applications onto each host as it can. Unlike most schedulers of the time it was not only for containers: drivers for Docker, QEMU virtual machines, Java JARs and any pre-installed executable shipped on day one.",
+      "The design borrowed from research and from HashiCorp’s own libraries. Cluster management followed Google’s Borg and Omega papers, including Omega’s optimistic concurrency, which lets every server work out placements in parallel. Leader election and replication reused the Raft implementation built for Consul, and regions federated over gossip from Serf. The result was one binary that needed no external coordination or storage.",
+      "HashiCorp stress-tested it with a one-million-container challenge in 2016 and two million in 2020, the year of Nomad 1.0. Version 1.3 (2022) added simple built-in service discovery, so small clusters no longer needed Consul. Nomad moved to the Business Source License from version 1.7 in 2023, and in April 2026, with HashiCorp part of IBM, Nomad 2.0 adopted IBM’s versioning and support lifecycle."
+    ],
+    "choices": [
+      { "choice": "One binary, no external dependencies", "why": "Using the Raft code already proven in Consul let Nomad keep its own state and elect a leader without ZooKeeper, etcd or a database, which is most of what makes it simple to operate." },
+      { "choice": "Task drivers instead of containers only", "why": "Drivers for Docker, QEMU, Java and plain executables let teams bring scheduling and automatic restarts to existing applications without first packaging them as containers." },
+      { "choice": "Optimistic concurrency from Google’s Omega", "why": "Every server computes placements in parallel and the leader only checks that plans don’t oversubscribe a client, which raises scheduling throughput as servers are added." },
+      { "choice": "Schedule, and leave the rest to other tools", "why": "HashiCorp designed Nomad with a small scope, composing with Consul for service discovery and Vault for secrets rather than building everything in. The built-in service discovery added in 1.3 softened that rule for small clusters." }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "Announced and released as 0.1.0 on September 28" },
+      { "year": "2016", "text": "The one-million-container challenge" },
+      { "year": "2020", "text": "Nomad 1.0 in December; the two-million-container challenge" },
+      { "year": "2022", "text": "Nomad 1.3 adds native service discovery" },
+      { "year": "2023", "text": "Nomad 1.7 ships under the BUSL, with workload identity for Vault and Consul" },
+      { "year": "2025", "text": "IBM completes its HashiCorp purchase; 1.10 drops token-based Vault logins" },
+      { "year": "2026", "text": "Nomad 2.0 in April, on IBM’s support lifecycle" }
+    ],
+    "sources": [
+      { "label": "HashiCorp blog: Nomad (Armon Dadgar, Sep 28, 2015)", "url": "https://www.hashicorp.com/blog/nomad.html", "archive": "https://web.archive.org/web/20160304031041/https://www.hashicorp.com/blog/nomad.html" },
+      { "label": "GitHub: Nomad v0.1.0 tag (Sep 28, 2015)", "url": "https://github.com/hashicorp/nomad/releases/tag/v0.1.0" },
+      { "label": "Nomad docs: Introduction (Unix philosophy; 1M and 2M container challenges)", "url": "https://developer.hashicorp.com/nomad/docs/what-is-nomad" },
+      { "label": "GitHub: Nomad v1.0.0 release (Dec 2020)", "url": "https://github.com/hashicorp/nomad/releases/tag/v1.0.0" },
+      { "label": "Nomad 1.3.0 changelog: native service discovery (May 2022)", "url": "https://github.com/hashicorp/nomad/blob/v1.3.0/CHANGELOG.md" },
+      { "label": "Nomad 1.7.0 changelog: workload identity for Vault and Consul (Dec 2023)", "url": "https://github.com/hashicorp/nomad/blob/v1.7.0/CHANGELOG.md" },
+      { "label": "HashiCorp blog: HashiCorp adopts Business Source License (Aug 2023)", "url": "https://www.hashicorp.com/en/blog/hashicorp-adopts-business-source-license", "archive": "https://web.archive.org/web/20250304013523/https://www.hashicorp.com/en/blog/hashicorp-adopts-business-source-license" },
+      { "label": "IBM newsroom: IBM completes acquisition of HashiCorp (Feb 2025)", "url": "https://newsroom.ibm.com/2025-02-27-ibm-completes-acquisition-of-hashicorp,-creates-comprehensive,-end-to-end-hybrid-cloud-platform" },
+      { "label": "Nomad docs: Release notes (2.0 and IBM’s lifecycle, April 2026)", "url": "https://developer.hashicorp.com/nomad/docs/release-notes" }
+    ]
+  },
+  "sources": [
+    { "label": "Nomad docs: Introduction (single binary; Nomad versus Kubernetes)", "url": "https://developer.hashicorp.com/nomad/docs/what-is-nomad" },
+    { "label": "Nomad docs: Architecture (servers, clients, regions, bin packing)", "url": "https://developer.hashicorp.com/nomad/docs/architecture" },
+    { "label": "Nomad docs: Consensus protocol (Raft)", "url": "https://developer.hashicorp.com/nomad/docs/architecture/cluster/consensus" },
+    { "label": "Nomad docs: Job", "url": "https://developer.hashicorp.com/nomad/docs/concepts/job" },
+    { "label": "Nomad docs: How scheduling works", "url": "https://developer.hashicorp.com/nomad/docs/concepts/scheduling/how-scheduling-works" },
+    { "label": "Nomad API docs: Scheduler configuration (binpack or spread)", "url": "https://developer.hashicorp.com/nomad/api-docs/operator/scheduler" },
+    { "label": "Nomad docs: Use spread to increase failure tolerance", "url": "https://developer.hashicorp.com/nomad/docs/job-scheduling/spread" },
+    { "label": "Nomad docs: Task drivers", "url": "https://developer.hashicorp.com/nomad/docs/job-declare/task-driver" },
+    { "label": "Nomad docs: Raw Fork/Exec driver (no isolation, disabled by default)", "url": "https://developer.hashicorp.com/nomad/docs/deploy/task-driver/raw_exec" },
+    { "label": "Nomad docs: Isolated Fork/Exec driver", "url": "https://developer.hashicorp.com/nomad/docs/job-declare/task-driver/exec" },
+    { "label": "Nomad docs: Service discovery (native vs Consul)", "url": "https://developer.hashicorp.com/nomad/docs/networking/service-discovery" },
+    { "label": "Nomad docs: Vault integration", "url": "https://developer.hashicorp.com/nomad/docs/secure/vault" },
+    { "label": "Nomad docs: Workload identity", "url": "https://developer.hashicorp.com/nomad/docs/concepts/workload-identity" },
+    { "label": "Nomad docs: vault block in the job specification", "url": "https://developer.hashicorp.com/nomad/docs/job-specification/vault" },
+    { "label": "Nomad 1.10.0 changelog: token-based Vault and Consul workflows removed", "url": "https://github.com/hashicorp/nomad/blob/v1.10.0/CHANGELOG.md" },
+    { "label": "Nomad docs: Variables", "url": "https://developer.hashicorp.com/nomad/docs/concepts/variables" },
+    { "label": "Nomad docs: Nomad for Kubernetes practitioners", "url": "https://developer.hashicorp.com/nomad/docs/k8s-nomad" },
+    { "label": "Nomad docs: Nomad Pack", "url": "https://developer.hashicorp.com/nomad/tools/nomad-pack" },
+    { "label": "Nomad docs: Nomad Enterprise", "url": "https://developer.hashicorp.com/nomad/docs/enterprise" },
+    { "label": "Nomad docs: Community Edition license and support", "url": "https://developer.hashicorp.com/nomad/docs/ce-license-support" },
+    { "label": "HCP docs: What is HCP?", "url": "https://developer.hashicorp.com/hcp/docs/hcp" },
+    { "label": "GitHub: Nomad LICENSE at v1.6.3 (MPL 2.0)", "url": "https://github.com/hashicorp/nomad/blob/v1.6.3/LICENSE" },
+    { "label": "GitHub: Nomad LICENSE (BUSL 1.1 for 1.7.0 and later)", "url": "https://github.com/hashicorp/nomad/blob/main/LICENSE" },
+    { "label": "HashiCorp licensing FAQ", "url": "https://www.hashicorp.com/en/license-faq" },
+    { "label": "IBM newsroom: IBM completes acquisition of HashiCorp (Feb 2025)", "url": "https://newsroom.ibm.com/2025-02-27-ibm-completes-acquisition-of-hashicorp,-creates-comprehensive,-end-to-end-hybrid-cloud-platform" },
+    { "label": "Terraform Registry: Nomad provider", "url": "https://registry.terraform.io/providers/hashicorp/nomad/latest/docs" },
+    { "label": "Kubernetes docs: Cluster components", "url": "https://kubernetes.io/docs/concepts/overview/components/" },
+    { "label": "Kubernetes docs: Service", "url": "https://kubernetes.io/docs/concepts/services-networking/service/" },
+    { "label": "Kubernetes docs: Secrets", "url": "https://kubernetes.io/docs/concepts/configuration/secret/" },
+    { "label": "Kubernetes docs: Considerations for large clusters", "url": "https://kubernetes.io/docs/setup/best-practices/cluster-large/" },
+    { "label": "Amazon EKS docs: What is Amazon EKS?", "url": "https://docs.aws.amazon.com/eks/latest/userguide/what-is-eks.html" },
+    { "label": "GKE docs: GKE overview", "url": "https://docs.cloud.google.com/kubernetes-engine/docs/concepts/kubernetes-engine-overview" },
+    { "label": "Azure docs: What is AKS?", "url": "https://learn.microsoft.com/en-us/azure/aks/what-is-aks" },
+    { "label": "Helm docs", "url": "https://helm.sh/docs/" },
+    { "label": "CNCF: Kubernetes (graduated project)", "url": "https://www.cncf.io/projects/kubernetes/" }
+  ],
+  "checked": "2026-10-05"
+}

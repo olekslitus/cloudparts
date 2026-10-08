@@ -1,0 +1,93 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Fission",
+  "concepts": ["serverless"],
+  "provider": "oss",
+  "vendor": "Fission project (started at Platform9)",
+  "license": "Apache 2.0",
+  "website": "https://fission.io/",
+  "repo": "https://github.com/fission/fission",
+  "summary": "Open-source functions on Kubernetes: a pool of warm, generic pods takes your code on the first call, so cold starts stay around 100 ms.",
+  "intro": [
+    "Fission adds four object types to a Kubernetes cluster as custom resources. An Environment is a language runtime image (Node.js, Python, Go and others); a Package holds your code; a Function ties code to an environment; and a Trigger binds an event to a function. There are four kinds of trigger: an HTTP route, a cron timer, a message-queue consumer and a watch on Kubernetes objects. Every one of them ends up as an HTTP request to Fission’s router, which forwards it to a pod running the function.",
+    "Where that pod comes from depends on the executor you pick per function. The default, `poolmgr`, keeps a pool of generic pods warm for each environment. On a first call it takes one out of the pool, copies the package in and tells the runtime to load it, which for a small function typically takes well under 100 ms; the pod is reaped after it sits idle. `newdeploy` instead creates a Deployment, Service and CPU-driven autoscaler per function, and can keep a minimum number of pods running so there is no cold start at all. A third type, `container`, runs your own prebuilt image.",
+    "Platform9 started Fission in 2016, and engineers at InfraCloud, which sells a supported version, have maintained it in recent years. Its pace has been uneven: v1.21.0 (January 2025) and v1.22.0 (December 2025) came nearly a year apart, then five releases followed in May and June 2026, up to v1.27.0 on June 22, 2026. Commits continue, but most of them in 2026 come from a single maintainer."
+  ],
+  "strengths": [
+    "Fast cold starts from the pre-warmed pool: typically under 100 ms for a small function",
+    "Plain Kubernetes underneath: functions are pods and its objects are custom resources, so existing monitoring, RBAC and GitOps tools apply",
+    "Pick latency or idle cost per function: warm pool, a per-function Deployment with a minimum scale, or your own container image",
+    "Message-queue triggers built on KEDA cover Kafka, SQS, Kinesis, Pub/Sub, NATS, RabbitMQ and Redis lists, and scale their consumers to zero"
+  ],
+  "limits": [
+    "A small, concentrated maintainer base: most 2026 commits come from one person, after an eleven-month gap between releases in 2025",
+    "Scale to zero applies to function pods, not to the cluster: you still run the control plane, nodes and the warm pools",
+    "Every invocation passes through the router as HTTP, and `newdeploy` scales on CPU rather than on requests or queue depth",
+    "Cold start grows with package size, so large dependencies erode the warm pool’s advantage"
+  ],
+  "worksWith": [
+    { "id": "kubernetes", "how": "runs functions as pods on" },
+    { "id": "kafka", "how": "can be triggered by messages in" },
+    { "id": "sqs", "how": "can be triggered by messages in" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Deploy a function, then expose it over HTTP and on a schedule",
+    "source": [
+      "fission env create --name nodejs --image ghcr.io/fission/node-env",
+      "",
+      "# default executor (poolmgr): code is loaded into a warm pod on first call",
+      "fission fn create --name hello --env nodejs --code hello.js",
+      "",
+      "fission httptrigger create --url /hello --method GET --function hello",
+      "fission timer create --name minute --function hello --cron \"@every 1m\"",
+      "",
+      "# or: a Deployment + autoscaler per function, with one pod always warm",
+      "fission fn create --name report --env nodejs --code report.js \\",
+      "  --executortype newdeploy --minscale 1 --maxscale 3"
+    ]
+  },
+  "history": {
+    "story": [
+      "Kubernetes was powerful but asked a lot of a newcomer before anything useful ran. Soam Vasani began Fission at Platform9 in late 2016 so that customers could be productive on the first day they installed a cluster. Platform9 announced it on January 24, 2017, together with its managed Kubernetes service, pitching it as Lambda-style functions that run on any Kubernetes cluster.",
+      "The alpha supported Node.js and Python, triggered functions from HTTP routes, timers and Kubernetes watches, and already used a pool of warm containers to keep cold starts near 100 ms. Version 1.0 followed in February 2019. Fission was one of several Kubernetes function frameworks of that period; one of its peers, VMware’s Kubeless, has since been archived (its last commits date from December 2021).",
+      "Development then slowed: 2024 brought only patch releases of v1.20, and 2025 just two minor releases, eleven months apart. A burst of work in 2026 brought five releases in two months, including a v1.27.0 rewrite that collapsed the executor’s nine controllers into three."
+    ],
+    "choices": [
+      { "choice": "A pool of warm, generic pods", "why": "Instead of starting a new container per function, Fission keeps runtime pods already running and loads code into one on demand. That is what brings a cold start down to about 100 ms, at the cost of keeping the pool alive." },
+      { "choice": "Language runtimes as swappable environments", "why": "Each environment is a container with a small web server and a dynamic loader, much like a buildpack. Adding a language means building an environment image, not changing Fission’s Go core." },
+      { "choice": "Built on Kubernetes, not its own scheduler", "why": "Its authors expected real applications to mix functions with ordinary microservices, and running both on Kubernetes lets one set of monitoring, logging and deployment tools cover everything." },
+      { "choice": "Every trigger becomes an HTTP call", "why": "Timers, queue consumers and watchers all post to the same router that serves HTTP routes, so there is a single invocation path to scale and debug." }
+    ],
+    "timeline": [
+      { "year": "2016", "text": "Soam Vasani starts Fission at Platform9" },
+      { "year": "2017", "text": "Announced January 24 as an open-source alpha for Node.js and Python" },
+      { "year": "2019", "text": "Version 1.0 released in February" },
+      { "year": "2025", "text": "Releases slow: v1.21.0 in January, v1.22.0 in December" },
+      { "year": "2026", "text": "Five releases in May and June, through v1.27.0 and an executor rewrite" }
+    ],
+    "sources": [
+      { "label": "DiscoPosse: Platform9 announces general availability of Managed Kubernetes and Fission project (Jan 2017)", "url": "https://discoposse.com/2017/01/24/platform9-announces-general-availability-of-managed-kubernetes-and-fission-project/" },
+      { "label": "InfoQ: Platform9 introduces Kube2Go alongside Fission serverless framework (Mar 2017)", "url": "https://www.infoq.com/news/2017/03/platform9-kubernetes-fission/" },
+      { "label": "The New Stack: How Fission.io brings serverless to Kubernetes, with creator Soam Vasani (Aug 2018)", "url": "https://thenewstack.io/how-fission-io-brings-serverless-to-kubernetes/" },
+      { "label": "Fission README: warm pool, environments, why Kubernetes", "url": "https://github.com/fission/fission" },
+      { "label": "Fission releases on GitHub (v1.0.0 in Feb 2019 through v1.27.0 in Jun 2026)", "url": "https://github.com/fission/fission/releases" },
+      { "label": "Fission docs: Executor (v1.27.0 controller consolidation)", "url": "https://fission.io/docs/architecture/executor/" },
+      { "label": "Kubeless repository on GitHub (archived; last updated Dec 2021)", "url": "https://github.com/vmware-archive/kubeless" }
+    ]
+  },
+  "sources": [
+    { "label": "Fission docs: Concepts (functions, environments, triggers, packages as custom resources)", "url": "https://fission.io/docs/concepts/" },
+    { "label": "Fission docs: Executor (poolmgr, newdeploy, container; cold starts; CPU-based HPA)", "url": "https://fission.io/docs/architecture/executor/" },
+    { "label": "Fission docs: Controlling function execution (executor flags, min and max scale)", "url": "https://fission.io/docs/usage/function/executor/" },
+    { "label": "Fission docs: Triggers (every trigger becomes an HTTP request to the router)", "url": "https://fission.io/docs/usage/triggers/" },
+    { "label": "Fission docs: HTTP trigger", "url": "https://fission.io/docs/usage/triggers/http-trigger/" },
+    { "label": "Fission docs: Timer trigger", "url": "https://fission.io/docs/usage/triggers/timer/" },
+    { "label": "Fission docs: Message queue trigger with KEDA (supported event sources, scale to zero)", "url": "https://fission.io/docs/usage/triggers/message-queue-trigger-kind-keda/" },
+    { "label": "Fission README: licence, languages, 100 ms cold start", "url": "https://github.com/fission/fission" },
+    { "label": "Fission releases on GitHub (v1.21.0 Jan 2025, v1.22.0 Dec 2025, v1.23.0 to v1.27.0 May to Jun 2026)", "url": "https://github.com/fission/fission/releases" },
+    { "label": "Fission commit history on GitHub (2026 activity and authors)", "url": "https://github.com/fission/fission/commits/main" },
+    { "label": "InfraCloud: open-source projects (Fission maintainer; Fission Enterprise)", "url": "https://www.infracloud.io/open-source" }
+  ],
+  "checked": "2026-10-06"
+}

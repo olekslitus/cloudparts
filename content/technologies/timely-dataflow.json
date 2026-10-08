@@ -1,0 +1,140 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Timely Dataflow",
+  "concepts": ["stream-processing"],
+  "provider": "oss",
+  "vendor": "Frank McSherry and contributors (TimelyDataflow project)",
+  "license": "MIT (since the first commit in 2014)",
+  "website": "https://timelydataflow.github.io/timely-dataflow/",
+  "repo": "https://github.com/TimelyDataflow/timely-dataflow",
+  "summary": "A Rust library for data-parallel dataflow with logical timestamps, loops and exact progress tracking; the engine underneath Materialize.",
+  "intro": [
+    "Timely Dataflow is a Rust crate, not a server. Your program describes a dataflow graph of operators, and `timely::execute` starts a number of worker threads, optionally in several processes on different machines; every worker builds the same graph and handles its own share of the data. An `exchange` step routes each record to a worker by key, through memory between threads or over TCP between processes. Every batch of records carries a logical timestamp, and timestamps can be partially ordered: inside a loop, a stream’s time becomes a pair of (outer time, iteration count), which is how a dataflow can contain cycles. Workers constantly share progress information. Each operator holds capabilities, the times at which it may still send data, and the system turns them into a frontier for every input: the earliest times that can still arrive. When the frontier passes a time, the operator knows that time is complete and can emit a final result; a probe tells the driving program when a round of input has been fully processed.",
+    "Its sister library, Differential Dataflow, sits on top and supplies the higher-level operators. A collection is a stream of `(data, time, diff)` updates, and `map`, `join`, `reduce` and `iterate` respond to each change by doing only the work that change requires, keeping indexed state called arrangements that several operators can share. Both are MIT-licensed libraries with nothing to buy and nothing to deploy beyond your own binary. They also leave out what a stream processing service provides: SQL, connectors, persistence and recovery from failed workers. Materialize built a source-available SQL database on top of both, and Pathway’s engine runs on modified copies of them."
+  ],
+  "strengths": [
+    "Loops and incremental updates in one dataflow: iterative algorithms such as graph reachability keep their answers current as the input changes",
+    "Exact progress tracking: frontiers come from what upstream operators can still send, so an operator knows when a time is complete instead of guessing",
+    "The same program runs on one thread or on many processes across machines, chosen with command-line flags",
+    "Rust with no garbage collector, and proven in production as the compute layer of Materialize"
+  ],
+  "limits": [
+    "A library for Rust programmers: no SQL, no connectors to Kafka or databases, no scheduler, UI or deployment tooling",
+    "No fault tolerance: unlike Spark or Flink it doesn’t survive a failed worker, so checkpoints, persistence and restarts are yours to build",
+    "The number of workers and processes is set when the program starts, and every worker must build the same dataflow",
+    "Still pre-1.0 after more than ten years: 55 releases on crates.io (0.31.0 in July 2026), with breaking API changes, and older blog examples may need tweaks to compile"
+  ],
+  "worksWith": [],
+  "snippet": {
+    "lang": "bash",
+    "title": "Run the hello example on two worker threads, then on two processes",
+    "source": [
+      "# in your own project: cargo add timely differential-dataflow",
+      "git clone https://github.com/TimelyDataflow/timely-dataflow && cd timely-dataflow",
+      "",
+      "# one process, two worker threads; `exchange` routes each number to a worker by value",
+      "cargo run --example hello -- -w2",
+      "# worker 0:   hello 0",
+      "# worker 1:   hello 1",
+      "# ...",
+      "",
+      "# two processes with two workers each (run each line in its own terminal);",
+      "# without -h they connect over localhost",
+      "cargo run --example hello -- -w2 -n2 -p0",
+      "cargo run --example hello -- -w2 -n2 -p1",
+      "",
+      "# across machines: a file of host:port lines, the same on every process",
+      "#   cargo run --example hello -- -w2 -h hostfile.txt -n4 -p0   # on host0, then -p1 on host1, ..."
+    ]
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "Timely, Differential, and what’s built on them",
+      "intro": "Timely Dataflow is the bottom layer. Most people meet it through something built on top.",
+      "items": [
+        {
+          "name": "Timely Dataflow",
+          "tag": "MIT, Rust library",
+          "text": "Workers, data exchange, logical timestamps, loops and progress tracking. Operators are closures you write; state lives in memory inside them."
+        },
+        {
+          "name": "Differential Dataflow",
+          "tag": "MIT, Rust library",
+          "text": "Collections of `(data, time, diff)` updates with incremental `join`, `reduce`, `distinct` and `iterate`, and shared indexed state (arrangements). Compiles down to timely dataflow."
+        },
+        {
+          "name": "Materialize",
+          "tag": "BSL 1.1",
+          "text": "A PostgreSQL-compatible database that keeps SQL views up to date from Kafka and database replication streams. Founded in 2019 by Frank McSherry and Arjun Narayan; it depends on the `timely` and `differential-dataflow` crates and adds SQL, persistence in object storage and replication."
+        },
+        {
+          "name": "Pathway",
+          "tag": "BSL 1.1",
+          "text": "A Python stream processing framework whose Rust engine is built on forked and modified copies of both libraries, kept in its own repository."
+        }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Around 2012, data processing was split across separate systems: batch processors for throughput, stream processors for low latency, and specialised graph systems for iterative algorithms. Applications that needed all three stitched several platforms together. At Microsoft Research, Derek Murray, Frank McSherry, Rebecca Isaacs, Michael Isard, Paul Barham and Martín Abadi built Naiad to do all of it in one engine. Its model, timely dataflow, attached logical timestamps to data so that cyclic, incremental computations could coordinate cheaply; the paper appeared at SOSP in November 2013, after a CIDR paper earlier that year on differential computation.",
+      "Naiad was written in C#, and Microsoft Research’s leadership ended the project in 2014. McSherry started again in Rust: the first commit is from December 2014, and the first crate was published in May 2015. His stated aims were to learn Rust and to build reusable infrastructure for data-parallel research, without fighting C#’s performance. Differential Dataflow followed in 2015 as its own library.",
+      "In January 2019 McSherry and Arjun Narayan founded Materialize to turn the two libraries into a streaming SQL database, first released in February 2020. The libraries stayed MIT-licensed and are still developed in the open, and Pathway later built its engine on forks of them."
+    ],
+    "choices": [
+      {
+        "choice": "Logical timestamps that can be partially ordered",
+        "why": "A timestamp like (input round, loop iteration) lets the system tell apart work from different rounds and different iterations at once. That is what makes loops inside a streaming computation possible."
+      },
+      {
+        "choice": "Progress tracking instead of global synchronisation",
+        "why": "Operators report which times they may still produce, and everyone else learns when a time is complete. Naiad’s authors called this an efficient, lightweight coordination mechanism: no stop-the-world steps between rounds."
+      },
+      {
+        "choice": "Every worker runs the whole dataflow on a shard of the data",
+        "why": "Workers are identical and data moves only at explicit exchange points, so the same program scales from one thread to many machines without a central scheduler."
+      },
+      {
+        "choice": "No built-in fault tolerance",
+        "why": "McSherry argued in 2015 that fault tolerance costs real overhead (writing to disk, stateless operators) and is not worth it for computations that finish in seconds. Systems that need it, such as Materialize, add their own."
+      }
+    ],
+    "timeline": [
+      { "year": "2013", "text": "Differential dataflow paper at CIDR; Naiad paper at SOSP" },
+      { "year": "2014", "text": "Naiad ends at Microsoft; McSherry starts timely dataflow in Rust" },
+      { "year": "2015", "text": "First `timely` crate published; Differential Dataflow library begins" },
+      { "year": "2019", "text": "McSherry and Arjun Narayan found Materialize on top of both" },
+      { "year": "2023", "text": "Pathway publishes its engine, built on forks of both libraries" },
+      { "year": "2026", "text": "Timely 0.31.0 released in July" }
+    ],
+    "sources": [
+      { "label": "Microsoft Research: Naiad, a timely dataflow system (SOSP, Nov 2013)", "url": "https://www.microsoft.com/en-us/research/publication/naiad-a-timely-dataflow-system-2/" },
+      { "label": "Microsoft Research: Differential dataflow (CIDR, Jan 2013)", "url": "https://www.microsoft.com/en-us/research/publication/differential-dataflow/" },
+      { "label": "Frank McSherry: An introduction to timely dataflow (Sep 2015; Naiad in C#, project ended by MSR)", "url": "https://github.com/frankmcsherry/blog/blob/master/posts/2015-09-14.md" },
+      { "label": "Frank McSherry: The impact of fast networks on graph analytics, part 2 (Jul 2015; fault tolerance)", "url": "https://github.com/frankmcsherry/blog/blob/master/posts/2015-07-31.md" },
+      { "label": "timely-dataflow: initial commit (Dec 2014)", "url": "https://github.com/TimelyDataflow/timely-dataflow/commit/99256e09" },
+      { "label": "crates.io: timely (first published May 2015)", "url": "https://crates.io/crates/timely" },
+      { "label": "Differential Dataflow on GitHub", "url": "https://github.com/TimelyDataflow/differential-dataflow" },
+      { "label": "Materialize: About (timeline: founding Jan 2019, first release Feb 2020)", "url": "https://materialize.com/about/" },
+      { "label": "Pathway: first public release v0.2.0 (July 2023)", "url": "https://github.com/pathwaycom/pathway/releases/tag/v0.2.0" },
+      { "label": "timely-dataflow releases (timely v0.31.0, July 2026)", "url": "https://github.com/TimelyDataflow/timely-dataflow/releases" }
+    ]
+  },
+  "sources": [
+    { "label": "timely-dataflow README (model, examples, workers and processes, ecosystem)", "url": "https://github.com/TimelyDataflow/timely-dataflow" },
+    { "label": "Timely Dataflow mdbook (exchange, capabilities, frontiers, scopes and iteration)", "url": "https://timelydataflow.github.io/timely-dataflow/" },
+    { "label": "Timely Dataflow API docs on docs.rs", "url": "https://docs.rs/timely" },
+    { "label": "timely-dataflow LICENSE (MIT, 2014)", "url": "https://github.com/TimelyDataflow/timely-dataflow/blob/master/LICENSE" },
+    { "label": "timely-dataflow releases (v0.31.0, July 2026)", "url": "https://github.com/TimelyDataflow/timely-dataflow/releases" },
+    { "label": "crates.io: timely (version history)", "url": "https://crates.io/crates/timely" },
+    { "label": "Differential Dataflow README", "url": "https://github.com/TimelyDataflow/differential-dataflow" },
+    { "label": "Differential Dataflow mdbook (update triples, arrangements)", "url": "https://timelydataflow.github.io/differential-dataflow/" },
+    { "label": "Frank McSherry: The impact of fast networks on graph analytics, part 2 (no fault tolerance, unlike Spark)", "url": "https://github.com/frankmcsherry/blog/blob/master/posts/2015-07-31.md" },
+    { "label": "Materialize Cargo.toml (depends on timely 0.31 and differential-dataflow 0.25)", "url": "https://github.com/MaterializeInc/materialize/blob/main/Cargo.toml" },
+    { "label": "Materialize README (BSL 1.1, PostgreSQL and Kafka sources, object storage)", "url": "https://github.com/MaterializeInc/materialize" },
+    { "label": "Materialize: About (built on Timely and Differential Dataflow)", "url": "https://materialize.com/about/" },
+    { "label": "Pathway: README for its fork of Timely Dataflow", "url": "https://github.com/pathwaycom/pathway/blob/main/external/timely-dataflow/README-LICENSE-COPYRIGHT" }
+  ],
+  "checked": "2026-10-06"
+}

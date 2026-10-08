@@ -1,0 +1,134 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "WarpStream",
+  "concepts": ["stream", "pubsub"],
+  "provider": "vendor",
+  "vendor": "Confluent (an IBM company)",
+  "license": "Proprietary (the embedded Bento pipeline engine is MIT)",
+  "website": "https://www.warpstream.com/",
+  "summary": "A Kafka-compatible stream that keeps no data on disks: stateless Agents write straight to your object storage bucket.",
+  "intro": [
+    "WarpStream replaces Kafka brokers with Agents: one stateless Go binary that you run in your own VPC and that speaks the Kafka protocol. An Agent has no local disk. It buffers produce requests from many clients and partitions for 250 ms or until it has 8 MiB, writes them as one file to your bucket in S3, GCS, Azure Blob Storage or an S3-compatible store such as MinIO or R2, then commits the file’s metadata to WarpStream’s hosted control plane, which assigns the offsets. Only then does the producer get its acknowledgement. Any Agent can serve any partition, because there are no partition leaders; in the background, Agents compact small files into larger ones, and a per-zone cache keeps reads from crossing zones. The control plane stores only metadata, which file holds which offsets, so the records never leave your account.",
+    "The price is latency. With default settings WarpStream documents a produce p99 of 500 ms and an end-to-end p99 of 900 ms; shorter batches, S3 Express One Zone and “lightning topics” bring produce p99 under 50 ms, but end-to-end p99 stays near 400 ms. In return there is no broker-to-broker replication traffic across zones, nothing to rebalance, and scaling is adding or removing Agents. BYOC clusters are billed per cluster tier ($100 to $1,500 a month) plus uncompressed data written and stored, starting at $0.01 per GiB; your VMs and object storage are billed by your cloud provider. A Serverless option runs the Agents and the bucket in WarpStream’s account instead. Confluent bought WarpStream in September 2024, and IBM completed its purchase of Confluent in March 2026."
+  ],
+  "strengths": [
+    "No disks, partition leaders or rebalancing: Agents are stateless, scale like web servers, and losing all of them loses no acknowledged data",
+    "Producers and consumers talk to Agents in their own zone and object storage does the replicating, so there are no cross-zone transfer fees",
+    "BYOC by design: data stays in your bucket and WarpStream can’t read it",
+    "The same binary also runs Tableflow (topics to Iceberg tables), a Schema Registry and Bento data pipelines"
+  ],
+  "limits": [
+    "Hundreds of milliseconds of latency by default; low-latency setups need S3 Express or similar and cost more",
+    "WarpStream’s hosted control plane sits in the request path: if it’s unreachable, consumers stop, and producers stop too unless Agents run in Ripcord mode",
+    "Closed source and only offered by WarpStream, so leaving means migrating to another Kafka-compatible system",
+    "Billing counts uncompressed bytes written and stored, on top of your own object storage and request costs; shorter batch timeouts mean more PUT requests",
+    "Implements a listed subset of Kafka API messages; Serverless clusters are capped at 20 MiB/s of produce traffic"
+  ],
+  "worksWith": [
+    { "id": "kafka", "how": "speaks the client protocol of" },
+    { "id": "s3", "how": "stores every record in" },
+    { "id": "gcs", "how": "can store every record in" },
+    { "id": "azure-blob", "how": "can store every record in" },
+    { "id": "iceberg", "how": "builds tables with Tableflow in" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Try an Agent locally, then run one in your VPC against an S3 bucket",
+    "source": [
+      "# in-memory Agent with a fake control plane, for tests and CI",
+      "docker run -p 9092:9092 -p 9094:9094 \\",
+      "  public.ecr.aws/warpstream-labs/warpstream_agent:latest local",
+      "",
+      "# the warpstream CLI has a small Kafka client built in",
+      "warpstream kcmd --type create-topic --topic orders",
+      "warpstream kcmd --type produce --topic orders --records \"first,,second\"",
+      "warpstream kcmd --type fetch --topic orders --offset 0",
+      "",
+      "# production: stateless Agents; the key and cluster ID come from the console",
+      "docker run public.ecr.aws/warpstream-labs/warpstream_agent:latest agent \\",
+      "  -bucketURL \"s3://acme-warpstream?region=us-east-1\" \\",
+      "  -agentKey \"$AGENT_KEY\" \\",
+      "  -defaultVirtualClusterID \"$VIRTUAL_CLUSTER_ID\" \\",
+      "  -region us-east-1"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "BYOC pricing",
+      "intro": "List prices from WarpStream’s pricing page. Usage is metered in 15-minute steps and billed monthly; new accounts get $400 of credit.",
+      "columns": ["List price", "Notes"],
+      "rows": [
+        { "label": "Dev tier", "values": ["$100 a month", "No uptime SLA"] },
+        { "label": "Fundamentals tier", "values": ["$500 a month", "99.9% uptime SLA"] },
+        { "label": "Pro tier", "values": ["$1,500 a month", "99.99% uptime SLA"] },
+        { "label": "Enterprise tier", "values": ["Contact sales", "99.999% with multi-region clusters"] },
+        { "label": "Data written (uncompressed)", "values": ["$0.01 per GiB for the first 50 TiB a month", "Falls in steps to $0.003 per GiB above 7,800 TiB"] },
+        { "label": "Data stored (uncompressed)", "values": ["$0.01 per GiB-month for the first 50 TiB", "Falls in steps to $0.004 per GiB-month above 1,800 TiB"] }
+      ],
+      "notes": [
+        "Checked 2026-10-05. In BYOC your cloud provider also bills the Agent VMs, the bucket’s storage and its PUT and GET requests.",
+        "Multi-region clusters multiply data written and stored by the number of control plane regions."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "What else runs in the Agent",
+      "intro": "WarpStream ships every product as the same Agent binary, deployed as a separate cluster or role.",
+      "items": [
+        { "name": "Tableflow", "tag": "GA February 2026", "text": "Turns topics from any Kafka-compatible cluster into Apache Iceberg tables in your bucket, with compaction and schema changes handled for you. Tables are managed by WarpStream; other engines read them through a read-only REST catalog." },
+        { "name": "BYOC Schema Registry", "tag": "Confluent-compatible", "text": "A schema registry with Confluent’s API whose schemas live in your bucket, plus optional schema validation in the Agents. Data contracts and client-side field-level encryption aren’t supported." },
+        { "name": "Managed data pipelines", "tag": "Bento", "text": "Bento, WarpStream’s MIT-licensed fork of Benthos, embedded in the Agent and controlled from the console, for ETL and simple stream processing without a separate Kafka Connect cluster." },
+        { "name": "Orbit", "tag": "migration", "text": "Copies records with their original offsets, topic configs and consumer group offsets from any Kafka-compatible cluster into WarpStream, for migrations, disaster recovery or read replicas." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Richard Artoul and Ryan Worl had built Husky at Datadog, an event store that runs directly on top of Amazon S3. Looking at Kafka in the cloud, they saw that most of its cost wasn’t disks or machines but networking: with replicas in three zones, “every GiB of data that is produced must be written cross zone 2/3rds of the time,” which they put at “over 80% of the infrastructure cost of a Kafka deployment at scale.” Running the brokers also turned teams into operators: “developers set out to solve a business problem, and end up becoming Kafka SREs instead.”",
+      "They launched WarpStream in July 2023: the Kafka protocol on top of object storage, with stateless Agents and metadata in their own cloud. They named the cost openly, a produce p99 of about 400 ms and about a second end to end. In 2024 they forked Benthos as Bento after Redpanda bought it, and that September Confluent acquired WarpStream as its bring-your-own-cloud option for workloads with “relaxed latency requirements”."
+    ],
+    "choices": [
+      { "choice": "Object storage as the only storage", "why": "Writing straight to S3 lets the object store replicate the data across zones, and in AWS traffic between EC2 and S3 is free, while broker-to-broker replication is billed per GB." },
+      { "choice": "Metadata in a hosted control plane", "why": "Separating data from metadata, as the founders had done with Husky, moved consensus and coordination out of the customer’s hands; offsets are assigned when a file is committed, so many Agents can write to one partition." },
+      { "choice": "Many partitions per file", "why": "A file per partition every 100 ms would cost about $130 a month per partition in PUT requests alone. Agents instead write a few files per second that mix partitions, then compact them in the background." },
+      { "choice": "Agents in the customer’s cloud", "why": "Keeping the data plane in the customer’s VPC means records never leave their account, and WarpStream can’t read them even if its own cloud were compromised." }
+    ],
+    "timeline": [
+      { "year": "2022", "text": "Datadog describes Husky, the S3-based event store Artoul helped build" },
+      { "year": "2023", "text": "WarpStream launches publicly in July" },
+      { "year": "2024", "text": "Forks Benthos as Bento in May; Confluent acquires WarpStream in September" },
+      { "year": "2026", "text": "Tableflow generally available in February; IBM completes its Confluent purchase in March" }
+    ],
+    "sources": [
+      { "label": "Richard Artoul (WarpStream): Kafka is dead, long live Kafka (July 2023)", "url": "https://www.warpstream.com/blog/kafka-is-dead-long-live-kafka" },
+      { "label": "Datadog engineering: Introducing Husky, Datadog’s third-generation event store (May 2022)", "url": "https://www.datadoghq.com/blog/engineering/introducing-husky/" },
+      { "label": "Richard Artoul (WarpStream): Announcing Bento, the open-source fork of Benthos (May 2024)", "url": "https://www.warpstream.com/blog/announcing-bento-the-open-source-fork-of-the-project-formerly-known-as-benthos" },
+      { "label": "Confluent press release: Confluent acquires WarpStream (Sep 2024)", "url": "https://www.confluent.io/press-release/confluent-acquires-warpstream-to-advance-next-gen-byoc-data-streaming/" },
+      { "label": "WarpStream blog: Tableflow is now generally available (Feb 2026)", "url": "https://www.warpstream.com/blog/warpstream-tableflow-is-now-generally-available" },
+      { "label": "Confluent press release: IBM completes acquisition of Confluent (Mar 2026)", "url": "https://www.confluent.io/press-release/ibm-completes-acquisition-of-confluent/" }
+    ]
+  },
+  "sources": [
+    { "label": "WarpStream docs: Architecture (Agents, control plane, virtual clusters, file-per-partition cost)", "url": "https://docs.warpstream.com/warpstream/overview/architecture" },
+    { "label": "WarpStream docs: Write path (250 ms or 8 MiB batches, no leaders, durability)", "url": "https://docs.warpstream.com/warpstream/overview/architecture/write-path" },
+    { "label": "WarpStream docs: Read path (per-zone cache)", "url": "https://docs.warpstream.com/warpstream/overview/architecture/read-path" },
+    { "label": "WarpStream docs: Low latency clusters (latency table, S3 Express, lightning topics)", "url": "https://docs.warpstream.com/warpstream/kafka/advanced-agent-deployment-options/low-latency-clusters" },
+    { "label": "WarpStream docs: Ripcord (producing while the control plane is unavailable)", "url": "https://docs.warpstream.com/warpstream/kafka/advanced-agent-deployment-options/ripcord" },
+    { "label": "WarpStream docs: Object storage configuration (S3, GCS, Azure, MinIO, R2 and others)", "url": "https://docs.warpstream.com/warpstream/agent-setup/different-object-stores" },
+    { "label": "WarpStream docs: Protocol and feature support", "url": "https://docs.warpstream.com/warpstream/kafka/reference/protocol-and-feature-support" },
+    { "label": "WarpStream docs: Serverless clusters (rate limits)", "url": "https://docs.warpstream.com/warpstream/kafka/reference/serverless-clusters" },
+    { "label": "WarpStream docs: Billing", "url": "https://docs.warpstream.com/warpstream/reference/billing" },
+    { "label": "WarpStream pricing", "url": "https://www.warpstream.com/pricing" },
+    { "label": "WarpStream docs: Tableflow setup", "url": "https://docs.warpstream.com/warpstream/tableflow/tableflow" },
+    { "label": "WarpStream docs: Managed data pipelines (Bento)", "url": "https://docs.warpstream.com/warpstream/kafka/manage-connectors/bento" },
+    { "label": "WarpStream docs: Orbit (cluster linking)", "url": "https://docs.warpstream.com/warpstream/kafka/orbit" },
+    { "label": "WarpStream docs: Deploy the Agents", "url": "https://docs.warpstream.com/warpstream/agent-setup/deploy" },
+    { "label": "WarpStream docs: Run the Agents locally", "url": "https://docs.warpstream.com/warpstream/getting-started/run-the-agent-locally" },
+    { "label": "WarpStream docs: Hello World for Apache Kafka (kcmd)", "url": "https://docs.warpstream.com/warpstream/getting-started/hello-world-using-kafka" },
+    { "label": "WarpStream docs: BYOC Schema Registry", "url": "https://docs.warpstream.com/warpstream/schema-registry/warpstream-byoc-schema-registry" },
+    { "label": "WarpStream docs: Enforce schemas (schema validation)", "url": "https://docs.warpstream.com/warpstream/schema-registry/schema-validation" },
+    { "label": "Bento LICENSE (MIT)", "url": "https://github.com/warpstreamlabs/bento/blob/main/LICENSE" }
+  ],
+  "checked": "2026-10-05"
+}

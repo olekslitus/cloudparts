@@ -1,0 +1,177 @@
+{
+  "$schema": "../../.astro/collections/architectures.schema.json",
+  "title": "IoT telemetry pipeline",
+  "order": 80,
+  "summary": "Devices stream readings into Kinesis; Lambda writes them to TimescaleDB for Grafana, and raw data is archived to S3.",
+  "intro": "Thousands of sensors each send a reading every few seconds. A stream takes that firehose without blinking and keeps it for a while, so consumers can process it at their own pace. One consumer writes readings into a time-series database for live dashboards; another archives the raw stream to cheap object storage for later analysis.",
+  "fits": "Fleets of devices, metrics or clickstreams",
+  "diagram": {
+    "caption": "Device readings append to a Kinesis stream. Lambda reads small batches into TimescaleDB, where Grafana’s dashboard queries find them. A second consumer archives the stream to S3 in large, infrequent batches.",
+    "w": 860,
+    "h": 310,
+    "nodes": [
+      {
+        "id": "devices",
+        "x": 85,
+        "y": 90,
+        "label": "Devices",
+        "sub": "sensor readings",
+        "emit": {
+          "every": 260,
+          "jitter": 0.35,
+          "colorByKey": 4
+        },
+        "out": [
+          "stream"
+        ]
+      },
+      {
+        "id": "stream",
+        "x": 330,
+        "y": 90,
+        "label": "Kinesis Data Streams",
+        "sub": "telemetry",
+        "tech": "kinesis",
+        "kind": "log",
+        "cells": 9,
+        "retain": 50,
+        "readers": [
+          {
+            "to": "fn",
+            "every": 700,
+            "batch": 4,
+            "name": "Lambda"
+          },
+          {
+            "to": "archive",
+            "every": 2400,
+            "batch": 12,
+            "name": "archive"
+          }
+        ]
+      },
+      {
+        "id": "fn",
+        "x": 590,
+        "y": 90,
+        "label": "AWS Lambda",
+        "sub": "batch insert",
+        "tech": "lambda",
+        "kind": "pool",
+        "max": 3,
+        "work": 350,
+        "idle": 3000,
+        "cold": 300,
+        "out": [
+          "tsdb"
+        ]
+      },
+      {
+        "id": "tsdb",
+        "x": 780,
+        "y": 175,
+        "label": "TimescaleDB",
+        "sub": "hypertable",
+        "tech": "timescaledb",
+        "mode": "reply",
+        "delay": 50
+      },
+      {
+        "id": "archive",
+        "x": 590,
+        "y": 255,
+        "label": "Amazon S3",
+        "sub": "raw archive",
+        "tech": "s3",
+        "mode": "reply",
+        "delay": 80
+      },
+      {
+        "id": "grafana",
+        "x": 780,
+        "y": 50,
+        "label": "Grafana",
+        "sub": "live dashboard",
+        "tech": "grafana",
+        "emit": {
+          "every": 1500,
+          "req": true,
+          "color": 1
+        },
+        "out": [
+          "tsdb"
+        ]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "title": "Devices append to the stream",
+      "text": "Each device sends readings with its id as the partition key, so one device’s readings stay in order on one shard. The stream keeps them for at least 24 hours.",
+      "nodes": [
+        "devices",
+        "stream"
+      ]
+    },
+    {
+      "title": "Lambda loads the database",
+      "text": "Lambda polls the stream, receives batches of records, and inserts them into a TimescaleDB hypertable that is partitioned by time behind the scenes.",
+      "nodes": [
+        "fn",
+        "tsdb"
+      ]
+    },
+    {
+      "title": "Dashboards query recent data",
+      "text": "Grafana runs time-bucketed SQL such as `time_bucket('1 minute', time)` against TimescaleDB every few seconds to draw live charts.",
+      "nodes": [
+        "grafana",
+        "tsdb"
+      ]
+    },
+    {
+      "title": "The raw stream is archived",
+      "text": "A separate consumer reads the same stream in large batches and writes compressed files to S3, where analysts can query months of history without loading the database.",
+      "nodes": [
+        "archive"
+      ]
+    }
+  ],
+  "good": [
+    "The stream absorbs spikes and lets each consumer run at its own pace",
+    "Adding a consumer (alerting, ML features) doesn’t touch devices or the other consumers",
+    "The time-series database keeps recent data fast to query and old data compressed",
+    "Raw history is kept cheaply and can be replayed if processing logic changes"
+  ],
+  "watch": [
+    "Shards cap throughput per partition key range; plan capacity or use on-demand mode",
+    "If the Lambda consumer errors on a bad record, it can block its shard until the record expires",
+    "Retention and downsampling policies decide how much the database grows",
+    "Devices on flaky networks send late or duplicate readings; design inserts to tolerate both"
+  ],
+  "swaps": [
+    {
+      "text": "Off AWS or at very high volume, Kafka plays the stream’s role.",
+      "techs": [
+        "kafka"
+      ]
+    },
+    {
+      "text": "For metrics from servers rather than devices, Prometheus scrapes and stores them itself.",
+      "techs": [
+        "prometheus"
+      ]
+    },
+    {
+      "text": "For heavy analytical queries over the whole history, load the archive into ClickHouse or an Iceberg table.",
+      "techs": [
+        "clickhouse",
+        "iceberg"
+      ]
+    }
+  ],
+  "sources": [
+    { "label": "AWS docs: Using Lambda with Kinesis (a failing batch stops processing of its shard)", "url": "https://docs.aws.amazon.com/lambda/latest/dg/with-kinesis.html" },
+    { "label": "Tiger Data docs: time_bucket()", "url": "https://www.tigerdata.com/docs/reference/timescaledb/hyperfunctions/time-series-utilities/time_bucket" }
+  ]
+}

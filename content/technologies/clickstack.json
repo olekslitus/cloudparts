@@ -1,0 +1,324 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "ClickStack",
+  "concepts": ["observability", "logs", "traces"],
+  "provider": "oss",
+  "vendor": "ClickHouse, Inc.",
+  "license": "MIT (HyperDX UI, API and the ClickStack collector build); Apache 2.0 (ClickHouse and the upstream OpenTelemetry Collector); self-hosted app state in MongoDB, which is SSPL; Managed ClickStack is a proprietary ClickHouse Cloud service",
+  "website": "https://clickhouse.com/clickstack",
+  "repo": "https://github.com/hyperdxio/hyperdx",
+  "summary": "ClickHouse’s open-source observability stack: an OpenTelemetry collector, ClickHouse for storage and the HyperDX UI for search, dashboards and alerts on logs, traces, metrics and session replays.",
+  "intro": [
+    "ClickStack has three parts. Applications and agents send OpenTelemetry data over OTLP (gRPC on port 4317, HTTP on 4318) to ClickStack’s own build of the OpenTelemetry Collector, assembled from the upstream components plus a few of its own and meant to run as a gateway. It writes batches into ClickHouse tables with a fixed schema: `otel_logs`, `otel_traces` and one `otel_metrics_*` table per metric type, each a MergeTree table partitioned by day with a TTL for retention. The HyperDX UI queries ClickHouse directly, with Lucene-style search or full SQL, and adds dashboards, threshold alerts, event patterns, live tail and browser session replay. Dashboards, saved searches, users and alerts live in a separate MongoDB database. You can run it all from one demo container, with Docker Compose, with a Helm chart on Kubernetes, or point the UI alone at an existing ClickHouse; recent ClickHouse server builds also embed the UI, without persistence or alerting.",
+    "Managed ClickStack runs ClickHouse and the UI in ClickHouse Cloud, with Cloud sign-in and no MongoDB; you still run the collector. It launched in beta in February 2026 and is priced as ClickHouse Cloud infrastructure, not per host, user or event: compute per compute-unit-hour (one unit is 2 vCPUs and 8 GiB; $0.2985 on the Scale plan in AWS us-east-1), storage at $25.30 per TB-month of compressed data, and internet egress from $0.1152 per GB. ClickHouse’s sizing guide suggests 2 vCPUs × 3 replicas for under 10 TB of raw ingest a month. New Cloud accounts get $300 of credit for 30 days."
+  ],
+  "strengths": [
+    "Logs, traces, metrics and session replays in one ClickHouse database, so a slow trace links straight to its log lines, and SQL is there when search isn’t enough",
+    "Free to self-host, with ClickStack’s own parts under MIT and Apache 2.0 and no per-host, per-user or per-event fees",
+    "ClickHouse’s columnar compression keeps long retention cheap; ClickHouse says observability data compresses at least 10x",
+    "OpenTelemetry in, documented ClickHouse tables out: the data stays queryable from `clickhouse-client`, Grafana or anything else that speaks ClickHouse",
+    "An MCP server and an API expose search, SQL, dashboards and alerts to AI agents and scripts"
+  ],
+  "limits": [
+    "Self-hosting means running ClickHouse (with sharding, replication and Keeper at scale), the collector and MongoDB, whose SSPL licence is not OSI open source; the all-in-one image is not for production",
+    "Alerting is basic: static thresholds on a search or a dashboard tile, with no alerts on custom SQL for metrics, no multi-condition rules and no anomaly detection yet",
+    "Metrics lag behind logs and traces: there is no metrics search page, materialized views don’t work on OpenTelemetry metrics sources, and drilling down from a metric tile only links to nearby logs",
+    "Managed pricing follows running compute, not data volume: an ingest service rarely idles, so the suggested 3 × 2 vCPU starting size comes to about $650 a month on Scale in us-east-1 before storage, and the “less than a cent per GB” claim counts compressed storage only",
+    "Young as a product: ClickStack was announced in May 2025 and the managed service entered beta in February 2026"
+  ],
+  "worksWith": [
+    {
+      "id": "clickhouse",
+      "how": "stores all telemetry in"
+    },
+    {
+      "id": "opentelemetry",
+      "how": "ingests OTLP through its own build of"
+    },
+    {
+      "id": "mongodb",
+      "how": "keeps dashboards, users and alerts in"
+    },
+    {
+      "id": "kubernetes",
+      "how": "is installed with a Helm chart on"
+    }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Run the demo container, send OpenTelemetry data, query it with SQL",
+    "source": [
+      "# all-in-one image: ClickHouse, HyperDX, the collector and MongoDB (demos and local testing only)",
+      "docker run -d --name clickstack -p 8080:8080 -p 4317:4317 -p 4318:4318 \\",
+      "  clickhouse/clickstack-all-in-one:latest",
+      "",
+      "# create a user at http://localhost:8080, copy the ingestion key from",
+      "# Team Settings → API Keys, and point any OpenTelemetry SDK at the collector",
+      "export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318",
+      "export OTEL_EXPORTER_OTLP_HEADERS=\"authorization=${INGESTION_KEY}\"",
+      "export OTEL_SERVICE_NAME=checkout",
+      "opentelemetry-instrument python app.py",
+      "",
+      "# the data is plain ClickHouse tables: slowest operations in the last hour",
+      "docker exec clickstack clickhouse-client --query \"",
+      "  SELECT ServiceName, SpanName,",
+      "         round(quantile(0.95)(Duration) / 1e6, 1) AS p95_ms, count() AS spans",
+      "  FROM otel_traces",
+      "  WHERE Timestamp > now() - INTERVAL 1 HOUR",
+      "  GROUP BY ServiceName, SpanName",
+      "  ORDER BY p95_ms DESC LIMIT 10\""
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Ways to run it",
+      "intro": "The UI and the table schemas are the same everywhere. What changes is who runs ClickHouse and where the app state lives.",
+      "corner": "Option",
+      "columns": [
+        "What you run",
+        "Suited to",
+        "Catch"
+      ],
+      "rows": [
+        {
+          "label": "Managed ClickStack",
+          "values": [
+            "Only the collector; ClickHouse Cloud hosts the database and UI",
+            "Production",
+            "Billed as ClickHouse Cloud compute, storage and egress"
+          ]
+        },
+        {
+          "label": "Helm chart",
+          "values": [
+            "Everything, on Kubernetes; can also point at ClickHouse Cloud",
+            "Production on Kubernetes",
+            "You operate ClickHouse, MongoDB and the collector"
+          ]
+        },
+        {
+          "label": "Docker Compose",
+          "values": [
+            "One container per component on one host",
+            "Small production on a single server, proofs of concept",
+            "No fault tolerance"
+          ]
+        },
+        {
+          "label": "All-in-one image",
+          "values": [
+            "One container with every component",
+            "Demos, local testing",
+            "Not for production; data is lost unless you mount volumes"
+          ]
+        },
+        {
+          "label": "HyperDX only",
+          "values": [
+            "The UI, against your own ClickHouse and schema",
+            "Existing ClickHouse users with their own pipelines",
+            "Ingestion and schema are up to you"
+          ]
+        },
+        {
+          "label": "Embedded in ClickHouse",
+          "values": [
+            "Nothing extra: the UI is built into the server binary",
+            "Trying it on data you already have",
+            "No alerting, no saved dashboards or searches"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "What Managed ClickStack costs",
+      "intro": "ClickHouse Cloud list prices for AWS us-east-1, checked 6 October 2026. Compute is metered per minute while the service runs; storage is measured after compression.",
+      "corner": "Item",
+      "columns": [
+        "Basic",
+        "Scale",
+        "Enterprise"
+      ],
+      "rows": [
+        {
+          "label": "Compute, per unit-hour (2 vCPU, 8 GiB)",
+          "values": [
+            "$0.2181",
+            "$0.2985",
+            "$0.3903"
+          ]
+        },
+        {
+          "label": "Storage, per TB-month (compressed)",
+          "values": [
+            "$25.30",
+            "$25.30",
+            "$25.30"
+          ]
+        },
+        {
+          "label": "Limits",
+          "values": [
+            "1 availability zone, up to 1 TB storage",
+            "2+ zones, unlimited storage, compute-compute separation",
+            "Adds SAML SSO, CMEK, HIPAA and PCI"
+          ]
+        }
+      ],
+      "notes": [
+        "ClickHouse recommends Scale for most ClickStack workloads. Public internet egress starts at $0.1152 per GB and inter-region egress at $0.0312 per GB; ingress is free.",
+        "Example: the suggested size for under 10 TB of raw ingest a month is 3 replicas of 2 vCPUs, which is 3 compute units × $0.2985 × 730 hours ≈ $654 a month on Scale if it never idles, plus storage."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "HyperDX was founded in 2022 by Michael Shi and Warren Lee and went through Y Combinator’s summer 2022 batch with a pitch of open-source, developer-friendly observability built on ClickHouse and S3, correlating logs, metrics, traces and browser session replays. It published its code under the MIT licence in September 2023, and open-sourced a rebuilt V2 UI in late 2024.",
+      "ClickHouse had long been the storage behind other companies’ observability products, but its own answer was OpenTelemetry for collection and Grafana for charts. That worked, but ClickHouse saw room for smoother workflows and wanted session replay, which the open-source tools it looked at lacked. After testing HyperDX V2 internally, ClickHouse announced on 6 March 2025 that it had acquired HyperDX and that the open-source project would stay maintained.",
+      "On 28 May 2025 it announced ClickStack: ClickHouse, the HyperDX UI and a preconfigured OpenTelemetry collector, packaged as one open-source stack. In February 2026 Managed ClickStack entered beta in ClickHouse Cloud, priced on infrastructure rather than events, and ClickHouse has since added an MCP server and AI notebooks."
+    ],
+    "choices": [
+      {
+        "choice": "Wide events in one column store",
+        "why": "Search engines were costly to run at scale and slow at aggregations, while metrics stores needed rigid pre-aggregation and couldn’t search. Keeping logs, traces and metrics as wide, high-cardinality events in ClickHouse gives fast search and fast aggregation over the same data."
+      },
+      {
+        "choice": "OpenTelemetry as the way in",
+        "why": "Both ClickHouse and HyperDX were committed to OpenTelemetry, and ClickHouse maintains the collector’s ClickHouse exporter, so standard SDKs and collectors work without a proprietary agent."
+      },
+      {
+        "choice": "Open source stack, paid infrastructure",
+        "why": "The whole self-hosted stack stays open source, and ClickHouse earns money by running it in ClickHouse Cloud, billed for compute and storage rather than per host or per event."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "2022",
+        "text": "HyperDX founded; joins Y Combinator’s summer batch"
+      },
+      {
+        "year": "2023",
+        "text": "HyperDX open-sourced under MIT in September"
+      },
+      {
+        "year": "2025",
+        "text": "ClickHouse acquires HyperDX, announced 6 March"
+      },
+      {
+        "year": "2025",
+        "text": "ClickStack announced on 28 May with HyperDX 2.0"
+      },
+      {
+        "year": "2026",
+        "text": "Managed ClickStack enters beta in ClickHouse Cloud in February"
+      }
+    ],
+    "sources": [
+      {
+        "label": "Y Combinator: HyperDX (Summer 2022, founders)",
+        "url": "https://www.ycombinator.com/companies/hyperdx"
+      },
+      {
+        "label": "GitHub: HyperDX release 1.1.0 (September 2023)",
+        "url": "https://github.com/hyperdxio/hyperdx/releases/tag/hyperdx%401.1.0"
+      },
+      {
+        "label": "ClickHouse blog: ClickHouse acquires HyperDX (6 March 2025)",
+        "url": "https://clickhouse.com/blog/clickhouse-acquires-hyperdx-the-future-of-open-source-observability"
+      },
+      {
+        "label": "ClickHouse blog: ClickStack, a high-performance OSS observability stack on ClickHouse (28 May 2025)",
+        "url": "https://clickhouse.com/blog/clickstack-a-high-performance-oss-observability-stack-on-clickhouse"
+      },
+      {
+        "label": "ClickHouse blog: Introducing Managed ClickStack beta (February 2026)",
+        "url": "https://clickhouse.com/blog/introducing-managed-clickstack-beta"
+      },
+      {
+        "label": "Managed ClickStack product page (AI notebooks)",
+        "url": "https://clickhouse.com/cloud/clickstack"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "ClickStack product page (components, MCP tools)",
+      "url": "https://clickhouse.com/clickstack"
+    },
+    {
+      "label": "ClickStack docs: Architecture (collector, ClickHouse, HyperDX, MongoDB)",
+      "url": "https://clickhouse.com/docs/clickstack/architecture"
+    },
+    {
+      "label": "ClickStack docs: Deployment options",
+      "url": "https://clickhouse.com/docs/clickstack/deployment/overview"
+    },
+    {
+      "label": "ClickStack docs: All in one",
+      "url": "https://clickhouse.com/docs/clickstack/deployment/all-in-one"
+    },
+    {
+      "label": "ClickStack docs: Docker Compose",
+      "url": "https://clickhouse.com/docs/clickstack/deployment/docker-compose"
+    },
+    {
+      "label": "ClickStack docs: Embedded in ClickHouse",
+      "url": "https://clickhouse.com/docs/clickstack/deployment/clickhouse-embedded"
+    },
+    {
+      "label": "ClickStack docs: Deploying Managed ClickStack (no MongoDB, sizing table)",
+      "url": "https://clickhouse.com/docs/clickstack/deployment/managed"
+    },
+    {
+      "label": "ClickStack docs: OpenTelemetry collector (gateway role, ClickStack distribution)",
+      "url": "https://clickhouse.com/docs/clickstack/ingesting-data/collector"
+    },
+    {
+      "label": "ClickStack docs: Ingesting with OpenTelemetry (ingestion API key)",
+      "url": "https://clickhouse.com/docs/clickstack/ingesting-data/opentelemetry"
+    },
+    {
+      "label": "ClickStack docs: Tables and schemas",
+      "url": "https://clickhouse.com/docs/clickstack/ingesting-data/schemas"
+    },
+    {
+      "label": "ClickStack docs: FAQ (alerting and metrics limitations)",
+      "url": "https://clickhouse.com/docs/clickstack/faq"
+    },
+    {
+      "label": "ClickStack docs: API reference",
+      "url": "https://clickhouse.com/docs/clickstack/api-reference"
+    },
+    {
+      "label": "Managed ClickStack product page (sub-cent storage claim, trial credits)",
+      "url": "https://clickhouse.com/cloud/clickstack"
+    },
+    {
+      "label": "ClickHouse Cloud pricing (plans, compute units, storage, egress)",
+      "url": "https://clickhouse.com/pricing"
+    },
+    {
+      "label": "GitHub: hyperdxio/hyperdx LICENSE (MIT)",
+      "url": "https://github.com/hyperdxio/hyperdx/blob/main/LICENSE"
+    },
+    {
+      "label": "GitHub: HyperDX collector Dockerfile (built with the OpenTelemetry Collector Builder)",
+      "url": "https://github.com/hyperdxio/hyperdx/blob/main/docker/otel-collector/Dockerfile"
+    },
+    {
+      "label": "GitHub: opentelemetry-collector-contrib (Apache 2.0)",
+      "url": "https://github.com/open-telemetry/opentelemetry-collector-contrib"
+    },
+    {
+      "label": "GitHub: ClickHouse/ClickStack (Docker Compose setup)",
+      "url": "https://github.com/ClickHouse/ClickStack"
+    },
+    {
+      "label": "GitHub: MongoDB Community licence (SSPL)",
+      "url": "https://github.com/mongodb/mongo/blob/master/LICENSE-Community.txt"
+    }
+  ],
+  "checked": "2026-10-06"
+}

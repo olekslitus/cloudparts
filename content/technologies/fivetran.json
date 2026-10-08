@@ -1,0 +1,173 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Fivetran",
+  "concepts": ["etl"],
+  "provider": "vendor",
+  "vendor": "Fivetran + dbt Labs",
+  "license": "Proprietary; the Python Connector SDK is MIT",
+  "website": "https://www.fivetran.com/",
+  "summary": "Managed connectors that copy data from SaaS apps, databases and files into your warehouse or lake, billed by the rows that change each month.",
+  "intro": [
+    "Fivetran is a hosted service that copies data from sources into a destination you own. You pick a connector (a SaaS API such as Salesforce, a database, files), give it credentials, and choose a destination: Snowflake, BigQuery, Databricks, PostgreSQL and others, or its Managed Data Lake Service, which writes Parquet files with Iceberg metadata to S3, ADLS or GCS. The first sync copies all history. After that, incremental syncs run on a schedule (every 6 hours by default, every minute on the top plans) and fetch only what changed, from API cursors or, for databases, the change log, such as PostgreSQL’s write-ahead log. Fivetran keeps the cursors and checkpoints, creates and alters destination tables as the source schema changes, and adds columns such as `_fivetran_synced` and `_fivetran_deleted`. Transformation happens afterwards in the warehouse, usually with dbt. With Hybrid Deployment, the data is processed inside your network while Fivetran’s cloud orchestrates it.",
+    "Pricing is measured in Monthly Active Rows (MAR): the distinct rows, by primary key, inserted, updated or deleted in a calendar month, counted per connection and table. A row that syncs many times in a month counts once, and history from the initial sync is free. The price per MAR falls as a connection’s volume grows, and since March 2025 those tiers apply per connection rather than across the account. Fivetran’s own Standard-plan examples, checked 6 October 2026: a Google Ads connection at a median 88,240 MAR costs $48.67 a month, Marketo at 847,574 MAR costs $424.54. Fivetran merged with dbt Labs on 1 June 2026, and both brands continue."
+  ],
+  "strengths": [
+    "More than 700 managed connectors: you configure them instead of writing and running extraction code",
+    "Log-based CDC for databases (PostgreSQL logical replication, and HVR for large Oracle and SAP replication)",
+    "Handles schema drift: new columns and tables appear in the destination unless you block them, and soft-delete and history modes keep deleted rows and old versions",
+    "Initial historical syncs don’t count as paid MAR, and the Free plan covers 500,000 MAR a month",
+    "Writes to every major warehouse or to Iceberg tables in your own object storage, and Hybrid Deployment keeps processing inside your network"
+  ],
+  "limits": [
+    "Bills are hard to predict: a job that touches every row of a big table makes all of them active for the month, and since January 2026 deletes and every history-mode version count too",
+    "Volume discounts build up per connection since March 2025, and each connection with 1 to 1 million MAR carries a $5 base charge, so many small connections cost more than their rows suggest",
+    "Reverse ETL is priced far higher per row: Fivetran’s median example is $202.25 a month for 12,007 activated MAR (Snowflake to Salesforce), against $22.06 for 34,479 MAR of Facebook Ads",
+    "Closed source with fixed connectors: unusual sources need the Python Connector SDK, and leaving means rebuilding every pipeline elsewhere",
+    "Fast syncs are plan-gated: Standard goes down to 15 minutes; 1-minute syncs and cron schedules need Enterprise or Business Critical"
+  ],
+  "worksWith": [
+    { "id": "snowflake", "how": "loads data into" },
+    { "id": "bigquery", "how": "loads data into" },
+    { "id": "databricks", "how": "loads data into" },
+    { "id": "postgresql", "how": "reads changes from the WAL of" },
+    { "id": "iceberg", "how": "writes data lake tables as" },
+    { "id": "duckdb", "how": "tests SDK connectors locally in" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "A custom connector with the Connector SDK: Fivetran stores the cursor and merges rows",
+    "source": [
+      "# connector.py  (pip install fivetran-connector-sdk requests)",
+      "import requests",
+      "from fivetran_connector_sdk import Connector, Operations as op",
+      "",
+      "def schema(configuration: dict):",
+      "    return [{\"table\": \"invoices\", \"primary_key\": [\"id\"]}]",
+      "",
+      "def update(configuration: dict, state: dict):",
+      "    cursor = state.get(\"updated_since\", \"1970-01-01T00:00:00Z\")  # state is empty on the first sync",
+      "    resp = requests.get(",
+      "        \"https://api.billing.example.com/v1/invoices\",",
+      "        headers={\"Authorization\": f\"Bearer {configuration['api_key']}\"},",
+      "        params={\"updated_since\": cursor, \"order\": \"updated_at\"},",
+      "        timeout=30,",
+      "    )",
+      "    resp.raise_for_status()",
+      "    for invoice in resp.json()[\"data\"]:",
+      "        op.upsert(table=\"invoices\", data=invoice)  # merged on the primary key",
+      "        cursor = max(cursor, invoice[\"updated_at\"])",
+      "    op.checkpoint(state={\"updated_since\": cursor})  # the next sync resumes here",
+      "",
+      "connector = Connector(update=update, schema=schema)",
+      "",
+      "# fivetran debug   -> runs locally into files/warehouse.db (DuckDB)",
+      "# fivetran deploy --api-key \"$FIVETRAN_API_KEY\" --destination warehouse --connection billing_invoices"
+    ]
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "How the bill is built",
+      "intro": "List prices aren’t published per MAR; the pricing page shows examples and a calculator. These are the rules that decide what you pay.",
+      "items": [
+        { "name": "Monthly Active Rows", "tag": "the meter", "text": "Each distinct primary key inserted, updated or deleted in a month, tracked separately per connection and table. A row counts once a month however often it syncs. Tables without a key get a `_fivetran_id` computed from the row’s values." },
+        { "name": "Per-connection tiers", "tag": "since March 2025", "text": "The rate per MAR falls as volume grows, but the tiers apply to each connection on its own, not to the whole account. Fivetran said this would be a price cut for most customers; accounts with many small connections lose pooled discounts." },
+        { "name": "Base charge", "tag": "$5 per connection", "text": "Every standard connection with 1 to 1 million MAR in a month costs at least $5, except on the Free plan." },
+        { "name": "Deletes and history mode", "tag": "since January 2026", "text": "Deletes count as paid MAR. In history mode, which keeps every version of a row, repeated updates to the same row in one month each count." },
+        { "name": "What’s free", "tag": "free", "text": "Initial historical syncs, re-syncs of rows identical to the destination, history backfilled when you add a column, and connection trials." },
+        { "name": "Transformations", "tag": "per model run", "text": "The first 5,000 model runs a month are free on every plan; then $0.01 per run up to 30,000, $0.007 up to 100,000 and $0.002 beyond." },
+        { "name": "Free plan", "tag": "$0", "text": "500,000 MAR for connections, 5,000 model runs and 3,500 MAR of reverse ETL (Activations) a month." },
+        { "name": "Annual contracts", "tag": "from 5% off", "text": "Committing to a year gives automatic discounts that grow with the annual list price: 5% at first, rising to 22.6% for contracts above $145,340 a year at list price." }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Fivetran’s example list prices",
+      "intro": "Median usage and median monthly list price for real connections, as Fivetran publishes them.",
+      "corner": "Connection",
+      "columns": ["Median MAR", "Median monthly list price"],
+      "rows": [
+        { "label": "Google Analytics 4", "values": ["21,993", "$15.88"] },
+        { "label": "Facebook Ads", "values": ["34,479", "$22.06"] },
+        { "label": "Google Ads", "values": ["88,240", "$48.67"] },
+        { "label": "Marketo", "values": ["847,574", "$424.54"] },
+        { "label": "Activation: Snowflake to HubSpot", "values": ["9,934", "$197.96"] },
+        { "label": "Activation: Snowflake to Salesforce", "values": ["12,007", "$202.25"] }
+      ],
+      "notes": [
+        "Estimates for the Standard plan at a company with 1 to 200 employees, from fivetran.com/pricing, checked 6 October 2026."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Other ways to load data",
+      "items": [
+        { "name": "Airbyte", "tag": "source-available and cloud", "text": "Connectors for APIs, databases and files into warehouses and lakes, self-hosted or as a cloud service." },
+        { "name": "Meltano and Singer", "tag": "MIT", "text": "Taps and targets that pass JSON over a Unix pipe; Meltano runs and configures them as code." },
+        { "name": "Estuary and Artie", "tag": "managed CDC", "text": "Streaming change data capture from databases into warehouses with low latency, for when hourly batches are too slow." },
+        { "name": "Cloud-native options", "tag": "one cloud", "text": "AWS DMS and zero-ETL integrations into Redshift, Google Datastream and BigQuery Data Transfer Service, and Fabric Data Factory copy jobs and mirroring." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "George Fraser and Taylor Brown, friends since childhood, founded Fivetran in 2012 and went through Y Combinator’s winter 2013 batch with a data analysis tool for scientists. In 2014, responding to what customers needed, they built their first connector. The bet that followed was that moving data should be a utility: managed pipelines from each source that copy everything into a cloud warehouse, where analysts transform it with SQL afterwards.",
+      "Cheap cloud warehouse storage made copying raw data reasonable, and Fivetran priced by the rows that change each month. In 2021 it raised $565 million at a $5.6 billion valuation and bought HVR for $700 million, adding high-volume database replication for systems such as Oracle and SAP. In 2025 it agreed to buy Census, a reverse ETL company, and bought Tobiko Data, maker of SQLMesh and SQLGlot. That October it agreed an all-stock merger with dbt Labs, its partner for a decade; the deal closed on 1 June 2026, with Fraser as CEO and dbt’s Tristan Handy as president."
+    ],
+    "choices": [
+      { "choice": "Fixed, managed connectors instead of a toolkit", "why": "Writing and maintaining extraction code for every SaaS API was the most time-consuming part of a pipeline. Fivetran builds and runs each connector, and customers only configure it." },
+      { "choice": "Load raw, transform later (ELT)", "why": "Storage became cheap enough to keep untransformed copies, so Fivetran loads source tables as they are and leaves modelling to SQL in the warehouse." },
+      { "choice": "Bill by rows changed, not by data volume", "why": "Monthly Active Rows count each changed row once a month, and history from the initial sync is free, so the price follows how much the source changes rather than how big it is." },
+      { "choice": "Follow schema changes automatically", "why": "Source APIs add fields all the time. By default new columns and tables are created in the destination, so pipelines keep running instead of failing on schema drift." }
+    ],
+    "timeline": [
+      { "year": "2012", "text": "George Fraser and Taylor Brown found Fivetran" },
+      { "year": "2013", "text": "Joins Y Combinator’s winter batch" },
+      { "year": "2014", "text": "Builds its first connector; opens headquarters in Oakland" },
+      { "year": "2021", "text": "Raises $565M at a $5.6B valuation; buys HVR for $700M" },
+      { "year": "2025", "text": "Per-connection MAR tiers; buys Census and Tobiko Data; agrees dbt Labs merger" },
+      { "year": "2026", "text": "Deletes billed as MAR from January; dbt Labs merger completes on 1 June" }
+    ],
+    "sources": [
+      { "label": "Y Combinator: Fivetran (Winter 2013 batch)", "url": "https://www.ycombinator.com/companies/fivetran" },
+      { "label": "Fivetran: About us (company history)", "url": "https://www.fivetran.com/about" },
+      { "label": "Fivetran press release: Fivetran to acquire HVR, announces $565 million Series D (September 2021)", "url": "https://www.fivetran.com/press/fivetran-to-acquire-hvr-announces-565-million-in-series-d-funding" },
+      { "label": "Fivetran press release: Fivetran completes acquisition of HVR (October 2021)", "url": "https://www.fivetran.com/press/fivetran-completes-acquisition-of-hvr" },
+      { "label": "Fivetran press release: Fivetran signs agreement to acquire Census (May 2025)", "url": "https://www.fivetran.com/press/fivetran-signs-agreement-to-acquire-census-delivering-the-first-end-to-end-data-movement-platform-for-the-ai-era" },
+      { "label": "Fivetran press release: Fivetran acquires Tobiko Data (September 2025)", "url": "https://www.fivetran.com/press/fivetran-acquires-tobiko-data-to-power-the-next-generation-of-advanced-ai-ready-data-transformation" },
+      { "label": "Fivetran press release: Fivetran and dbt Labs unite (all-stock merger, October 2025)", "url": "https://www.fivetran.com/press/fivetran-and-dbt-labs-unite-to-set-the-standard-for-open-data-infrastructure-2025" },
+      { "label": "Fivetran press release: Fivetran + dbt Labs complete merger (June 2026)", "url": "https://www.fivetran.com/press/fivetran-dbt-labs-complete-merger-to-create-the-data-infrastructure-for-trusted-ai-agents" },
+      { "label": "Fivetran blog: ETL vs ELT (Charles Wang, August 2022)", "url": "https://www.fivetran.com/blog/etl-vs-elt" }
+    ]
+  },
+  "sources": [
+    { "label": "Fivetran pricing (plans, free plan, base charge, transformations, examples, annual discounts)", "url": "https://www.fivetran.com/pricing" },
+    { "label": "Fivetran docs: Usage-based pricing (MAR definition, free MAR, base charge)", "url": "https://fivetran.com/docs/core-concepts/usage-based-pricing" },
+    { "label": "Fivetran docs: 2025 pricing FAQ (per-connection tiering from 1 March 2025)", "url": "https://fivetran.com/docs/core-concepts/usage-based-pricing/pricing-updates/2025-pricing-faq" },
+    { "label": "Fivetran docs: 2026 pricing updates (minimum charge, deletes, history mode, Activations)", "url": "https://fivetran.com/docs/core-concepts/usage-based-pricing/pricing-updates/2026-pricing-updates" },
+    { "label": "Fivetran docs: Sync overview (initial and incremental syncs, frequencies)", "url": "https://fivetran.com/docs/core-concepts/syncoverview" },
+    { "label": "Fivetran docs: Sync modes (soft delete, live, history)", "url": "https://fivetran.com/docs/core-concepts/syncoverview/sync-modes" },
+    { "label": "Fivetran docs: System columns and tables", "url": "https://fivetran.com/docs/core-concepts/syncoverview/system-columns-and-tables" },
+    { "label": "Fivetran docs: Schema change settings", "url": "https://fivetran.com/docs/core-concepts/features/data-blocking-column-hashing/config" },
+    { "label": "Fivetran docs: Deployment models (SaaS, Hybrid)", "url": "https://fivetran.com/docs/core-concepts/deployment-models" },
+    { "label": "Fivetran docs: Destinations", "url": "https://fivetran.com/docs/destinations" },
+    { "label": "Fivetran docs: Managed Data Lake Service (Parquet, Iceberg metadata, S3, ADLS, GCS)", "url": "https://fivetran.com/docs/destinations/managed-data-lake-service" },
+    { "label": "Fivetran docs: PostgreSQL connector (logical replication)", "url": "https://fivetran.com/docs/connectors/databases/postgresql" },
+    { "label": "Fivetran docs: HVR 6", "url": "https://fivetran.com/docs/hvr6" },
+    { "label": "Fivetran docs: Connector SDK", "url": "https://fivetran.com/docs/connector-sdk" },
+    { "label": "Fivetran docs: Connector SDK setup guide (`fivetran debug`, `fivetran deploy`)", "url": "https://fivetran.com/docs/connector-sdk/setup-guide" },
+    { "label": "fivetran/fivetran_connector_sdk on GitHub (MIT; template connector)", "url": "https://github.com/fivetran/fivetran_connector_sdk" },
+    { "label": "Fivetran press release: Fivetran + dbt Labs complete merger (June 2026; brands continue)", "url": "https://www.fivetran.com/press/fivetran-dbt-labs-complete-merger-to-create-the-data-infrastructure-for-trusted-ai-agents" },
+    { "label": "Airbyte on GitHub", "url": "https://github.com/airbytehq/airbyte" },
+    { "label": "Singer specification", "url": "https://hub.meltano.com/singer/spec" },
+    { "label": "Meltano on GitHub (MIT)", "url": "https://github.com/meltano/meltano" },
+    { "label": "Estuary docs", "url": "https://docs.estuary.dev/" },
+    { "label": "Artie docs: Quickstart", "url": "https://www.artie.com/docs/quickstart" },
+    { "label": "AWS DMS docs: Ongoing replication (CDC)", "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html" },
+    { "label": "Amazon Redshift docs: Zero-ETL integrations", "url": "https://docs.aws.amazon.com/redshift/latest/mgmt/zero-etl-using.html" },
+    { "label": "Google Cloud docs: Datastream overview", "url": "https://docs.cloud.google.com/datastream/docs/overview" },
+    { "label": "Google Cloud docs: BigQuery Data Transfer Service", "url": "https://docs.cloud.google.com/bigquery/docs/dts-introduction" },
+    { "label": "Microsoft Learn: What is Data Factory in Microsoft Fabric?", "url": "https://learn.microsoft.com/en-us/fabric/data-factory/data-factory-overview" }
+  ],
+  "checked": "2026-10-06"
+}

@@ -1,0 +1,147 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Workflow orchestration",
+  "category": "messaging",
+  "order": 50,
+  "summary": "A durable state machine that drives multi-step processes to completion.",
+  "howItWorks": "You define the steps of a process, their order, and what happens on failure: retries with backoff, timeouts, branches, parallel steps and compensating actions. The engine records every transition, so a process can wait days for a person or an outside system and resume exactly where it left off, even after a crash.",
+  "analogy": "A project manager with a checklist who never forgets where each project stands, chases late steps, and follows the backup plan when something fails.",
+  "useWhen": [
+    "Processes that span services: order fulfilment, onboarding, data pipelines",
+    "Long waits on people, approvals or callbacks",
+    "Replacing tangled chains of queues and cron jobs that nobody can debug"
+  ],
+  "avoidWhen": ["One quick step; a function or queue is enough","Very high-rate, low-latency event processing"],
+  "example": "An order workflow validates the cart, tries to charge the card up to 3 times, then ships. If the charge is declined, it runs a compensation step that releases the reserved stock and tells the customer.",
+  "providers": {
+    "aws": "Step Functions; EventBridge Scheduler for timed starts",
+    "gcp": "Workflows",
+    "azure": "Durable Functions, Logic Apps",
+    "oss": "Temporal, Apache Airflow, Argo Workflows; for data pipelines, Dagster (now part of Prefect)"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "# Temporal workflow: each step is retried and its result recorded",
+      "@workflow.defn",
+      "class OrderWorkflow:",
+      "    @workflow.run",
+      "    async def run(self, order: Order) -> str:",
+      "        await workflow.execute_activity(validate, order, start_to_close_timeout=T(seconds=30))",
+      "        try:",
+      "            await workflow.execute_activity(charge_card, order,",
+      "                retry_policy=RetryPolicy(maximum_attempts=3),",
+      "                start_to_close_timeout=T(minutes=2))",
+      "        except ActivityError:",
+      "            await workflow.execute_activity(release_stock, order, start_to_close_timeout=T(seconds=30))",
+      "            return \"cancelled\"",
+      "        await workflow.execute_activity(ship, order, start_to_close_timeout=T(days=3))",
+      "        return \"shipped\""
+    ]
+  },
+  "related": ["orchestration","queue","eventbus","actors","etl"],
+  "diagram": {
+    "caption": "Each order moves through the steps. About one card charge in four is declined, and those orders take the compensation branch instead of shipping.",
+    "h": 270,
+    "nodes": [
+      {
+        "id": "trig",
+        "x": 72,
+        "y": 135,
+        "label": "Order placed",
+        "sub": "start",
+        "emit": {"every":2500,"jitter":0.3,"cycle":true},
+        "out": ["v"]
+      },
+      {
+        "id": "v",
+        "x": 208,
+        "y": 135,
+        "kind": "pool",
+        "label": "Validate",
+        "sub": "step 1",
+        "max": 3,
+        "work": 350,
+        "idle": 99999,
+        "out": ["ch"]
+      },
+      {
+        "id": "ch",
+        "x": 362,
+        "y": 135,
+        "label": "Charge card",
+        "sub": "step 2 · up to 3 tries",
+        "mode": "gate",
+        "p": 0.75,
+        "deny": "rel",
+        "denyText": "declined",
+        "allowText": "paid",
+        "out": ["ship"]
+      },
+      {
+        "id": "ship",
+        "x": 522,
+        "y": 72,
+        "kind": "pool",
+        "label": "Ship",
+        "sub": "step 3",
+        "max": 3,
+        "work": 600,
+        "idle": 99999,
+        "out": ["done"]
+      },
+      {"id":"done","x":676,"y":72,"label":"Done","sub":"shipped","mode":"sink"},
+      {"id":"rel","x":522,"y":205,"label":"Release stock","sub":"compensation","out":["tell"]},
+      {"id":"tell","x":676,"y":205,"label":"Tell customer","sub":"cancelled","mode":"sink"}
+    ]
+  },
+  "history": {
+    "story": [
+      "Business processes have always spanned many steps and long stretches of time: an order is checked, paid for, packed and shipped; an insurance claim moves from desk to desk. In 1987 Hector Garcia-Molina and Kenneth Salem of Princeton described “sagas”: a long-lived transaction written as a sequence of smaller ones, with compensating transactions to undo a partial run. Their examples were monthly bank statements and insurance claims.",
+      "The 1990s brought workflow management systems, and the Workflow Management Coalition, founded in 1993, worked to standardize them. IBM and Microsoft merged their web-service orchestration languages, WSFL and XLANG, into BPEL4WS, an XML language that they, BEA, SAP and Siebel submitted to the OASIS standards body in 2003. Cloud providers and web companies then brought the idea to developers: Amazon’s Simple Workflow Service in 2012, Airbnb’s Apache Airflow for data pipelines in 2015, AWS Step Functions in 2016, and Uber’s Cadence, which became Temporal, where workflows are ordinary code.",
+      "Today the idea often goes by “durable execution”: the engine records every step, so a process can wait days for a person or survive a crash and resume where it stopped. AI agents, which run long chains of model and tool calls, have renewed interest; Temporal raised $550 million in 2026 as demand grew for reliable AI infrastructure."
+    ],
+    "choices": [
+      { "choice": "One engine owns the whole process", "why": "A central orchestrator knows every step and where each instance stands, so failures, timeouts and stuck steps show up in one place instead of being scattered across queues and cron jobs." },
+      { "choice": "Compensation instead of long locks", "why": "Holding database locks for a process that runs hours or days blocks everything else, so sagas commit each step and undo completed ones with compensating actions if a later step fails." },
+      { "choice": "Record every state transition", "why": "Writing each step down durably lets the engine resume after a crash, and lets a process sleep for days without holding a server." },
+      { "choice": "Definitions as data, or workflows as code", "why": "BPEL and Step Functions describe the process as XML or JSON that an engine can validate and draw. Cadence and Temporal use a normal programming language instead, which requires deterministic code so the engine can replay it." }
+    ],
+    "timeline": [
+      { "year": "1987", "text": "The sagas paper introduces compensating transactions" },
+      { "year": "2003", "text": "BPEL4WS, from IBM and Microsoft, is submitted to OASIS" },
+      { "year": "2012", "text": "Amazon Simple Workflow Service launches" },
+      { "year": "2015", "text": "Airbnb releases Airflow as open source" },
+      { "year": "2016", "text": "AWS Step Functions launches" },
+      { "year": "2020", "text": "Temporal 1.0, a fork of Uber’s Cadence, ships" },
+      { "year": "2026", "text": "Temporal raises $550M as demand for reliable AI infrastructure grows" }
+    ],
+    "sources": [
+      { "label": "Garcia-Molina and Salem: Sagas (SIGMOD 1987)", "url": "https://www.cs.cornell.edu/andru/cs711/2002fa/reading/sagas.pdf" },
+      { "label": "Workflow Management Coalition: About us (founded 1993)", "url": "http://www.wfmc.org/about-us", "archive": "https://web.archive.org/web/20150102232023/http://www.wfmc.org:80/about-us" },
+      { "label": "OASIS WSBPEL TC charter (BPEL4WS submitted by BEA, IBM, Microsoft, SAP and Siebel, 2003)", "url": "https://www.oasis-open.org/committees/wsbpel/charter.php" },
+      { "label": "Cover Pages: BPEL4WS, the merger of WSFL and XLANG", "url": "http://xml.coverpages.org/bpel4ws.html" },
+      { "label": "AWS News Blog: Amazon Simple Workflow (Feb 2012)", "url": "https://aws.amazon.com/blogs/aws/amazon-simple-workflow-cloud-based-workflow-management/" },
+      { "label": "Apache Airflow: project history (announced by Airbnb, June 2015)", "url": "https://airflow.apache.org/docs/apache-airflow/stable/project.html" },
+      { "label": "AWS News Blog: New, AWS Step Functions (Dec 2016)", "url": "https://aws.amazon.com/blogs/aws/new-aws-step-functions-build-distributed-applications-using-visual-workflows/" },
+      { "label": "Temporal blog: from Amazon to Azure to Cadence to Temporal", "url": "https://temporal.io/blog/building-resilient-workflows-from-azure-to-cadence-to-temporal" },
+      { "label": "Temporal blog: Temporal V1 announcement (Sep 2020)", "url": "https://temporal.io/blog/temporal-v1-announcement" },
+      { "label": "Temporal blog: Temporal raises $550M Series E (Sep 2026)", "url": "https://temporal.io/blog/temporal-raises-usd550m-series-e-at-usd12-55b-valuation-ai" }
+    ]
+  },
+  "sources": [
+    { "label": "AWS docs: What is Step Functions?", "url": "https://docs.aws.amazon.com/step-functions/latest/dg/welcome.html" },
+    { "label": "AWS docs: Handling errors in Step Functions workflows", "url": "https://docs.aws.amazon.com/step-functions/latest/dg/concepts-error-handling.html" },
+    { "label": "AWS docs: Step Functions quotas (1-year maximum execution time)", "url": "https://docs.aws.amazon.com/step-functions/latest/dg/service-quotas.html" },
+    { "label": "Google Cloud docs: Workflows overview", "url": "https://cloud.google.com/workflows/docs/overview" },
+    { "label": "Microsoft Learn: Durable Functions overview", "url": "https://learn.microsoft.com/en-us/azure/azure-functions/durable/durable-functions-overview" },
+    { "label": "Microsoft Learn: What is Azure Logic Apps?", "url": "https://learn.microsoft.com/en-us/azure/logic-apps/logic-apps-overview" },
+    { "label": "Temporal docs: Workflow Execution (runs for seconds or years)", "url": "https://docs.temporal.io/workflow-execution" },
+    { "label": "Temporal docs: Retry Policies", "url": "https://docs.temporal.io/encyclopedia/retry-policies" },
+    { "label": "Temporal Python SDK: RetryPolicy (maximum_attempts)", "url": "https://python.temporal.io/temporalio.common.RetryPolicy.html" },
+    { "label": "Temporal docs: Python failure detection (ActivityError)", "url": "https://docs.temporal.io/develop/python/failure-detection" },
+    { "label": "Apache Airflow docs", "url": "https://airflow.apache.org/docs/apache-airflow/stable/index.html" },
+    { "label": "Argo Workflows docs", "url": "https://argo-workflows.readthedocs.io/en/latest/" },
+    { "label": "EventBridge Scheduler User Guide: Templated targets (Step Functions StartExecution)", "url": "https://docs.aws.amazon.com/scheduler/latest/UserGuide/managing-targets-templated.html" }
+  ]
+}

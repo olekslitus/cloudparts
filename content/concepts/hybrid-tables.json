@@ -1,0 +1,100 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Hybrid (medium) tables",
+  "category": "modeling",
+  "order": 15,
+  "summary": "The middle ground: a metric-name column plus a few typed value columns, or fixed columns plus a JSON or map column for the rest.",
+  "howItWorks": "A hybrid table keeps the narrow table’s trick of naming the metric in a column, but gives it one value column per data type instead of a single one: `(time, device_id, metric, value_float, value_int, value_bool, value_text)`. Each row fills the column that matches its metric’s type and leaves the others NULL. New metrics still need no migration; only a new data type does, and types are far fewer than metrics. Values keep their native types, so counters stay exact integers and flags stay booleans. The catch is that something must know which metric lives in which column, usually a small lookup table or the application, and queries that mix types need `CASE` expressions or casts. The other common hybrid keeps the stable, frequently filtered fields as real columns and puts everything variable into one JSON or map column, such as PostgreSQL’s `jsonb` with a GIN index, or the `Attributes` map in the OpenTelemetry ClickHouse exporter’s tables. TigerData’s docs call the typed-columns version the medium layout, and suggest mixing layouts: a wide table for core host metrics, say, and a medium table for custom ones.",
+  "analogy": "A stockroom with one shelf per kind of container rather than one per product: boxes here, bottles there, envelopes on the third. Any new product fits on the shelf for its container, but you need the inventory list to know which shelf to check.",
+  "useWhen": [
+    "Metrics are dynamic but fall into a few known types: measurements, counts, states and flags",
+    "Multi-tenant platforms where each tenant defines its own fields",
+    "A stable core of fields that every query uses, plus a long tail of optional attributes"
+  ],
+  "avoidWhen": [
+    "The metric set is fixed and known: a wide table is simpler",
+    "Nothing records which column each metric uses, so every reader has to guess",
+    "Most queries filter or aggregate on the JSON part, which is slower and less checked than real columns"
+  ],
+  "example": "A building-management system collects from thousands of devices. Thermostats report `temp` (a float), door sensors `open` (a boolean), electricity meters `kwh_total` (an integer) and controllers `mode` (text such as `eco`). One table with `metric`, `value_float`, `value_int`, `value_bool` and `value_text` holds all of them, and a `metrics` lookup table records that `open` lives in `value_bool`. When a new CO₂ sensor arrives, it adds one row to the lookup table and starts writing data, with no `ALTER TABLE`.",
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "CREATE TABLE readings (",
+      "  time        timestamptz NOT NULL,",
+      "  device_id   int         NOT NULL,",
+      "  metric      text        NOT NULL,",
+      "  value_float double precision,",
+      "  value_int   bigint,",
+      "  value_bool  boolean,",
+      "  value_text  text",
+      ");",
+      "",
+      "-- which column each metric uses",
+      "CREATE TABLE metrics (name text PRIMARY KEY, value_column text NOT NULL);",
+      "INSERT INTO metrics VALUES ('temp', 'value_float'), ('open', 'value_bool');",
+      "",
+      "INSERT INTO readings (time, device_id, metric, value_float)",
+      "VALUES ('2026-10-06 09:00', 12, 'temp', 21.4);",
+      "INSERT INTO readings (time, device_id, metric, value_bool)",
+      "VALUES ('2026-10-06 09:00', 31, 'open', true);",
+      "",
+      "-- the other hybrid: fixed columns plus a JSON column",
+      "CREATE TABLE events (",
+      "  time      timestamptz NOT NULL,",
+      "  device_id int         NOT NULL,",
+      "  kind      text        NOT NULL,",
+      "  attrs     jsonb",
+      ");",
+      "CREATE INDEX ON events USING gin (attrs);"
+    ]
+  },
+  "related": ["narrow-tables","wide-tables","emergent-schema","eav"],
+  "sections": [
+    {
+      "type": "cards",
+      "title": "Three common hybrids",
+      "items": [
+        { "name": "Typed value columns", "tag": "medium layout", "text": "A metric-name column plus one value column per data type. New metrics are new rows; a new type is one `ADD COLUMN`. Needs a mapping from metric to column." },
+        { "name": "Fixed columns plus JSON or a map", "tag": "semi-structured", "text": "Time, entity and the fields everyone filters on are real columns; the rest goes in `jsonb` (PostgreSQL) or a `Map` (ClickHouse). Indexes on the variable part are special ones, such as GIN or Bloom filters." },
+        { "name": "Wide core, medium extras", "tag": "two tables", "text": "A wide table for the metrics every host reports and a medium table for custom, per-team or per-tenant metrics. TigerData’s docs give this as a common combination." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Narrow tables solve schema churn but squeeze every value into one type. One table per type multiplies tables, and Timescale’s schema guide notes that people often fall back to a `JSONB` value column instead, then have to cast every value they read, since JSON has no real integers, only IEEE 754 numbers. Putting a few typed value columns side by side in one table splits the difference.",
+      "PostgreSQL 9.4, released in December 2014, made the other hybrid practical. Its `jsonb` type stores JSON in a decomposed binary form that can be indexed with GIN, and the release announcement said users “no longer have to choose between relational and non-relational data stores”. Columnar engines added map types too: the OpenTelemetry Collector’s ClickHouse exporter keeps fixed columns such as `ServiceName`, `MetricName` and `TimeUnix`, and puts attributes in `Map` columns with Bloom-filter indexes on their keys and values.",
+      "Timescale named the typed-columns variant the medium layout in a 2024 guide by Chris Engelbert and Carlota Soto. They called it probably the least common layout in the wild, and often an excellent trade-off between an easy design, extensibility and a quick start. TigerData’s docs now present narrow, medium and wide as three options and recommend combining them."
+    ],
+    "choices": [
+      { "choice": "One value column per data type, not per metric", "why": "Types are few and stable while metrics multiply, so the schema changes only when a genuinely new type appears." },
+      { "choice": "A lookup from metric to column", "why": "Without one, a reader can’t tell whether `open` lives in `value_bool` or `value_text`. The Timescale guide notes that a small, static set of metrics can be mapped in application code instead." },
+      { "choice": "Real columns for what every query filters on", "why": "Fixed columns can be partitioned, sorted and indexed directly, as the ClickHouse exporter does with service, metric name and time. Keys inside a JSON or map column need special indexes, such as GIN in PostgreSQL or Bloom filters in ClickHouse." }
+    ],
+    "timeline": [
+      { "year": "2007", "text": "Wickham’s reshape paper describes melting and casting between long and wide" },
+      { "year": "2012", "text": "Prometheus starts at SoundCloud, storing one float64 value per sample" },
+      { "year": "2014", "text": "PostgreSQL 9.4 adds `jsonb` with GIN indexing" },
+      { "year": "2014", "text": "“Tidy Data” formalizes long versus wide for analysts" },
+      { "year": "2024", "text": "Timescale’s schema guide names the medium table layout" }
+    ],
+    "sources": [
+      { "label": "Chris Engelbert and Carlota Soto, Timescale: Designing your database schema, wide vs. narrow Postgres tables (Mar 2024)", "url": "https://www.tigerdata.com/learn/designing-your-database-schema-wide-vs-narrow-postgres-tables" },
+      { "label": "TigerData docs: Wide, narrow, and medium tables", "url": "https://www.tigerdata.com/docs/learn/data-model/wide-narrow-medium-tables" },
+      { "label": "PostgreSQL news: PostgreSQL 9.4 released (Dec 2014)", "url": "https://www.postgresql.org/about/news/postgresql-94-released-1557/" },
+      { "label": "OpenTelemetry Collector Contrib: ClickHouse exporter gauge table definition", "url": "https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/exporter/clickhouseexporter/internal/sqltemplates/metrics_gauge_table.sql" },
+      { "label": "Hadley Wickham: Reshaping data with the reshape package (Journal of Statistical Software, 2007)", "url": "https://www.jstatsoft.org/article/view/v021i12" },
+      { "label": "Hadley Wickham: Tidy Data (Journal of Statistical Software, 2014)", "url": "https://www.jstatsoft.org/article/view/v059i10" },
+      { "label": "Prometheus docs: Overview (since 2012)", "url": "https://prometheus.io/docs/introduction/overview/" },
+      { "label": "Prometheus docs: Data model (float64 samples)", "url": "https://prometheus.io/docs/concepts/data_model/" }
+    ]
+  },
+  "sources": [
+    { "label": "TigerData docs: Wide, narrow, and medium tables (medium layout, comparison, combining layouts)", "url": "https://www.tigerdata.com/docs/learn/data-model/wide-narrow-medium-tables" },
+    { "label": "Timescale: Designing your database schema, wide vs. narrow Postgres tables (medium layout, lookup table, CASE WHEN)", "url": "https://www.tigerdata.com/learn/designing-your-database-schema-wide-vs-narrow-postgres-tables" },
+    { "label": "PostgreSQL docs: JSON types (jsonb, GIN indexing)", "url": "https://www.postgresql.org/docs/current/datatype-json.html" },
+    { "label": "OpenTelemetry Collector Contrib: ClickHouse exporter gauge table definition (Map columns, Bloom-filter indexes)", "url": "https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/exporter/clickhouseexporter/internal/sqltemplates/metrics_gauge_table.sql" },
+    { "label": "OpenTelemetry Collector Contrib: ClickHouse exporter README", "url": "https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/exporter/clickhouseexporter" }
+  ]
+}

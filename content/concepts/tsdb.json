@@ -1,0 +1,129 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Time-series databases",
+  "category": "data",
+  "order": 40,
+  "summary": "A database shaped for measurements stamped with time.",
+  "howItWorks": "Time-series databases are built for data that arrives as timestamp, source and value, and is almost always appended rather than updated. They split data into time chunks, compress old chunks heavily, and keep pre-computed rollups so questions like “hourly average for the last 30 days” stay fast. Retention policies drop or downsample old data automatically, which also stops queries that forget a time range from growing without end.",
+  "analogy": "A ship’s logbook with a fresh page every day. Recent pages lie open on the desk; old volumes get summarized and shelved.",
+  "useWhen": [
+    "IoT and sensor telemetry, infrastructure metrics, market ticks",
+    "Dashboards over recent windows plus long-term trends",
+    "High ingest rates where rows are rarely changed"
+  ],
+  "avoidWhen": ["Transactional business data with frequent updates","Data you don’t mainly query by time"],
+  "example": "Pressure readings from thousands of wells land every few seconds in a TimescaleDB hypertable. The live chart reads the last 15 minutes, and a continuous aggregate keeps hourly averages, so a one-year chart reads 8,760 rows instead of millions.",
+  "providers": {
+    "aws": "Timestream for InfluxDB (Timestream for LiveAnalytics has been closed to new customers since June 2025)",
+    "gcp": "Bigtable, BigQuery",
+    "azure": "Azure Data Explorer",
+    "oss": "TimescaleDB, InfluxDB, Prometheus, QuestDB, TDengine (IoT, one table per device), GreptimeDB (metrics, logs and traces on object storage), Arc (DuckDB and Parquet), ArcticDB (Man Group; versioned pandas DataFrames on S3 or LMDB; source-available BSL); proprietary: kdb+ (KX, free Community Edition), used widely in finance"
+  },
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "CREATE TABLE readings (time timestamptz NOT NULL, well_id int, psi double precision);",
+      "SELECT create_hypertable('readings', by_range('time', INTERVAL '1 day'));",
+      "",
+      "-- hourly rollup, refreshed every hour by a background policy",
+      "CREATE MATERIALIZED VIEW readings_hourly WITH (timescaledb.continuous) AS",
+      "SELECT time_bucket('1 hour', time) AS hour, well_id, avg(psi) AS avg_psi",
+      "FROM readings GROUP BY hour, well_id;",
+      "SELECT add_continuous_aggregate_policy('readings_hourly',",
+      "  start_offset => INTERVAL '3 hours', end_offset => INTERVAL '1 hour',",
+      "  schedule_interval => INTERVAL '1 hour');"
+    ]
+  },
+  "related": ["stream","relational","wide-column","warehouse","olap","bitemporal","unbounded-queries","metrics"],
+  "diagram": {
+    "caption": "Readings are appended in time order. The live chart reads each new row almost at once, while the rollup job wakes periodically and summarizes a batch.",
+    "h": 250,
+    "nodes": [
+      {
+        "id": "s",
+        "x": 95,
+        "y": 100,
+        "label": "Sensors",
+        "sub": "psi every 5 s",
+        "emit": {"every":400,"jitter":0.3,"cycle":true},
+        "out": ["ht"]
+      },
+      {
+        "id": "ht",
+        "x": 390,
+        "y": 100,
+        "kind": "log",
+        "cells": 10,
+        "label": "Hypertable: readings",
+        "sub": "1-day chunks · compressed after 7 d",
+        "retain": 40,
+        "readers": [
+          {"to":"live","every":480,"name":"live"},
+          {"to":"agg","every":3200,"batch":7,"name":"rollup"}
+        ]
+      },
+      {"id":"live","x":655,"y":60,"label":"Live chart","sub":"last 15 min","mode":"sink"},
+      {
+        "id": "agg",
+        "x": 655,
+        "y": 170,
+        "label": "Hourly rollup",
+        "sub": "continuous aggregate",
+        "mode": "sink"
+      }
+    ]
+  },
+  "history": {
+    "story": [
+      "Time-series storage grew out of network monitoring. In late 1997 Tobias Oetiker started RRDtool as a successor to his MRTG traffic grapher, and by 1999 it was in public beta, storing measurements such as network bandwidth, machine-room temperature and server load. Its round-robin database gave each series a fixed number of slots, overwrote the oldest values, and kept extra archives that consolidated older points into averages, minimums and maximums, so storage never grew but detail faded with age. That trade-off survives in today’s retention and downsampling policies.",
+      "As fleets of servers grew, so did the metrics. Graphite, built at Orbitz by Chris Davis, was open-sourced in 2008. SoundCloud started Prometheus in 2012 because its monitoring, mostly based on StatsD and Graphite, couldn’t keep up with hundreds of microservices, and InfluxDB followed in 2013. Facebook’s 2015 Gorilla paper showed how far compression could go: by storing timestamps as differences of differences and values XORed with the previous one, it cut storage about tenfold, enough to keep recent metrics in memory.",
+      "Others went back to SQL. TimescaleDB, launched in 2017, argued that relational databases handle time series well once the scaling problem is solved, and runs as a PostgreSQL extension. Cloud providers added managed services, such as Amazon Timestream, generally available in September 2020."
+    ],
+    "choices": [
+      { "choice": "Fixed-size storage that forgets detail", "why": "RRDtool’s circular buffer kept the storage footprint constant over time. Recent data stayed at full resolution and older data survived only as consolidated averages, minimums and maximums." },
+      { "choice": "Partition by time", "why": "New points almost always land in the latest interval, and queries ask for time ranges. Splitting data into time chunks keeps the active chunk small and fast, and dropping old data means deleting whole chunks." },
+      { "choice": "Compress for how measurements change", "why": "Timestamps arrive at regular intervals and values change little between readings, so encoding only the change saves a lot: Gorilla stored about 96% of timestamps in a single bit and shrank each 16-byte point to 1.37 bytes on average. Gorilla’s authors also noted that users care about aggregates and recent data more than individual old points." },
+      { "choice": "Label each series with dimensions", "why": "Prometheus made a multi-dimensional data model a design goal: each series is a metric name plus key-value labels, so one query can slice by host, region or service." }
+    ],
+    "timeline": [
+      { "year": "1999", "text": "Tobias Oetiker’s RRDtool, with its fixed-size round-robin database, is in public beta" },
+      { "year": "2008", "text": "Graphite, built at Orbitz, is open-sourced" },
+      { "year": "2012", "text": "SoundCloud starts Prometheus" },
+      { "year": "2015", "text": "Facebook’s Gorilla paper shows tenfold compression for in-memory metrics" },
+      { "year": "2017", "text": "TimescaleDB brings time-series storage to PostgreSQL" },
+      { "year": "2020", "text": "Amazon Timestream becomes generally available" },
+      { "year": "2024", "text": "Prometheus 3.0, its first major release in seven years" }
+    ],
+    "sources": [
+      { "label": "Tobias Oetiker: About RRDtool (archived Sep 1999)", "url": "http://ee-staff.ethz.ch/~oetiker/webtools/rrdtool/", "archive": "https://web.archive.org/web/19991003081448/http://ee-staff.ethz.ch:80/%7Eoetiker/webtools/rrdtool/" },
+      { "label": "RRDtool documentation: rrdtool", "url": "https://oss.oetiker.ch/rrdtool/doc/rrdtool.en.html" },
+      { "label": "Graphite docs: Overview", "url": "https://graphite.readthedocs.io/en/latest/overview.html" },
+      { "label": "SoundCloud: Prometheus, monitoring at SoundCloud (Jan 2015)", "url": "https://developers.soundcloud.com/blog/prometheus-monitoring-at-soundcloud" },
+      { "label": "Prometheus docs: Overview", "url": "https://prometheus.io/docs/introduction/overview/" },
+      { "label": "InfluxDB v0.0.1 tag on GitHub (Oct 2013)", "url": "https://github.com/influxdata/influxdb/releases/tag/v0.0.1" },
+      { "label": "Gorilla: A Fast, Scalable, In-Memory Time Series Database (VLDB 2015)", "url": "https://www.vldb.org/pvldb/vol8/p1816-teller.pdf" },
+      { "label": "Mike Freedman: Time-series data, why (and how) to use a relational database instead of NoSQL (2017)", "url": "https://www.tigerdata.com/blog/time-series-data-why-and-how-to-use-a-relational-database-instead-of-nosql-d0cd6975e87c" },
+      { "label": "AWS What’s New: Amazon Timestream is now generally available (Sep 2020)", "url": "https://aws.amazon.com/about-aws/whats-new/2020/09/amazon-timestream-now-generally-available/" },
+      { "label": "Prometheus blog: Announcing Prometheus 3.0 (Nov 2024)", "url": "https://prometheus.io/blog/2024/11/14/prometheus-3-0/" }
+    ]
+  },
+  "sources": [
+    { "label": "Tiger Data docs: Understand hypertables", "url": "https://www.tigerdata.com/docs/learn/hypertables/understand-hypertables" },
+    { "label": "Tiger Data docs: Understand hypercore", "url": "https://www.tigerdata.com/docs/learn/columnar-storage/understand-hypercore" },
+    { "label": "Tiger Data docs: Understand continuous aggregates", "url": "https://www.tigerdata.com/docs/learn/continuous-aggregates" },
+    { "label": "Tiger Data docs: add_retention_policy()", "url": "https://www.tigerdata.com/docs/reference/timescaledb/data-retention/add_retention_policy" },
+    { "label": "Tiger Data docs: create_hypertable()", "url": "https://www.tigerdata.com/docs/reference/timescaledb/hypertables/create_hypertable" },
+    { "label": "Tiger Data docs: CREATE MATERIALIZED VIEW (continuous aggregate)", "url": "https://www.tigerdata.com/docs/reference/timescaledb/continuous-aggregates/create_materialized_view" },
+    { "label": "Tiger Data docs: add_continuous_aggregate_policy()", "url": "https://www.tigerdata.com/docs/reference/timescaledb/continuous-aggregates/add_continuous_aggregate_policy" },
+    { "label": "Prometheus docs: Storage", "url": "https://prometheus.io/docs/prometheus/latest/storage/" },
+    { "label": "AWS: Amazon Timestream", "url": "https://aws.amazon.com/timestream/" },
+    { "label": "AWS docs: Amazon Timestream for LiveAnalytics availability change", "url": "https://docs.aws.amazon.com/timestream/latest/developerguide/AmazonTimestreamForLiveAnalytics-availability-change.html" },
+    { "label": "Google Cloud docs: Bigtable schema design for time series data", "url": "https://cloud.google.com/bigtable/docs/schema-design-time-series" },
+    { "label": "Google Cloud docs: Work with time series data in BigQuery", "url": "https://cloud.google.com/bigquery/docs/working-with-time-series" },
+    { "label": "Microsoft Learn: What is Azure Data Explorer?", "url": "https://learn.microsoft.com/en-us/azure/data-explorer/data-explorer-overview" },
+    { "label": "InfluxDB 3 Core documentation", "url": "https://docs.influxdata.com/influxdb3/core/" },
+    { "label": "QuestDB documentation", "url": "https://questdb.com/docs/" },
+    { "label": "GreptimeDB docs: Data model", "url": "https://docs.greptime.com/user-guide/concepts/data-model" },
+    { "label": "man-group/ArcticDB on GitHub", "url": "https://github.com/man-group/ArcticDB" }
+  ]
+}

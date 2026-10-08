@@ -1,0 +1,117 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Memcached",
+  "concepts": ["cache"],
+  "provider": "oss",
+  "vendor": "Memcached open-source project (originally Danga Interactive)",
+  "license": "BSD-3-Clause",
+  "website": "https://memcached.org/",
+  "repo": "https://github.com/memcached/memcached",
+  "summary": "A simple, multithreaded in-memory key-value cache; clients hash keys across independent servers.",
+  "intro": [
+    "Memcached keeps small values (strings, serialised objects, rendered fragments) in RAM under a key, with an expiry time, and offers little more than `get`, `set`, `delete` and atomic `incr`/`decr`. It doesn’t understand the data and can’t query inside it. A cluster is just a list of servers that know nothing about each other: no replication, no gossip, no coordination. The client library hashes each key to pick a server, so adding servers adds memory, and a dead server costs only its share of the keys, which then miss and are reloaded from the database. Every command is designed to be O(1), and docs say a request should take well under a millisecond even on slow machines.",
+    "Inside, memory is split into 1 MB pages that are cut into chunks of fixed sizes, the slab allocator, so the server never fragments memory or waits for a garbage collector; each slab class keeps its own LRU, and the oldest items are evicted when memory is full. The server is multithreaded (four worker threads by default) on top of libevent. Since its first release it has added a binary protocol (1.4.0, 2009), a newer “meta” text protocol, TLS (1.5.13), warm restarts that keep the cache across a clean restart (1.5.18), extstore, which keeps keys in RAM but moves large values to flash (experimental in 1.5.4, 2017), and a built-in proxy for routing between pools (1.6.23). The latest stable release is 1.6.45 (July 2026)."
+  ],
+  "strengths": [
+    "Very simple to run and reason about: one binary, a few flags, no cluster state to repair",
+    "Multithreaded and O(1), so one server uses several cores and keeps latency flat under load",
+    "Scales out by adding servers; clients spread keys and servers never coordinate",
+    "Proven at very large scale: Facebook’s NSDI 2013 paper describes billions of requests per second and trillions of items on memcached"
+  ],
+  "limits": [
+    "A cache only: no replication, no persistence beyond warm restarts, no snapshots, so a lost node loses its keys",
+    "Values are opaque blobs (1 MB by default); no lists, sets, sorted sets or queries, unlike Valkey or Redis",
+    "Exposed servers have been abused for UDP amplification DDoS attacks; UDP is off by default since 1.5.6, and servers belong behind a firewall",
+    "Managed options are shrinking: Google is deprecating Memorystore for Memcached (shutdown January 2029) in favour of Valkey, and ElastiCache Serverless prices Valkey 33% below Memcached"
+  ],
+  "worksWith": [
+    { "id": "elasticache", "how": "is offered as a managed engine by" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Start a server, then store and read a value with the text and meta protocols",
+    "source": [
+      "# 4 GB of cache, 4 worker threads, TCP only (UDP is off by default since 1.5.6)",
+      "memcached -m 4096 -t 4 -p 11211 -U 0 &",
+      "",
+      "# set <key> <flags> <ttl seconds> <bytes>, then the data",
+      "printf 'set user:42 0 300 14\\r\\n{\"name\":\"Ada\"}\\r\\nget user:42\\r\\n' | nc -q1 localhost 11211",
+      "# STORED",
+      "# VALUE user:42 0 14",
+      "# {\"name\":\"Ada\"}",
+      "# END",
+      "",
+      "# the same read with the meta protocol: ask for remaining TTL (t) and value (v)",
+      "printf 'mg user:42 t v\\r\\n' | nc -q1 localhost 11211",
+      "",
+      "# optional: keep keys in RAM, push large values to a 64 GB file on NVMe (extstore)",
+      "memcached -m 4096 -o ext_path=/mnt/nvme/extstore:64G"
+    ]
+  },
+  "history": {
+    "story": [
+      "In 2003 LiveJournal ran on about 70 machines for 2.5 million accounts, and its databases were the bottleneck. Brad Fitzpatrick wanted to cache more on the web servers, but each of the 30 to 50 mod_perl processes per server had its own memory, and caching in every process on 40-plus machines would have duplicated the same data everywhere. He noticed the network had plenty of spare memory and wanted one big hash table that every process on every machine could use. He wrote a prototype in Perl, found it slow and bloated, and rewrote it in C as a single-threaded, event-driven daemon on libevent. The first commit is from May 2003.",
+      "The design was deliberately small. The client hashed each key to pick a server, and each server was an ordinary hash table with an LRU that never talked to the others. By 2004 LiveJournal ran 28 instances on ten hosts, caching its most popular 30 GB with a hit rate around 92%, and Slashdot and Wikipedia used it too. Facebook adopted it and pushed it furthest, making it multithreaded and contributing that work back; its 2013 paper describes billions of requests per second.",
+      "AWS made it a managed service with ElastiCache in 2011. After Redis changed its licence in 2024, the clouds backed the BSD-licensed Valkey fork; AWS now prices serverless Valkey 33% below Memcached, and Google is retiring Memorystore for Memcached in favour of Valkey. Memcached itself is still maintained, with dormando by far its most active contributor, and has gained extstore for flash, warm restarts, the meta protocol and a built-in proxy."
+    ],
+    "choices": [
+      {
+        "choice": "Servers that don’t know about each other",
+        "why": "Treating servers as buckets in a client-side hash table needs no replication or cluster protocol. Fitzpatrick judged that a dead node only means a few extra cache misses, which a large enough pool absorbs."
+      },
+      {
+        "choice": "A slab allocator instead of malloc",
+        "why": "Early versions used glibc’s malloc and, in Fitzpatrick’s words, fell on their faces after about a week from fragmentation. Fixed-size chunks in 1 MB pages keep memory use predictable."
+      },
+      {
+        "choice": "Event-driven C on libevent",
+        "why": "The Perl prototype couldn’t handle many connections. libevent picks epoll or kqueue at runtime, so one process can serve thousands of connections in O(1) time per operation."
+      },
+      {
+        "choice": "Forgetting is a feature",
+        "why": "Memcached is meant to hold a copy of data that lives elsewhere. Evicting least recently used items and expiring keys after a TTL keep it simple and fast; the docs advise against replication because it halves the usable cache."
+      }
+    ],
+    "timeline": [
+      { "year": "2003", "text": "Brad Fitzpatrick writes memcached for LiveJournal" },
+      { "year": "2004", "text": "Linux Journal article: LiveJournal, Slashdot and Wikipedia use it" },
+      { "year": "2009", "text": "1.4.0 adds the binary protocol" },
+      { "year": "2011", "text": "AWS launches ElastiCache, a managed Memcached service" },
+      { "year": "2013", "text": "Facebook publishes “Scaling Memcache at Facebook” (NSDI)" },
+      { "year": "2017", "text": "1.5.4 adds extstore for keeping values on flash" },
+      { "year": "2024", "text": "Redis changes licence; the clouds back Valkey, and Memcached’s managed options start to shrink" }
+    ],
+    "sources": [
+      { "label": "Brad Fitzpatrick: Distributed caching with memcached (Linux Journal, Aug 2004)", "url": "https://www.linuxjournal.com/article/7451" },
+      { "label": "memcached on GitHub: first commit by Brad Fitzpatrick (May 2003)", "url": "https://github.com/memcached/memcached/commit/32f382b605b4565bddfae5c9d082af3bfd30cf02" },
+      { "label": "memcached.org: About (developed by Brad Fitzpatrick for LiveJournal in 2003; contributors)", "url": "https://memcached.org/about" },
+      { "label": "memcached wiki: Release notes for 1.4.0 (Jul 2009, binary protocol)", "url": "https://github.com/memcached/memcached/wiki/ReleaseNotes140" },
+      { "label": "memcached wiki: Release notes for 1.5.4 (Dec 2017, extstore)", "url": "https://github.com/memcached/memcached/wiki/ReleaseNotes154" },
+      { "label": "Nishtala et al.: Scaling Memcache at Facebook (NSDI 2013)", "url": "https://www.usenix.org/system/files/conference/nsdi13/nsdi13-final170_update.pdf" },
+      { "label": "AWS What’s New: Announcing Amazon ElastiCache (Aug 2011)", "url": "https://aws.amazon.com/about-aws/whats-new/2011/08/22/announcing-amazon-elasticache/" },
+      { "label": "Google Cloud docs: Memorystore for Memcached overview (deprecation notice)", "url": "https://docs.cloud.google.com/memorystore/docs/memcached/memcached-overview" },
+      { "label": "Linux Foundation: Launches open source Valkey community (Mar 2024)", "url": "https://www.linuxfoundation.org/press/linux-foundation-launches-open-source-valkey-community" },
+      { "label": "Amazon ElastiCache pricing (serverless Valkey 33% lower than other engines)", "url": "https://aws.amazon.com/elasticache/pricing/" }
+    ]
+  },
+  "sources": [
+    { "label": "memcached.org: latest stable release 1.6.45 (2026-07-09)", "url": "https://memcached.org/" },
+    { "label": "memcached on GitHub: LICENSE (BSD three-clause, Danga Interactive)", "url": "https://github.com/memcached/memcached/blob/master/LICENSE" },
+    { "label": "Memcached docs: Overview and design philosophy (client hashing, servers disconnected, O(1))", "url": "https://docs.memcached.org/" },
+    { "label": "memcached wiki: User internals (1 MB pages, slab classes, per-class LRU)", "url": "https://github.com/memcached/memcached/wiki/UserInternals" },
+    { "label": "Memcached docs: Hardware (multithreaded, 4 worker threads by default)", "url": "https://docs.memcached.org/serverguide/hardware/" },
+    { "label": "Memcached docs: Configuring (threads; item_size_max 1048576)", "url": "https://docs.memcached.org/serverguide/configuring/" },
+    { "label": "Memcached docs: Flash storage (extstore)", "url": "https://docs.memcached.org/features/flashstorage/" },
+    { "label": "Memcached docs: Warm restart (1.5.18 and newer)", "url": "https://docs.memcached.org/features/restart/" },
+    { "label": "Memcached docs: TLS support (1.5.13 and newer)", "url": "https://docs.memcached.org/features/tls/" },
+    { "label": "Memcached docs: Built-in proxy (1.6.23 and newer)", "url": "https://docs.memcached.org/features/proxy/" },
+    { "label": "Memcached docs: Meta text protocol", "url": "https://docs.memcached.org/protocols/meta/" },
+    { "label": "Memcached docs: FAQ (no replication; persistence only via warm restart)", "url": "https://docs.memcached.org/userguide/faq/" },
+    { "label": "Memcached docs: UDP DDoS advisory (UDP off by default since 1.5.6)", "url": "https://docs.memcached.org/advisories/ddos/" },
+    { "label": "Nishtala et al.: Scaling Memcache at Facebook (NSDI 2013)", "url": "https://www.usenix.org/system/files/conference/nsdi13/nsdi13-final170_update.pdf" },
+    { "label": "ElastiCache User Guide: What is Amazon ElastiCache? (Valkey, Memcached, Redis OSS; serverless Memcached 1.6.22+)", "url": "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/WhatIs.html" },
+    { "label": "Google Cloud docs: Memorystore for Memcached overview (deprecated, shutdown 31 January 2029)", "url": "https://docs.cloud.google.com/memorystore/docs/memcached/memcached-overview" },
+    { "label": "Amazon ElastiCache pricing (serverless Valkey 33% lower than other engines)", "url": "https://aws.amazon.com/elasticache/pricing/" }
+  ],
+  "checked": "2026-10-06"
+}

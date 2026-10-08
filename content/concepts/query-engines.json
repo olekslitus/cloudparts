@@ -1,0 +1,174 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Query engines",
+  "category": "analytics",
+  "order": 30,
+  "summary": "Compute that runs SQL over data it doesn’t own, and scales separately from the storage.",
+  "howItWorks": "A query engine parses your SQL, asks a catalog which files hold the table, and splits the work into tasks that many workers run in parallel. Each worker reads its share of Parquet files straight from object storage, then results are shuffled, aggregated and returned through a coordinator. Because the data stays in open files, several engines can share it: an interactive SQL engine for dashboards, Spark for heavy batch and ML jobs, DuckDB on a laptop. Each one scales up, or shuts down, without moving any data.",
+  "analogy": "Researchers in a public library. You can bring in one or a hundred and they all read the same shelves. When they go home, the books stay put.",
+  "useWhen": [
+    "Interactive SQL over a data lake without loading it into a warehouse first",
+    "Several teams or tools that need the same tables through different engines",
+    "Spiky analytics, where paying per query or per second beats an always-on cluster"
+  ],
+  "avoidWhen": [
+    "Sub-second lookups for an app; use a database or a cache",
+    "Small data: DuckDB or a single Postgres is simpler than a distributed cluster"
+  ],
+  "example": "A retailer keeps three years of clickstream as Iceberg tables in S3. Analysts run Athena queries that each scan a few GB and pay per TB scanned. A nightly Spark job on EMR builds features from the same tables, and an engineer debugs one day’s partition with DuckDB on a laptop.",
+  "providers": {
+    "aws": "Athena, Redshift Spectrum, EMR (Spark, Trino), Glue",
+    "gcp": "BigQuery (incl. BigLake tables), Managed Service for Apache Spark (formerly Dataproc)",
+    "azure": "Microsoft Fabric (SQL endpoint, Spark), Azure Databricks, Synapse serverless SQL",
+    "oss": "Trino, Presto, Apache Spark, Apache Hive, Apache Impala, DuckDB, Polars (a DataFrame library with a streaming engine), StarRocks, ClickHouse, Apache DataFusion (a library to build engines on), chDB (ClickHouse as a library), GizmoSQL (DuckDB served over Arrow Flight SQL), Spice.ai OSS (federates sources and caches them locally, built on DataFusion); also Dremio (now part of SAP), Starburst"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "import duckdb",
+      "",
+      "con = duckdb.connect()",
+      "con.sql(\"CREATE SECRET (TYPE s3, PROVIDER credential_chain)\")",
+      "",
+      "# DuckDB reads only the columns and row groups this query needs",
+      "con.sql(\"\"\"",
+      "    SELECT date_trunc('day', ts) AS day, count(*) AS views",
+      "    FROM read_parquet('s3://lake/clicks/2026/09/*.parquet')",
+      "    GROUP BY day ORDER BY day",
+      "\"\"\").show()"
+    ]
+  },
+  "related": ["warehouse","lakehouse","table-formats","autoscaling"],
+  "diagram": {
+    "caption": "Two engines share one copy of the data. Analysts’ queries go to a coordinator that hands them to a pool of workers, which grows with demand and shrinks when it’s quiet. A nightly job spins up its own Spark cluster, reads the same files and shuts down again. Neither engine owns the storage.",
+    "w": 800,
+    "h": 280,
+    "nodes": [
+      {
+        "id": "an",
+        "x": 100,
+        "y": 80,
+        "label": "Analysts",
+        "sub": "dashboards · SQL",
+        "emit": {"every":850,"jitter":0.5,"req":true,"color":0},
+        "out": ["coord"]
+      },
+      {
+        "id": "coord",
+        "x": 290,
+        "y": 80,
+        "label": "Coordinator",
+        "sub": "plan · split · merge",
+        "out": ["workers"]
+      },
+      {
+        "id": "workers",
+        "x": 490,
+        "y": 80,
+        "kind": "pool",
+        "label": "Workers",
+        "sub": "Trino",
+        "min": 1,
+        "max": 5,
+        "work": 450,
+        "idle": 2500,
+        "out": ["store"]
+      },
+      {
+        "id": "job",
+        "x": 100,
+        "y": 210,
+        "label": "Nightly job",
+        "sub": "feature build",
+        "emit": {"req":true,"color":1,"phases":[[2600,280],[5400,null]]},
+        "out": ["spark"]
+      },
+      {
+        "id": "spark",
+        "x": 490,
+        "y": 210,
+        "kind": "pool",
+        "label": "Spark cluster",
+        "sub": "ephemeral",
+        "max": 4,
+        "work": 650,
+        "idle": 1500,
+        "cold": 450,
+        "coldText": "starting",
+        "out": ["store"]
+      },
+      {
+        "id": "store",
+        "x": 700,
+        "y": 145,
+        "label": "Object storage",
+        "sub": "Parquet + Iceberg",
+        "concept": "object",
+        "mode": "reply",
+        "delay": 120
+      }
+    ]
+  },
+  "history": {
+    "story": [
+      "For most of database history, the SQL engine and the storage were one product: to query data, you loaded it into the database, in the database’s own format. In the late 2000s, companies such as Facebook began keeping huge datasets as plain files in Hadoop’s HDFS, because traditional warehouses had become prohibitively expensive at that size. But querying those files meant writing low-level MapReduce programs that were hard to maintain and reuse.",
+      "Facebook’s Hive, described at VLDB 2009, put SQL on top of those files. A table was just a directory, a catalog (the Hive Metastore) recorded schemas and formats, and each query compiled into MapReduce jobs; Facebook’s Hive warehouse already held over 700 TB. Hive was slow, so a wave of engines followed that read the same files without MapReduce: Google’s Dremel paper (2010) showed interactive SQL on data in place, Cloudera announced Impala and Facebook built Presto in 2012, and Spark SQL followed. AWS made the idea serverless with Athena in 2016, billing per byte scanned.",
+      "Sharing files between engines had a weakness: no transactions, so a half-finished write could corrupt a table. Table formats such as Apache Iceberg, created at Netflix in 2017, added that, which is why several engines can now safely work on the same tables."
+    ],
+    "choices": [
+      { "choice": "A catalog that maps tables to files", "why": "Once storage was just files, an engine needed somewhere to learn which files make up a table and how to read them. Hive’s Metastore filled that role, and later catalogs such as Glue and Iceberg REST catalogs followed the same idea." },
+      { "choice": "Pipelined, in-memory execution instead of MapReduce", "why": "Hive’s MapReduce jobs wrote every stage to disk. Presto and Dremel-style engines stream results between stages in memory, trading some fault tolerance for interactive speed." },
+      { "choice": "Open columnar file formats", "why": "Dremel’s encoding for nested columns was adopted by Apache Parquet in 2013, so any engine could read only the columns a query needs, without one vendor owning the format." }
+    ],
+    "timeline": [
+      { "year": "2009", "text": "Facebook describes Hive, SQL over files in Hadoop" },
+      { "year": "2010", "text": "Google’s Dremel paper shows interactive SQL on data in place" },
+      { "year": "2012", "text": "Cloudera announces Impala; Facebook starts Presto" },
+      { "year": "2013", "text": "Presto open-sourced; Twitter and Cloudera announce Parquet" },
+      { "year": "2016", "text": "Amazon Athena offers serverless SQL over S3, billed per byte scanned" },
+      { "year": "2018", "text": "Netflix’s Iceberg table format enters the Apache Incubator" }
+    ],
+    "sources": [
+      { "label": "Thusoo et al.: Hive, A Warehousing Solution Over a Map-Reduce Framework (VLDB 2009)", "url": "https://www.vldb.org/pvldb/vol2/vldb09-938.pdf" },
+      { "label": "Melnik et al.: Dremel, Interactive Analysis of Web-Scale Datasets (VLDB 2010)", "url": "https://research.google/pubs/dremel-interactive-analysis-of-web-scale-datasets-2/" },
+      { "label": "Melnik et al.: Dremel, A Decade of Interactive SQL Analysis at Web Scale (VLDB 2020)", "url": "https://www.vldb.org/pvldb/vol13/p3461-melnik.pdf", "archive": "https://web.archive.org/web/20260907041951/https://www.vldb.org/pvldb/vol13/p3461-melnik.pdf" },
+      { "label": "Cloudera blog: Cloudera Impala, real-time queries in Apache Hadoop, for real (Oct 2012)", "url": "https://www.cloudera.com/blog/technical/cloudera-impala-real-time-queries-in-apache-hadoop-for-real.html" },
+      { "label": "Engineering at Meta: Presto, interacting with petabytes of data at Facebook (Nov 2013)", "url": "https://engineering.fb.com/2013/11/06/core-infra/presto-interacting-with-petabytes-of-data-at-facebook/" },
+      { "label": "Armbrust et al.: Spark SQL, Relational Data Processing in Spark (SIGMOD 2015)", "url": "https://people.csail.mit.edu/matei/papers/2015/sigmod_spark_sql.pdf" },
+      { "label": "AWS News Blog: Amazon Athena, interactive SQL queries for data in Amazon S3 (Nov 2016)", "url": "https://aws.amazon.com/blogs/aws/amazon-athena-interactive-sql-queries-for-data-in-amazon-s3/" },
+      { "label": "Apache Iceberg GitHub: first commit at Netflix (Dec 2017)", "url": "https://github.com/apache/iceberg/commit/a5eb3f6ba171ecfc517a4f09ae9654e7d8ae0291" },
+      { "label": "Apache Incubator: Iceberg incubation status", "url": "https://incubator.apache.org/projects/iceberg.html" },
+      { "label": "Armbrust et al.: Delta Lake, ACID Table Storage over Cloud Object Stores (VLDB 2020)", "url": "https://www.vldb.org/pvldb/vol13/p3411-armbrust.pdf" },
+      { "label": "Trino docs: Fault-tolerant execution (queries fail on node failure by default)", "url": "https://trino.io/docs/current/admin/fault-tolerant-execution.html" }
+    ]
+  },
+  "sources": [
+    { "label": "Trino docs: Trino concepts (coordinator, workers, stages, splits)", "url": "https://trino.io/docs/current/overview/concepts.html" },
+    { "label": "Apache Iceberg: REST catalog spec", "url": "https://iceberg.apache.org/rest-catalog-spec/" },
+    { "label": "AWS Glue docs: Data Catalog and crawlers", "url": "https://docs.aws.amazon.com/glue/latest/dg/catalog-and-crawler.html" },
+    { "label": "Amazon Athena pricing (per TB scanned)", "url": "https://aws.amazon.com/athena/pricing/" },
+    { "label": "DuckDB docs: Reading and writing Parquet files (projection and filter pushdown)", "url": "https://duckdb.org/docs/current/data/parquet/overview.html" },
+    { "label": "DuckDB docs: S3 API support (credential_chain secrets)", "url": "https://duckdb.org/docs/current/core_extensions/httpfs/s3api" },
+    { "label": "Amazon Redshift docs: Amazon Redshift Spectrum", "url": "https://docs.aws.amazon.com/redshift/latest/dg/c-using-spectrum.html" },
+    { "label": "Amazon EMR docs: Apache Spark", "url": "https://docs.aws.amazon.com/emr/latest/ReleaseGuide/emr-spark.html" },
+    { "label": "Amazon EMR docs: Trino", "url": "https://docs.aws.amazon.com/emr/latest/ReleaseGuide/emr-trino.html" },
+    { "label": "AWS Glue docs: What is AWS Glue?", "url": "https://docs.aws.amazon.com/glue/latest/dg/what-is-glue.html" },
+    { "label": "BigQuery docs: Introduction to BigLake", "url": "https://docs.cloud.google.com/bigquery/docs/biglake-intro" },
+    { "label": "Google Cloud docs: Managed Service for Apache Spark (formerly Dataproc) overview", "url": "https://cloud.google.com/dataproc/docs/concepts/overview" },
+    { "label": "Microsoft Learn: SQL analytics endpoint of a Fabric lakehouse", "url": "https://learn.microsoft.com/en-us/fabric/data-engineering/lakehouse-sql-analytics-endpoint" },
+    { "label": "Microsoft Learn: Spark compute in Fabric", "url": "https://learn.microsoft.com/en-us/fabric/data-engineering/spark-compute" },
+    { "label": "Microsoft Learn: What is Azure Databricks?", "url": "https://learn.microsoft.com/en-us/azure/databricks/introduction/" },
+    { "label": "Microsoft Learn: Serverless SQL pool in Azure Synapse Analytics", "url": "https://learn.microsoft.com/en-us/azure/synapse-analytics/sql/on-demand-workspace-overview" },
+    { "label": "Apache Spark: Spark SQL", "url": "https://spark.apache.org/sql/" },
+    { "label": "Presto on GitHub (prestodb)", "url": "https://github.com/prestodb/presto" },
+    { "label": "ClickHouse docs: What is ClickHouse?", "url": "https://clickhouse.com/docs/intro" },
+    { "label": "StarRocks docs: Introduction", "url": "https://docs.starrocks.io/docs/introduction/StarRocks_intro/" },
+    { "label": "Dremio docs", "url": "https://docs.dremio.com/current/" },
+    { "label": "Starburst docs: Introduction (products built on Trino)", "url": "https://docs.starburst.io/introduction/index.html" },
+    { "label": "DataFusion docs: Introduction", "url": "https://datafusion.apache.org/user-guide/introduction.html" },
+    { "label": "Apache Hive home page", "url": "https://hive.apache.org/" },
+    { "label": "Impala docs: Components of the Impala server", "url": "https://impala.apache.org/docs/build/html/topics/impala_components.html" },
+    { "label": "pola-rs/polars on GitHub", "url": "https://github.com/pola-rs/polars" },
+    { "label": "spiceai/spiceai on GitHub", "url": "https://github.com/spiceai/spiceai" }
+  ]
+}

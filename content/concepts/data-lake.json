@@ -1,0 +1,145 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Data lakes",
+  "category": "analytics",
+  "order": 48,
+  "summary": "Raw files of any kind in cheap storage, given a structure only when someone reads them.",
+  "howItWorks": "A data lake is a large pool of files in cheap storage: today almost always object storage such as S3, Azure Data Lake Storage or Google Cloud Storage, and before that Hadoop’s HDFS. Data lands as it is, whether JSON logs, CSV exports, Parquet, images or PDFs, and nothing checks it on the way in. Structure is applied when someone reads it (“schema on read”). For SQL, a catalog such as the Hive Metastore or AWS Glue Data Catalog maps a folder to a table and its subfolders (`dt=2026-09-30/`) to partitions, and engines such as Spark, Trino or Athena scan the files. Most teams split the lake into zones, such as raw, cleaned and curated, with jobs that rewrite one zone into the next. What a plain lake lacks is transactions. A table is whatever files sit in its folder right now, so concurrent writers, half-finished jobs and row-level deletes are your problem. Add a table format on top and you have a lakehouse.",
+  "analogy": "A storage unit you can fill with anything, without filling in a form. Moving in is easy. Whether you find the right box a year later depends on how tidy everyone was.",
+  "useWhen": [
+    "Keeping raw data cheaply, before you know every question you’ll ask of it",
+    "Files that don’t fit in tables: images, audio, documents, model training sets",
+    "A landing zone that feeds a warehouse or lakehouse"
+  ],
+  "avoidWhen": [
+    "Tables that need updates, deletes or several writers at once; add a table format and use a lakehouse",
+    "Business users who expect clean, documented tables; without ownership and a catalog, a lake turns into a swamp"
+  ],
+  "example": "A mobile game writes every client event as gzipped JSON under `s3://acme-lake/raw/events/dt=…/`. A nightly Glue job turns each day into Parquet in the curated zone, and analysts query it from Athena, paying per terabyte scanned. When a player asks for their data to be deleted, though, someone has to find and rewrite every file that holds their events.",
+  "providers": {
+    "aws": "S3, with Glue Data Catalog, Lake Formation permissions, and Athena or EMR to query",
+    "gcp": "Cloud Storage, with BigQuery external tables and Managed Service for Apache Spark (formerly Dataproc)",
+    "azure": "Azure Data Lake Storage (Blob Storage with a hierarchical namespace), with Azure Databricks or Microsoft Fabric",
+    "oss": "S3-compatible storage such as MinIO, Ceph or SeaweedFS, or Hadoop’s HDFS, plus a Hive Metastore and Spark, Trino or DuckDB"
+  },
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "-- Athena: the table only describes files that are already in S3",
+      "CREATE EXTERNAL TABLE events (",
+      "  player_id string,",
+      "  event     string,",
+      "  ts        timestamp",
+      ")",
+      "PARTITIONED BY (dt string)",
+      "STORED AS PARQUET",
+      "LOCATION 's3://acme-lake/curated/events/';",
+      "",
+      "-- register the dt=... folders written since the table was created",
+      "MSCK REPAIR TABLE events;",
+      "",
+      "SELECT event, count(*) AS n",
+      "FROM events",
+      "WHERE dt = '2026-09-30'",
+      "GROUP BY event;"
+    ]
+  },
+  "related": ["lakehouse","warehouse","object","file-formats","query-engines","etl"],
+  "diagram": {
+    "caption": "Apps and database dumps drop files into the raw zone as they are, with no checks. A clean-up job rewrites them as Parquet in the curated zone. Analysts’ SQL goes through table definitions that only point at folders, so nothing stops a half-written file or a renamed column from reaching the answer.",
+    "w": 800,
+    "h": 290,
+    "zones": [
+      {"x":14,"y":14,"w":172,"h":262,"label":"Sources"},
+      {"x":205,"y":14,"w":581,"h":262,"label":"Data lake · object storage, any format"}
+    ],
+    "nodes": [
+      {
+        "id": "apps",
+        "x": 100,
+        "y": 70,
+        "label": "App events",
+        "sub": "JSON logs",
+        "emit": {"every":900,"jitter":0.4,"color":1},
+        "out": ["raw"]
+      },
+      {
+        "id": "dumps",
+        "x": 100,
+        "y": 150,
+        "label": "Database dumps",
+        "sub": "nightly CSV",
+        "emit": {"every":2400,"jitter":0.3,"color":3},
+        "out": ["raw"]
+      },
+      {
+        "id": "analyst",
+        "x": 100,
+        "y": 230,
+        "label": "Analyst",
+        "sub": "ad-hoc SQL",
+        "emit": {"every":1700,"jitter":0.4,"req":true,"color":0},
+        "out": ["engine"]
+      },
+      {"id":"raw","x":300,"y":110,"label":"Raw zone","sub":"lake/raw/","concept":"object","out":["clean"]},
+      {"id":"engine","x":300,"y":230,"label":"SQL engine","sub":"Athena · Trino","concept":"query-engines","out":["meta"]},
+      {"id":"clean","x":510,"y":70,"label":"Clean-up job","sub":"Spark · Glue","out":["curated"]},
+      {"id":"meta","x":510,"y":230,"label":"Table definitions","sub":"Hive Metastore · Glue","out":["curated"]},
+      {
+        "id": "curated",
+        "x": 700,
+        "y": 150,
+        "label": "Curated zone",
+        "sub": "Parquet files",
+        "concept": "file-formats",
+        "mode": "reply",
+        "delay": 120
+      }
+    ]
+  },
+  "history": {
+    "story": [
+      "In the 2000s, analytics meant a data warehouse. Data was cleaned and modelled before it was loaded, and storage cost enough that anything without a clear use was thrown away. Hadoop, which split off from the Nutch search project in 2006, changed the economics: HDFS spread files across racks of cheap servers, and MapReduce processed them where they sat. Facebook built Hive on top so analysts could use SQL, with each table stored as a directory in HDFS and each partition as a subdirectory.",
+      "In October 2010 James Dixon, then CTO of Pentaho, contrasted the data mart, “a store of bottled water – cleansed and packaged and structured for easy consumption”, with a “data lake”: “a large body of water in a more natural state” that users could “examine, dive in, or take samples” from. Hadoop vendors took up the term, and critics followed. In July 2014 Gartner warned of a “data lake fallacy”, since lakes “lack semantic consistency and governed metadata”, and in December 2014 Michael Stonebraker argued that without data curation the lake is really a “data swamp”.",
+      "From around 2015, cloud object stores took over from HDFS, so storage and compute could scale separately and engines such as Presto and Athena queried files in place. Object stores weren’t file systems, though: until December 2020, a job listing an S3 folder could miss files that had just been written. The missing piece was transactions across many files. Table formats such as Iceberg, Delta Lake and Hudi added them, and a lake with a table format on top is what is now called a lakehouse."
+    ],
+    "choices": [
+      { "choice": "Schema on read", "why": "Modelling data before loading it was slow, and it threw away whatever nobody had asked about yet. Storing data raw keeps every option open, at the cost of making each reader work out what the data means." },
+      { "choice": "Open files, not a database", "why": "Any engine can read CSV, JSON and later Parquet, so a team could add Spark next to Hive, or Presto next to both, without moving data." },
+      { "choice": "Folders as tables and partitions", "why": "Hive mapped a table to a directory and its partitions to subdirectories such as `ds=20090101`, so queries could skip whole folders. That needed no new storage layer, but a table could only ever be as consistent as a directory listing." }
+    ],
+    "timeline": [
+      { "year": "2006", "text": "Hadoop splits off from Nutch, bringing cheap storage on commodity servers" },
+      { "year": "2009", "text": "Facebook describes Hive: SQL tables mapped onto HDFS directories" },
+      { "year": "2010", "text": "James Dixon coins “data lake” in a blog post" },
+      { "year": "2014", "text": "Gartner warns of the “data lake fallacy”; Stonebraker calls lakes “data swamps”" },
+      { "year": "2016", "text": "Amazon Athena launches, running SQL directly on files in S3" },
+      { "year": "2020", "text": "S3 becomes strongly consistent, so a listing now shows files just written" }
+    ],
+    "sources": [
+      { "label": "James Dixon: Pentaho, Hadoop, and Data Lakes (October 2010)", "url": "https://jamesdixon.wordpress.com/2010/10/14/pentaho-hadoop-and-data-lakes/", "archive": "https://web.archive.org/web/20101017135921/http://jamesdixon.wordpress.com:80/2010/10/14/pentaho-hadoop-and-data-lakes/" },
+      { "label": "Gartner: Beware of the Data Lake Fallacy (July 2014)", "url": "https://www.gartner.com/en/newsroom/press-releases/2014-07-28-gartner-says-beware-of-the-data-lake-fallacy", "archive": "https://web.archive.org/web/20140730191301/http://www.gartner.com:80/newsroom/id/2809117" },
+      { "label": "Michael Stonebraker: Why the ‘Data Lake’ Is Really a ‘Data Swamp’ (BLOG@CACM, December 2014)", "url": "https://cacm.acm.org/blogcacm/why-the-data-lake-is-really-a-data-swamp/", "archive": "https://web.archive.org/web/20240229223332/https://cacm.acm.org/blogcacm/why-the-data-lake-is-really-a-data-swamp/" },
+      { "label": "Apache JIRA: NUTCH-193, move NDFS and MapReduce to a separate project (February 2006)", "url": "https://issues.apache.org/jira/browse/NUTCH-193" },
+      { "label": "Thusoo et al.: Hive, a warehousing solution over a Map-Reduce framework (VLDB 2009)", "url": "https://www.vldb.org/pvldb/vol2/vldb09-938.pdf" },
+      { "label": "Lakehouse: A New Generation of Open Platforms (CIDR 2021)", "url": "https://www.cidrdb.org/cidr2021/papers/cidr2021_paper17.pdf" },
+      { "label": "AWS News Blog: Amazon Athena, interactive SQL queries for data in Amazon S3 (November 2016)", "url": "https://aws.amazon.com/blogs/aws/amazon-athena-interactive-sql-queries-for-data-in-amazon-s3/" },
+      { "label": "AWS What’s New: Amazon S3 now delivers strong read-after-write consistency (December 2020)", "url": "https://aws.amazon.com/about-aws/whats-new/2020/12/amazon-s3-now-delivers-strong-read-after-write-consistency-automatically-for-all-applications/" }
+    ]
+  },
+  "sources": [
+    { "label": "AWS: What is a data lake?", "url": "https://aws.amazon.com/what-is/data-lake/" },
+    { "label": "Google Cloud: What is a data lake?", "url": "https://cloud.google.com/learn/what-is-a-data-lake" },
+    { "label": "Azure docs: Introduction to Azure Data Lake Storage (hierarchical namespace)", "url": "https://learn.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction" },
+    { "label": "AWS Prescriptive Guidance: Data layer definitions (raw, stage and analytics layers)", "url": "https://docs.aws.amazon.com/prescriptive-guidance/latest/defining-bucket-names-data-lakes/data-layer-definitions.html" },
+    { "label": "AWS Lake Formation docs: What is Lake Formation?", "url": "https://docs.aws.amazon.com/lake-formation/latest/dg/what-is-lake-formation.html" },
+    { "label": "AWS Glue docs: Using crawlers to populate the Data Catalog", "url": "https://docs.aws.amazon.com/glue/latest/dg/add-crawler.html" },
+    { "label": "Athena docs: CREATE TABLE", "url": "https://docs.aws.amazon.com/athena/latest/ug/create-table.html" },
+    { "label": "Athena docs: Partition your data", "url": "https://docs.aws.amazon.com/athena/latest/ug/partitions.html" },
+    { "label": "Athena docs: MSCK REPAIR TABLE (Hive-compatible partitions)", "url": "https://docs.aws.amazon.com/athena/latest/ug/msck-repair-table.html" },
+    { "label": "Amazon Athena pricing (per TB scanned)", "url": "https://aws.amazon.com/athena/pricing/" },
+    { "label": "BigQuery docs: Introduction to external tables", "url": "https://docs.cloud.google.com/bigquery/docs/external-tables" },
+    { "label": "Google Cloud docs: Cloud Storage introduction", "url": "https://docs.cloud.google.com/storage/docs/introduction" },
+    { "label": "Hadoop docs: HDFS architecture", "url": "https://hadoop.apache.org/docs/stable/hadoop-project-dist/hadoop-hdfs/HdfsDesign.html" }
+  ]
+}

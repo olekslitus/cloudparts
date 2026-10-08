@@ -1,0 +1,192 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "gRPC",
+  "concepts": ["rpc"],
+  "provider": "oss",
+  "vendor": "The gRPC Authors (CNCF), started at Google",
+  "license": "Apache 2.0 since June 2017 (BSD 3-Clause before); the gRPC-Rust preview is MIT",
+  "website": "https://grpc.io/",
+  "repo": "https://github.com/grpc/grpc",
+  "summary": "Google’s open RPC framework: describe a service in a `.proto` file, generate typed clients and servers, and call them over HTTP/2 with streaming, deadlines and standard status codes.",
+  "intro": [
+    "You describe a service and its messages in a `.proto` file, and the Protocol Buffers compiler, with a gRPC plugin, generates a client stub and a server base class for your language. The client calls a stub method like a local function. The library encodes the request as Protobuf and sends it as an HTTP/2 request to `/package.Service/Method` with `content-type: application/grpc`; the server’s generated code decodes it and calls your handler. Each message carries a 5-byte prefix (a compression flag and its length), so one call can carry many messages, and the outcome comes back as a status code and message in HTTP/2 trailers. That allows four call shapes: unary (one request, one response), server streaming, client streaming and bidirectional streaming, all multiplexed over one long-lived connection. A client sets a deadline, sent as the `grpc-timeout` header; the server can see it and stop working, and the call fails with `DEADLINE_EXCEEDED`. Interceptors wrap every call for logging, auth or metrics, and standard services cover health checks and reflection.",
+    "The client also picks the server. A name resolver (DNS by default) returns addresses, and a load-balancing policy chooses one per call: `pick_first` by default, or `round_robin` and others named in the service config, which also holds per-method timeouts and retry policies. With xDS, that configuration can come from a control plane such as Google’s Cloud Service Mesh, for a service mesh with no sidecar proxy. gRPC is free and open source and has been a CNCF incubating project since 2017. There is no single implementation: the C++ core in `grpc/grpc` also powers Python, Ruby, PHP and Objective-C, while Go, Java, Kotlin, Node, .NET, Swift, Dart and Rust (a preview since May 2026) live in separate repositories with their own releases and feature sets."
+  ],
+  "strengths": [
+    "One `.proto` contract generates typed clients and servers in a dozen languages, so a Go service and a Python caller agree on every field",
+    "Streaming in both directions over one multiplexed HTTP/2 connection, with flow control",
+    "Deadlines, cancellation, retry policies and a fixed set of status codes are part of the framework, not reinvented by each team",
+    "Wide infrastructure support: Envoy, NGINX, AWS ALB and Cloud Run carry it, and Kubernetes can probe pods with the gRPC health protocol",
+    "Client-side load balancing and xDS let large fleets skip the proxy hop entirely"
+  ],
+  "limits": [
+    "Browsers can’t make gRPC calls, because browser APIs expose neither HTTP/2 frames nor trailers. gRPC-Web needs a translating proxy (Envoy by default) and supports only unary and server-streaming calls, the latter only in text mode",
+    "Long-lived HTTP/2 connections defeat connection-level load balancing: behind a Kubernetes Service or another L4 balancer, every call from a client can land on one pod. You need an L7 proxy, client-side balancing or a mesh, and every hop must pass HTTP/2 and trailers (on ALB, an HTTPS listener and a gRPC target group)",
+    "Harder to debug: payloads are binary Protobuf, so `curl` and browser dev tools don’t help; you need the `.proto` files or server reflection plus a tool such as `grpcurl` or Postman",
+    "No deadline by default: a client that doesn’t set one can wait for a response forever",
+    "Features differ by language: each implementation has its own repository and release cycle, xDS support covers only some of them, and a client silently ignores xDS settings it doesn’t support"
+  ],
+  "worksWith": [
+    { "id": "protobuf", "how": "uses as its default schema and encoding" },
+    { "id": "kubernetes", "how": "carries kubelet runtime calls and probes in" },
+    { "id": "alb", "how": "can be routed per call by" },
+    { "id": "cloud-run", "how": "runs unary and streaming services on" },
+    { "id": "nginx", "how": "is proxied with `grpc_pass` by" },
+    { "id": "opentelemetry", "how": "reports per-call metrics through" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "A Python client with round-robin balancing, retries and a deadline",
+    "source": [
+      "# pip install grpcio grpcio-tools   (protos_and_services compiles the .proto at import)",
+      "#",
+      "# orders.proto",
+      "#   syntax = \"proto3\";",
+      "#   package shop.v1;",
+      "#   service Orders {",
+      "#     rpc GetOrder (GetOrderRequest) returns (Order);",
+      "#     rpc WatchOrders (WatchRequest) returns (stream Order);  // server streaming",
+      "#   }",
+      "#   message GetOrderRequest { string id = 1; }",
+      "#   message WatchRequest { string customer_id = 1; }",
+      "#   message Order { string id = 1; string status = 2; int64 total_cents = 3; }",
+      "import json",
+      "",
+      "import grpc",
+      "",
+      "pb, pb_grpc = grpc.protos_and_services(\"orders.proto\")",
+      "",
+      "service_config = {",
+      "    \"loadBalancingConfig\": [{\"round_robin\": {}}],  # default pick_first uses one backend",
+      "    \"methodConfig\": [{",
+      "        \"name\": [{\"service\": \"shop.v1.Orders\"}],",
+      "        \"retryPolicy\": {",
+      "            \"maxAttempts\": 3,",
+      "            \"initialBackoff\": \"0.1s\",",
+      "            \"maxBackoff\": \"1s\",",
+      "            \"backoffMultiplier\": 2,",
+      "            \"retryableStatusCodes\": [\"UNAVAILABLE\"],",
+      "        },",
+      "    }],",
+      "}",
+      "",
+      "# dns:/// returns every address behind the name, so round_robin can spread calls",
+      "channel = grpc.insecure_channel(",
+      "    \"dns:///orders.internal:50051\",",
+      "    options=[(\"grpc.service_config\", json.dumps(service_config))],",
+      ")",
+      "stub = pb_grpc.OrdersStub(channel)",
+      "",
+      "try:",
+      "    order = stub.GetOrder(pb.GetOrderRequest(id=\"o-1042\"), timeout=0.5)  # deadline",
+      "    print(order.status, order.total_cents)",
+      "except grpc.RpcError as err:",
+      "    if err.code() != grpc.StatusCode.DEADLINE_EXCEEDED:",
+      "        raise",
+      "    print(\"orders service too slow; showing the cached status\")",
+      "",
+      "for update in stub.WatchOrders(pb.WatchRequest(customer_id=\"c-77\"), timeout=60):",
+      "    print(\"update:\", update.id, update.status)"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "gRPC, REST with JSON, and Connect",
+      "intro": "Connect is a newer Protobuf RPC protocol and library family that also speaks gRPC, so it is the usual alternative when browsers or plain HTTP tools matter.",
+      "columns": ["gRPC", "REST with JSON", "Connect"],
+      "rows": [
+        { "label": "Contract", "values": ["A `.proto` file, required", "Optional, often an OpenAPI document", "A `.proto` file"] },
+        { "label": "Encoding", "values": ["Binary Protobuf by default; other payloads possible", "JSON text", "Binary Protobuf or JSON"] },
+        { "label": "HTTP version", "values": ["HTTP/2 or later", "Any", "HTTP/1.1, HTTP/2 or HTTP/3; bidirectional streaming needs HTTP/2"] },
+        { "label": "Streaming", "values": ["Unary, server, client and bidirectional", "Not defined by the style", "Unary, server, client and bidirectional"] },
+        { "label": "Errors", "values": ["Status code and message in HTTP/2 trailers", "HTTP status codes", "No trailers, so any HTTP infrastructure can carry it"] },
+        { "label": "From a browser", "values": ["Only through gRPC-Web and a proxy", "Directly", "Directly; also serves gRPC-Web without a proxy"] },
+        { "label": "With `curl`", "values": ["No; use reflection and `grpcurl`", "Yes", "Yes, for unary calls with JSON"] }
+      ],
+      "notes": [
+        "Connect servers accept gRPC, gRPC-Web and Connect requests, and Connect clients can call any gRPC server. Connect RPC has been a CNCF sandbox project since April 13, 2024."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Main implementations",
+      "intro": "Each language has its own library and release schedule; check the one you use for features such as xDS.",
+      "items": [
+        { "name": "grpc/grpc", "tag": "C++ core", "text": "The C++ library, also wrapped by the Python (`grpcio`), Ruby, PHP and Objective-C packages. The older C# package built on it, `Grpc.Core`, is in maintenance mode." },
+        { "name": "grpc-java and grpc-go", "tag": "standalone", "text": "Separate implementations in Java (with grpc-kotlin on top) and Go, each with its own releases. Both have supported xDS since 1.30 in June 2020." },
+        { "name": "grpc-dotnet and grpc-node", "tag": "standalone", "text": "The recommended C# implementation since May 2021, and `@grpc/grpc-js` for Node.js." },
+        { "name": "grpc-web", "tag": "browsers", "text": "A JavaScript client that talks to gRPC services through a proxy, Envoy by default. Unary and server-streaming calls only." },
+        { "name": "grpc-rust", "tag": "preview", "text": "First preview in May 2026, client only, built on Tokio and Google’s Protobuf-Rust. Not recommended for production yet; MIT-licensed." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "For over a decade Google connected its internal microservices with one general-purpose RPC system, Stubby, which by 2016 handled tens of billions of requests per second. Stubby wasn’t based on any standard and was too tied to Google’s infrastructure to release. Once SPDY, HTTP/2 and QUIC had put many of its features into public standards, Google decided to rebuild it on top of them and make it fit mobile, IoT and cloud use too.",
+      "Google open-sourced the result as gRPC on February 26, 2015, under a BSD licence, built on the just-finalised HTTP/2 standard, with Square as an early partner replacing its own RPC system. Its published principles favoured services and messages over distributed objects, streaming, flow control, cancellation and timeouts, a small set of standard status codes, and a layered protocol that doesn’t care about the payload format. Version 1.0 followed in August 2016.",
+      "gRPC joined the CNCF in February 2017 and switched to Apache 2.0 that June. It became plumbing for cloud-native software: etcd and containerd used it early, Kubernetes’ kubelet talks to container runtimes over it, and Envoy’s xDS configuration APIs are gRPC streams, which gRPC clients themselves have consumed since 2020 for meshes without sidecars."
+    ],
+    "choices": [
+      { "choice": "Standard HTTP/2 instead of a custom transport", "why": "The wire protocol had to survive “traversal over common internet infrastructure”. HTTP/2 already offered multiplexed streams, flow control and header compression, the features Stubby had built for itself." },
+      { "choice": "Protobuf by default, but payload-agnostic", "why": "The principles said services need different encodings (Protobuf, JSON, XML, Thrift) and pluggable compression, so the protocol frames opaque messages and the `.proto` file is only the default." },
+      { "choice": "Deadlines and cancellation in the protocol", "why": "Expensive, long-lived operations let servers reclaim work when the client gives up, and cancellation can cascade down a chain of calls instead of each service guessing its own timeout." },
+      { "choice": "A small, fixed set of status codes", "why": "Clients handle errors in a few ways, so a constrained namespace (such as `UNAVAILABLE` or `DEADLINE_EXCEEDED`) makes retry and error decisions clear; richer detail goes in metadata." }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "Open-sourced February 26 under a BSD licence, with Square" },
+      { "year": "2016", "text": "1.0 in August for C++, Java, Go, Node, Ruby, Python and C#" },
+      { "year": "2017", "text": "Joins the CNCF in February; moves to Apache 2.0 in June" },
+      { "year": "2018", "text": "gRPC-Web generally available in October" },
+      { "year": "2020", "text": "xDS support in 1.30 enables proxyless service meshes" },
+      { "year": "2026", "text": "First gRPC-Rust preview in May" }
+    ],
+    "sources": [
+      { "label": "Google Developers Blog: Introducing gRPC, a new open source HTTP/2 RPC framework (Feb 2015)", "url": "https://developers.googleblog.com/en/introducing-grpc-a-new-open-source-http2-rpc-framework/" },
+      { "label": "gRPC blog: gRPC motivation and design principles (Sep 2015)", "url": "https://grpc.io/blog/principles/" },
+      { "label": "gRPC blog: gRPC 1.0 GA announcement (Aug 2016)", "url": "https://grpc.io/blog/ga-announcement/" },
+      { "label": "Google Cloud Blog: gRPC is now 1.0 and ready for production deployments (Aug 2016)", "url": "https://cloud.google.com/blog/products/gcp/grpc-a-true-internet-scale-rpc-framework-is-now-1-and-ready-for-production-deployments" },
+      { "label": "CNCF: gRPC project page (accepted Feb 16, 2017, incubating)", "url": "https://www.cncf.io/projects/grpc/" },
+      { "label": "GitHub: grpc/grpc commit “change LICENSE, add AUTHORS” (BSD to Apache 2.0, Jun 2017)", "url": "https://github.com/grpc/grpc/commit/312ea4a1874acebc056f142fc65ac434165de0a4" },
+      { "label": "gRPC blog: gRPC-Web is generally available (Oct 2018)", "url": "https://grpc.io/blog/grpc-web-ga/" },
+      { "label": "gRPC docs: xDS features in gRPC (first supported in 1.30)", "url": "https://grpc.github.io/grpc/core/md_doc_grpc_xds_features.html" },
+      { "label": "gRPC blog: gRPC-Rust preview announcement (May 2026)", "url": "https://grpc.io/blog/grpc-rust-announcement/" }
+    ]
+  },
+  "sources": [
+    { "label": "gRPC: About gRPC", "url": "https://grpc.io/about/" },
+    { "label": "gRPC docs: Core concepts (service definition, four RPC types, stubs)", "url": "https://grpc.io/docs/what-is-grpc/core-concepts/" },
+    { "label": "GitHub: gRPC over HTTP/2 protocol spec (path, content-type, framing, trailers, grpc-timeout)", "url": "https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md" },
+    { "label": "gRPC docs: Deadlines (no default deadline)", "url": "https://grpc.io/docs/guides/deadlines/" },
+    { "label": "gRPC docs: Status codes", "url": "https://grpc.io/docs/guides/status-codes/" },
+    { "label": "gRPC docs: Interceptors", "url": "https://grpc.io/docs/guides/interceptors/" },
+    { "label": "gRPC docs: Health checking", "url": "https://grpc.io/docs/guides/health-checking/" },
+    { "label": "gRPC docs: Reflection (grpcurl, Postman, binary payloads)", "url": "https://grpc.io/docs/guides/reflection/" },
+    { "label": "gRPC docs: Retry (service config retry policy)", "url": "https://grpc.io/docs/guides/retry/" },
+    { "label": "gRPC docs: Custom load balancing policies (pick_first default, round_robin)", "url": "https://grpc.io/docs/guides/custom-load-balancing/" },
+    { "label": "gRPC docs: OpenTelemetry metrics", "url": "https://grpc.io/docs/guides/opentelemetry-metrics/" },
+    { "label": "gRPC docs: xDS features in gRPC (per-language support, ignored settings)", "url": "https://grpc.github.io/grpc/core/md_doc_grpc_xds_features.html" },
+    { "label": "Google Cloud docs: Cloud Service Mesh with proxyless gRPC services", "url": "https://cloud.google.com/service-mesh/docs/service-routing/proxyless-overview" },
+    { "label": "gRPC docs: Supported languages", "url": "https://grpc.io/docs/languages/" },
+    { "label": "GitHub: grpc/grpc README (packages per language)", "url": "https://github.com/grpc/grpc" },
+    { "label": "GitHub: grpc/grpc LICENSE", "url": "https://github.com/grpc/grpc/blob/master/LICENSE" },
+    { "label": "GitHub: grpc/grpc-dotnet README (recommended since May 2021; Grpc.Core in maintenance)", "url": "https://github.com/grpc/grpc-dotnet" },
+    { "label": "GitHub: grpc/grpc-web README (proxy, supported call types)", "url": "https://github.com/grpc/grpc-web" },
+    { "label": "GitHub: grpc/grpc-rust (MIT licence)", "url": "https://github.com/grpc/grpc-rust" },
+    { "label": "gRPC blog: gRPC-Rust preview announcement (May 2026)", "url": "https://grpc.io/blog/grpc-rust-announcement/" },
+    { "label": "gRPC blog: The state of gRPC in the browser (Jan 2019)", "url": "https://grpc.io/blog/state-of-grpc-web/" },
+    { "label": "gRPC blog: gRPC load balancing (Jun 2017)", "url": "https://grpc.io/blog/grpc-load-balancing/" },
+    { "label": "Kubernetes blog: gRPC load balancing on Kubernetes without tears (Nov 2018)", "url": "https://kubernetes.io/blog/2018/11/07/grpc-load-balancing-on-kubernetes-without-tears/" },
+    { "label": "Kubernetes docs: Configure liveness, readiness and startup probes (gRPC probes)", "url": "https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/" },
+    { "label": "Kubernetes docs: Container Runtime Interface (gRPC)", "url": "https://kubernetes.io/docs/concepts/architecture/cri/" },
+    { "label": "AWS docs: ALB target groups (gRPC protocol version, HTTPS listener)", "url": "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-target-groups.html" },
+    { "label": "Google Cloud docs: Using gRPC with Cloud Run", "url": "https://cloud.google.com/run/docs/triggering/grpc" },
+    { "label": "nginx docs: ngx_http_grpc_module", "url": "https://nginx.org/en/docs/http/ngx_http_grpc_module.html" },
+    { "label": "Envoy docs: gRPC (trailers, gRPC-Web filter)", "url": "https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/other_protocols/grpc" },
+    { "label": "Connect docs: Introduction (gRPC, gRPC-Web and Connect protocols)", "url": "https://connectrpc.com/docs/introduction" },
+    { "label": "Connect docs: Connect protocol (HTTP versions, no trailers, curl)", "url": "https://connectrpc.com/docs/protocol/" },
+    { "label": "CNCF: Connect RPC project page (sandbox, Apr 2024)", "url": "https://www.cncf.io/projects/connect-rpc/" },
+    { "label": "CNCF: gRPC project page (incubating)", "url": "https://www.cncf.io/projects/grpc/" }
+  ],
+  "checked": "2026-10-06"
+}

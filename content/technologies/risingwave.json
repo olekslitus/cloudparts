@@ -1,0 +1,167 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "RisingWave",
+  "concepts": ["stream-processing", "relational"],
+  "provider": "oss",
+  "vendor": "RisingWave Labs",
+  "license": "Apache 2.0 (since the first open-source release in April 2022); premium features in the same binary need a paid licence key since v2.0 (2024)",
+  "website": "https://risingwave.com/",
+  "repo": "https://github.com/risingwavelabs/risingwave",
+  "summary": "A streaming database in Rust that speaks the PostgreSQL protocol: you write materialized views in SQL, and it keeps them up to date as events arrive, with all state in object storage.",
+  "intro": [
+    "To a client, RisingWave looks like PostgreSQL: `psql` or any Postgres driver connects to port 4566. You declare inputs with `CREATE SOURCE` or `CREATE TABLE … WITH (connector = …)`: Kafka, Kinesis or Pulsar topics, files in S3, or row changes read straight from PostgreSQL, MySQL or MongoDB. Then you write `CREATE MATERIALIZED VIEW … AS SELECT`. Instead of running once, that query becomes a streaming job: the Meta node splits it into actors on Streaming nodes, which first backfill from the data already there and then apply each new change incrementally, so the view stays current without a `REFRESH`. Serving nodes answer ordinary `SELECT` queries against tables and views. Everything persistent (tables, views and the internal state of joins and aggregations) lives in Hummock, RisingWave’s LSM-tree store on S3, GCS or Azure Blob Storage, with memory and an optional local disk cache in front. The Meta node sends a barrier through the jobs every second by default and commits a consistent checkpoint to object storage, and Compactor nodes merge files in the background. Results leave through `CREATE SINK` (Kafka, Iceberg, PostgreSQL, ClickHouse, Snowflake and others) or through subscriptions an application reads with a cursor. A table created with `ENGINE = iceberg` is stored as an Apache Iceberg table that RisingWave maintains (compaction, snapshot cleanup) and queries with Apache DataFusion.",
+    "RisingWave Labs, a San Francisco company founded in 2021, develops it in the open under Apache 2.0. Since v2.0 some features (elastic disk cache, time travel queries, secret management, automatic schema changes for CDC, several sinks) are premium: self-hosted clusters unlock them with a licence key, with a free trial up to 4 RWUs. RisingWave Cloud bills RisingWave Units (RWUs), where 1 RWU is 1 vCPU or 4 GB of memory, whichever is larger: the Basic plan starts at $0.227 per RWU-hour after a 7-day trial and stops at 64 cores, Pro adds bring-your-own-cloud and every premium feature, and storage and network transfer are billed on top."
+  ],
+  "strengths": [
+    "The streaming engine is also the serving database: applications query materialized views over the PostgreSQL protocol with the drivers and tools they already use, and views can be stacked on other views",
+    "State lives in object storage, not on local disks, so compute nodes scale and recover without moving state around, and state size isn’t capped by a disk",
+    "Reads row changes straight from PostgreSQL, MySQL and MongoDB, with no Debezium or Kafka in between",
+    "Iceberg in both directions: a sink, a source, and Iceberg tables it manages itself, with built-in compaction and a hosted catalog",
+    "Rust with no JVM, an Apache 2.0 core, and a steady release cadence (3.1.0 in September 2026)"
+  ],
+  "limits": [
+    "PostgreSQL-compatible, not PostgreSQL: no stored procedures, triggers, `LISTEN`/`NOTIFY`, temporary tables or full-text search, and streaming habits apply (time windows never emit without a watermark, and `NOW()` in a view needs a temporal filter)",
+    "Open core since v2.0: self-hosted, the elastic disk cache, time travel, secret management, automatic schema changes, SQL Server CDC and the Snowflake, BigQuery and DynamoDB sinks need a paid licence key beyond a 4-RWU trial, and a 1.9 cluster using them errors after upgrading",
+    "Queries that miss memory go to object storage, so low read latency depends on cache sizing; RisingWave Cloud bills every node’s RWUs plus storage, ingress, egress and PrivateLink",
+    "A production cluster has four node types, a meta store (PostgreSQL, MySQL or SQLite) and object storage to run and monitor",
+    "SQL is the only programming interface: no low-level DataStream-style API, so logic SQL can’t express goes into user-defined functions"
+  ],
+  "worksWith": [
+    { "id": "kafka", "how": "reads and writes topics in" },
+    { "id": "postgresql", "how": "speaks the protocol of, reads CDC from" },
+    { "id": "mysql", "how": "reads row changes directly (CDC) from" },
+    { "id": "s3", "how": "keeps all tables, views and state in" },
+    { "id": "iceberg", "how": "writes, hosts and compacts tables in" },
+    { "id": "datafusion", "how": "runs batch queries on Iceberg tables with" },
+    { "id": "kinesis", "how": "reads streams from" },
+    { "id": "clickhouse", "how": "sinks materialized views into" },
+    { "id": "snowflake", "how": "sinks results (premium connector) into" },
+    { "id": "kubernetes", "how": "runs through Helm or its operator on" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "From a Kafka topic to an always-fresh view, queried like Postgres and copied into Iceberg",
+    "source": [
+      "CREATE SOURCE orders (",
+      "  customer_id VARCHAR,",
+      "  amount DOUBLE PRECISION,",
+      "  created_at TIMESTAMPTZ,",
+      "  -- events may arrive up to 10 seconds late",
+      "  WATERMARK FOR created_at AS created_at - INTERVAL '10 SECONDS'",
+      ") WITH (",
+      "  connector = 'kafka',",
+      "  topic = 'orders',",
+      "  properties.bootstrap.server = 'kafka-1:9092',",
+      "  scan.startup.mode = 'earliest'",
+      ") FORMAT PLAIN ENCODE JSON;",
+      "",
+      "-- kept up to date incrementally as orders arrive; no REFRESH",
+      "CREATE MATERIALIZED VIEW revenue_per_minute AS",
+      "SELECT customer_id, window_start, count(*) AS orders, sum(amount) AS revenue",
+      "FROM TUMBLE(orders, created_at, INTERVAL '1 MINUTE')",
+      "GROUP BY customer_id, window_start;",
+      "",
+      "-- any Postgres client: psql -h localhost -p 4566 -U root -d dev",
+      "SELECT * FROM revenue_per_minute",
+      "WHERE customer_id = 'c-42' ORDER BY window_start DESC LIMIT 10;",
+      "",
+      "-- also keep a copy in an Iceberg table, updates included",
+      "CREATE SINK revenue_to_lake FROM revenue_per_minute WITH (",
+      "  connector = 'iceberg',",
+      "  type = 'upsert',",
+      "  primary_key = 'customer_id,window_start',",
+      "  warehouse.path = 's3://lake/warehouse',",
+      "  s3.region = 'eu-west-1',",
+      "  catalog.type = 'rest',",
+      "  catalog.uri = 'http://iceberg-rest:8181',",
+      "  database.name = 'sales',",
+      "  table.name = 'revenue_per_minute',",
+      "  create_table_if_not_exists = 'true'",
+      ");"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Ways to run RisingWave",
+      "intro": "Prices checked 2026-10-06 on RisingWave’s pricing page and docs.",
+      "columns": ["Community (self-hosted)", "Self-managed with a licence", "Cloud Basic", "Cloud Pro"],
+      "rows": [
+        { "label": "Who runs it", "values": ["You: Docker Compose, Helm chart or Kubernetes operator", "You, on premises or Kubernetes, with vendor support", "RisingWave Labs, on AWS, GCP or Azure", "RisingWave Labs, hosted, in your cloud account (BYOC) or on your Kubernetes"] },
+        { "label": "Features", "values": ["Core engine, Apache 2.0; premium features as a trial up to 4 RWUs", "Premium features unlocked by a licence key", "Core features plus premium connectors", "All premium features"] },
+        { "label": "Size", "values": ["No limit", "No limit", "Up to 64 cores, standalone", "No core limit, distributed"] },
+        { "label": "Price", "values": ["Free; you pay for machines, object storage and the meta store", "Annual contract, quoted", "From $0.227 per RWU-hour after a 7-day trial, plus storage and network", "Pay-as-you-go or annual contract; rates not listed"] }
+      ],
+      "notes": [
+        "1 RWU is 1 vCPU or 4 GB of memory, whichever is larger, and every node (serving, streaming, meta, compactor) counts. Storage is billed per GB-month; ingress, egress and PrivateLink are billed separately.",
+        "Self-hosted premium features use the same binary: the licence key is a signed token set with `ALTER SYSTEM SET license_key` or an environment variable."
+      ]
+    },
+    {
+      "type": "table",
+      "title": "RisingWave and Flink, as RisingWave describes them",
+      "intro": "From RisingWave’s own comparison page, which compares against Flink 1.17. It is the vendor’s view, but these rows are factual.",
+      "columns": ["Apache Flink", "RisingWave"],
+      "rows": [
+        { "label": "Kind of system", "values": ["Stream processing framework", "Streaming database"] },
+        { "label": "How you write jobs", "values": ["Java, Scala, Python or SQL", "PostgreSQL-style SQL, plus Python and Java UDFs"] },
+        { "label": "Where state lives", "values": ["RocksDB on local disk, checkpointed to S3", "Its own store, persisted in S3 or similar object storage"] },
+        { "label": "Reading results", "values": ["Write them to a sink and query that system", "Query materialized views directly, concurrently, over the Postgres protocol"] },
+        { "label": "Licence", "values": ["Apache 2.0", "Apache 2.0"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Stream processing had been studied for two decades, yet building a real-time application still meant chaining several systems: change capture, Kafka, a stream processor such as Flink, and a separate database to serve the results. Yingjun Wu, who had worked on the Amazon Redshift team and at IBM’s Almaden Research Center, founded RisingWave Labs in 2021 to make stream processing simple and affordable enough for ordinary developers, by folding it into a database that speaks SQL.",
+      "The team wrote the first version in C++. After about seven months, bugs such as memory leaks and segmentation faults, and code that grew harder to read as the team grew, led them to start over in Rust, deleting 276,406 lines of C++. RisingWave was open-sourced on GitHub on 8 April 2022 under Apache 2.0, compatible with the PostgreSQL wire protocol and keeping its state in object storage. RisingWave Cloud became generally available in June 2023, and version 1.0 followed on 12 July 2023.",
+      "With 2.0 in 2024 the company added a premium edition: the code stays Apache 2.0, and a licence key unlocks some features. Since then it has moved towards the lake, with Iceberg tables it manages and compacts itself and, in 3.0, Apache DataFusion for batch queries, and it now markets RisingWave as event streaming for AI agents."
+    ],
+    "choices": [
+      { "choice": "Rust instead of C++", "why": "Memory bugs and inconsistent styles made the C++ code hard to debug and review as engineers joined. A streaming database runs mission-critical, latency-sensitive work, and Rust gave memory safety without a garbage collector." },
+      { "choice": "State in object storage instead of on local disks", "why": "Object storage is roughly a hundred times cheaper than memory, by RisingWave’s estimate, and needs no rebalancing, so compute can scale and recover in seconds; a disk cache keeps hot data close for low-latency reads." },
+      { "choice": "The PostgreSQL wire protocol and dialect", "why": "Users could learn, develop and manage streaming jobs with SQL and tools they already knew, and without JVM-based components." },
+      { "choice": "Apache 2.0 rather than a source-available licence", "why": "The founders wanted to promote stream processing broadly, avoid lock-in and gather feedback, and expected revenue from the cloud service rather than the licence." }
+    ],
+    "timeline": [
+      { "year": "2021", "text": "RisingWave Labs founded; the C++ prototype is rewritten in Rust" },
+      { "year": "2022", "text": "Open-sourced on GitHub under Apache 2.0 on 8 April" },
+      { "year": "2023", "text": "RisingWave Cloud generally available in June; RisingWave 1.0 in July" },
+      { "year": "2024", "text": "Version 2.0 introduces premium features behind a licence key" },
+      { "year": "2025", "text": "2.x releases add Iceberg engine tables with built-in compaction" },
+      { "year": "2026", "text": "Version 3.0 runs batch queries on Apache DataFusion by default" }
+    ],
+    "sources": [
+      { "label": "RisingWave: About us (founded 2021, Yingjun Wu)", "url": "https://risingwave.com/about-us/" },
+      { "label": "RisingWave blog: Why we moved from C++ to Rust (May 2022)", "url": "https://risingwave.com/blog/building-a-cloud-database-from-scratch-why-we-moved-from-c-to-rust/" },
+      { "label": "RisingWave blog: Why we open sourced RisingWave under Apache 2.0 (Aug 2023)", "url": "https://risingwave.com/blog/why-we-open-sourced-risingwave-under-apache-2-0-license/" },
+      { "label": "RisingWave blog: Launching RisingWave 1.0 (Jul 2023; open-sourced 8 April 2022)", "url": "https://risingwave.com/blog/risingwave-1-0/" },
+      { "label": "RisingWave blog: Introducing RisingWave Cloud GA (Jun 2023)", "url": "https://risingwave.com/blog/introducing-risingwave-cloud-ga/" },
+      { "label": "RisingWave blog: Everything you want to know about RisingWave Premium (Oct 2024)", "url": "https://risingwave.com/blog/everything-you-want-to-know-about-risingwave-premium/" }
+    ]
+  },
+  "sources": [
+    { "label": "RisingWave README (architecture, object storage, Iceberg via DataFusion, Postgres protocol)", "url": "https://github.com/risingwavelabs/risingwave" },
+    { "label": "RisingWave LICENSE (Apache 2.0)", "url": "https://github.com/risingwavelabs/risingwave/blob/main/LICENSE" },
+    { "label": "RisingWave releases on GitHub (v3.1.0, September 2026)", "url": "https://github.com/risingwavelabs/risingwave/releases" },
+    { "label": "RisingWave docs: Architecture (node types, barriers, Hummock LSM tree, meta store)", "url": "https://docs.risingwave.com/get-started/architecture" },
+    { "label": "RisingWave docs: Data persistence (barriers and checkpoints)", "url": "https://docs.risingwave.com/reference/data-persistence" },
+    { "label": "RisingWave docs: index for agents (port 4566, differences from PostgreSQL, pitfalls)", "url": "https://docs.risingwave.com/llms.txt" },
+    { "label": "RisingWave docs: Kafka to materialized view to serve (recipe)", "url": "https://docs.risingwave.com/get-started/recipes/kafka-to-mv-to-serve" },
+    { "label": "RisingWave docs: Ingestion overview (sources and CDC)", "url": "https://docs.risingwave.com/ingestion/overview" },
+    { "label": "RisingWave docs: Delivery overview (sinks)", "url": "https://docs.risingwave.com/delivery/overview" },
+    { "label": "RisingWave docs: Subscriptions", "url": "https://docs.risingwave.com/serve/subscription" },
+    { "label": "RisingWave docs: Iceberg overview", "url": "https://docs.risingwave.com/iceberg/overview" },
+    { "label": "RisingWave docs: Deliver to Iceberg (CREATE SINK parameters)", "url": "https://docs.risingwave.com/iceberg/deliver-to-iceberg" },
+    { "label": "RisingWave docs: Iceberg catalogs", "url": "https://docs.risingwave.com/iceberg/catalogs" },
+    { "label": "RisingWave docs: Internal Iceberg tables (ENGINE = iceberg)", "url": "https://docs.risingwave.com/iceberg/internal-iceberg-tables" },
+    { "label": "RisingWave docs: Premium features (licence key, 4-RWU trial, list of features)", "url": "https://docs.risingwave.com/get-started/premium-features" },
+    { "label": "RisingWave docs: Cloud pricing (RWU definition, plans, billed components)", "url": "https://docs.risingwave.com/cloud/pricing" },
+    { "label": "RisingWave pricing page (Basic from $0.227 per RWU-hour, checked 2026-10-06)", "url": "https://risingwave.com/pricing/" },
+    { "label": "RisingWave docs: Release notes (Iceberg engine, DataFusion in 3.0)", "url": "https://docs.risingwave.com/changelog/release-notes" },
+    { "label": "RisingWave docs: RisingWave vs. Apache Flink", "url": "https://docs.risingwave.com/reference/risingwave-flink-comparison" },
+    { "label": "RisingWave docs: Deploy on Kubernetes with the operator", "url": "https://docs.risingwave.com/deploy/risingwave-kubernetes" },
+    { "label": "RisingWave blog: Hummock, a storage engine designed for stream processing (Sep 2023)", "url": "https://risingwave.com/blog/hummock-a-storage-engine-designed-for-stream-processing/" }
+  ],
+  "checked": "2026-10-06"
+}

@@ -1,0 +1,170 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "OLake",
+  "concepts": ["etl", "lakehouse"],
+  "provider": "oss",
+  "vendor": "Datazip Inc.",
+  "license": "Apache 2.0 since November 2024 (OLake Go, OLake UI, the Helm chart and OLake Fusion); before that, when the project was called Kaku, Shift and then Gear5, its licence allowed only personal and private use",
+  "website": "https://olake.io/olake-go/",
+  "repo": "https://github.com/datazip-inc/olake",
+  "summary": "An open-source tool in Go that copies databases, Kafka topics and S3 files into Apache Iceberg tables (or plain Parquet), with full loads, incremental syncs and CDC, and no Kafka, Debezium, Spark or Flink in between.",
+  "intro": [
+    "OLake Go, the ingestion engine, ships as one Docker image per source (`olakego/source-postgres`, `-mysql`, `-mongodb` and so on) with the same commands: `discover` lists tables and columns into a `streams.json`, and `sync` copies them. A sync is a process that reads its JSON configs and a `state.json`, does its work, saves state and exits, so something has to schedule it: the OLake UI (which runs syncs through Temporal), Airflow, cron or Kubernetes. Each stream picks a mode. Full loads split big tables into chunks read in parallel, and resume by re-running only unfinished chunks. Incremental syncs read rows whose cursor column moved, which misses deletes. CDC reads the database’s own change log (PostgreSQL logical replication with `pgoutput`, the MySQL binlog, MongoDB change streams, SQL Server CDC tables) from the position where it last stopped up to where the log ended when the run began, then commits and exits; run it every few minutes for near-real-time tables. Oracle and DB2 get full and incremental loads only, Kafka is read through consumer groups, and S3 files by modification time.",
+    "Writes go to Iceberg through two processes: Go builds the Parquet data and delete files, and a sidecar JVM running the official Iceberg Java library registers them with the catalog (Glue, Hive, JDBC, or a REST catalog such as Polaris, Nessie, Unity, Lakekeeper, S3 Tables or Snowflake Horizon) in one atomic commit. Changed rows become equality deletes on a hash of the primary key (`_olake_id`) plus new data files, or Iceberg v3 deletion vectors since 0.11. The commit also records what was synced in a table property, which is how OLake gets exactly-once delivery with no coordinator. Datazip, the company behind it, renamed the engine OLake Go in June 2026, alongside OLake Fusion, a separate Iceberg compaction service based on a fork of Apache Amoro; it is a new name, not a rewrite. Everything is free to self-host, and Datazip publishes no prices for a paid tier."
+  ],
+  "strengths": [
+    "A short path from database to lake: one binary per source writes Iceberg directly, without running Kafka, Kafka Connect, Debezium, Spark or Flink",
+    "Fast, resumable initial loads: tables are split into chunks read in parallel, and a crash only re-runs unfinished chunks",
+    "Exactly-once into Iceberg: progress is stored in the table in the same commit as the data, and PostgreSQL’s replication slot only advances after that commit",
+    "Open output: standard Iceberg tables in your bucket, registered in the catalog you choose, readable by Trino, Athena, Snowflake, Dremio or Databricks"
+  ],
+  "limits": [
+    "CDC is batch, not a daemon: each run drains the log and exits, so freshness depends on the schedule, and between runs PostgreSQL keeps WAL for the replication slot",
+    "Frequent CDC syncs leave many small files and delete files in Iceberg; you need compaction from OLake Fusion, Spark or another tool to keep queries fast",
+    "Narrow scope: sources are databases, Kafka and S3 only (no SaaS APIs), the only destinations are Iceberg and Parquet, and Oracle and DB2 have no CDC",
+    "Still 0.x (0.11.3 in October 2026) with frequent releases, and the speed claims come from Datazip’s own benchmarks",
+    "Two runtimes per sync: the Go engine plus a JVM sidecar for Iceberg commits"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "replicates tables with CDC (pgoutput) from" },
+    { "id": "mysql", "how": "reads the binlog of" },
+    { "id": "s3-tables", "how": "can commit Iceberg tables to" },
+    { "id": "mongodb", "how": "reads change streams from" },
+    { "id": "kafka", "how": "reads topics through consumer groups from" },
+    { "id": "iceberg", "how": "writes and upserts tables in" },
+    { "id": "parquet", "how": "writes data files as" },
+    { "id": "s3", "how": "reads files from and writes tables to" },
+    { "id": "polaris", "how": "registers Iceberg tables in" },
+    { "id": "snowflake", "how": "can commit tables through Horizon Catalog in" },
+    { "id": "temporal", "how": "schedules syncs (OLake UI) with" },
+    { "id": "kubernetes", "how": "is deployed with a Helm chart on" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Replicate PostgreSQL into Iceberg tables registered in Polaris, with the Docker CLI",
+    "source": [
+      "cat > source.json <<'EOF'",
+      "{",
+      "  \"host\": \"orders-db.internal\",",
+      "  \"port\": 5432,",
+      "  \"database\": \"shop\",",
+      "  \"username\": \"olake\",",
+      "  \"password\": \"change-me\",",
+      "  \"schemas\": [\"public\"],",
+      "  \"ssl\": { \"mode\": \"disable\" },",
+      "  \"update_method\": {",
+      "    \"replication_slot\": \"olake_slot\",",
+      "    \"publication\": \"olake_pub\",",
+      "    \"initial_wait_time\": 120",
+      "  },",
+      "  \"max_threads\": 8",
+      "}",
+      "EOF",
+      "",
+      "cat > destination.json <<'EOF'",
+      "{",
+      "  \"type\": \"ICEBERG\",",
+      "  \"writer\": {",
+      "    \"catalog_type\": \"polaris\",",
+      "    \"rest_catalog_url\": \"http://polaris:8181/api/catalog\",",
+      "    \"iceberg_s3_path\": \"lake\",",
+      "    \"rest_auth_type\": \"oauth2\",",
+      "    \"oauth2_uri\": \"http://polaris:8181/api/catalog/v1/oauth/tokens\",",
+      "    \"credential\": \"<client_id>:<client_secret>\",",
+      "    \"scope\": \"PRINCIPAL_ROLE:ALL\",",
+      "    \"aws_region\": \"eu-west-1\",",
+      "    \"arrow_writes\": true",
+      "  }",
+      "}",
+      "EOF",
+      "",
+      "# list tables and columns into streams.json; CDC is the default where supported",
+      "docker run --rm -v \"$PWD:/mnt/config\" olakego/source-postgres:latest \\",
+      "  discover --config /mnt/config/source.json",
+      "",
+      "# first run: parallel full load, then the WAL; later runs (e.g. every 5 minutes) only the WAL",
+      "docker run --rm -v \"$PWD:/mnt/config\" olakego/source-postgres:latest \\",
+      "  sync --config /mnt/config/source.json \\",
+      "       --catalog /mnt/config/streams.json \\",
+      "       --destination /mnt/config/destination.json \\",
+      "       --state /mnt/config/state.json"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Datazip’s full-load benchmark: PostgreSQL to Iceberg",
+      "intro": "4.01 billion rows of NYC taxi data from Azure PostgreSQL into Iceberg on S3 with a Glue catalog, as published on OLake’s benchmarks page. Datazip ran every test itself: OLake Go and Debezium on a 64-vCPU VM, the others as their cloud services. OLake’s run is from January 2026; the competitors’ runs are from April 2025.",
+      "corner": "Tool",
+      "columns": ["Rows synced", "Rows per second", "Notes"],
+      "rows": [
+        { "label": "OLake Go", "values": ["4.01 billion", "580,113", "Whole dataset in 1.91 hours"] },
+        { "label": "Fivetran", "values": ["4.01 billion", "46,395", "Whole dataset within the 24-hour window"] },
+        { "label": "Debezium Server Iceberg (memiiso)", "values": ["1.28 billion", "14,839", "Stopped at 24 hours"] },
+        { "label": "Estuary", "values": ["0.34 billion", "3,982", "Stopped at 24 hours"] },
+        { "label": "Airbyte Cloud", "values": ["12.7 million", "457", "Sync failed after 7.5 hours"] }
+      ],
+      "notes": [
+        "On the same page Datazip reports CDC at 55,555 rows per second for OLake Go against 26,910 for Fivetran. Treat all of these as vendor results: the hardware, dates and settings differ between tools."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "OLake Go, OLake UI and OLake Fusion",
+      "intro": "Datazip ships three Apache 2.0 pieces that are often all called OLake.",
+      "items": [
+        { "name": "OLake Go", "tag": "ingestion", "text": "The Go engine and its per-source Docker images: `discover`, `sync`, `check` and `clear-destination` from the command line. Called simply OLake until June 2026." },
+        { "name": "OLake UI", "tag": "web app", "text": "A web interface and backend for sources, destinations and scheduled jobs. Its Docker Compose stack runs the jobs through a Temporal service and worker; it is the recommended way to start." },
+        { "name": "OLake Fusion", "tag": "table maintenance", "text": "Released in April 2026: compaction for CDC-heavy Iceberg tables on a per-table cron schedule, in lite, medium and full tiers, with metrics. Its code is a modified Apache Amoro." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Datazip’s engineers kept seeing data teams copy operational databases into analytics systems with brittle scripts or heavy pipelines: Debezium and Kafka for the changes, then Spark or Flink to write the lake. In May 2023 they started a Go project to replace that chain, renamed several times (Kaku, then Shift, then Gear5), described as a data integration protocol and an alternative to Airbyte, Meltano and Singer, focused on simplicity and performance. Its licence then allowed only personal and private use.",
+      "In November 2024 the project was relaunched as OLake under Apache 2.0, aimed at one job: replicating databases into Apache Iceberg. The first tagged release, v0.1.0, came in June 2025, together with OLake UI.",
+      "Releases have come every few weeks since, and by October 2026 it read eight kinds of source and wrote Iceberg v3 deletion vectors. Since CDC tables need constant compaction, Datazip added OLake Fusion in April 2026 and in June renamed the ingestion engine OLake Go to tell the two apart."
+    ],
+    "choices": [
+      { "choice": "Write to Iceberg directly, without Kafka", "why": "The architecture post lists the problem as Kafka, Spark or Flink and Debezium all sitting in the pipeline. Without a broker or a separate writer job there are fewer systems to run: one process goes from the database log to committed lake tables." },
+      { "choice": "Go for the engine, Java only for the catalog", "why": "Go handles reading and file building, while catalog integrations and Iceberg’s commit protocol come from the official Iceberg Java library in a sidecar, rather than being reimplemented for four catalog types." },
+      { "choice": "A stateless run that exits", "why": "All progress lives in `state.json` and in the Iceberg table, so recovering from a crash means rereading a file instead of rebuilding a long-running server’s memory." },
+      { "choice": "Use the Iceberg table as the ledger", "why": "Recording progress in the same atomic commit as the data lets a retried chunk or replayed log segment be recognised and skipped, which gives exactly-once delivery without an external coordinator." }
+    ],
+    "timeline": [
+      { "year": "2023", "text": "Work starts in Go as Kaku, renamed Shift, under a personal-use licence" },
+      { "year": "2024", "text": "Renamed Gear5 in June; relaunched as OLake under Apache 2.0 in November" },
+      { "year": "2025", "text": "v0.1.0 and OLake UI in June; a Kafka source by November" },
+      { "year": "2026", "text": "OLake Fusion for Iceberg compaction in April" },
+      { "year": "2026", "text": "Ingestion engine renamed OLake Go in June; v0.11 adds deletion vectors" }
+    ],
+    "sources": [
+      { "label": "GitHub: datazip-inc/olake LICENCE history (Gear5 licence, Apache 2.0 from 4 November 2024)", "url": "https://github.com/datazip-inc/olake/commits/master/LICENCE" },
+      { "label": "GitHub: commit “altering license and readme” (Gear5 to OLake, Apache 2.0)", "url": "https://github.com/datazip-inc/olake/commit/3ea41a7b" },
+      { "label": "GitHub: commit “Update the README with Fusion” (OLake renamed OLake Go, June 2026)", "url": "https://github.com/datazip-inc/olake/commit/cd23671f" },
+      { "label": "GitHub: OLake releases (v0.1.0 June 2025 to v0.11.3 October 2026)", "url": "https://github.com/datazip-inc/olake/releases" },
+      { "label": "OLake blog: Apache Iceberg table maintenance made easier with OLake Fusion (April 2026)", "url": "https://olake.io/blog/apache-iceberg-table-maintenance-olake-fusion/" },
+      { "label": "OLake blog: Deep dive into OLake Go architecture (July 2026)", "url": "https://olake.io/blog/olake-architecture-deep-dive/" }
+    ]
+  },
+  "sources": [
+    { "label": "OLake Go product page (full, incremental and CDC syncs; benchmark table)", "url": "https://olake.io/olake-go/" },
+    { "label": "OLake docs: Welcome to OLake Go (sources, destinations, catalogs, capabilities)", "url": "https://olake.io/docs/" },
+    { "label": "OLake blog: Deep dive into OLake Go architecture (drivers, sync modes, chunking, CDC sessions, JVM sidecar, deletes, exactly-once)", "url": "https://olake.io/blog/olake-architecture-deep-dive/" },
+    { "label": "GitHub: datazip-inc/olake README (OLake Go, sources, catalogs, CLI commands)", "url": "https://github.com/datazip-inc/olake" },
+    { "label": "GitHub: datazip-inc/olake LICENCE (Apache 2.0, Copyright 2024 Datazip)", "url": "https://github.com/datazip-inc/olake/blob/master/LICENCE" },
+    { "label": "OLake docs: Release notes v0.11.0 to v0.11.2 (Horizon Catalog, Iceberg v3 deletion vectors)", "url": "https://olake.io/docs/release/ingestion/v0.11.0/" },
+    { "label": "GitHub: OLake v0.11.3 release (5 October 2026)", "url": "https://github.com/datazip-inc/olake/releases/tag/v0.11.3" },
+    { "label": "OLake docs: Iceberg REST catalogs (Polaris, Lakekeeper, generic REST)", "url": "https://olake.io/docs/writers/iceberg/catalog/rest/" },
+    { "label": "OLake docs: Postgres source config", "url": "https://olake.io/docs/shared/config/PostgresSourceConfig/" },
+    { "label": "OLake docs: Docker discover command for Postgres", "url": "https://olake.io/docs/shared/commands/DockerDiscoverPostgres/" },
+    { "label": "OLake docs: Docker sync command for Postgres", "url": "https://olake.io/docs/shared/commands/DockerSyncPostgres/" },
+    { "label": "OLake docs: Ingestion benchmarks (setup, dates, full load and CDC)", "url": "https://olake.io/docs/benchmarks/ingestion/" },
+    { "label": "OLake docs: Install on Kubernetes", "url": "https://olake.io/docs/install/kubernetes/" },
+    { "label": "GitHub: datazip-inc/olake-ui (Docker Compose with Temporal)", "url": "https://github.com/datazip-inc/olake-ui" },
+    { "label": "GitHub: datazip-inc/olake-fusion (modified Apache Amoro, Apache 2.0)", "url": "https://github.com/datazip-inc/olake-fusion" },
+    { "label": "OLake Fusion product page", "url": "https://olake.io/olake-fusion/" },
+    { "label": "OLake blog: OLake Fusion (small files and delete files from CDC)", "url": "https://olake.io/blog/apache-iceberg-table-maintenance-olake-fusion/" }
+  ],
+  "checked": "2026-10-06"
+}

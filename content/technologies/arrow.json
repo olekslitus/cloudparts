@@ -1,0 +1,151 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Apache Arrow",
+  "concepts": ["file-formats"],
+  "kinds": ["in-memory-columnar"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://arrow.apache.org/",
+  "repo": "https://github.com/apache/arrow",
+  "summary": "A standard way to lay out columnar data in memory, so libraries, engines and languages can share tables without copying or converting them.",
+  "intro": [
+    "Arrow defines how a table sits in memory, byte for byte. Each column is an array made of a few contiguous buffers: a validity bitmap that marks nulls, the values themselves and, for strings and lists, an offsets buffer that says where each value starts. Columns that share a schema are grouped into record batches. Because the layout is the same in every language, a C++ library, a Rust engine and a Python program can hand each other pointers to the same buffers instead of serialising and parsing. Inside one process this goes through the C Data Interface: two small C structs, with no Arrow library needed on either side.",
+    "Between processes, the IPC format writes the same buffers out: a stream format for pipes and sockets, and a file format with a footer for random access. A Feather v2 file is exactly an Arrow IPC file, and since the bytes on disk match the bytes in memory, a reader can memory-map it without decoding anything. Arrow Flight sends record batches over gRPC, Flight SQL builds a database protocol on top of Flight, and ADBC is a client API like JDBC or ODBC that returns columns instead of rows, with drivers for PostgreSQL, Snowflake, DuckDB, BigQuery and others. Parquet is the storage partner: Parquet is encoded and compressed to be small on disk, Arrow is laid out to be computed on, and most tools read Parquet straight into Arrow. Official libraries cover C++, C#, Go, Java, JavaScript, Julia, MATLAB, Python, R, Ruby, Rust and Swift; the current release is 25.0.1."
+  ],
+  "strengths": [
+    "Two systems that both speak Arrow exchange tables without converting them, in one process or over the network",
+    "Columns sit in contiguous, aligned buffers, so vectorised (SIMD) code runs on them directly",
+    "Libraries in a dozen languages, integration-tested against each other so they read each other’s data",
+    "IPC files can be memory-mapped and used with no deserialisation step",
+    "Flight and ADBC move query results as columns, instead of row-by-row JDBC or ODBC"
+  ],
+  "limits": [
+    "It isn’t an archive format: Parquet is built for space efficiency and is usually the better choice for data at rest",
+    "Zero-copy only works when both sides already use Arrow’s layout; data from a row-based system or plain Python objects is still converted once",
+    "Arrow is plumbing, not a database: there is no catalog, storage management or SQL server, so you pair it with an engine such as DuckDB, DataFusion or Spark",
+    "Feature coverage differs by language; check the implementation status table before relying on Flight or a newer data type"
+  ],
+  "worksWith": [
+    { "id": "parquet", "how": "loads and saves tables as" },
+    { "id": "orc", "how": "reads and writes ORC files through" },
+    { "id": "duckdb", "how": "is queried in place by" },
+    { "id": "datafusion", "how": "is the in-memory format of" },
+    { "id": "arroyo", "how": "is the in-memory format of" },
+    { "id": "spark", "how": "moves data between JVM and Python for" },
+    { "id": "postgresql", "how": "talks to through its ADBC driver" },
+    { "id": "snowflake", "how": "talks to through its ADBC driver" },
+    { "id": "grpc", "how": "sends Flight record batches over" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Parquet into Arrow, query it with DuckDB, save an IPC file",
+    "source": [
+      "import duckdb",
+      "import pandas as pd",
+      "import pyarrow as pa",
+      "import pyarrow.feather as feather",
+      "import pyarrow.parquet as pq",
+      "",
+      "# Parquet on disk -> Arrow in memory, two columns only",
+      "readings = pq.read_table(\"readings.parquet\", columns=[\"sensor\", \"temp_c\"])",
+      "",
+      "# DuckDB scans the Arrow table by its variable name and returns Arrow",
+      "peaks = duckdb.sql(\"SELECT sensor, max(temp_c) AS peak FROM readings GROUP BY sensor\").to_arrow_table()",
+      "",
+      "# pandas columns backed by Arrow arrays",
+      "df = peaks.to_pandas(types_mapper=pd.ArrowDtype)",
+      "",
+      "# an uncompressed IPC (Feather v2) file can be memory-mapped and read without decoding",
+      "feather.write_feather(peaks, \"peaks.arrow\", compression=\"uncompressed\")",
+      "with pa.memory_map(\"peaks.arrow\") as source:",
+      "    same = pa.ipc.open_file(source).read_all()"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Arrow, Arrow IPC files or Parquet?",
+      "corner": "",
+      "columns": ["Arrow in memory", "Arrow IPC / Feather file", "Parquet file"],
+      "rows": [
+        { "label": "Where it lives", "values": ["RAM, shared between libraries in one process", "A pipe, socket or file", "A file on disk or object storage"] },
+        { "label": "Built for", "values": ["Computing on columns", "Moving Arrow data between processes", "Storing data compactly for years"] },
+        { "label": "Reading it", "values": ["Nothing to read: pass a pointer", "Memory-map it; no decoding when uncompressed", "Decode and decompress into memory, usually into Arrow"] },
+        { "label": "Size", "values": ["Uncompressed", "Optional LZ4 or ZSTD compression; Feather defaults to LZ4", "Encoded and compressed per column: smallest"] },
+        { "label": "Use it for", "values": ["Handing tables between engines and languages", "Caches, scratch files, fast hand-offs between tools", "Data lakes, table formats, archives"] }
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "The Arrow family",
+      "intro": "Everything below shares the same columnar layout, so data passes between the pieces without conversion.",
+      "items": [
+        { "name": "Columnar format", "tag": "spec", "text": "The byte-level layout of arrays, buffers and record batches. Declared stable, with compatibility guarantees, in 1.0 (2020)." },
+        { "name": "C Data Interface", "tag": "in-process", "text": "Two C structs that let libraries in one process share Arrow data with no build-time dependency on each other." },
+        { "name": "IPC format", "tag": "between processes", "text": "A stream format and a file format with a footer for random access. Feather v2 is the file format under its old name." },
+        { "name": "Flight", "tag": "network", "text": "An RPC framework on gRPC that streams record batches with `DoGet`, `DoPut` and `DoExchange`, and can split a result across several endpoints read in parallel." },
+        { "name": "Flight SQL", "tag": "database protocol", "text": "SQL queries, prepared statements and catalog lookups over Flight. A database implements the server side and reuses a generic client." },
+        { "name": "ADBC", "tag": "client API", "text": "Arrow Database Connectivity: a JDBC/ODBC-style API that returns Arrow, with drivers for PostgreSQL, SQLite, Snowflake, BigQuery, DuckDB, Flight SQL and more." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "By 2015, almost every analytics system had its own way of holding columns in memory. Moving a table from a JVM engine such as Spark or Impala into pandas meant serialising every value and parsing it again; the projects involved estimated that 70 to 80% of CPU time in many workloads went on this kind of conversion. Each project also rebuilt the same columnar code from scratch.",
+      "Jacques Nadeau, co-founder of Dremio, had been working on a standard in-memory columnar format for the same reason. Wes McKinney, the creator of pandas, then at Cloudera, wanted Python to work with systems like Impala and Spark without expensive copies. Together they recruited developers from Calcite, Drill, Impala, Kudu, Parquet, Spark and other projects, and on 17 February 2016 the Apache Software Foundation announced Arrow as a top-level project straight away, skipping the incubator. A month later McKinney and Hadley Wickham released Feather, a file format for passing data frames between Python and R that grew out of the Arrow discussions.",
+      "Version 1.0 in July 2020 declared the columnar format stable. Flight, Flight SQL and ADBC then carried the same layout onto the network and into database drivers, and pandas 2.0 (April 2023) let data frames keep their columns as Arrow arrays."
+    ],
+    "choices": [
+      { "choice": "Specify the bytes, not just an API", "why": "If every implementation lays out buffers identically, a C++ library and a Python program can use the same memory. An API alone would still need conversion at every boundary." },
+      { "choice": "Contiguous, aligned buffers per column", "why": "The spec recommends 8- or 64-byte alignment and padding so vectorised loops can use SIMD instructions without extra checks." },
+      { "choice": "A neutral Apache project from day one", "why": "McKinney described the ASF as a “neutral ‘safe space’ free from software vendor affiliation”, so competing engines could adopt the format without depending on one company." },
+      { "choice": "Leave long-term storage to Parquet", "why": "Arrow is laid out for computation and Parquet for space efficiency. The project treats them as complements, and invests in fast Parquet-to-Arrow readers instead of a rival file format." }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "Nadeau and McKinney gather developers from a dozen projects around a shared format" },
+      { "year": "2016", "text": "Top-level Apache project in February; Feather in March; 0.1.0 in October" },
+      { "year": "2019", "text": "DataFusion donated in February; Arrow Flight introduced in October" },
+      { "year": "2020", "text": "C Data Interface in May; 1.0 declares the format stable in July" },
+      { "year": "2022", "text": "Flight SQL introduced in February" },
+      { "year": "2023", "text": "ADBC in January; pandas 2.0 adds Arrow-backed columns in April" }
+    ],
+    "sources": [
+      { "label": "The Apache Software Foundation announces Apache Arrow as a top-level project (17 February 2016)", "url": "https://news.apache.org/foundation/entry/the_apache_software_foundation_announces87", "archive": "https://web.archive.org/web/20260603115114/https://news.apache.org/foundation/entry/the_apache_software_foundation_announces87" },
+      { "label": "Dremio blog: The origins of Apache Arrow and its fit in today’s data landscape (July 2022)", "url": "https://www.dremio.com/blog/the-origins-of-apache-arrow-its-fit-in-todays-data-landscape/", "archive": "https://web.archive.org/web/20260421195255/https://www.dremio.com/blog/the-origins-of-apache-arrow-its-fit-in-todays-data-landscape/" },
+      { "label": "Wes McKinney: Apache Arrow and the “10 things I hate about pandas” (September 2017)", "url": "https://wesmckinney.com/blog/apache-arrow-pandas-internals/" },
+      { "label": "Hadley Wickham and Wes McKinney: Feather, a fast on-disk format for data frames (March 2016)", "url": "https://posit.co/blog/feather/" },
+      { "label": "Apache Arrow 0.1.0 release notes (10 October 2016)", "url": "https://arrow.apache.org/release/0.1.0.html" },
+      { "label": "Apache Arrow blog: 1.0.0 release, format declared stable (July 2020)", "url": "https://arrow.apache.org/blog/2020/07/24/1.0.0-release/" },
+      { "label": "Apache Arrow blog: DataFusion donated to Apache Arrow (February 2019)", "url": "https://arrow.apache.org/blog/2019/02/04/datafusion-donation/" },
+      { "label": "pandas 2.0.0 release notes: the pyarrow dtype backend and ArrowDtype (April 2023)", "url": "https://pandas.pydata.org/docs/whatsnew/v2.0.0.html" }
+    ]
+  },
+  "sources": [
+    { "label": "Apache Arrow: Overview (in-memory columnar format, SIMD, languages)", "url": "https://arrow.apache.org/overview/" },
+    { "label": "Arrow docs: Columnar format (buffers, validity bitmap, offsets, alignment, IPC stream and file)", "url": "https://arrow.apache.org/docs/format/Columnar.html" },
+    { "label": "Arrow docs: The C Data Interface", "url": "https://arrow.apache.org/docs/format/CDataInterface.html" },
+    { "label": "Apache Arrow blog: Introducing the Arrow C Data Interface (May 2020)", "url": "https://arrow.apache.org/blog/2020/05/03/introducing-arrow-c-data-interface/" },
+    { "label": "Apache Arrow FAQ: Arrow vs Parquet, Feather is the IPC file format, memory-mapping", "url": "https://arrow.apache.org/faq/" },
+    { "label": "PyArrow docs: Streaming, serialization and IPC (memory-mapped files, buffer compression)", "url": "https://arrow.apache.org/docs/python/ipc.html" },
+    { "label": "PyArrow docs: Feather file format", "url": "https://arrow.apache.org/docs/python/feather.html" },
+    { "label": "Arrow docs: Arrow Flight RPC", "url": "https://arrow.apache.org/docs/format/Flight.html" },
+    { "label": "Apache Arrow blog: Introducing Apache Arrow Flight (October 2019)", "url": "https://arrow.apache.org/blog/2019/10/13/introducing-arrow-flight/" },
+    { "label": "Arrow docs: Arrow Flight SQL", "url": "https://arrow.apache.org/docs/format/FlightSql.html" },
+    { "label": "Apache Arrow blog: Introducing Arrow Flight SQL (February 2022)", "url": "https://arrow.apache.org/blog/2022/02/16/introducing-arrow-flight-sql/" },
+    { "label": "ADBC documentation", "url": "https://arrow.apache.org/adbc/current/index.html" },
+    { "label": "ADBC: Driver list (PostgreSQL, Snowflake, DuckDB, BigQuery, SQLite, Flight SQL and more)", "url": "https://arrow.apache.org/adbc/current/driver/index.html" },
+    { "label": "ADBC: PostgreSQL driver", "url": "https://arrow.apache.org/adbc/current/driver/postgresql.html" },
+    { "label": "Apache Arrow blog: Introducing ADBC (January 2023)", "url": "https://arrow.apache.org/blog/2023/01/05/introducing-arrow-adbc/" },
+    { "label": "Arrow docs: Implementation status by language", "url": "https://arrow.apache.org/docs/status.html" },
+    { "label": "PyArrow docs: Reading and writing Parquet", "url": "https://arrow.apache.org/docs/python/parquet.html" },
+    { "label": "DuckDB docs: SQL on Apache Arrow", "url": "https://duckdb.org/docs/current/guides/python/sql_on_arrow" },
+    { "label": "PySpark docs: Apache Arrow in PySpark", "url": "https://spark.apache.org/docs/latest/api/python/tutorial/sql/arrow_pandas.html" },
+    { "label": "Arroyo blog: We built a new SQL engine on Arrow and DataFusion (March 2024)", "url": "https://www.arroyo.dev/blog/why-arrow-and-datafusion/" },
+    { "label": "Apache DataFusion: uses Apache Arrow as its in-memory format", "url": "https://datafusion.apache.org/" },
+    { "label": "apache/arrow releases on GitHub (25.0.1, August 2026)", "url": "https://github.com/apache/arrow/releases" },
+    { "label": "apache/arrow LICENSE (Apache 2.0)", "url": "https://github.com/apache/arrow/blob/main/LICENSE.txt" },
+    { "label": "Apache Arrow docs: Reading and writing the Apache ORC format", "url": "https://arrow.apache.org/docs/python/orc.html" }
+  ],
+  "checked": "2026-10-05"
+}

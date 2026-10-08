@@ -1,0 +1,146 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Amazon ElastiCache",
+  "concepts": ["cache"],
+  "provider": "aws",
+  "vendor": "Amazon Web Services",
+  "license": "Proprietary (runs open-source engines: Valkey, Memcached and Redis OSS up to 7.1, all BSD-3-Clause)",
+  "website": "https://aws.amazon.com/elasticache/",
+  "summary": "AWS’s managed Valkey, Redis OSS and Memcached, as node-based clusters or a serverless cache.",
+  "intro": [
+    "ElastiCache runs open-source in-memory engines (Valkey, Redis OSS and Memcached) on machines AWS manages, inside your VPC. Your app talks to them with an ordinary Valkey, Redis or Memcached client, so existing code works unchanged. There are two ways to run it. In a node-based cluster you pick the node type and count. With Valkey or Redis OSS in cluster mode, keys are split across up to 500 shards. Each shard has one primary that takes writes and up to five read replicas in other Availability Zones. If a primary fails, ElastiCache promotes a replica and repoints the DNS name. ElastiCache Serverless hides all of that behind one endpoint. It watches memory, CPU and network use, adds shards when one runs short, and keeps copies in several Availability Zones.",
+    "Data lives in RAM, and replicas copy the primary asynchronously, so by default a failover can lose writes that were already acknowledged. Since June 2026, node-based Valkey 9.0 clusters can turn on durability: every write also goes to a transaction log stored in several Availability Zones. With synchronous writes nothing acknowledged is lost, but writes take single-digit milliseconds and nodes cost 18% more. With asynchronous writes, latency stays in microseconds at no extra cost, but up to 10 seconds of writes can be lost. Nodes are billed by the hour, with optional one- or three-year reservations. Serverless is billed per GB-hour of data stored plus ElastiCache Processing Units (ECPUs): a simple `GET` or `SET` uses 1 ECPU per KB transferred. After Redis changed its licence in 2024, AWS backed the BSD-licensed Valkey fork. Valkey is now the recommended engine and costs 20% less on nodes and 33% less on serverless than Redis OSS or Memcached."
+  ],
+  "strengths": [
+    "Speaks standard Valkey, Redis OSS and Memcached, so existing clients and code work as they are",
+    "A serverless Valkey cache takes under a minute to create, scales without picking nodes, and starts at about $6 a month",
+    "Microsecond reads and writes, replicas across Availability Zones with automatic failover, and up to 500 shards per cluster",
+    "Valkey costs 20 to 33% less than the other engines and adds vector search (8.2) and full-text search (9.0) at no extra charge",
+    "Optional Multi-AZ durability (Valkey 9.0) lets the same cluster hold data that must not be lost, not just a cache"
+  ],
+  "limits": [
+    "Replication is asynchronous by default, so a failover can lose acknowledged writes. Durability fixes that, but it needs node-based Valkey 9.0, and synchronous writes cost 18% more and take milliseconds",
+    "Serverless pricing traps: Redis OSS and Memcached caches are billed for at least 1 GB (about $91 a month); every KB moved counts as an ECPU, so big values multiply the bill; pre-scaling minimums are billed even when idle; and there are no reserved prices, Global Datastore or data tiering",
+    "Node-based clusters leave sizing to you (AWS suggests keeping 25% of memory free for overhead), bill each partial hour as a full hour, and charge $0.01 per GB for app traffic that crosses Availability Zones",
+    "Redis OSS stops at version 7.1, and majors past community end of life move to paid Extended Support: 80% extra in years one and two, 160% in year three (Redis OSS 5 since February 2026)",
+    "Node-based Memcached has no replication and no backups: a failed node takes its share of the cache with it"
+  ],
+  "worksWith": [
+    { "id": "redis", "how": "offers managed clusters of" },
+    { "id": "aws-vpc", "how": "places cache endpoints in subnets of" },
+    { "id": "ec2", "how": "serves apps on instances in" },
+    { "id": "lambda", "how": "caches data for functions in" },
+    { "id": "s3", "how": "exports Redis OSS backups to buckets in" },
+    { "id": "memorydb", "how": "has snapshots that can seed clusters in" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "A serverless Valkey cache with cost limits, then a session key with a TTL",
+    "source": [
+      "# cap the cache at 20 GB and 50,000 ECPU/s so a runaway client can’t run up the bill",
+      "aws elasticache create-serverless-cache \\",
+      "  --serverless-cache-name sessions \\",
+      "  --engine valkey \\",
+      "  --subnet-ids subnet-0a1b2c3d4e5f60718 subnet-0f1e2d3c4b5a69788 \\",
+      "  --security-group-ids sg-0123456789abcdef0 \\",
+      "  --cache-usage-limits 'DataStorage={Maximum=20,Unit=GB},ECPUPerSecond={Maximum=50000}'",
+      "",
+      "aws elasticache describe-serverless-caches --serverless-cache-name sessions \\",
+      "  --query 'ServerlessCaches[0].Endpoint.Address' --output text",
+      "",
+      "# from an instance in the same VPC; serverless caches require TLS",
+      "valkey-cli -c --tls -h sessions-x1y2z3.serverless.use1.cache.amazonaws.com -p 6379 \\",
+      "  SET session:8f2c '{\"user\":1042}' EX 1800"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Serverless or node-based?",
+      "intro": "Both run the same engines. Serverless trades control for not having to size anything; node-based clusters are cheaper for steady load and unlock more features. Prices are US East (N. Virginia) list prices, checked 2026-10-05.",
+      "corner": "",
+      "columns": ["ElastiCache Serverless", "Node-based cluster"],
+      "rows": [
+        { "label": "What you choose", "values": ["A name, subnets and optional limits", "Node type, number of shards and replicas, Availability Zones, engine version"] },
+        { "label": "Scaling", "values": ["Automatic: adds shards as memory, CPU or network fills; about 30,000 ECPU/s on an empty cache, higher after pre-scaling", "You add shards or replicas, or move to bigger nodes; online resharding for Valkey and Redis OSS; auto scaling for Memcached since 2025"] },
+        { "label": "How it’s billed", "values": ["Per GB-hour stored plus per million ECPUs", "Per node-hour (partial hours round up), or reserved nodes up to 55% off"] },
+        { "label": "Valkey price", "values": ["$0.084 per GB-hour, $0.0023 per million ECPUs", "e.g. `cache.r7g.large` (13.07 GiB) $0.1752 an hour"] },
+        { "label": "Redis OSS and Memcached price", "values": ["$0.125 per GB-hour, $0.0034 per million ECPUs", "e.g. `cache.r7g.large` $0.219 an hour"] },
+        { "label": "Smallest bill", "values": ["Valkey: 100 MB minimum, about $6 a month. Redis OSS and Memcached: 1 GB minimum, about $91 a month", "`cache.t4g.micro` (0.5 GiB) Valkey: $0.0128 an hour, about $9 a month, one node with no replica"] },
+        { "label": "High availability", "values": ["Built in: data is stored in several Availability Zones", "Add at least one replica per shard (Valkey and Redis OSS only)"] },
+        { "label": "Durability log", "values": ["Not available", "Valkey 9.0 and later: synchronous (+18%) or asynchronous (free)"] },
+        { "label": "Network", "values": ["VPC endpoint, or a public endpoint with IAM auth and TLS 1.3 (Valkey 9.0 and later)", "Inside your VPC; app traffic across Availability Zones costs $0.01 per GB"] },
+        { "label": "Not available", "values": ["Reserved pricing, Global Datastore (cross-Region), data tiering to SSD, Outposts", "Nothing missing; you do the capacity planning"] }
+      ],
+      "notes": [
+        "ElastiCache’s own pricing example puts a spiky 10 to 100 GB Valkey cache at about $2.92 an hour serverless versus about $5.66 an hour for a 12-node `r7g.xlarge` cluster sized for the peak; for steady load, right-sized nodes usually win."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Which engine?",
+      "intro": "All three are open source under BSD-3-Clause. You can upgrade Redis OSS to Valkey in place without downtime, but you can’t downgrade an engine version.",
+      "items": [
+        { "name": "Valkey", "tag": "recommended, cheapest", "text": "The Linux Foundation fork of Redis 7.2.4, co-created by an AWS engineer. Same commands and clients as Redis OSS. Only Valkey gets durability, vector search, full-text search and hash-field expiry on ElastiCache. Versions 7.2 to 9.1." },
+        { "name": "Redis OSS", "tag": "up to 7.1", "text": "Kept for existing clusters. No versions newer than 7.1, priced 20 to 33% above Valkey, and old major versions move to paid Extended Support after end of life." },
+        { "name": "Memcached", "tag": "simplest", "text": "Plain strings and objects, multi-threaded, keys hashed across nodes by the client. No replication, persistence or pub/sub on node-based clusters, so use it only for data you can rebuild." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "By 2011 memcached was the usual way for read-heavy web apps to answer repeated queries from memory instead of a disk-based database. On AWS that meant running it yourself on EC2 instances: setting up the nodes, monitoring them and dealing with failures. On 22 August 2011 AWS launched ElastiCache in beta: you picked a node size and count, and AWS ran the cluster. It spoke the Memcached protocol, so existing code and client libraries worked unchanged. Nodes held 6 to 67 GB and started at $0.095 an hour.",
+      "In September 2013 AWS added Redis, with replicas in other Availability Zones and failover. Support for Redis Cluster in October 2016 let one dataset be sharded across nodes. In November 2023 ElastiCache Serverless removed node sizing altogether and billed by data stored and work done.",
+      "When Redis moved to source-available licences in March 2024, Madelyn Olson, an AWS principal engineer and former Redis maintainer, co-created Valkey, a BSD-licensed fork, under the Linux Foundation. In October 2024 ElastiCache added Valkey at 20 to 33% lower prices than Redis OSS. In June 2026 it added a Multi-AZ transaction log for Valkey 9.0, so a cluster no longer has to lose writes in a failure."
+    ],
+    "choices": [
+      { "choice": "Speak the open-source protocol, not a new API", "why": "Being protocol-compliant with Memcached, and later Redis, meant teams could move an existing cache to ElastiCache by changing an endpoint, with the same client libraries and tools." },
+      { "choice": "Clusters of nodes you choose, billed by the hour", "why": "That matched how people already ran memcached on EC2 and made cost predictable. The catch was capacity planning, which ElastiCache Serverless took on in 2023." },
+      { "choice": "Asynchronous replicas for failover", "why": "Copying writes to replicas after acknowledging them kept writes in microseconds, which suits a cache that can be refilled from the database. The price is that acknowledged writes can be lost when a primary fails, which the 2026 durability option addresses." },
+      { "choice": "Back the fork and price it lower", "why": "After the 2024 Redis licence change, AWS put Valkey on ElastiCache, made it the recommended engine and cut its price, so new features now arrive on Valkey rather than Redis OSS." }
+    ],
+    "timeline": [
+      { "year": "2011", "text": "Launches in beta as a managed Memcached-compatible cache (August)" },
+      { "year": "2013", "text": "Adds Redis with replicas in other Availability Zones and failover" },
+      { "year": "2016", "text": "Redis Cluster support shards one dataset across nodes" },
+      { "year": "2023", "text": "ElastiCache Serverless bills per GB-hour and ECPU (November)" },
+      { "year": "2024", "text": "Adds Valkey, 20 to 33% cheaper than Redis OSS (October)" },
+      { "year": "2026", "text": "Valkey 9.0 brings an optional Multi-AZ transaction log for durability" }
+    ],
+    "sources": [
+      { "label": "AWS What’s New: Announcing Amazon ElastiCache (Aug 2011)", "url": "https://aws.amazon.com/about-aws/whats-new/2011/08/22/announcing-amazon-elasticache/" },
+      { "label": "AWS News Blog: Amazon ElastiCache, distributed in-memory caching (Aug 2011)", "url": "https://aws.amazon.com/blogs/aws/amazon-elasticache-distributed-in-memory-caching/" },
+      { "label": "AWS What’s New: Amazon ElastiCache for Redis (Sep 2013)", "url": "https://aws.amazon.com/about-aws/whats-new/2013/09/04/amazon-elasticache-for-redis/" },
+      { "label": "AWS What’s New: ElastiCache for Redis adds sharding with Redis Cluster (Oct 2016)", "url": "https://aws.amazon.com/about-aws/whats-new/2016/10/amazon-elasticache-for-redis-adds-sharding-support-with-redis-cluster/" },
+      { "label": "AWS What’s New: AWS announces Amazon ElastiCache Serverless (Nov 2023)", "url": "https://aws.amazon.com/about-aws/whats-new/2023/11/amazon-elasticache-serverless/" },
+      { "label": "Linux Foundation: Launches open source Valkey community (Mar 2024)", "url": "https://www.linuxfoundation.org/press/linux-foundation-launches-open-source-valkey-community" },
+      { "label": "AWS What’s New: Announcing Amazon ElastiCache for Valkey (Oct 2024)", "url": "https://aws.amazon.com/about-aws/whats-new/2024/10/amazon-elasticache-valkey/" },
+      { "label": "AWS What’s New: Amazon ElastiCache for Valkey now supports durability (Jun 2026)", "url": "https://aws.amazon.com/about-aws/whats-new/2026/06/durability-amazon-elasticache/" }
+    ]
+  },
+  "sources": [
+    { "label": "ElastiCache User Guide: What is Amazon ElastiCache?", "url": "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/WhatIs.html" },
+    { "label": "ElastiCache User Guide: Replication, cluster mode disabled vs enabled", "url": "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/Replication.Redis-RedisCluster.html" },
+    { "label": "ElastiCache User Guide: Comparing node-based Valkey, Memcached and Redis OSS clusters", "url": "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/SelectEngine.html" },
+    { "label": "ElastiCache User Guide: Scaling ElastiCache Serverless (limits and pre-scaling)", "url": "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/Scaling-serverless.html" },
+    { "label": "ElastiCache User Guide: Durability in ElastiCache", "url": "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/durability.html" },
+    { "label": "ElastiCache User Guide: Engine versions and upgrading", "url": "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/engine-versions.html" },
+    { "label": "ElastiCache User Guide: Exporting a backup to Amazon S3", "url": "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/backups-exporting.html" },
+    { "label": "ElastiCache User Guide: Tutorial, configuring Lambda to access ElastiCache in a VPC", "url": "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/LambdaRedis.html" },
+    { "label": "ElastiCache User Guide: Connect to a Valkey serverless cache", "url": "https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/GettingStarted.serverless-valkey.step2.html" },
+    { "label": "Amazon ElastiCache pricing (serverless, nodes, durability, Extended Support, data transfer)", "url": "https://aws.amazon.com/elasticache/pricing/" },
+    { "label": "Amazon ElastiCache FAQs (durability, replicas, failover, backups)", "url": "https://aws.amazon.com/elasticache/faqs/" },
+    { "label": "AWS What’s New: Announcing Valkey 9.0 for Amazon ElastiCache (May 2026)", "url": "https://aws.amazon.com/about-aws/whats-new/2026/05/valkey-amazon-elasticache/" },
+    { "label": "AWS What’s New: Announcing vector search for Amazon ElastiCache (Oct 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/10/amazon-elasticache-vector-search/" },
+    { "label": "AWS What’s New: Horizontal autoscaling in ElastiCache for Memcached (Apr 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/04/horizontal-autoscaling-amazon-elasticache-memcached/" },
+    { "label": "AWS What’s New: 1-click connectivity between EC2 and your cache (Jan 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/01/amazon-elasticache-1-click-connectivity-setup-ec2-cache/" },
+    { "label": "AWS Database Blog: Get started with Amazon ElastiCache for Valkey (Oct 2024)", "url": "https://aws.amazon.com/blogs/database/get-started-with-amazon-elasticache-for-valkey/" },
+    { "label": "Amazon MemoryDB FAQs: migrating data from ElastiCache", "url": "https://aws.amazon.com/memorydb/faqs/" },
+    { "label": "AWS CLI reference: create-serverless-cache", "url": "https://docs.aws.amazon.com/cli/latest/reference/elasticache/create-serverless-cache.html" },
+    { "label": "AWS CLI reference: describe-serverless-caches", "url": "https://docs.aws.amazon.com/cli/latest/reference/elasticache/describe-serverless-caches.html" },
+    { "label": "Redis licenses (versions 7.2 and earlier are BSD-3-Clause)", "url": "https://redis.io/legal/licenses/" },
+    { "label": "Valkey on GitHub (BSD-3-Clause)", "url": "https://github.com/valkey-io/valkey" },
+    { "label": "Memcached on GitHub (BSD-3-Clause)", "url": "https://github.com/memcached/memcached" }
+  ],
+  "checked": "2026-10-05"
+}

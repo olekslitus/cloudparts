@@ -1,0 +1,183 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Podman",
+  "concepts": ["containers"],
+  "provider": "oss",
+  "vendor": "Podman Container Tools, a CNCF sandbox project; started and still mostly maintained by Red Hat",
+  "license": "Apache 2.0 (Podman and Podman Desktop alike)",
+  "website": "https://podman.io/",
+  "repo": "https://github.com/podman-container-tools/podman",
+  "summary": "Runs Docker-style containers without a daemon, as root or as an ordinary user, and hands long-running ones to systemd.",
+  "intro": [
+    "Podman runs containers without a daemon. Each `podman` command does its job and exits: `podman run` prepares the container’s storage and network, then starts `conmon`, a small monitor process, which launches an OCI runtime (`crun` by default, or `runc`) to create the container. `conmon` stays behind to hold the container’s output streams, write its logs and record its exit code. The container is therefore a descendant of whatever started it, a shell or a systemd unit, not of a long-running server. Run by an ordinary user, Podman creates a user namespace mapped onto that user’s ranges in `/etc/subuid` and `/etc/subgid`, so root inside the container is your own account outside, and Podman itself never gains privileges. Rootful containers get bridge networks from Netavark, with container names served by the aardvark-dns DNS server; rootless ones get their network device from `pasta`. Containers can be grouped into pods that share network, IPC and hostname namespaces, matching Kubernetes defaults, and `podman kube play` runs Kubernetes Pod and Deployment YAML directly.",
+    "The command line copies Docker’s, so `alias docker=podman` works for most people, and `podman build` uses Buildah underneath. For tools that speak the Docker API, `podman system service` serves a Docker-compatible REST API, alongside Podman’s own, on a Unix socket that systemd starts on demand; `docker-compose` and the `podman compose` wrapper talk to it. For long-running services, Quadlet turns small `.container`, `.pod` or `.kube` files into systemd units, and `podman auto-update` pulls newer images and restarts those units. Containers need a Linux kernel, so on macOS and Windows `podman machine` runs a Linux VM (libkrun by default on Macs, WSL or Hyper-V on Windows) and `podman` drives it remotely. Podman is Apache 2.0. Red Hat started it, and since January 2025 it has been a CNCF sandbox project with Buildah and Skopeo; the separate Podman Desktop GUI is also Apache 2.0 and a CNCF sandbox project."
+  ],
+  "strengths": [
+    "No daemon to run or protect: containers are children of the command or systemd unit that started them, and nothing runs when no containers do",
+    "Rootless by design: an ordinary user runs containers in a user namespace, and Podman is not setuid and gains no privileges",
+    "Close to Docker: the same CLI, images and registries, plus a Docker-compatible API socket for tools such as `docker-compose`",
+    "Quadlet makes containers ordinary systemd services, with dependencies, restarts and scheduled image updates through `podman auto-update`",
+    "Pods and `podman kube play` / `podman kube generate` let you move between Kubernetes YAML and local containers"
+  ],
+  "limits": [
+    "Compose isn’t built in: `podman compose` hands off to an external `docker-compose` or `podman-compose`, and Docker plugins aren’t supported",
+    "Rootless networking has caveats: ports below 1024 need a sysctl change, and the default `rootlessport` forwarder hides clients’ real source IPs (a `pasta` forwarder that keeps them is experimental in 6.0)",
+    "One machine only: no Swarm and no scheduling or failover across hosts; the project points to Kubernetes for orchestration",
+    "On macOS and Windows every container runs inside a `podman machine` Linux VM, and Podman 6 dropped Intel Macs and Windows 10",
+    "Podman 6 removed cgroups v1, iptables, CNI and slirp4netns, so older hosts must be modernised or stay on the 5.8 line, which still gets releases"
+  ],
+  "worksWith": [
+    { "id": "docker", "how": "replaces the CLI and socket API of" },
+    { "id": "kubernetes", "how": "plays and generates Pod YAML for" },
+    { "id": "nomad", "how": "runs tasks as a task driver for" },
+    { "id": "github-actions", "how": "is preinstalled on Ubuntu runners of" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "A rootless web service run by systemd through a Quadlet file",
+    "source": [
+      "mkdir -p ~/.config/containers/systemd",
+      "cat > ~/.config/containers/systemd/orders-api.container <<'EOF'",
+      "[Unit]",
+      "Description=Orders API",
+      "",
+      "[Container]",
+      "Image=ghcr.io/acme/orders-api:1.4.2",
+      "PublishPort=8080:8000",
+      "Volume=orders-data:/var/lib/orders",
+      "Environment=LOG_LEVEL=info",
+      "HealthCmd=curl -fsS http://localhost:8000/healthz",
+      "AutoUpdate=registry",
+      "",
+      "[Service]",
+      "Restart=on-failure",
+      "",
+      "[Install]",
+      "WantedBy=default.target",
+      "EOF",
+      "",
+      "systemctl --user daemon-reload                # Quadlet generates orders-api.service",
+      "systemctl --user start orders-api.service     # runs `podman run` as you; no daemon",
+      "loginctl enable-linger \"$USER\"                # keep user services alive after logout",
+      "systemctl --user enable --now podman-auto-update.timer  # daily: pull newer image, restart"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Podman and Docker compared",
+      "intro": "Both run the same OCI images from the same registries, and most `docker` commands work unchanged with `podman`. They differ in how containers are started and supervised, and in what comes in the box.",
+      "columns": ["Podman", "Docker"],
+      "rows": [
+        { "label": "How containers start", "values": ["No daemon: `podman` starts `conmon` and an OCI runtime, then exits", "The `docker` client asks the `dockerd` daemon over a REST API"] },
+        { "label": "Root", "values": ["Rootful or rootless; rootless needs only subordinate UID ranges", "The daemon needs root unless you opt in to Rootless mode"] },
+        { "label": "Pods", "values": ["Yes: `podman pod` shares network, IPC and hostname namespaces, like Kubernetes", "No pod object; Compose groups related containers"] },
+        { "label": "Keeping services running", "values": ["Quadlet files become systemd units; `podman auto-update` refreshes images", "Restart policies run by the daemon; Docker advises against process managers"] },
+        { "label": "Compose", "values": ["`podman compose` runs `docker-compose` or `podman-compose` against Podman’s socket", "Docker Compose, Docker’s own tool"] },
+        { "label": "Multi-host", "values": ["None; Swarm API calls are refused", "Swarm mode built into the engine"] },
+        { "label": "Kubernetes YAML", "values": ["`podman kube play` runs it; `podman kube generate` writes it", "Not read by the engine; Docker Desktop includes a local Kubernetes"] },
+        { "label": "Docker API", "values": ["Compatibility layer (Docker API v1.44 in Podman 6.0) plus the Libpod API", "Native"] },
+        { "label": "macOS and Windows", "values": ["`podman machine` Linux VM", "Docker Desktop Linux VM (on Linux desktops too)"] },
+        { "label": "Desktop app licence", "values": ["Podman Desktop: Apache 2.0, free for everyone", "Docker Desktop: proprietary; paid for companies with 250+ employees or $10 million+ revenue"] },
+        { "label": "Licence and governance", "values": ["Apache 2.0, CNCF sandbox project", "Engine Apache 2.0, built from the Moby project; Docker, Inc."] }
+      ],
+      "notes": [
+        "Docker’s Rootless mode runs the daemon itself inside a user namespace; Podman’s rootless mode has no daemon at all."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "The rest of the toolbox",
+      "intro": "Podman is one of several daemonless tools from the same team, sharing the same image and storage libraries.",
+      "items": [
+        { "name": "Buildah", "tag": "CNCF, with Podman", "text": "Builds OCI images from a `Dockerfile` or by modifying a working container, without a daemon or root. `podman build` uses it internally, and the two share image storage." },
+        { "name": "Skopeo", "tag": "CNCF, with Podman", "text": "Copies images between registries and inspects remote images, layers included, without pulling them or running a daemon." },
+        { "name": "Podman Desktop", "tag": "separate CNCF sandbox", "text": "A GUI for Linux, macOS and Windows for working with containers, images and Kubernetes from the desktop. Free and Apache 2.0 for any size of company." },
+        { "name": "bootc", "tag": "separate CNCF sandbox", "text": "Boots and updates whole operating systems from container images, kernel included. Podman 6 uses `bootc switch` to update the OS inside `podman machine` VMs." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Docker starts every container as a child of one long-running daemon that normally runs as root. In 2018 Red Hat’s Dan Walsh showed what that costs: a container started through the daemon loses the login UID that Linux audit uses to record who changed a file, and systemd features such as readiness notification and socket activation can’t pass through the client/server hop. Talking to the daemon’s socket also means trusting a root process.",
+      "Podman began inside CRI-O, Red Hat’s container runtime for Kubernetes. In November 2016 engineers added `kpod` there, a client-only tool for debugging pods and images when the daemons weren’t responding, which needed no daemon itself. In November 2017 it moved to its own repository, libpod, and that December Walsh renamed it: “The decision is in, kpod is going to be named podman.” Red Hat wanted something easy for anyone used to the Docker command line that didn’t need a daemon running.",
+      "Podman 1.0 shipped in January 2019, and RHEL 8 that May dropped the Docker engine and `docker` command in favour of Podman. Later releases replaced CNI networking with Netavark, built systemd support in through Quadlet and made `pasta` the rootless network. The CNCF accepted Podman, Buildah and Skopeo as a sandbox project in January 2025, and Podman 6.0 moved them into a CNCF-owned GitHub organization."
+    ],
+    "choices": [
+      { "choice": "Fork and exec instead of a client and a daemon", "why": "The container is an offspring of the `podman` process, so audit keeps the real user’s login UID and systemd can pass readiness notifications and sockets straight through. When no containers run, nothing of Podman runs." },
+      { "choice": "Rootless through user namespaces", "why": "Walsh’s complaint about the daemon model was that users must open a socket to a privileged daemon. Mapping a block of subordinate UIDs into a user namespace lets an ordinary user run containers without ever holding root on the host." },
+      { "choice": "Pods from day one", "why": "Its ancestor `kpod` was a tool for inspecting and launching pods next to CRI-O, so Podman kept Kubernetes’ unit of grouped containers. That made it natural to read and write Kubernetes YAML, which `podman play kube` did by 1.0." },
+      { "choice": "Its own network stack instead of CNI", "why": "CNI was built for Kubernetes clusters, while Podman needed single-host features such as DNS by container name and alias. In Podman 4.0 the team replaced it with Netavark and Aardvark, written in Rust, for better IPv6, multi-network containers and speed." }
+    ],
+    "timeline": [
+      { "year": "2016", "text": "`kpod` added to the CRI-O repository in November" },
+      { "year": "2017", "text": "Moves to its own repository; renamed Podman in December" },
+      { "year": "2019", "text": "Podman 1.0 in January; RHEL 8 ships Podman instead of Docker in May" },
+      { "year": "2022", "text": "Podman 4.0 brings the Netavark network stack" },
+      { "year": "2024", "text": "Podman 5.0 makes `pasta` the default rootless network" },
+      { "year": "2025", "text": "Accepted into the CNCF as a sandbox project in January" },
+      { "year": "2026", "text": "Podman 6.0 in June: CNCF GitHub organization, cgroups v1 and CNI removed" }
+    ],
+    "sources": [
+      { "label": "Opensource.com: Podman, a more secure way to run containers (Dan Walsh, Oct 2018)", "url": "https://opensource.com/article/18/10/podman-more-secure-way-run-containers" },
+      { "label": "CRI-O on GitHub: Add README for kpod (Nov 2016)", "url": "https://github.com/cri-o/cri-o/commit/0d0b70a475b9846798710ffd7cdd8f4a462a4404" },
+      { "label": "CRI-O on GitHub: Remove kpod code after repository move (Nov 2017)", "url": "https://github.com/cri-o/cri-o/commit/1bf6d20309d6eba99d7e815f0a716e9667caac18" },
+      { "label": "Podman on GitHub: Rename all references to kpod to podman (Dec 2017)", "url": "https://github.com/podman-container-tools/podman/commit/5770dc2640c216525ab84031e3712fcc46b3b087" },
+      { "label": "Red Hat blog: Why Red Hat is investing in CRI-O and Podman (May 2019)", "url": "https://www.redhat.com/en/blog/why-red-hat-investing-cri-o-and-podman" },
+      { "label": "Podman on GitHub: v1.0.0 release (Jan 2019)", "url": "https://github.com/podman-container-tools/podman/releases/tag/v1.0.0" },
+      { "label": "Red Hat: Red Hat Enterprise Linux release dates (RHEL 8 GA, May 7, 2019)", "url": "https://access.redhat.com/articles/3078" },
+      { "label": "RHEL 8 docs: Starting with containers (Docker engine removed)", "url": "https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/8/html/building_running_and_managing_containers/assembly_starting-with-containers_building-running-and-managing-containers" },
+      { "label": "Red Hat blog: Podman’s new network stack (Netavark and Aardvark, Podman 4.0)", "url": "https://www.redhat.com/en/blog/podman-new-network-stack" },
+      { "label": "Red Hat blog: Make systemd better for Podman with Quadlet (merged in Podman 4.4)", "url": "https://www.redhat.com/en/blog/quadlet-podman" },
+      { "label": "Podman on GitHub: v5.0.0 release (pasta default, Mar 2024)", "url": "https://github.com/podman-container-tools/podman/releases/tag/v5.0.0" },
+      { "label": "CNCF: Podman Container Tools (sandbox, accepted Jan 21, 2025)", "url": "https://www.cncf.io/projects/podman-container-tools/" },
+      { "label": "Podman on GitHub: v6.0.0 release (Jun 2026)", "url": "https://github.com/podman-container-tools/podman/releases/tag/v6.0.0" }
+    ]
+  },
+  "sources": [
+    { "label": "Podman docs: What is Podman?", "url": "https://docs.podman.io/en/latest/index.html" },
+    { "label": "Podman docs: podman(1) (crun default, rootless mode, pasta, Quadlet)", "url": "https://docs.podman.io/en/latest/markdown/podman.1.html" },
+    { "label": "conmon on GitHub: README (what the monitor does)", "url": "https://github.com/containers/conmon" },
+    { "label": "Podman docs: podman-network(1) (Netavark, aardvark-dns, pasta)", "url": "https://docs.podman.io/en/latest/markdown/podman-network.1.html" },
+    { "label": "Podman docs: podman-pod-create(1) (shared namespaces match Kubernetes)", "url": "https://docs.podman.io/en/latest/markdown/podman-pod-create.1.html" },
+    { "label": "Podman docs: podman-kube-play(1)", "url": "https://docs.podman.io/en/latest/markdown/podman-kube-play.1.html" },
+    { "label": "Podman docs: podman-kube-generate(1)", "url": "https://docs.podman.io/en/latest/markdown/podman-kube-generate.1.html" },
+    { "label": "Podman docs: podman-system-service(1) (Docker-compatible and Libpod REST API, socket activation)", "url": "https://docs.podman.io/en/latest/markdown/podman-system-service.1.html" },
+    { "label": "Podman docs: podman-compose(1) (wrapper around external providers)", "url": "https://docs.podman.io/en/latest/markdown/podman-compose.1.html" },
+    { "label": "Podman docs: podman-systemd.unit(5) (Quadlet)", "url": "https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html" },
+    { "label": "Podman docs: podman-container.unit(5) (Quadlet .container keys)", "url": "https://docs.podman.io/en/latest/markdown/podman-container.unit.5.html" },
+    { "label": "Podman docs: podman-auto-update(1) (timer, registry policy)", "url": "https://docs.podman.io/en/latest/markdown/podman-auto-update.1.html" },
+    { "label": "Podman docs: podman-machine(1) (VM providers per platform)", "url": "https://docs.podman.io/en/latest/markdown/podman-machine.1.html" },
+    { "label": "Podman on GitHub: Rootless tutorial (not setuid, user namespaces)", "url": "https://github.com/podman-container-tools/podman/blob/main/docs/tutorials/rootless_tutorial.md" },
+    { "label": "Podman on GitHub: Troubleshooting (ports below 1024, lingering)", "url": "https://github.com/podman-container-tools/podman/blob/main/troubleshooting.md" },
+    { "label": "Podman blog: Rootless Podman, preserving source IPs (Sep 2026)", "url": "https://blog.podman.io/2026/09/rootless-podman-preserving-source-ips/" },
+    { "label": "Podman on GitHub: transfer.md (no Swarm, no plugins)", "url": "https://github.com/podman-container-tools/podman/blob/main/transfer.md" },
+    { "label": "Podman on GitHub: Swarm API endpoints return an error", "url": "https://github.com/podman-container-tools/podman/blob/main/pkg/api/server/register_swarm.go" },
+    { "label": "Podman on GitHub: v6.0.0 release notes (removals, Docker API v1.44, libkrun default, bootc)", "url": "https://github.com/podman-container-tools/podman/releases/tag/v6.0.0" },
+    { "label": "Podman on GitHub: releases (6.1.x and 5.8.x both maintained)", "url": "https://github.com/podman-container-tools/podman/releases" },
+    { "label": "Podman on GitHub: LICENSE (Apache 2.0)", "url": "https://github.com/podman-container-tools/podman/blob/main/LICENSE" },
+    { "label": "Podman on GitHub: MAINTAINERS.md (affiliations)", "url": "https://github.com/podman-container-tools/podman/blob/main/MAINTAINERS.md" },
+    { "label": "Podman blog: Podman Container Tools grows (CNCF GitHub organization, Aug 2026)", "url": "https://blog.podman.io/2026/08/podman-container-tools-grows/" },
+    { "label": "CNCF: Podman Container Tools (sandbox project)", "url": "https://www.cncf.io/projects/podman-container-tools/" },
+    { "label": "CNCF: Podman Desktop (sandbox project)", "url": "https://www.cncf.io/projects/podman-desktop/" },
+    { "label": "Podman Desktop on GitHub (Apache 2.0)", "url": "https://github.com/podman-desktop/podman-desktop" },
+    { "label": "Podman Desktop", "url": "https://podman-desktop.io/" },
+    { "label": "Buildah on GitHub: README", "url": "https://github.com/podman-container-tools/buildah" },
+    { "label": "Skopeo on GitHub: README", "url": "https://github.com/podman-container-tools/skopeo" },
+    { "label": "CNCF: bootc (sandbox project)", "url": "https://www.cncf.io/projects/bootc/" },
+    { "label": "Nomad docs: Podman task driver plugin", "url": "https://developer.hashicorp.com/nomad/plugins/drivers/podman" },
+    { "label": "GitHub Actions runner images: Ubuntu 24.04 (Podman preinstalled)", "url": "https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md" },
+    { "label": "RHEL 8 docs: Starting with containers (no daemon; podman-docker and the Docker socket)", "url": "https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/8/html/building_running_and_managing_containers/assembly_starting-with-containers_building-running-and-managing-containers" },
+    { "label": "Docker docs: Docker Engine (Apache 2.0)", "url": "https://docs.docker.com/engine/" },
+    { "label": "Moby project on GitHub", "url": "https://github.com/moby/moby" },
+    { "label": "Docker docs: Docker Engine security (daemon needs root unless Rootless mode)", "url": "https://docs.docker.com/engine/security/" },
+    { "label": "Docker docs: Rootless mode", "url": "https://docs.docker.com/engine/security/rootless/" },
+    { "label": "Docker docs: Start containers automatically (restart policies)", "url": "https://docs.docker.com/engine/containers/start-containers-automatically/" },
+    { "label": "Docker docs: Docker Compose", "url": "https://docs.docker.com/compose/" },
+    { "label": "Docker docs: Swarm mode", "url": "https://docs.docker.com/engine/swarm/" },
+    { "label": "Docker docs: Docker Desktop (includes Kubernetes)", "url": "https://docs.docker.com/desktop/" },
+    { "label": "Docker docs: Install Docker Desktop on Linux (runs a VM)", "url": "https://docs.docker.com/desktop/setup/install/linux/" },
+    { "label": "Docker docs: Docker Desktop license agreement", "url": "https://docs.docker.com/subscription/desktop-license/" }
+  ],
+  "checked": "2026-10-05"
+}

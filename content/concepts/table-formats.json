@@ -1,0 +1,163 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Table formats",
+  "category": "analytics",
+  "order": 20,
+  "summary": "A metadata layer that turns a folder of data files into a real table, with transactions, schema changes and time travel.",
+  "howItWorks": "Apache Iceberg, Delta Lake and Apache Hudi keep metadata files next to the Parquet data files. Each commit writes new data files plus a new snapshot listing exactly which files make up the table, then makes it current in one atomic step: swapping a pointer in a catalog (Iceberg) or adding the next entry to a transaction log (Delta Lake). That gives you ACID transactions on object storage. Readers always see a complete snapshot, concurrent writers detect conflicts and retry, and old snapshots stay readable for time travel until you expire them. Adding or renaming a column is a metadata change, so it doesn’t rewrite the data.",
+  "analogy": "The catalogue of a library whose books never move. The catalogue says which books make up the collection right now, and you can pull last year’s edition to see what it said then.",
+  "useWhen": [
+    "Tables in object storage that several engines, such as Spark, Trino, Snowflake and DuckDB, must read and write safely",
+    "Updates, deletes and upserts on lake data, such as erasing a customer or applying change-data capture",
+    "Auditing or reproducing a report exactly as of a past snapshot"
+  ],
+  "avoidWhen": [
+    "Many small single-row writes per second; each commit adds files and metadata, so batch them or use a database",
+    "A handful of files that one tool reads; plain Parquet is enough"
+  ],
+  "example": "A streaming job commits new orders to an Iceberg table every minute while a nightly job compacts small files and deletes rows for customers who asked to be erased. Analysts in Trino and data scientists in Spark query the same table and never see a half-written commit. Finance reruns last quarter’s report against the snapshot from 1 July.",
+  "providers": {
+    "aws": "S3 Tables (managed Iceberg), Glue Data Catalog, Lake Formation",
+    "gcp": "Apache Iceberg managed tables in BigQuery, Lakehouse runtime catalog (formerly BigLake metastore)",
+    "azure": "Microsoft Fabric OneLake (Delta Lake), Azure Databricks (Unity Catalog)",
+    "oss": "Apache Iceberg, Delta Lake, Apache Hudi, Apache Paimon, Lance (for AI data); catalogs such as Apache Polaris, Unity Catalog and Nessie"
+  },
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "-- Spark SQL with an Iceberg catalog named \"lake\"",
+      "CREATE TABLE lake.sales.orders (",
+      "  order_id BIGINT, customer_id BIGINT, amount DECIMAL(10,2), ts TIMESTAMP",
+      ") USING iceberg",
+      "PARTITIONED BY (days(ts));",
+      "",
+      "MERGE INTO lake.sales.orders t",
+      "USING updates u ON t.order_id = u.order_id",
+      "WHEN MATCHED THEN UPDATE SET *",
+      "WHEN NOT MATCHED THEN INSERT *;",
+      "",
+      "-- time travel: the table as it was on 1 July",
+      "SELECT sum(amount) FROM lake.sales.orders TIMESTAMP AS OF '2026-07-01 00:00:00';"
+    ]
+  },
+  "related": ["file-formats","lakehouse","query-engines","relational"],
+  "diagram": {
+    "caption": "Two writers commit to one table. The catalog accepts one commit at a time, so a writer that loses a race gets a conflict and retries. Each accepted commit is a new numbered snapshot. Dashboards follow the latest snapshot, while an audit job reads an older one. Snapshots past retention are expired, and the audit skips ahead.",
+    "w": 800,
+    "h": 280,
+    "nodes": [
+      {
+        "id": "w1",
+        "x": 100,
+        "y": 75,
+        "label": "Streaming job",
+        "sub": "commits every minute",
+        "emit": {"every":1100,"jitter":0.3,"color":1},
+        "out": ["cat"]
+      },
+      {
+        "id": "w2",
+        "x": 100,
+        "y": 195,
+        "label": "Compaction",
+        "sub": "rewrites small files",
+        "emit": {"every":3200,"jitter":0.2,"color":3},
+        "out": ["cat"]
+      },
+      {
+        "id": "cat",
+        "x": 300,
+        "y": 135,
+        "label": "Catalog",
+        "sub": "atomic pointer swap",
+        "mode": "gate",
+        "p": 0.85,
+        "allowText": "commit",
+        "denyText": "conflict: retry",
+        "out": ["log"]
+      },
+      {
+        "id": "log",
+        "x": 530,
+        "y": 135,
+        "kind": "log",
+        "cells": 8,
+        "label": "Table snapshots",
+        "sub": "metadata · manifests",
+        "retain": 30,
+        "readers": [{"to":"bi","every":500,"name":"latest","batch":3},{"to":"audit","every":2600,"name":"audit"}]
+      },
+      {
+        "id": "bi",
+        "x": 720,
+        "y": 75,
+        "label": "Dashboards",
+        "sub": "Trino",
+        "mode": "sink",
+        "concept": "query-engines"
+      },
+      {"id":"audit","x":720,"y":195,"label":"Audit report","sub":"AS OF snapshot","mode":"sink"}
+    ]
+  },
+  "history": {
+    "story": [
+      "Hive, built at Facebook and described in a 2009 VLDB paper, gave Hadoop its idea of a table: an HDFS directory of files, split into partition subdirectories such as `ds=20090101`, with a metastore recording each table’s schema and location. That worked for batch loads, but the files were the truth. Readers found data by listing directories, writers changed tables by adding and renaming files, and nothing stopped a query from seeing half of an update.",
+      "Cloud object stores made this worse. Listing millions of objects was slow, consistency guarantees were limited, and a rename on S3 is really a copy. Between 2016 and 2017 three companies built a fix independently: Uber built Hudi to apply database changes to its lake within minutes, Netflix started Iceberg to replace Hive’s layout with a spec that tracks every file, and Databricks launched Delta Lake after cloud storage problems caused around half of its support escalations. All three record the exact list of files in each table version and switch versions atomically.",
+      "All three were open source by 2019 and competed for years before converging. Delta’s UniForm (2023) writes Iceberg and Hudi metadata, Apache XTable converts between formats, and in 2024 Databricks agreed to acquire Tabular, the company founded by Iceberg’s creators. Newer designs such as DuckLake (2025) move the metadata into a SQL database altogether."
+    ],
+    "choices": [
+      { "choice": "Track files explicitly, not directories", "why": "Listing directories is slow on object stores and can’t tell a finished write from a half-written one. A manifest or log that names every file makes the table’s contents exact." },
+      { "choice": "One atomic step per commit", "why": "Object stores have no multi-object transactions, but a single small write can be made atomic: swapping a pointer in a catalog (Iceberg) or creating the next log file (Delta Lake). Writers that lose the race retry." },
+      { "choice": "Immutable data files plus delete markers", "why": "Parquet files can’t be edited in place, so updates write new files, and Iceberg v2 records deleted rows in separate delete files instead of rewriting whole files." },
+      { "choice": "Keep old snapshots", "why": "Because files are never modified, an old version costs only storage. That gives time travel and reproducible reads until the snapshot is expired." }
+    ],
+    "timeline": [
+      { "year": "2009", "text": "Hive paper describes tables as directories plus a metastore" },
+      { "year": "2016", "text": "Uber builds Hudi to apply updates to its Hadoop lake" },
+      { "year": "2017", "text": "Iceberg starts at Netflix; Databricks launches Delta for customers" },
+      { "year": "2019", "text": "Delta Lake open-sourced; Hudi joins Iceberg in the Apache Incubator" },
+      { "year": "2023", "text": "Delta Lake UniForm writes Iceberg and Hudi metadata" },
+      { "year": "2024", "text": "XTable enters the Apache Incubator; Databricks agrees to buy Tabular" },
+      { "year": "2025", "text": "DuckLake keeps table metadata in SQL; Iceberg adds v3 deletion vectors" }
+    ],
+    "sources": [
+      { "label": "Hive: A Warehousing Solution Over a Map-Reduce Framework (VLDB 2009)", "url": "https://www.vldb.org/pvldb/vol2/vldb09-938.pdf" },
+      { "label": "Delta Lake: High-Performance ACID Table Storage over Cloud Object Stores (VLDB 2020)", "url": "https://www.vldb.org/pvldb/vol13/p3411-armbrust.pdf" },
+      { "label": "Uber Engineering: Apache Hudi submitted to the ASF (developed in 2016, open-sourced 2017)", "url": "https://www.uber.com/us/en/blog/apache-hudi/" },
+      { "label": "Apache Incubator: Iceberg proposal (Hive’s layout and object store limits)", "url": "https://cwiki.apache.org/confluence/display/INCUBATOR/IcebergProposal" },
+      { "label": "Netflix/iceberg: Ryan Blue’s “Initial public release” commit (December 2017)", "url": "https://github.com/Netflix/iceberg/commit/a5eb3f6ba171ecfc517a4f09ae9654e7d8ae0291" },
+      { "label": "Databricks blog: Introducing Databricks Delta (October 2017)", "url": "https://www.databricks.com/blog/2017/10/25/databricks-delta-a-unified-management-system-for-real-time-big-data.html" },
+      { "label": "Databricks: Databricks open sources Delta Lake (April 2019)", "url": "https://www.databricks.com/company/newsroom/press-releases/databricks-open-sources-delta-lake-for-data-lake-reliability" },
+      { "label": "Apache Incubator: Iceberg incubation status (entered November 2018)", "url": "https://incubator.apache.org/projects/iceberg.html" },
+      { "label": "Apache Incubator: Hudi incubation status (entered January 2019)", "url": "https://incubator.apache.org/projects/hudi.html" },
+      { "label": "Delta Lake 3.0 and UniForm announcement (June 2023)", "url": "https://www.prnewswire.com/news-releases/announcing-delta-lake-3-0-new-universal-format-offers-automatic-compatibility-for-apache-iceberg-and-apache-hudi-301865107.html" },
+      { "label": "Apache Incubator: XTable incubation status (entered February 2024)", "url": "https://incubator.apache.org/projects/xtable.html" },
+      { "label": "Databricks agrees to acquire Tabular (June 2024)", "url": "https://www.databricks.com/company/newsroom/press-releases/databricks-agrees-acquire-tabular-company-founded-original-creators" },
+      { "label": "DuckLake: SQL as a Lakehouse Format (May 2025)", "url": "https://ducklake.select/2025/05/27/ducklake-01/" },
+      { "label": "GitHub: Apache Iceberg 1.8.0 release notes, v3 deletion vectors (February 2025)", "url": "https://github.com/apache/iceberg/releases/tag/apache-iceberg-1.8.0" }
+    ]
+  },
+  "sources": [
+    { "label": "Iceberg table spec: snapshots, atomic metadata swap, optimistic concurrency, delete files", "url": "https://iceberg.apache.org/spec/" },
+    { "label": "Delta transaction log protocol", "url": "https://github.com/delta-io/delta/blob/master/PROTOCOL.md" },
+    { "label": "Delta Lake docs: Concurrency control", "url": "https://docs.delta.io/concurrency-control/" },
+    { "label": "Hudi docs: Timeline", "url": "https://hudi.apache.org/docs/timeline" },
+    { "label": "Iceberg docs: Evolution (schema changes without rewriting data)", "url": "https://iceberg.apache.org/docs/latest/evolution/" },
+    { "label": "Iceberg docs: Maintenance (expire snapshots)", "url": "https://iceberg.apache.org/docs/latest/maintenance/" },
+    { "label": "Iceberg docs: Spark writes (MERGE INTO)", "url": "https://iceberg.apache.org/docs/latest/spark-writes/" },
+    { "label": "Iceberg docs: Spark queries (TIMESTAMP AS OF)", "url": "https://iceberg.apache.org/docs/latest/spark-queries/" },
+    { "label": "Iceberg docs: Vendors and third-party engines (Trino, Snowflake, DuckDB and others)", "url": "https://iceberg.apache.org/vendors/" },
+    { "label": "Amazon S3 docs: Working with S3 Tables and table buckets", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html" },
+    { "label": "AWS Glue docs: Using the Iceberg framework", "url": "https://docs.aws.amazon.com/glue/latest/dg/aws-glue-programming-etl-format-iceberg.html" },
+    { "label": "Lake Formation docs: Permissions for Iceberg, Hudi and Delta Lake tables", "url": "https://docs.aws.amazon.com/lake-formation/latest/dg/otf-tutorial.html" },
+    { "label": "BigQuery docs: Apache Iceberg managed tables (formerly BigLake tables for Apache Iceberg in BigQuery)", "url": "https://docs.cloud.google.com/bigquery/docs/biglake-iceberg-tables-in-bigquery" },
+    { "label": "Google Cloud docs: Lakehouse runtime catalog (BigLake renamed Lakehouse, April 2026)", "url": "https://docs.cloud.google.com/lakehouse/docs/about-lakehouse-catalogs" },
+    { "label": "Microsoft Fabric docs: Delta Lake table format interoperability", "url": "https://learn.microsoft.com/en-us/fabric/fundamentals/delta-lake-interoperability" },
+    { "label": "Azure Databricks docs: What is Unity Catalog?", "url": "https://learn.microsoft.com/en-us/azure/databricks/data-governance/unity-catalog/" },
+    { "label": "Apache Paimon docs", "url": "https://paimon.apache.org/docs/master/" },
+    { "label": "Lance table format specification", "url": "https://lance.org/format/table/" },
+    { "label": "Apache Polaris: an open-source catalog for Apache Iceberg", "url": "https://polaris.apache.org/" },
+    { "label": "Unity Catalog (open source)", "url": "https://unitycatalog.io/" },
+    { "label": "Project Nessie: transactional catalog for data lakes", "url": "https://projectnessie.org/" }
+  ]
+}

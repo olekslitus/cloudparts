@@ -1,0 +1,159 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Lakehouses",
+  "category": "analytics",
+  "order": 50,
+  "summary": "Warehouse-style tables on open files in object storage, shared by every engine.",
+  "howItWorks": "A lakehouse keeps all its data in object storage as open files, usually Parquet, organised into tables by a table format such as Iceberg or Delta Lake. A catalog registers the tables and controls who may read or change them. On top, any number of engines work on the same tables: SQL for dashboards, Spark or Python for data science, streaming jobs for fresh data. You get a warehouse’s transactions and SQL without copying data into a proprietary store, and a lake’s low cost and openness without a swamp of untracked files.",
+  "analogy": "A shared kitchen with labelled, inventoried shelves. Every cook can bring their own tools, and the inventory means nobody grabs a half-unpacked crate.",
+  "useWhen": [
+    "One copy of data serving BI, ML and streaming, instead of a copy per tool",
+    "Large or fast-growing data, where warehouse storage gets expensive",
+    "Avoiding lock-in: any engine that speaks the table format can read the tables"
+  ],
+  "avoidWhen": [
+    "A small team whose data a managed warehouse already handles well",
+    "You can’t staff the extra moving parts: catalog, compaction, snapshot expiry and permissions"
+  ],
+  "example": "An energy company lands smart-meter readings as Iceberg tables in S3 Tables. Operators’ dashboards query them through Athena, data scientists train forecasting models in Spark on the same tables, and finance reads them from Snowflake. Nobody runs a copy job.",
+  "providers": {
+    "aws": "S3 Tables, Glue Data Catalog, Lake Formation, with Athena, Redshift and EMR",
+    "gcp": "Lakehouse (formerly BigLake) and BigQuery, with Spark on Managed Service for Apache Spark (formerly Dataproc)",
+    "azure": "Microsoft Fabric (OneLake), Azure Databricks",
+    "oss": "Iceberg or Delta Lake + Trino or Spark + a catalog such as Polaris or Unity Catalog; also Databricks, Snowflake, Dremio (now part of SAP)"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "from pyiceberg.catalog import load_catalog",
+      "",
+      "# one catalog, shared by every engine that reads these tables",
+      "catalog = load_catalog(\"lake\", type=\"rest\", uri=\"https://catalog.example.com\", warehouse=\"analytics\")",
+      "",
+      "meters = catalog.load_table(\"energy.meter_readings\")",
+      "df = meters.scan(",
+      "    row_filter=\"reading_date >= '2026-09-01'\",",
+      "    selected_fields=(\"meter_id\", \"kwh\"),",
+      ").to_pandas()",
+      "print(df.groupby(\"meter_id\").kwh.sum().head())"
+    ]
+  },
+  "related": ["data-lake","warehouse","table-formats","query-engines","object","etl"],
+  "diagram": {
+    "caption": "Ingest, dashboards and model training all use the same tables. Every engine goes through one catalog to find the current snapshot, then reads the same open files in object storage. There is no copy of the data per tool.",
+    "w": 800,
+    "h": 290,
+    "zones": [
+      {"x":205,"y":14,"w":190,"h":262,"label":"Engines"},
+      {"x":420,"y":14,"w":366,"h":262,"label":"Storage · open formats"}
+    ],
+    "nodes": [
+      {
+        "id": "ingest",
+        "x": 100,
+        "y": 70,
+        "label": "Streaming ingest",
+        "sub": "meter readings",
+        "emit": {"every":950,"jitter":0.4,"color":1},
+        "out": ["flink"]
+      },
+      {
+        "id": "bi",
+        "x": 100,
+        "y": 150,
+        "label": "BI dashboard",
+        "sub": "operators",
+        "emit": {"every":1500,"jitter":0.4,"req":true,"color":0},
+        "out": ["sql"]
+      },
+      {
+        "id": "ml",
+        "x": 100,
+        "y": 230,
+        "label": "ML training",
+        "sub": "notebooks",
+        "emit": {"every":2600,"jitter":0.3,"req":true,"color":2},
+        "out": ["spark"]
+      },
+      {"id":"flink","x":300,"y":70,"label":"Stream writer","sub":"Flink · Spark","out":["cat"]},
+      {
+        "id": "sql",
+        "x": 300,
+        "y": 150,
+        "label": "SQL engine",
+        "sub": "Trino · Athena",
+        "concept": "query-engines",
+        "out": ["cat"]
+      },
+      {"id":"spark","x":300,"y":230,"label":"Spark","sub":"Python · ML","out":["cat"]},
+      {
+        "id": "cat",
+        "x": 520,
+        "y": 150,
+        "label": "Table catalog",
+        "sub": "Iceberg · Delta",
+        "concept": "table-formats",
+        "out": ["obj"]
+      },
+      {
+        "id": "obj",
+        "x": 700,
+        "y": 150,
+        "label": "Object storage",
+        "sub": "Parquet files",
+        "concept": "object",
+        "mode": "reply",
+        "delay": 120
+      }
+    ]
+  },
+  "history": {
+    "story": [
+      "Data warehouses gave businesses reliable SQL over cleaned data, but they coupled compute and storage in expensive appliances and couldn’t hold video, audio or free text. From around 2010, companies poured raw data into cheap Hadoop storage instead; Pentaho’s James Dixon called it a “data lake”, in contrast to the tidy data mart. From 2015, cloud object stores such as S3, ADLS and GCS began replacing HDFS. Most large companies ended up with two tiers: a lake for raw data and machine learning, and a warehouse such as Redshift or Snowflake fed with a curated copy for BI.",
+      "Two tiers meant ETL twice, warehouse data that was days stale, and two systems to keep consistent. Table formats built from 2016 onward (Hudi at Uber, Iceberg at Netflix, Delta Lake at Databricks) added transactions and snapshots to lake files. In January 2020 Databricks described the result as a lakehouse, “a new, open architecture that combines the best elements of data lakes and data warehouses”, and in a CIDR 2021 paper Michael Armbrust, Ali Ghodsi, Reynold Xin and Matei Zaharia argued that the warehouse architecture “will wither in the coming years”.",
+      "Warehouses and clouds converged on the idea rather than fighting it. Engines such as Snowflake, BigQuery and Athena now read open tables, AWS launched managed Iceberg tables as S3 Tables in December 2024, and open catalogs such as Apache Polaris (a top-level Apache project since February 2026) let many engines share one set of tables."
+    ],
+    "choices": [
+      { "choice": "One copy of data, in open files", "why": "Copying lake data into a warehouse added cost, ETL failures and staleness. Keeping a single copy in open formats like Parquet lets warehouses, Spark and ML tools all read the same files." },
+      { "choice": "A transactional metadata layer over the files", "why": "Plain folders of files have no atomic updates or versions. Table formats add a log or snapshot tree, which brings ACID transactions, time travel and schema enforcement to the lake." },
+      { "choice": "Storage separate from compute", "why": "Warehouse appliances forced companies to pay for peak load. With data in object storage, any number of engines can start, scale and stop independently of the data." }
+    ],
+    "timeline": [
+      { "year": "2010", "text": "James Dixon coins “data lake” for raw data kept in Hadoop" },
+      { "year": "2015", "text": "Cloud object stores start replacing HDFS as the home of data lakes" },
+      { "year": "2017", "text": "Delta Lake launches at Databricks; Iceberg starts at Netflix" },
+      { "year": "2020", "text": "Databricks describes the lakehouse in a January blog post" },
+      { "year": "2021", "text": "CIDR paper argues lakehouses will replace the warehouse architecture" },
+      { "year": "2024", "text": "AWS launches S3 Tables; Apache Polaris catalog enters the incubator" },
+      { "year": "2025", "text": "DuckLake proposes keeping lakehouse metadata in a SQL database" }
+    ],
+    "sources": [
+      { "label": "Lakehouse: A New Generation of Open Platforms (CIDR 2021)", "url": "https://www.cidrdb.org/cidr2021/papers/cidr2021_paper17.pdf" },
+      { "label": "James Dixon: Pentaho, Hadoop, and Data Lakes (October 2010)", "url": "https://jamesdixon.wordpress.com/2010/10/14/pentaho-hadoop-and-data-lakes/" },
+      { "label": "Databricks: What is a lakehouse? (January 2020)", "url": "https://www.databricks.com/blog/2020/01/30/what-is-a-data-lakehouse.html" },
+      { "label": "Databricks blog: Introducing Databricks Delta (October 2017)", "url": "https://www.databricks.com/blog/2017/10/25/databricks-delta-a-unified-management-system-for-real-time-big-data.html" },
+      { "label": "Netflix/iceberg: Ryan Blue’s “Initial public release” commit (December 2017)", "url": "https://github.com/Netflix/iceberg/commit/a5eb3f6ba171ecfc517a4f09ae9654e7d8ae0291" },
+      { "label": "Uber Engineering: Apache Hudi submitted to the ASF (developed in 2016)", "url": "https://www.uber.com/us/en/blog/apache-hudi/" },
+      { "label": "AWS What’s New: Amazon S3 Tables (December 2024)", "url": "https://aws.amazon.com/about-aws/whats-new/2024/12/amazon-s3-tables-apache-iceberg-tables-analytics-workloads/" },
+      { "label": "Apache Incubator: Polaris (entered August 2024, graduated February 2026)", "url": "https://incubator.apache.org/projects/polaris.html" },
+      { "label": "Iceberg docs: Vendors (Snowflake, BigQuery, Athena and others)", "url": "https://iceberg.apache.org/vendors/" },
+      { "label": "DuckLake: SQL as a Lakehouse Format (May 2025)", "url": "https://ducklake.select/2025/05/27/ducklake-01/" }
+    ]
+  },
+  "sources": [
+    { "label": "Lakehouse: A New Generation of Open Platforms (CIDR 2021)", "url": "https://www.cidrdb.org/cidr2021/papers/cidr2021_paper17.pdf" },
+    { "label": "Iceberg table spec", "url": "https://iceberg.apache.org/spec/" },
+    { "label": "Delta Lake docs: Introduction", "url": "https://docs.delta.io/" },
+    { "label": "Amazon S3 docs: S3 Tables, used from Athena, Redshift and EMR", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html" },
+    { "label": "AWS Glue docs: Using the Iceberg framework", "url": "https://docs.aws.amazon.com/glue/latest/dg/aws-glue-programming-etl-format-iceberg.html" },
+    { "label": "Lake Formation docs: Permissions for Iceberg, Hudi and Delta Lake tables", "url": "https://docs.aws.amazon.com/lake-formation/latest/dg/otf-tutorial.html" },
+    { "label": "Google Cloud docs: What is borderless Lakehouse? (BigLake renamed Lakehouse, April 2026)", "url": "https://docs.cloud.google.com/lakehouse/docs/introduction" },
+    { "label": "BigQuery docs: Apache Iceberg managed tables", "url": "https://docs.cloud.google.com/bigquery/docs/biglake-iceberg-tables-in-bigquery" },
+    { "label": "Microsoft Fabric docs: Delta Lake table format interoperability", "url": "https://learn.microsoft.com/en-us/fabric/fundamentals/delta-lake-interoperability" },
+    { "label": "Azure Databricks docs: What is Unity Catalog?", "url": "https://learn.microsoft.com/en-us/azure/databricks/data-governance/unity-catalog/" },
+    { "label": "Iceberg docs: Vendors (Trino, Snowflake, Dremio and others)", "url": "https://iceberg.apache.org/vendors/" },
+    { "label": "Apache Polaris: an open-source catalog for Apache Iceberg", "url": "https://polaris.apache.org/" },
+    { "label": "Unity Catalog (open source)", "url": "https://unitycatalog.io/" },
+    { "label": "PyIceberg docs: API (load_catalog, scan with row_filter and selected_fields)", "url": "https://py.iceberg.apache.org/api/" }
+  ]
+}

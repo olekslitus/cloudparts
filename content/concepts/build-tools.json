@@ -1,0 +1,154 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Build tools",
+  "category": "delivery",
+  "order": 40,
+  "summary": "Turn source code into runnable artifacts, rebuilding only what changed since last time.",
+  "howItWorks": "A build tool reads build files that say what to produce (a binary, a JAR, a container image, a JavaScript bundle), what each output is made from, and the command that makes it. From those it builds a dependency graph and runs the steps in order, side by side where they don’t depend on each other. The skill is in skipping work. Make, the original, rebuilds a target only if one of the files it depends on is newer. Newer tools such as Gradle, Bazel, Nx and Turborepo fingerprint each step’s inputs (source files, flags, tool versions) and reuse the earlier output when the fingerprint matches, from a local cache or a remote cache the whole team and CI share. That only works if a step’s output depends on nothing but its declared inputs, which is what a hermetic build promises: the same source and configuration always give the same output, whatever happens to be installed on the machine. Bazel, Buck2 and others can go further and send steps to a pool of remote workers through the Remote Execution API. Some languages ship a build tool with the compiler (Cargo for Rust, `go build` for Go), and in JavaScript the bundlers (webpack, esbuild, Vite) play the role, following imports from entry points to build one or more bundles. A build tool is not a CI service: CodeBuild, Cloud Build, Azure Pipelines or GitHub Actions decide when and where a build runs, and the build tool they call decides what gets built.",
+  "analogy": "A kitchen that keeps prepped ingredients labelled with the recipe and date. When an order comes in, the cook only chops what isn’t already in the fridge, and a sister kitchen can borrow the prep too.",
+  "useWhen": [
+    "Any project bigger than one file: the graph and incremental rebuilds save time on every change",
+    "A monorepo where CI should rebuild and retest only what a change affects (Bazel, Buck2, Nx, Turborepo, Gradle)",
+    "Builds slow enough that a shared remote cache, or remote execution, pays for its servers"
+  ],
+  "avoidWhen": [
+    "Adopting Bazel or Buck2 for a small project: they ask you to declare every input and toolchain, which is real work",
+    "Trusting cached outputs from non-hermetic steps, such as ones that read the clock or download “latest”; they make stale or wrong builds"
+  ],
+  "example": "A monorepo holds 40 TypeScript packages, and a full CI build takes 25 minutes. With Turborepo and a remote cache, a pull request that changes one package rebuilds and retests that package and the three that depend on it; the other 36 restore their outputs from the cache, because their input hashes match a build that already ran. CI takes four minutes, and a developer pulling the branch gets the same cache hits locally.",
+  "providers": {
+    "aws": "AWS CodeBuild (a managed service that runs your build tool, not a build tool itself)",
+    "gcp": "Cloud Build (runs build steps in containers)",
+    "azure": "Azure Pipelines (builds, tests and deploys; runs your build tool)",
+    "oss": "Make, Maven, Gradle, Bazel, Buck2, Pants, Nx, Turborepo, Cargo, `go build`; bundlers webpack, esbuild, Vite; remote cache and execution servers Buildbarn, Buildfarm, bazel-remote"
+  },
+  "snippet": {
+    "lang": "text",
+    "source": [
+      "# Makefile: target: what it depends on, then the command (indented with a tab)",
+      "app: main.o db.o",
+      "\tcc -o app main.o db.o",
+      "",
+      "main.o: main.c db.h",
+      "\tcc -c main.c",
+      "",
+      "db.o: db.c db.h",
+      "\tcc -c db.c",
+      "",
+      "# $ make          compiles main.o and db.o, then links app",
+      "# $ touch db.c",
+      "# $ make          recompiles only db.o, then relinks app"
+    ]
+  },
+  "related": ["cicd", "containers", "version-control", "cache"],
+  "diagram": {
+    "caption": "Each build step is looked up by a hash of its inputs: source files, flags and tool versions. Most steps hit the shared cache and come back at once; only steps whose inputs changed go on to run on a worker.",
+    "h": 240,
+    "nodes": [
+      {
+        "id": "build",
+        "x": 100,
+        "y": 120,
+        "label": "Build",
+        "sub": "steps in the graph",
+        "emit": { "every": 520, "jitter": 0.35, "req": true, "cycle": true },
+        "out": ["cache"]
+      },
+      {
+        "id": "cache",
+        "x": 350,
+        "y": 120,
+        "label": "Remote cache",
+        "sub": "hash(inputs) → outputs",
+        "mode": "cache",
+        "p": 0.75,
+        "out": ["workers"],
+        "concept": "cache"
+      },
+      {
+        "id": "workers",
+        "x": 610,
+        "y": 120,
+        "label": "Workers",
+        "sub": "compile, link, test",
+        "mode": "reply",
+        "delay": 900
+      }
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Families of build tools",
+      "corner": "Family",
+      "columns": ["Examples", "Decides what to rebuild by", "Sharing work"],
+      "rows": [
+        { "label": "Classic", "values": ["Make", "File timestamps: a target older than a prerequisite is rebuilt", "None built in"] },
+        { "label": "Task-based (JVM)", "values": ["Ant, Maven, Gradle", "Gradle compares each task’s declared inputs and outputs and marks it `UP-TO-DATE`", "Gradle’s build cache, local or remote over HTTP"] },
+        { "label": "Artifact-based, hermetic", "values": ["Bazel, Buck2, Pants", "Hashes of each action’s declared inputs, command and environment", "Remote cache and remote execution through the Remote Execution API"] },
+        { "label": "JavaScript monorepo task runners", "values": ["Nx, Turborepo", "A fingerprint of each task’s inputs; runs only affected projects", "Remote cache shared by CI and developers"] },
+        { "label": "Built into the language", "values": ["Cargo, `go build`", "The toolchain tracks changed packages; Go keeps a build cache", "Local by default"] },
+        { "label": "Bundlers", "values": ["webpack, esbuild, Vite", "A module graph followed from entry points", "Built for JavaScript and CSS, not a general build system"] }
+      ],
+      "notes": ["Bazel’s documentation calls Ant, Maven and Gradle task-based: you describe tasks that run commands. Bazel’s build files instead declare the artifacts to produce and their dependencies, and the tool decides how to run them."]
+    }
+  ],
+  "history": {
+    "story": [
+      "In the mid-1970s at Bell Labs, Steve Johnson stormed into Stuart Feldman’s office after losing a morning to debugging a program that was actually correct: the bug had been fixed, but the file hadn’t been recompiled. Feldman wrote Make that weekend; the base version in its change log is dated April 24, 1976. A Makefile records which files depend on which and how to rebuild each, and Make walks that dependency graph, rebuilding only targets older than what they depend on. Feldman’s paper describing it appeared in 1979.",
+      "Java brought new tools. Ant began as the tool that built the Tomcat server and became its own Apache project in 2000. Maven grew out of the Jakarta Turbine project, where each subproject had its own slightly different Ant file and JARs were checked into CVS; it offered one standard way to build and a clear definition of what a project consists of. Maven 2.0 came out in 2005. Gradle reached 1.0 in June 2012; it skips tasks whose inputs and outputs haven’t changed, and can share outputs through a build cache.",
+      "Very large codebases pushed further. Google, which had built its software with large generated Makefiles that grew slow and unreliable, wrote Blaze, a build tool over its monorepo whose promise was “{correct, fast}, choose two”. It open-sourced Blaze as Bazel on March 24, 2015. Facebook built Buck, and in April 2023 Meta open-sourced Buck2, a from-scratch rewrite in Rust that it said built twice as fast. Bazel’s Remote Execution API is now spoken by many clients and servers, and language toolchains took the lesson too: Go 1.10 added a build cache in 2018."
+    ],
+    "choices": [
+      { "choice": "A declared dependency graph", "why": "Programmers forgot which files depended on which, and recompiling everything to be safe was wasteful. Writing the dependencies down once lets the tool work out the minimum to rebuild every time." },
+      { "choice": "Hashes of inputs instead of timestamps", "why": "A timestamp only says a file was touched, and it means nothing on another machine. Hashing the inputs of each step makes a result safe to reuse from someone else’s build, which is what makes a shared cache possible." },
+      { "choice": "Hermetic builds", "why": "If a step can read whatever happens to be installed, the same source can build differently on two machines and a cached result can’t be trusted. Treating compilers and libraries as declared, versioned inputs makes outputs reproducible." },
+      { "choice": "Declare artifacts, not tasks", "why": "When build files describe what to produce instead of which commands to run, the tool is free to parallelize, cache and distribute the work, at the cost of declaring everything up front." }
+    ],
+    "timeline": [
+      { "year": "1976", "text": "Base version of Stuart Feldman’s Make, April 24, at Bell Labs" },
+      { "year": "2000", "text": "Ant leaves the Tomcat code base to become Apache Ant" },
+      { "year": "2005", "text": "Maven 2.0 is released (October)" },
+      { "year": "2012", "text": "Gradle 1.0 (June 12)" },
+      { "year": "2015", "text": "Google open-sources Blaze as Bazel (March 24)" },
+      { "year": "2018", "text": "Go 1.10 adds a build cache to `go build`" },
+      { "year": "2023", "text": "Meta open-sources Buck2, written in Rust (April 6)" }
+    ],
+    "sources": [
+      { "label": "TUHS: V7/usr/src/cmd/make/ident.c (change log, base version 4/24/76)", "url": "https://www.tuhs.org/cgi-bin/utree.pl?file=V7/usr/src/cmd/make/ident.c" },
+      { "label": "S. I. Feldman: Make, A Program for Maintaining Computer Programs (V7 Unix documentation, 1978)", "url": "https://www.tuhs.org/cgi-bin/utree.pl?file=V7/usr/doc/make" },
+      { "label": "S. I. Feldman: Make, Software: Practice and Experience 9(4) (Apr 1979)", "url": "https://doi.org/10.1002/spe.4380090402" },
+      { "label": "Eric S. Raymond: The Art of Unix Programming, ch. 15, make (Feldman on how Make began)", "url": "http://www.catb.org/esr/writings/taoup/html/ch15s04.html", "archive": "https://web.archive.org/web/20260821071621/http://www.catb.org/esr/writings/taoup/html/ch15s04.html" },
+      { "label": "Apache Ant FAQ: Ant’s history", "url": "https://ant.apache.org/faq.html" },
+      { "label": "Apache Maven: What is Maven? (began in the Jakarta Turbine project)", "url": "https://maven.apache.org/what-is-maven.html" },
+      { "label": "Apache Maven: release history (2.0, Oct 20, 2005)", "url": "https://maven.apache.org/docs/history.html" },
+      { "label": "Gradle: releases (1.0, Jun 12, 2012)", "url": "https://gradle.org/releases/" },
+      { "label": "Bazel FAQ: where Bazel came from and why Google built it", "url": "https://bazel.build/about/faq" },
+      { "label": "EngFlow blog: Birth of the Bazel (announced March 24, 2015)", "url": "https://blog.engflow.com/2024/10/01/birth-of-the-bazel/" },
+      { "label": "Meta Engineering: Build faster with Buck2, our open source build system (Apr 6, 2023)", "url": "https://engineering.fb.com/2023/04/06/open-source/buck2-open-source-large-scale-build-system/" },
+      { "label": "Go 1.10 release notes: build cache", "url": "https://go.dev/doc/go1.10" },
+      { "label": "Go release history: go1.10 released 2018-02-16", "url": "https://go.dev/doc/devel/release" }
+    ]
+  },
+  "sources": [
+    { "label": "S. I. Feldman: Make (dependency graph, rebuild targets older than their prerequisites)", "url": "https://www.tuhs.org/cgi-bin/utree.pl?file=V7/usr/doc/make" },
+    { "label": "Gradle docs: Incremental build (task inputs and outputs, UP-TO-DATE)", "url": "https://docs.gradle.org/current/userguide/incremental_build.html" },
+    { "label": "Gradle docs: Build cache (local and remote)", "url": "https://docs.gradle.org/current/userguide/build_cache.html" },
+    { "label": "Bazel docs: Task-based build systems (Ant, Maven, Gradle)", "url": "https://bazel.build/basics/task-based-builds" },
+    { "label": "Bazel docs: Artifact-based build systems", "url": "https://bazel.build/basics/artifact-based-builds" },
+    { "label": "Bazel docs: Hermeticity", "url": "https://bazel.build/basics/hermeticity" },
+    { "label": "Bazel docs: Remote caching (actions, action cache, CAS)", "url": "https://bazel.build/remote/caching" },
+    { "label": "bazelbuild/remote-apis on GitHub: Remote Execution API, clients and servers", "url": "https://github.com/bazelbuild/remote-apis" },
+    { "label": "Buck2 README", "url": "https://github.com/facebook/buck2" },
+    { "label": "Turborepo docs: Caching (input fingerprints, Remote Cache)", "url": "https://turborepo.com/docs/crafting-your-repository/caching" },
+    { "label": "Nx docs: Intro to Nx (caching, task orchestration, affected tasks)", "url": "https://nx.dev/docs/getting-started/intro" },
+    { "label": "The Cargo Book: Cargo is the Rust package manager and build tool", "url": "https://doc.rust-lang.org/cargo/" },
+    { "label": "Go 1.10 release notes: `go build` maintains a cache", "url": "https://go.dev/doc/go1.10" },
+    { "label": "webpack docs: Concepts (a static module bundler that builds a dependency graph)", "url": "https://webpack.js.org/concepts/" },
+    { "label": "esbuild FAQ: Why is esbuild fast?", "url": "https://esbuild.github.io/faq/" },
+    { "label": "Vite docs: Why Vite", "url": "https://vite.dev/guide/why" },
+    { "label": "AWS docs: What is AWS CodeBuild?", "url": "https://docs.aws.amazon.com/codebuild/latest/userguide/welcome.html" },
+    { "label": "Google Cloud docs: Cloud Build overview", "url": "https://cloud.google.com/build/docs/overview" },
+    { "label": "Microsoft Learn: What is Azure Pipelines?", "url": "https://learn.microsoft.com/en-us/azure/devops/pipelines/get-started/what-is-azure-pipelines" }
+  ]
+}

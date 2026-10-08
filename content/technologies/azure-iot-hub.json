@@ -1,0 +1,146 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Azure IoT Hub",
+  "concepts": ["iot"],
+  "provider": "azure",
+  "vendor": "Microsoft",
+  "license": "Proprietary; the Azure IoT device and service SDKs are open source (MIT)",
+  "website": "https://azure.microsoft.com/en-us/products/iot-hub/",
+  "summary": "Azure’s device gateway: a registry of device identities, telemetry into an Event Hubs-compatible stream, and device twins, direct methods and cloud-to-device messages, sold in fixed-price units with a daily message quota.",
+  "intro": [
+    "Every device has an entry in the hub’s identity registry and signs in with a symmetric key (a SAS token) or an X.509 certificate. It connects over MQTT 3.1.1, AMQP or HTTPS, with MQTT and AMQP also available over WebSockets on port 443. IoT Hub is not a general MQTT broker: a device publishes telemetry only to its own fixed topic, `devices/{device-id}/messages/events/`, and can’t talk to other devices. Telemetry lands in a built-in, Event Hubs-compatible endpoint, split into partitions (chosen at creation and fixed, up to 32) and kept for one to seven days, which any Event Hubs reader, Azure Functions or Stream Analytics can consume. Routes with queries over message properties, body and twin tags can also send messages to Blob Storage, Service Bus, Event Hubs or Cosmos DB. The Standard tier adds the other direction: a per-device queue of cloud-to-device messages, a device twin (a JSON document with `desired` and `reported` properties and tags), direct methods (a synchronous call to an online device that waits 5 to 300 seconds for an answer), and jobs that apply these across a fleet. The Device Provisioning Service assigns new devices to the right hub on first boot.",
+    "You buy a hub as units of one edition. Each unit has a daily message quota, counting 4 KB per message: 400,000 a day on B1 or S1, 6 million on B2 or S2, 300 million on B3 or S3. In US East a unit costs $10, $50 or $500 a month on Basic, and $25, $250 or $2,500 on Standard; a Free hub allows 8,000 messages of 0.5 KB a day. Twin reads and updates and direct method calls draw on the same quota. When the quota runs out, requests fail with `403002 IotHubQuotaExceeded` until the next UTC day or until you add units. For open publish/subscribe between devices, Microsoft now points to the MQTT broker in Azure Event Grid, and for factory-floor edge sites to Azure IoT Operations."
+  ],
+  "strengths": [
+    "Device management built in on Standard: twins, direct methods with timeouts, a cloud-to-device queue, and jobs across thousands of devices",
+    "Telemetry arrives in an Event Hubs-compatible stream that Azure Functions, Stream Analytics and Event Hubs SDKs read directly, with routing to Storage, Service Bus and Cosmos DB",
+    "A flat monthly price per unit: connection time and routing to several endpoints add nothing to the hub bill, and cost changes only when you add units",
+    "The Device Provisioning Service gives zero-touch enrollment and spreads devices across hubs, at $0.10 per 1,000 operations"
+  ],
+  "limits": [
+    "Not a full MQTT broker: MQTT 3.1.1 only, fixed topics, no retained messages, no QoS 2, no device-to-device or broadcast messaging; Event Grid’s broker covers those",
+    "Hard daily quotas: a burst past the quota is rejected for the rest of the UTC day, and you pay for each unit all month whether you use it or not",
+    "Basic tier has no cloud-to-device messages, twins or direct methods; Standard can’t be downgraded to Basic, a Free hub can’t be upgraded, and partition count is fixed at creation",
+    "Caps of 1,000,000 devices and modules per hub, 50 hubs per subscription, 256 KB per device-to-cloud message and 50 pending cloud-to-device messages per device",
+    "Microsoft has been retiring the services around it: Time Series Insights shut down in July 2024 and IoT Central will retire on 20 September 2029"
+  ],
+  "worksWith": [
+    { "id": "mqtt", "how": "accepts a limited subset of" },
+    { "id": "azure-blob", "how": "routes messages and file uploads to" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Create a hub, register a device, send telemetry and call a direct method",
+    "source": [
+      "az extension add --name azure-iot",
+      "",
+      "# A Standard S1 hub with 4 partitions on the built-in endpoint (fixed for life)",
+      "az iot hub create --name acme-plant-hub --resource-group iot-rg \\",
+      "  --sku S1 --unit 1 --partition-count 4",
+      "",
+      "# A device identity with a symmetric key",
+      "az iot hub device-identity create --hub-name acme-plant-hub --device-id pump-17",
+      "",
+      "# Simulate the device: send one telemetry message",
+      "az iot device send-d2c-message --hub-name acme-plant-hub --device-id pump-17 \\",
+      "  --data '{\"temp\": 84.2}'",
+      "",
+      "# Change desired state in the twin; the device sees it on connect",
+      "az iot hub device-twin update --hub-name acme-plant-hub --device-id pump-17 \\",
+      "  --desired '{\"reportEverySeconds\": 60}'",
+      "",
+      "# Call a direct method; fails with 404 if the device isn't online",
+      "az iot hub invoke-device-method --hub-name acme-plant-hub --device-id pump-17 \\",
+      "  --method-name reboot --method-payload '{\"delaySeconds\": 5}' --timeout 30",
+      "",
+      "# Watch telemetry arriving on the built-in endpoint",
+      "az iot hub monitor-events --hub-name acme-plant-hub --device-id pump-17"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Tiers and units",
+      "intro": "List prices in US East, checked 6 October 2026. Each hub is one edition; you scale by adding units of that edition, or by moving between sizes within the same tier.",
+      "corner": "Edition",
+      "columns": ["Price per unit per month", "Messages per day per unit", "Units per hub", "Features"],
+      "rows": [
+        { "label": "Free", "values": ["$0", "8,000 (metered at 0.5 KB)", "One free hub per subscription", "All Standard features; can’t be upgraded"] },
+        { "label": "B1", "values": ["$10", "400,000", "Up to 200", "Telemetry, routing, per-device identity, DPS"] },
+        { "label": "B2", "values": ["$50", "6,000,000", "Up to 200", "As B1"] },
+        { "label": "B3", "values": ["$500", "300,000,000", "Up to 10", "As B1"] },
+        { "label": "S1", "values": ["$25", "400,000", "Up to 200", "Adds cloud-to-device messages, twins, direct methods, jobs, IoT Edge"] },
+        { "label": "S2", "values": ["$250", "6,000,000", "Up to 200", "As S1"] },
+        { "label": "S3", "values": ["$2,500", "300,000,000", "Up to 10", "As S1"] }
+      ],
+      "notes": [
+        "Paid tiers meter every billable operation in 4 KB blocks: a 6 KB message counts as two, and a direct method counts its request and its response. Keep-alives and identity registry calls are free.",
+        "Throttles also scale with size: an S1 hub allows the higher of 100 device-to-cloud sends per second or 12 per second per unit; each S3 unit allows 6,000.",
+        "Azure Device Registry and certificate management work only on Free and S1 hubs.",
+        "Prices from the Azure Retail Prices API (meters effective since 2018) and the IoT Hub pricing page."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "IoT Hub and its neighbours",
+      "intro": "Microsoft has split IoT work across several services, and retired some of them. Which one fits depends on whether you need a device registry with twins and commands, an open MQTT broker, or software at the edge.",
+      "items": [
+        { "name": "Azure Event Grid MQTT broker", "tag": "GA Nov 2023", "text": "A publish/subscribe MQTT 3.1.1 and 5 broker on custom topics, with retained messages, shared subscriptions, device-to-device and broadcast messaging, and messages up to 1 MB. Billed per throughput unit hour plus MQTT operations metered per 64 KB. No twins or direct methods." },
+        { "name": "Azure IoT Operations", "tag": "edge", "text": "Kubernetes services on Azure Arc-enabled clusters at the site: an MQTT broker, connectors such as OPC UA, and data flows that clean data before sending it to Event Grid, Event Hubs or Fabric. It can run offline for up to 72 hours." },
+        { "name": "Azure IoT Central", "tag": "retires Sept 2029", "text": "A hosted IoT application with dashboards, rules and device templates, billed per device. Microsoft announced on 29 September 2026 that it will retire on 20 September 2029, and recommends IoT Hub, DPS, Azure Device Registry and Fabric instead." },
+        { "name": "Azure Time Series Insights", "tag": "retired July 2024", "text": "An analytics and storage service for IoT time series. Microsoft brought its retirement forward to 7 July 2024 and moved customers to Azure Data Explorer." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In November 2015 Microsoft’s Sam George introduced Azure IoT Suite, ready-made solutions such as remote monitoring that wired several Azure services together. At its centre was IoT Hub, “a new service we’ve introduced to meet the needs of IoT”: a cloud gateway that could scale to millions of connections per hub, authenticated each device separately, and could also send commands back to devices. It spoke HTTP and AMQP, with MQTT through a free open-source protocol gateway.",
+      "IoT Hub became generally available in February 2016, now listing HTTP, AMQP, AMQP over WebSockets and MQTT, with general-availability pricing from 1 April 2016. Device management followed in December 2016, and the Device Provisioning Service, for zero-touch enrollment of devices across hubs, reached general availability in December 2017.",
+      "IoT Hub kept its tight model of fixed topics per device. When customers wanted an open MQTT broker, Microsoft built one into Azure Event Grid, generally available in November 2023, and added Azure IoT Operations for edge sites. Around the hub, Time Series Insights was retired in 2024, and in September 2026 Microsoft announced that IoT Central will retire in 2029, naming IoT Hub and DPS as the platform to move to."
+    ],
+    "choices": [
+      { "choice": "Telemetry on Event Hubs internals", "why": "Event Hubs already handled partitioned, replayable ingestion at scale. Exposing an Event Hubs-compatible endpoint let existing readers, Stream Analytics and Functions consume device data unchanged." },
+      { "choice": "A gateway with per-device identity and fixed topics, not an open broker", "why": "Azure’s focus was device-to-cloud telemetry and cloud-to-device commands with per-device authentication and revocation. Fixed topics kept each device to its own channel; open pub/sub came later in Event Grid." },
+      { "choice": "Several protocols, not just MQTT", "why": "Devices and gateways in 2015 used HTTP and AMQP as well as MQTT, which was first offered through a separate protocol gateway. IoT Hub normalises them into one message format." },
+      { "choice": "Units with a daily quota instead of per-message billing", "why": "A fixed monthly price per unit makes costs predictable for a known fleet size. The trade-off is hard throttles and rejected messages once the day’s quota is spent." }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "IoT Hub introduced as the core of Azure IoT Suite (November)" },
+      { "year": "2016", "text": "Generally available in February, with HTTP, AMQP and MQTT" },
+      { "year": "2017", "text": "Device Provisioning Service generally available (December)" },
+      { "year": "2023", "text": "Event Grid MQTT broker generally available, for open pub/sub (November)" },
+      { "year": "2024", "text": "Time Series Insights retired on 7 July" },
+      { "year": "2026", "text": "IoT Central retirement announced for 20 September 2029" }
+    ],
+    "sources": [
+      { "label": "Azure blog: Microsoft Azure IoT Suite, Connecting Your Things to the Cloud (Sam George, 9 November 2015)", "url": "https://azure.microsoft.com/en-us/blog/microsoft-azure-iot-suite-connecting-your-things-to-the-cloud/" },
+      { "label": "Azure updates: General availability, Microsoft Azure IoT Hub (February 2016)", "url": "https://azure.microsoft.com/en-us/updates?id=generally-available-microsoft-azure-iot-hub" },
+      { "label": "Azure updates: General availability, Azure IoT Hub device management (December 2016)", "url": "https://azure.microsoft.com/en-us/updates?id=general-avalibility-azure-iot-hub-device-management" },
+      { "label": "Azure blog: Azure IoT Hub Device Provisioning Service is generally available (5 December 2017)", "url": "https://azure.microsoft.com/en-us/blog/azure-iot-hub-device-provisioning-service-is-generally-available/" },
+      { "label": "Azure updates: MQTT broker feature, PubSub capabilities now available for Azure Event Grid (15 November 2023)", "url": "https://azure.microsoft.com/en-us/updates?id=mqtt-broker-feature-pubsub-capabilities-now-available-for-azure-event-grid" },
+      { "label": "Azure updates: We’re retiring Azure Time Series Insights on 7 July 2024", "url": "https://azure.microsoft.com/en-us/updates?id=we-re-retiring-azure-time-series-insights-on-7-july-2024-transition-to-azure-data-explorer" },
+      { "label": "Azure updates: Retirement, Azure IoT Central will be retired on September 20, 2029 (29 September 2026)", "url": "https://azure.microsoft.com/en-us/updates?id=569914" }
+    ]
+  },
+  "sources": [
+    { "label": "Azure IoT Hub pricing", "url": "https://azure.microsoft.com/en-us/pricing/details/iot-hub/" },
+    { "label": "Azure Retail Prices API: IoT Hub, East US", "url": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20%27IoT%20Hub%27%20and%20armRegionName%20eq%20%27eastus%27" },
+    { "label": "Azure docs: IoT Hub scaling (tiers, editions, units, partitions, upgrades)", "url": "https://learn.microsoft.com/en-us/azure/iot-hub/iot-hub-scaling" },
+    { "label": "Azure docs: IoT Hub quotas and throttling", "url": "https://learn.microsoft.com/en-us/azure/iot-hub/iot-hub-devguide-quotas-throttling" },
+    { "label": "Azure docs: Understand IoT Hub pricing (what counts against the quota)", "url": "https://learn.microsoft.com/en-us/azure/iot-hub/iot-hub-devguide-pricing" },
+    { "label": "Azure docs: Troubleshoot IoT Hub error codes (403002 IotHubQuotaExceeded)", "url": "https://learn.microsoft.com/en-us/azure/iot-hub/troubleshoot-error-codes" },
+    { "label": "Azure docs: Use MQTT to communicate with IoT Hub (topics, limitations, comparison with Event Grid)", "url": "https://learn.microsoft.com/en-us/azure/iot-hub/iot-mqtt-connect-to-iot-hub" },
+    { "label": "Azure docs: Understand IoT Hub direct methods", "url": "https://learn.microsoft.com/en-us/azure/iot-hub/iot-hub-devguide-direct-methods" },
+    { "label": "Azure docs: IoT Hub message routing", "url": "https://learn.microsoft.com/en-us/azure/iot-hub/iot-hub-devguide-messages-d2c" },
+    { "label": "Azure docs: Understand the built-in endpoint (Event Hubs-compatible, retention)", "url": "https://learn.microsoft.com/en-us/azure/iot-hub/iot-hub-devguide-messages-read-builtin" },
+    { "label": "Azure docs: Event Grid MQTT broker overview", "url": "https://learn.microsoft.com/en-us/azure/event-grid/mqtt-overview" },
+    { "label": "Azure Event Grid pricing", "url": "https://azure.microsoft.com/en-us/pricing/details/event-grid/" },
+    { "label": "Azure docs: What is Azure IoT Operations?", "url": "https://learn.microsoft.com/en-us/azure/iot-operations/overview-iot-operations" },
+    { "label": "Azure docs: What is Azure IoT Central (per-device pricing)", "url": "https://learn.microsoft.com/en-us/azure/iot-central/core/overview-iot-central" },
+    { "label": "Azure docs (archived): What is Azure Time Series Insights Gen2 (retirement notice)", "url": "https://learn.microsoft.com/en-us/previous-versions/azure/time-series-insights/overview-what-is-tsi" },
+    { "label": "Azure updates: Retirement, Azure IoT Central will be retired on September 20, 2029", "url": "https://azure.microsoft.com/en-us/updates?id=569914" },
+    { "label": "Azure CLI reference: az iot hub (azure-iot extension)", "url": "https://learn.microsoft.com/en-us/cli/azure/iot/hub" },
+    { "label": "GitHub: Azure IoT device SDK for C (MIT)", "url": "https://github.com/Azure/azure-iot-sdk-c" }
+  ],
+  "checked": "2026-10-06"
+}

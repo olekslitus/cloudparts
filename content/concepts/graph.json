@@ -1,0 +1,155 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Graph databases",
+  "category": "data",
+  "order": 25,
+  "summary": "Store things and the links between them as first-class data, and answer questions by walking the links instead of joining tables.",
+  "howItWorks": "A graph database stores nodes (a person, a card, a server) and relationships, or edges, between them (`KNOWS`, `USED_ON`, `DEPENDS_ON`). Both can carry properties, such as a name or a date. A question like “friends of friends who bought X” becomes a walk: start at one person, follow `KNOWS` edges two steps out, then follow `BOUGHT` edges and keep the people who reach X. In a relational database the same question needs a self-join per hop, and when the depth isn’t known in advance, a recursive query. Native graph stores such as Neo4j keep each node’s relationships next to it, so a hop follows a stored pointer instead of looking up an index; Neo4j calls this index-free adjacency, and the cost of a query grows with the part of the graph it touches, not with the size of the whole database. Other products put a graph layer over a different engine: JanusGraph over Cassandra, HBase or Bigtable, Apache AGE over PostgreSQL tables, Cosmos DB for Apache Gremlin over Cosmos DB’s partitioned store. There are two data models. Property graphs (labels, typed relationships, properties on both) are queried with Cypher, openCypher, Gremlin or the ISO standard GQL, published in 2024. RDF triple stores keep every fact as a subject, predicate and object identified by URIs, the W3C model for linking data across sources, and are queried with SPARQL. SQL:2023 also added SQL/PGQ, which lets a relational database define a property graph over existing tables and match graph patterns inside SQL.",
+  "analogy": "A subway map instead of a timetable. To get from one station to another you trace the lines with your finger, station to station, and never have to scan a list of every train in the city.",
+  "useWhen": [
+    "Questions follow links of unknown depth: fraud rings sharing cards, devices and addresses; “who can reach this server”; supply chains",
+    "Recommendations built from what connected people or items did",
+    "Network, IT and microservice dependency maps where you ask “what breaks if this fails?”",
+    "Knowledge graphs, and GraphRAG pipelines that give a language model related facts instead of isolated text chunks"
+  ],
+  "avoidWhen": [
+    "Relationships are shallow and fixed, like orders and their line items: a relational database with foreign keys and joins does it well, and recursive CTEs cover the occasional hierarchy",
+    "Workloads are mostly aggregates over whole tables (totals by month, dashboards); use a warehouse or columnar engine",
+    "Simple lookups by key at very high scale; a key-value store is cheaper and easier to partition",
+    "Your team would be the only one on a new database: SQL/PGQ, Apache AGE or graph features in your current database may be enough"
+  ],
+  "example": "A payments team wants to know, at checkout, whether a new card shares a device, phone number or address with any card that had a chargeback, up to three hops away. In a graph store this is one pattern, `(card)-[:USED_ON|HAS_PHONE|SHIPS_TO*1..3]-(bad:Card {chargeback: true})`, and the query reads only the few dozen nodes around that card. In SQL the same check needs a recursive query over a links table that is joined to itself at every step.",
+  "providers": {
+    "aws": "Amazon Neptune Database (property graphs with Gremlin and openCypher, RDF with SPARQL; provisioned or Serverless); Neptune Analytics, an in-memory engine for graph algorithms and vector search over a graph",
+    "gcp": "Spanner Graph: an ISO GQL interface over Spanner tables that mixes with SQL (Enterprise and Enterprise Plus editions)",
+    "azure": "Azure Cosmos DB for Apache Gremlin (property graphs, Apache TinkerPop wire protocol); Graph in Microsoft Fabric (GQL over OneLake data, for analytics); SQL graph tables with `MATCH` in Azure SQL and SQL Server",
+    "oss": "Neo4j Community Edition (GPLv3); JanusGraph (Apache 2.0, Linux Foundation); Apache AGE, openCypher inside PostgreSQL (Apache 2.0); source-available: ArangoDB (BSL 1.1, multi-model), Memgraph (BSL 1.1, in-memory); Rayforce (MIT, an embedded engine for columnar tables and graphs); Kuzu (MIT, embedded) was archived in 2025"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "from neo4j import GraphDatabase",
+      "",
+      "driver = GraphDatabase.driver(\"neo4j://localhost:7687\", auth=(\"neo4j\", \"secret-password\"))",
+      "",
+      "# friends of friends of Ada who bought the same product, ranked by how many paths lead to them",
+      "records, summary, keys = driver.execute_query(\"\"\"",
+      "    MATCH (me:Person {name: $name})-[:KNOWS*2]-(fof:Person)-[:BOUGHT]->(p:Product {sku: $sku})",
+      "    WHERE fof <> me AND NOT EXISTS { (me)-[:KNOWS]-(fof) }",
+      "    RETURN fof.name AS name, count(*) AS paths",
+      "    ORDER BY paths DESC LIMIT 10",
+      "    \"\"\", name=\"Ada\", sku=\"A-17\", database_=\"neo4j\")",
+      "",
+      "for r in records:",
+      "    print(r[\"name\"], r[\"paths\"])"
+    ]
+  },
+  "related": ["relational", "document", "key-value"],
+  "diagram": {
+    "caption": "Each fraud check starts at one card and follows stored relationships hop by hop: from a card to the device it was used on, then to another card used on that device, which has a chargeback. Every hop reads only the neighbours of the current node, so the cost depends on how much of the graph the walk touches, not on how many cards the database holds.",
+    "h": 270,
+    "zones": [
+      { "x": 190, "y": 25, "w": 555, "h": 225, "label": "Graph database" }
+    ],
+    "nodes": [
+      {
+        "id": "app",
+        "x": 90,
+        "y": 135,
+        "label": "Checkout",
+        "sub": "fraud check",
+        "emit": { "every": 900, "jitter": 0.3, "req": true, "color": 0 },
+        "out": ["engine"]
+      },
+      {
+        "id": "engine",
+        "x": 290,
+        "y": 135,
+        "label": "Query engine",
+        "sub": "MATCH ...*1..3",
+        "out": ["card"]
+      },
+      {
+        "id": "card",
+        "x": 450,
+        "y": 70,
+        "label": "Card 4412",
+        "sub": "-[:USED_ON]->",
+        "out": ["device"]
+      },
+      {
+        "id": "device",
+        "x": 560,
+        "y": 200,
+        "label": "Device d-91",
+        "sub": "<-[:USED_ON]-",
+        "out": ["ring"]
+      },
+      {
+        "id": "ring",
+        "x": 665,
+        "y": 70,
+        "label": "Card 7730",
+        "sub": "chargeback: true",
+        "mode": "reply",
+        "delay": 40
+      }
+    ]
+  },
+  "history": {
+    "story": [
+      "Relational databases store a relationship as a foreign key and rebuild it with a join each time it’s queried. That works for a hop or two and gets slow and awkward when a question follows links to an unknown depth. In 2000 the founders of what became Neo4j hit those performance problems in a content management system, started building a graph engine, ran it in production from 2003 and open-sourced it under the GPL in 2007.",
+      "A second line came from the web. The W3C’s RDF, a Recommendation since 1999, describes facts as statements about resources named by URIs, so data from different sources can be merged; SPARQL became its query language in 2008. Developers building applications took the property-graph route instead: TinkerPop and its Gremlin traversal language began in 2009, Neo4j’s Cypher with its ASCII-art patterns dates to 2010, and in 2015 Neo4j opened Cypher as openCypher with support from Oracle, Databricks and others. In 2018 AWS made Neptune generally available, with both models in one managed service.",
+      "Standards followed. SQL:2023 added SQL/PGQ for graph queries over relational tables, and in April 2024 ISO published GQL, a property-graph query language with Cypher as a major input. Graph features now appear inside general-purpose databases, such as Spanner Graph and Microsoft Fabric, as well as in dedicated graph stores."
+    ],
+    "choices": [
+      { "choice": "Relationships stored as records, not rebuilt by joins", "why": "A traversal can follow a relationship straight to the next node. Neo4j describes this as index-free adjacency: following a pointer is O(1), while an index lookup per hop is O(log n), and the difference compounds over many hops." },
+      { "choice": "Properties on both nodes and edges", "why": "In a property graph a `BOUGHT` edge can carry the date and price, so the facts about a connection live on the connection. RDF instead splits everything into triples, which is verbose but makes merging data from different sources simple." },
+      { "choice": "Patterns drawn as ASCII art", "why": "Cypher let developers write `(a)-[:KNOWS]->(b)` instead of describing joins. Its authors modelled the rest on SQL, and the pattern syntax carried into GQL." },
+      { "choice": "URIs as names in RDF", "why": "RDF was designed for describing resources across the web, so every node and property is a URI that different publishers can reuse. That suits knowledge graphs that combine many datasets." }
+    ],
+    "timeline": [
+      { "year": "1999", "text": "RDF becomes a W3C Recommendation" },
+      { "year": "2007", "text": "Neo4j is open-sourced under the GPL" },
+      { "year": "2008", "text": "SPARQL becomes a W3C Recommendation" },
+      { "year": "2009", "text": "TinkerPop starts work on Gremlin and a common graph API" },
+      { "year": "2015", "text": "Neo4j launches openCypher with Oracle, Databricks and others" },
+      { "year": "2018", "text": "Amazon Neptune becomes generally available" },
+      { "year": "2024", "text": "ISO publishes GQL (ISO/IEC 39075), after SQL/PGQ in SQL:2023" }
+    ],
+    "sources": [
+      { "label": "Neo4j: company history (2000 prototype, 2003 production, 2007 GPL release)", "url": "https://neo4j.com/company/" },
+      { "label": "W3C: Resource Description Framework (RDF) Model and Syntax Specification, Recommendation (Feb 1999)", "url": "https://www.w3.org/TR/1999/REC-rdf-syntax-19990222/" },
+      { "label": "W3C: SPARQL Query Language for RDF, Recommendation (Jan 2008)", "url": "https://www.w3.org/TR/rdf-sparql-query/" },
+      { "label": "Apache TinkerPop reference documentation (TinkerPop0 in 2009)", "url": "https://tinkerpop.apache.org/docs/current/reference/" },
+      { "label": "Neo4j blog: Meet openCypher, the open source SQL for graphs (Oct 2015)", "url": "https://neo4j.com/blog/open-cypher-sql-for-graphs/" },
+      { "label": "AWS News Blog: Amazon Neptune generally available (May 2018)", "url": "https://aws.amazon.com/blogs/aws/amazon-neptune-generally-available/" },
+      { "label": "Peter Eisentraut: SQL:2023 is finished, here is what’s new (Part 16, SQL/PGQ)", "url": "https://peter.eisentraut.org/blog/2023/04/04/sql-2023-is-finished-here-is-whats-new" },
+      { "label": "openCypher: ISO/IEC 39075 GQL published on 11 April 2024", "url": "https://opencypher.org/" },
+      { "label": "Neo4j blog: ISO GQL, a defining moment in database innovation (Apr 2024)", "url": "https://neo4j.com/blog/cypher-and-gql/gql-international-standard/" }
+    ]
+  },
+  "sources": [
+    { "label": "Neo4j blog: Native vs. non-native graph technology (index-free adjacency)", "url": "https://neo4j.com/blog/cypher-and-gql/native-vs-non-native-graph-technology/" },
+    { "label": "Neo4j docs: Graph database concepts (no joins; relationships stored with nodes)", "url": "https://neo4j.com/docs/getting-started/graph-database/" },
+    { "label": "PostgreSQL docs: WITH queries, recursive queries", "url": "https://www.postgresql.org/docs/current/queries-with.html" },
+    { "label": "Peter Eisentraut: SQL:2023 is finished (SQL/PGQ, `GRAPH_TABLE`)", "url": "https://peter.eisentraut.org/blog/2023/04/04/sql-2023-is-finished-here-is-whats-new" },
+    { "label": "openCypher: openCypher and ISO/IEC 39075 GQL", "url": "https://opencypher.org/" },
+    { "label": "Amazon Neptune User Guide: What is Amazon Neptune? (Gremlin, openCypher, SPARQL)", "url": "https://docs.aws.amazon.com/neptune/latest/userguide/intro.html" },
+    { "label": "Amazon Neptune User Guide: Neptune Serverless", "url": "https://docs.aws.amazon.com/neptune/latest/userguide/neptune-serverless.html" },
+    { "label": "Neptune Analytics User Guide: What is Neptune Analytics?", "url": "https://docs.aws.amazon.com/neptune-analytics/latest/userguide/what-is-neptune-analytics.html" },
+    { "label": "Google Cloud: Spanner Graph overview (ISO GQL, Enterprise editions)", "url": "https://cloud.google.com/spanner/docs/graph/overview" },
+    { "label": "Microsoft Learn: What is Azure Cosmos DB for Apache Gremlin?", "url": "https://learn.microsoft.com/en-us/azure/cosmos-db/gremlin/overview" },
+    { "label": "Microsoft Learn: Graph in Microsoft Fabric overview (GQL, ISO/IEC 39075)", "url": "https://learn.microsoft.com/en-us/fabric/graph/overview" },
+    { "label": "Microsoft Learn: Graph processing with SQL Server and Azure SQL Database (`MATCH`)", "url": "https://learn.microsoft.com/en-us/sql/relational-databases/graphs/sql-graph-overview" },
+    { "label": "Neo4j Operations Manual: editions (Community Edition under GPLv3)", "url": "https://neo4j.com/docs/operations-manual/current/introduction/" },
+    { "label": "Neo4j Python driver manual: Query the database (`execute_query`)", "url": "https://neo4j.com/docs/python-manual/current/query-simple/" },
+    { "label": "JanusGraph: Apache 2.0, Linux Foundation, storage backends", "url": "https://janusgraph.org/" },
+    { "label": "Apache AGE README (openCypher in PostgreSQL)", "url": "https://github.com/apache/age/blob/master/README.md" },
+    { "label": "ArangoDB repository: LICENSE (BSL 1.1)", "url": "https://github.com/arangodb/arangodb/blob/devel/LICENSE" },
+    { "label": "Memgraph repository: LICENSE (BSL 1.1 and Memgraph Enterprise License)", "url": "https://github.com/memgraph/memgraph/blob/master/LICENSE" },
+    { "label": "Memgraph documentation (in-memory, Cypher)", "url": "https://memgraph.com/docs" },
+    { "label": "kuzudb/kuzu on GitHub (archived, README notice)", "url": "https://github.com/kuzudb/kuzu" },
+    { "label": "microsoft/graphrag on GitHub (knowledge-graph memory for LLMs)", "url": "https://github.com/microsoft/graphrag" }
+  ]
+}

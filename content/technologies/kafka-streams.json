@@ -1,0 +1,192 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Kafka Streams",
+  "concepts": ["stream-processing"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://kafka.apache.org/documentation/streams/",
+  "repo": "https://github.com/apache/kafka",
+  "summary": "A Java library, part of Apache Kafka, that turns your own application into a stateful stream processor with no cluster of its own.",
+  "intro": [
+    "Kafka Streams is a library you add to a Java or Scala application, not a server you run. You describe a topology of steps (filter, map, join, count, windowed aggregate) with the Streams DSL or the lower-level Processor API, and every running copy of your app joins the same group through the Kafka brokers. Each partition of the input topics becomes a task, and tasks are spread over all instances and their threads; start another instance and some tasks move to it. The partition count is also the ceiling: an input topic with five partitions keeps at most five instances busy.",
+    "State lives next to the code. Each task keeps its state stores on local disk, in RocksDB by default, and Kafka Streams writes every change to a compacted changelog topic in Kafka. If an instance dies, its tasks restart elsewhere and rebuild their stores by replaying those changelogs; standby replicas, warm copies kept on other instances, cut that wait. Re-keying data for a join or `groupBy` goes through an internal repartition topic. With `processing.guarantee` set to `exactly_once_v2` (brokers 2.5 or newer), Kafka transactions make each input record’s effect show up exactly once in the output topics and state stores. Input and output are always Kafka topics. It ships with Apache Kafka under Apache 2.0, so there is nothing to license or buy."
+  ],
+  "strengths": [
+    "No cluster to run: it’s a JAR inside your service, deployed, scaled and monitored like any other app",
+    "Local RocksDB state, backed up to changelog topics, makes joins and windowed aggregations fast and recoverable",
+    "Exactly-once processing from Kafka to Kafka with one setting",
+    "Interactive queries let the app read its own state stores, for example to serve the current count per key over an API",
+    "Released with Apache Kafka itself; Kafka 4.2 added dead letter queues for bad records and a broker-side rebalance protocol"
+  ],
+  "limits": [
+    "JVM only: the API is Java and Scala, so Python or Go teams need another engine",
+    "Kafka in, Kafka out: reaching databases or other systems means Kafka Connect or your own client code",
+    "Parallelism is capped by the input topics’ partition count",
+    "Big state means slow recovery: a moved task replays its whole changelog before it resumes, unless standby replicas are kept",
+    "Interactive queries only see the local instance; discovering the others and the RPC layer between them are yours to build"
+  ],
+  "worksWith": [
+    { "id": "kafka", "how": "reads, writes and backs up its state in" },
+    { "id": "ksqldb", "how": "is the engine underneath" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Run the bundled word-count app, feed it lines and watch the running counts",
+    "source": [
+      "bin/kafka-topics.sh --bootstrap-server localhost:9092 --create \\",
+      "  --topic streams-plaintext-input --partitions 1 --replication-factor 1",
+      "bin/kafka-topics.sh --bootstrap-server localhost:9092 --create \\",
+      "  --topic streams-wordcount-output --partitions 1 --replication-factor 1 \\",
+      "  --config cleanup.policy=compact",
+      "",
+      "# the demo is an ordinary Java process: split lines, groupBy word, count()",
+      "bin/kafka-run-class.sh org.apache.kafka.streams.examples.wordcount.WordCountDemo &",
+      "",
+      "bin/kafka-console-producer.sh --bootstrap-server localhost:9092 \\",
+      "  --topic streams-plaintext-input        # type: all streams lead to kafka",
+      "",
+      "bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \\",
+      "  --topic streams-wordcount-output --from-beginning \\",
+      "  --formatter-property print.key=true \\",
+      "  --formatter-property key.deserializer=org.apache.kafka.common.serialization.StringDeserializer \\",
+      "  --formatter-property value.deserializer=org.apache.kafka.common.serialization.LongDeserializer",
+      "",
+      "# the app created its own repartition and changelog topics",
+      "bin/kafka-topics.sh --bootstrap-server localhost:9092 --list | grep '^streams-wordcount-'"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Kafka Streams, ksqlDB or Flink",
+      "intro": "All three can join, window and aggregate Kafka topics with exactly-once results. They differ in what you have to run and what you write.",
+      "columns": ["Kafka Streams", "ksqlDB", "Apache Flink"],
+      "rows": [
+        {
+          "label": "What you run",
+          "values": ["Your own Java app; nothing else", "ksqlDB servers that run your SQL", "A Flink cluster: a JobManager and TaskManagers"]
+        },
+        { "label": "How you write it", "values": ["Java or Scala: Streams DSL or Processor API", "SQL", "SQL, Java or Python"] },
+        {
+          "label": "Inputs and outputs",
+          "values": ["Kafka topics only", "Kafka topics; can also manage Kafka Connect connectors", "Kafka plus many other connectors"]
+        },
+        {
+          "label": "Where state lives",
+          "values": [
+            "RocksDB on local disk, changelog topics in Kafka",
+            "Same as Kafka Streams (it runs on it)",
+            "Heap, RocksDB or ForSt backend, checkpointed to durable storage"
+          ]
+        },
+        { "label": "Licence", "values": ["Apache 2.0", "Confluent Community License (source-available)", "Apache 2.0"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "By 2015, teams processing Kafka data had two choices, as Guozhang Wang set out in KIP-28 that July. They could wrap the plain producer and consumer clients in their own loop and handle partitioning, state and failures themselves, or adopt a framework such as Storm, Samza, Spark Streaming or Flink, which ran as its own cluster and used Kafka only at the edges. Jay Kreps, who had helped build Samza at LinkedIn, had concluded that most stream processing looked less like a real-time MapReduce and more like ordinary services, which need the same deployment and monitoring as everything else.",
+      "So Kafka Streams became a library. Kreps announced a preview on Confluent’s blog on 10 March 2016, and it shipped in Kafka 0.10.0 on 22 May. “You don’t need to set up any kind of special Kafka Streams cluster and there is no cluster manager, nimbus, daemon processes, or anything like that,” he wrote. Kafka itself did the coordination: consumer groups split the work and topics backed up the state. Kafka 0.11.0 (2017) added transactions, and with them exactly-once processing.",
+      "Confluent built KSQL, later ksqlDB, on top of it in 2017. In Kafka 4.2 (February 2026) a new server-side rebalance protocol, KIP-1071, reached general availability with a limited feature set, moving task assignment from the clients to the brokers."
+    ],
+    "choices": [
+      {
+        "choice": "A library instead of a cluster",
+        "why": "Kreps wanted stream processors packaged and deployed like any other app, with Docker, Kubernetes, Puppet or a plain command line, and rolling restarts that already worked, rather than through a framework’s own scheduler."
+      },
+      {
+        "choice": "Local state, backed up to Kafka",
+        "why": "Lookups in a local store are fast and need no remote database. Writing each change to a changelog topic means a task can be rebuilt on any machine by replaying it."
+      },
+      {
+        "choice": "Kafka partitions as the unit of work",
+        "why": "Reusing consumer groups gave assignment and failover for free, and since tasks share no state, threads and instances need no coordination with each other."
+      },
+      {
+        "choice": "Streams and tables as one idea",
+        "why": "A table is the latest value per key of a stream, and a stream is the changelog of a table. Modelling both (`KStream`, `KTable`) lets one API do joins, aggregations and state backup."
+      }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "Guozhang Wang proposes a stream processing client for Kafka in KIP-28" },
+      { "year": "2016", "text": "Preview announced in March; ships in Kafka 0.10.0 in May" },
+      { "year": "2017", "text": "Exactly-once processing arrives with Kafka 0.11.0; Confluent builds KSQL on it" },
+      { "year": "2026", "text": "Kafka 4.2 makes the broker-side Streams rebalance protocol generally available" }
+    ],
+    "sources": [
+      {
+        "label": "KIP-28: Add a processor client (created by Guozhang Wang, July 2015)",
+        "url": "https://cwiki.apache.org/confluence/display/KAFKA/KIP-28+-+Add+a+processor+client"
+      },
+      {
+        "label": "Jay Kreps (Confluent): Introducing Kafka Streams, stream processing made simple (March 2016)",
+        "url": "https://www.confluent.io/blog/introducing-kafka-streams-stream-processing-made-simple/",
+        "archive": "https://web.archive.org/web/20160402071941/http://www.confluent.io:80/blog/introducing-kafka-streams-stream-processing-made-simple"
+      },
+      { "label": "Apache Kafka downloads: release dates of 0.10.0.0 and 0.11.0.0", "url": "https://kafka.apache.org/community/downloads/" },
+      {
+        "label": "Kafka docs: Kafka Streams core concepts (exactly-once since 0.11.0.0, stream-table duality)",
+        "url": "https://kafka.apache.org/43/streams/core-concepts/"
+      },
+      {
+        "label": "Neha Narkhede (Confluent): Introducing KSQL, streaming SQL for Apache Kafka (Aug 2017)",
+        "url": "https://www.confluent.io/blog/ksql-streaming-sql-for-apache-kafka/"
+      },
+      {
+        "label": "Apache Kafka 4.2.0 release announcement (Feb 2026)",
+        "url": "https://kafka.apache.org/blog/2026/02/17/apache-kafka-4.2.0-release-announcement/"
+      }
+    ]
+  },
+  "sources": [
+    { "label": "Kafka docs: Kafka Streams introduction", "url": "https://kafka.apache.org/43/streams/introduction/" },
+    {
+      "label": "Kafka docs: Kafka Streams architecture (tasks, threads, partitions, changelogs, standby replicas)",
+      "url": "https://kafka.apache.org/43/streams/architecture/"
+    },
+    {
+      "label": "Kafka docs: Kafka Streams core concepts (time, windowing, processing guarantees)",
+      "url": "https://kafka.apache.org/43/streams/core-concepts/"
+    },
+    {
+      "label": "Kafka docs: Processor API (state stores, RocksDB by default)",
+      "url": "https://kafka.apache.org/43/streams/developer-guide/processor-api/"
+    },
+    {
+      "label": "Kafka docs: Configuring a Streams application (processing.guarantee, num.standby.replicas)",
+      "url": "https://kafka.apache.org/43/streams/developer-guide/config-streams/"
+    },
+    {
+      "label": "Kafka docs: Managing Streams application topics (repartition and changelog topics)",
+      "url": "https://kafka.apache.org/43/streams/developer-guide/manage-topics/"
+    },
+    {
+      "label": "Kafka docs: Interactive queries (local and remote state, RPC layer)",
+      "url": "https://kafka.apache.org/43/streams/developer-guide/interactive-queries/"
+    },
+    { "label": "Kafka docs: Kafka Streams quick start (WordCountDemo)", "url": "https://kafka.apache.org/43/streams/quickstart/" },
+    {
+      "label": "Apache Kafka 4.2.0 release announcement (KIP-1034 dead letter queues, KIP-1071 rebalance protocol)",
+      "url": "https://kafka.apache.org/blog/2026/02/17/apache-kafka-4.2.0-release-announcement/"
+    },
+    {
+      "label": "ksqlDB docs: How it works (ksqlDB is built on Kafka Streams)",
+      "url": "https://docs.ksqldb.io/en/latest/operate-and-deploy/how-it-works/"
+    },
+    { "label": "ksqlDB docs: Connectors", "url": "https://docs.ksqldb.io/en/latest/concepts/connectors/" },
+    { "label": "Confluent Community License FAQ", "url": "https://www.confluent.io/confluent-community-license-faq/" },
+    {
+      "label": "Flink docs: Flink architecture (JobManager, TaskManagers)",
+      "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/concepts/flink-architecture/"
+    },
+    { "label": "Flink docs: State backends", "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/ops/state/state_backends/" },
+    {
+      "label": "Flink docs: Stateful stream processing (checkpoints)",
+      "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/concepts/stateful-stream-processing/"
+    },
+    { "label": "Apache Flink: project home (SQL, DataStream API, Python)", "url": "https://flink.apache.org/" },
+    { "label": "Apache Kafka LICENSE (Apache 2.0)", "url": "https://github.com/apache/kafka/blob/trunk/LICENSE" }
+  ],
+  "checked": "2026-10-05"
+}

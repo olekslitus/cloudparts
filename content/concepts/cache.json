@@ -1,0 +1,124 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Caches",
+  "category": "data",
+  "order": 30,
+  "summary": "Keep hot data in memory so you don’t ask the slow system twice.",
+  "howItWorks": "A cache is an in-memory key-value store in front of something slower, such as a database or an API. On a hit the answer comes back in under a millisecond. On a miss the app fetches from the source and stores the result with a time-to-live. The hard parts are deciding how stale data may get and clearing entries when the source changes.",
+  "analogy": "Keeping the reference book you use every day on your desk instead of walking to the library each time.",
+  "useWhen": [
+    "Read-heavy data that changes slowly: product pages, config, computed summaries",
+    "Shielding a database from the same query repeated thousands of times",
+    "Sessions, rate-limit counters, leaderboards"
+  ],
+  "avoidWhen": [
+    "Data that must always be exactly current",
+    "Being the only copy of anything important; caches get evicted and restarted"
+  ],
+  "example": "A well-status endpoint takes 180 ms to compute from the database. Caching the result for 60 seconds answers 70% of requests in under a millisecond and cuts database load by the same share.",
+  "providers": {
+    "aws": "ElastiCache, MemoryDB",
+    "gcp": "Memorystore for Valkey or Redis (Memorystore for Memcached is deprecated; shutdown January 2029)",
+    "azure": "Azure Managed Redis (built on Redis Enterprise; no Valkey service)",
+    "oss": "Redis, Valkey, Memcached"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "import json, redis",
+      "r = redis.Redis(host=\"cache\", port=6379)",
+      "",
+      "def well_status(well_id: int) -> dict:",
+      "    key = f\"well-status:{well_id}\"",
+      "    if (hit := r.get(key)) is not None:",
+      "        return json.loads(hit)                 # fast path",
+      "    status = compute_from_database(well_id)    # slow path",
+      "    r.set(key, json.dumps(status), ex=60)      # keep for 60 s",
+      "    return status"
+    ]
+  },
+  "related": ["key-value","cdn","relational","in-process-cache"],
+  "diagram": {
+    "caption": "Most requests are answered by the cache (HIT). Misses go through to the slow database, and the answer is stored for next time.",
+    "h": 230,
+    "nodes": [
+      {
+        "id": "app",
+        "x": 100,
+        "y": 115,
+        "label": "App",
+        "sub": "GET /wells/42",
+        "emit": {"every":700,"jitter":0.4,"req":true,"color":0},
+        "out": ["cache"]
+      },
+      {
+        "id": "cache",
+        "x": 350,
+        "y": 115,
+        "label": "Cache",
+        "sub": "Redis · TTL 60 s",
+        "mode": "cache",
+        "p": 0.7,
+        "out": ["db"]
+      },
+      {
+        "id": "db",
+        "x": 620,
+        "y": 115,
+        "label": "Database",
+        "sub": "slow query · 180 ms",
+        "mode": "reply",
+        "delay": 650,
+        "concept": "relational"
+      }
+    ]
+  },
+  "history": {
+    "story": [
+      "Caching started in hardware. By the 1960s processors were much faster than main memory, and IBM’s System/360 Model 85, announced in January 1968, became the first commercially available computer with a cache: 16 to 32 KB of “high-speed buffer storage” that cut the effective storage cycle to a third or a quarter of main storage’s. The idea has been reused at every layer since. Keep a small, fast copy of what was used recently, because it will probably be needed again.",
+      "The web carried it up to applications. HTTP/1.1, published in January 1997, added the `Cache-Control` header so browsers and proxies could keep a response for as long as the server allowed. Database-backed sites needed the same trick for their own queries. In May 2003 Brad Fitzpatrick wrote memcached for LiveJournal, which had 2.5 million accounts on about 70 machines. It pooled spare RAM across many servers into one large key-value cache, and LiveJournal reported hit rates around 92%. Facebook and Wikipedia were among the large sites that adopted it.",
+      "Redis, from 2009, added data structures and optional persistence. In 2011 AWS launched ElastiCache, a managed service compatible with memcached, so a cache became something you rent rather than run. When Redis changed its licence in 2024, AWS, Google and Oracle backed Valkey, a BSD-licensed fork."
+    ],
+    "choices": [
+      { "choice": "A small, fast store in front of a big, slow one", "why": "On the Model 85, a main-storage cycle took about a microsecond, twelve times the processor’s 80-nanosecond cycle, and databases are far slower still. Keeping copies of the most-used data close by avoids most trips to the slow layer." },
+      { "choice": "Hash keys across independent cache servers", "why": "Memcached clients treat servers as buckets in a hash table, so each key always goes to the same server. Servers never talk to each other or replicate, which keeps them simple and lets you add capacity by adding machines." },
+      { "choice": "Evict the least recently used items", "why": "Memory is limited, so something must go when it fills. Dropping the least recently used entry keeps the data most likely to be asked for again." },
+      { "choice": "Let the source say how long a copy stays fresh", "why": "HTTP’s `Cache-Control` and the time-to-live on a cache key let a copy be served without checking the source each time, trading some staleness for speed." }
+    ],
+    "timeline": [
+      { "year": "1968", "text": "IBM announces the System/360 Model 85, the first commercial computer with a cache" },
+      { "year": "1997", "text": "HTTP/1.1 adds `Cache-Control` for browsers and proxies" },
+      { "year": "2003", "text": "Brad Fitzpatrick writes memcached for LiveJournal" },
+      { "year": "2009", "text": "Redis brings data structures and persistence to in-memory stores" },
+      { "year": "2011", "text": "AWS launches ElastiCache, a managed memcached-compatible cache" },
+      { "year": "2024", "text": "Valkey forks Redis under the Linux Foundation after a licence change" }
+    ],
+    "sources": [
+      { "label": "IBM: System/360 Model 85 Functional Characteristics (Jun 1968)", "url": "https://bitsavers.org/pdf/ibm/360/functional_characteristics/A22-6916-1_360-85_funcChar_Jun68.pdf" },
+      { "label": "Wikipedia: IBM System/360 Model 85", "url": "https://en.wikipedia.org/wiki/IBM_System/360_Model_85" },
+      { "label": "RFC 2068: Hypertext Transfer Protocol, HTTP/1.1 (Jan 1997)", "url": "https://www.rfc-editor.org/rfc/rfc2068" },
+      { "label": "memcached on GitHub: first commit by Brad Fitzpatrick (May 2003)", "url": "https://github.com/memcached/memcached/commit/32f382b605b4565bddfae5c9d082af3bfd30cf02" },
+      { "label": "Brad Fitzpatrick: Distributed caching with memcached (Linux Journal, 2004)", "url": "https://www.linuxjournal.com/article/7451" },
+      { "label": "memcached wiki: User internals (LRU eviction)", "url": "https://github.com/memcached/memcached/wiki/UserInternals" },
+      { "label": "Scaling Memcache at Facebook (NSDI 2013)", "url": "https://www.usenix.org/conference/nsdi13/technical-sessions/presentation/nishtala" },
+      { "label": "MediaWiki manual: Memcached", "url": "https://www.mediawiki.org/wiki/Manual:Memcached" },
+      { "label": "Hacker News: Redis (Feb 2009)", "url": "https://news.ycombinator.com/item?id=494649" },
+      { "label": "Redis docs: Persistence", "url": "https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/" },
+      { "label": "AWS What’s New: Announcing Amazon ElastiCache (Aug 2011)", "url": "https://aws.amazon.com/about-aws/whats-new/2011/08/22/announcing-amazon-elasticache/" },
+      { "label": "Linux Foundation: Launches open source Valkey community (Mar 2024)", "url": "https://www.linuxfoundation.org/press/linux-foundation-launches-open-source-valkey-community" }
+    ]
+  },
+  "sources": [
+    { "label": "AWS: What is caching?", "url": "https://aws.amazon.com/caching/" },
+    { "label": "AWS: Caching best practices", "url": "https://aws.amazon.com/caching/best-practices/" },
+    { "label": "Redis docs: SET", "url": "https://redis.io/docs/latest/commands/set/" },
+    { "label": "Amazon ElastiCache", "url": "https://aws.amazon.com/elasticache/" },
+    { "label": "Amazon MemoryDB", "url": "https://aws.amazon.com/memorydb/" },
+    { "label": "Google Cloud Memorystore", "url": "https://cloud.google.com/memorystore" },
+    { "label": "Microsoft Learn: What is Azure Managed Redis?", "url": "https://learn.microsoft.com/en-us/azure/redis/overview" },
+    { "label": "Valkey", "url": "https://valkey.io/" },
+    { "label": "memcached", "url": "https://memcached.org/" },
+    { "label": "Google Cloud: Memorystore for Valkey overview", "url": "https://cloud.google.com/memorystore/docs/valkey/product-overview" },
+    { "label": "Google Cloud docs: Memorystore for Memcached overview (deprecation notice)", "url": "https://docs.cloud.google.com/memorystore/docs/memcached/memcached-overview" }
+  ]
+}

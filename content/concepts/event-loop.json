@@ -1,0 +1,167 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Event loop",
+  "category": "code",
+  "order": 65,
+  "summary": "One thread waits on thousands of sockets at once and runs a short callback whenever one of them is ready.",
+  "howItWorks": "An event loop is a single thread running one loop: ask the operating system which of its sockets are ready, run the callback waiting on each ready one, repeat. Every socket is non-blocking, so a read that has no data returns at once instead of putting the thread to sleep. The waiting happens in one system call that watches all the sockets together: `epoll` on Linux, `kqueue` on macOS and the BSDs, I/O completion ports (IOCP) on Windows. The older `select()` and `poll()` take the whole list on every call and slow down as it grows; `epoll` and `kqueue` keep the list in the kernel and scale to very large numbers of descriptors. Because only one callback runs at a time, in-memory state needs no locks, and an idle connection costs only its small state object, not a thread and its stack. Callbacks used to be written by hand; `async`/`await` lets the same code read top to bottom, pausing at each `await` while the loop runs other work. Node.js (through libuv), Python’s asyncio, each Nginx worker and Redis all work this way. The classic failure is blocking the loop: one slow callback, such as a big `JSON.parse`, a heavy regex or a synchronous file read, stalls every other connection until it returns. CPU-heavy or blocking work has to go to other threads or processes, and one loop uses one core, so servers run one loop per core.",
+  "analogy": "A single waiter serving a whole restaurant. They never stand at a table waiting for someone to decide; they take whatever order is ready, hand it to the kitchen and move on. It works beautifully until the waiter stops to fold napkins for ten minutes and every table waits.",
+  "useWhen": [
+    "Many concurrent connections that mostly wait: chat, websockets, proxies, API gateways, streaming",
+    "Network services that glue other services together, where requests spend their time on I/O",
+    "Keeping in-memory state simple, with no locks, as Redis does"
+  ],
+  "avoidWhen": [
+    "CPU-heavy work such as image processing, big parsing jobs or number crunching; use threads or processes",
+    "Code that relies on blocking libraries you can’t replace or move to a worker pool",
+    "A team new to async code with modest concurrency; thread-per-request (or virtual threads) is simpler to debug"
+  ],
+  "example": "A Node.js chat server holds 20,000 open websockets in one process. Most are silent at any moment, so the loop spends its time inside `epoll_wait`, waking to run a few short callbacks whenever messages arrive. Then someone adds a handler that runs `JSON.parse` on a 50 MB upload: for as long as that parse runs, no other client receives a single message.",
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "import asyncio",
+      "",
+      "async def handle(reader, writer):",
+      "    data = await reader.read(1024)    # waits without holding the thread",
+      "    writer.write(data)                # echo it back",
+      "    await writer.drain()",
+      "    writer.close()",
+      "",
+      "async def main():",
+      "    server = await asyncio.start_server(handle, \"0.0.0.0\", 8080)",
+      "    async with server:",
+      "        await server.serve_forever()  # one thread, thousands of sockets",
+      "",
+      "asyncio.run(main())",
+      "# time.sleep(1) inside handle() would freeze every connection for a second;",
+      "# await asyncio.sleep(1) pauses only this one."
+    ]
+  },
+  "related": ["multithreading","actors","serverless","monads"],
+  "diagram": {
+    "caption": "One loop thread runs a short callback per request, sends the query and moves straight on instead of waiting. Several queries are in flight at the database at once while the loop stays free.",
+    "h": 220,
+    "nodes": [
+      {
+        "id": "clients",
+        "x": 110,
+        "y": 110,
+        "label": "Clients",
+        "sub": "many connections",
+        "emit": {"every":300,"jitter":0.4,"req":true,"cycle":true},
+        "out": ["loop"]
+      },
+      {
+        "id": "loop",
+        "x": 380,
+        "y": 110,
+        "kind": "pool",
+        "label": "Event loop",
+        "sub": "1 thread, short callbacks",
+        "min": 1,
+        "max": 1,
+        "work": 60,
+        "out": ["db"]
+      },
+      {
+        "id": "db",
+        "x": 640,
+        "y": 110,
+        "label": "Database",
+        "sub": "query takes 900 ms",
+        "mode": "reply",
+        "delay": 900
+      }
+    ]
+  },
+  "sections": [
+    {
+      "type": "model",
+      "title": "Blocking the loop",
+      "intro": "The same loop, but now each callback computes for 450 ms instead of handing off to the database. A loop can’t overlap CPU work, so during a burst requests pile up behind it (“waiting”) and every client’s latency climbs, then drains when the burst ends.",
+      "diagram": {
+        "caption": "One thread, 450 ms of CPU per callback: a burst of requests queues behind the loop.",
+        "h": 200,
+        "nodes": [
+          {
+            "id": "clients",
+            "x": 150,
+            "y": 100,
+            "label": "Clients",
+            "sub": "a burst, then quiet",
+            "emit": {"phases":[[3000,250],[4000,null]],"jitter":0.3,"req":true,"cycle":true},
+            "out": ["loop"]
+          },
+          {
+            "id": "loop",
+            "x": 500,
+            "y": 100,
+            "kind": "pool",
+            "label": "Event loop",
+            "sub": "450 ms of CPU per callback",
+            "min": 1,
+            "max": 1,
+            "work": 450,
+            "mode": "reply",
+            "delay": 20
+          }
+        ]
+      }
+    }
+  ],
+  "history": {
+    "story": [
+      "Waiting on many descriptors at once is as old as BSD sockets: the `select()` system call appeared in 4.2BSD in 1983. For years event loops were mostly a GUI technique. In a 1995 talk John Ousterhout argued they should be the default for servers too: one execution stream, handlers registered for events, no preemption, so no locks and no deadlocks, with the warning that long-running handlers make the whole application unresponsive.",
+      "The web made it urgent. In 1999 Dan Kegel’s C10K page asked how one server could handle ten thousand clients at once, and catalogued the options: a thread per client cost a stack each, while `select()` and `poll()` slowed down as the descriptor list grew. Operating systems answered with interfaces that keep the list in the kernel: Jonathan Lemon’s `kqueue` first appeared in FreeBSD 4.1, and Linux added `epoll` in its 2.5.44 development kernel, shipping it in 2.6. Igor Sysoev’s Nginx, first released in October 2004, built a web server around them, and Redis later did the same for a database.",
+      "In 2009 Ryan Dahl tied the V8 JavaScript engine to an event loop and a thread pool for blocking calls, and called it Node.js. Languages then added syntax to make loop-driven code readable: Python got `async`/`await` in 3.5 (2015), and asyncio became its standard loop. Not everyone was convinced. In 2003 von Behren, Condit and Brewer argued that well-implemented threads match events while being easier to write, and Bob Nystrom’s 2015 essay “What Color Is Your Function?” pointed out that async functions still split every codebase in two. Go’s goroutines and Java’s virtual threads take that side: thread-style code, with the runtime doing the waiting underneath."
+    ],
+    "choices": [
+      { "choice": "Watch every socket with one kernel object", "why": "`select()` and `poll()` hand the kernel the full descriptor list on every call, so cost grows with connections. `kqueue` and `epoll` register interest once and report only what changed, which is what made ten thousand connections per thread practical." },
+      { "choice": "Never block the loop thread", "why": "Network I/O is non-blocking, but there are no portable non-blocking file APIs, so libuv runs file system calls and DNS lookups on a small thread pool and reports back to the loop." },
+      { "choice": "One loop per core", "why": "A loop runs on one core. Nginx starts one single-threaded worker process per core, each handling many connections without context switches between them." },
+      { "choice": "`async`/`await` instead of raw callbacks", "why": "Python’s generator-based coroutines were easy to confuse with ordinary generators and couldn’t be used everywhere. PEP 492 made coroutines a native feature, so asynchronous code reads like sequential code." }
+    ],
+    "timeline": [
+      { "year": "1983", "text": "4.2BSD ships the `select()` system call" },
+      { "year": "1999", "text": "Dan Kegel publishes the C10K problem" },
+      { "year": "2001", "text": "Jonathan Lemon presents `kqueue` at USENIX" },
+      { "year": "2004", "text": "Nginx 0.1.0, the first public release" },
+      { "year": "2009", "text": "Ryan Dahl releases Node.js" },
+      { "year": "2015", "text": "Python 3.5 adds `async` and `await` (PEP 492)" }
+    ],
+    "sources": [
+      { "label": "FreeBSD manual: select(2) (appeared in 4.2BSD)", "url": "https://man.freebsd.org/cgi/man.cgi?query=select&sektion=2" },
+      { "label": "Wikipedia: Berkeley Software Distribution (4.2BSD released August 1983)", "url": "https://en.wikipedia.org/wiki/Berkeley_Software_Distribution" },
+      { "label": "John Ousterhout: Why Threads Are A Bad Idea (for most purposes), slides (1995)", "url": "https://web.stanford.edu/~ouster/cgi-bin/papers/threads.pdf" },
+      { "label": "Dan Kegel: The C10K problem", "url": "http://www.kegel.com/c10k.html" },
+      { "label": "Jonathan Lemon: Kqueue, a generic and scalable event notification facility (USENIX 2001)", "url": "https://people.freebsd.org/~jlemon/papers/kqueue.pdf" },
+      { "label": "FreeBSD manual: kqueue(2) (first appeared in FreeBSD 4.1)", "url": "https://man.freebsd.org/cgi/man.cgi?query=kqueue&sektion=2" },
+      { "label": "Linux man-pages: epoll(7) (history: Linux 2.5.44)", "url": "https://man7.org/linux/man-pages/man7/epoll.7.html" },
+      { "label": "Linux man-pages: epoll_create(2) (Linux 2.6)", "url": "https://man7.org/linux/man-pages/man2/epoll_create.2.html" },
+      { "label": "nginx changes.xml: nginx 0.1.0 (2004-10-04)", "url": "https://github.com/nginx/nginx/blob/master/docs/xml/nginx/changes.xml" },
+      { "label": "nginx.org: originally written by Igor Sysoev", "url": "https://nginx.org/en/" },
+      { "label": "JSConf EU 2009: speakers (Ryan Dahl on Node.js)", "url": "http://jsconf.eu/2009/speaker/speakers_selected.html" },
+      { "label": "Node.js ChangeLog up to v0.4.0 (2009 releases)", "url": "https://raw.githubusercontent.com/nodejs/node/v0.4.0/ChangeLog" },
+      { "label": "PEP 492: Coroutines with async and await syntax (Python 3.5)", "url": "https://peps.python.org/pep-0492/" },
+      { "label": "von Behren, Condit and Brewer: Why Events Are A Bad Idea (for high-concurrency servers) (HotOS 2003)", "url": "https://www.usenix.org/legacy/events/hotos03/tech/full_papers/vonbehren/vonbehren.pdf" },
+      { "label": "Bob Nystrom: What Color is Your Function? (Feb 2015)", "url": "https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/" },
+      { "label": "libuv docs: Design overview (thread pool for file I/O and DNS)", "url": "https://docs.libuv.org/en/v1.x/design.html" },
+      { "label": "NGINX blog: Inside NGINX, how we designed for performance and scale (Jun 2015)", "url": "https://blog.nginx.org/blog/inside-nginx-how-we-designed-for-performance-scale" }
+    ]
+  },
+  "sources": [
+    { "label": "libuv docs: Design overview (non-blocking sockets polled with epoll, kqueue, event ports, IOCP)", "url": "https://docs.libuv.org/en/v1.x/design.html" },
+    { "label": "Linux man-pages: epoll(7) (scales well to large numbers of watched descriptors)", "url": "https://man7.org/linux/man-pages/man7/epoll.7.html" },
+    { "label": "Jonathan Lemon: Kqueue (select() and poll() don’t scale with many descriptors) (USENIX 2001)", "url": "https://people.freebsd.org/~jlemon/papers/kqueue.pdf" },
+    { "label": "Microsoft Learn: I/O completion ports", "url": "https://learn.microsoft.com/en-us/windows/win32/fileio/i-o-completion-ports" },
+    { "label": "Node.js: About Node.js (asynchronous, event-driven, no locks)", "url": "https://nodejs.org/en/about" },
+    { "label": "Node.js: Don’t block the event loop (or the worker pool)", "url": "https://nodejs.org/en/learn/asynchronous-work/dont-block-the-event-loop" },
+    { "label": "Python docs: asyncio event loop", "url": "https://docs.python.org/3/library/asyncio-eventloop.html" },
+    { "label": "Python docs: Developing with asyncio (running blocking code, slow callback warnings)", "url": "https://docs.python.org/3/library/asyncio-dev.html" },
+    { "label": "Python docs: asyncio streams (start_server)", "url": "https://docs.python.org/3/library/asyncio-stream.html" },
+    { "label": "NGINX blog: Inside NGINX (one single-threaded worker per core, non-blocking)", "url": "https://blog.nginx.org/blog/inside-nginx-how-we-designed-for-performance-scale" },
+    { "label": "Redis docs: Diagnosing latency issues (mostly single-threaded design, slow commands like KEYS)", "url": "https://redis.io/docs/latest/operate/oss_and_stack/management/optimization/latency/" },
+    { "label": "OpenJDK: JEP 444, Virtual Threads (asynchronous style keeps request state in heap objects)", "url": "https://openjdk.org/jeps/444" }
+  ]
+}

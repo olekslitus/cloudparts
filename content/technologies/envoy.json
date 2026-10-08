@@ -1,0 +1,191 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Envoy",
+  "concepts": ["service-mesh", "lb"],
+  "provider": "oss",
+  "vendor": "Envoy project (CNCF), started at Lyft",
+  "license": "Apache 2.0",
+  "website": "https://www.envoyproxy.io/",
+  "repo": "https://github.com/envoyproxy/envoy",
+  "summary": "A C++ proxy for the edge and between services, configured live through the xDS APIs; the data plane under Istio, Envoy Gateway, Consul’s mesh and many others.",
+  "intro": [
+    "Envoy is one C++ binary that sits in the path of network traffic. It accepts connections on listeners and passes each through a chain of network filters (raw TCP, TLS, HTTP, Redis, Postgres and others). For HTTP there is a second chain of HTTP filters that can rate-limit, check authorization, transcode or route a request. Routes send traffic to clusters, groups of backends that Envoy health-checks actively and ejects when they misbehave (outlier detection), with retries, timeouts and circuit breaking. A main thread handles configuration, statistics and the admin port, while worker threads, usually one per CPU core, each keep the connections they accept, so the busy path needs almost no locking. It speaks HTTP/1.1 and HTTP/2, translates between them (HTTP/3 is still alpha), and handles gRPC natively. Every subsystem keeps counters, which the local admin port serves in Prometheus format.",
+    "Configuration can be a static YAML file, changed by a hot restart that hands the listening sockets to a new process. More often a control plane streams it in through the xDS APIs: listeners, routes, clusters, endpoints and TLS secrets, sent as Protobuf messages over gRPC, so backends and routes change without a restart. Envoy doesn’t include a control plane. Istio, Consul, Envoy Gateway, Contour and Google’s Cloud Service Mesh are control planes that program fleets of Envoys as sidecars next to each service, as shared waypoint proxies, or as edge gateways. Envoy is free under Apache 2.0, a CNCF graduated project, and ships a major release every quarter, each maintained for 12 months."
+  ],
+  "strengths": [
+    "Routes, backends and certificates change at runtime through xDS, with no restart and no dropped connections",
+    "First-class HTTP/2 and gRPC: it handles trailers, which many proxies don’t, and has filters for gRPC-Web from browsers and JSON-to-gRPC transcoding",
+    "Detailed statistics for every listener, cluster and route, a Prometheus endpoint, access logs and distributed tracing",
+    "One proxy for the edge, ingress and service-to-service calls, so the same load balancing, retries and metrics apply everywhere",
+    "Apache 2.0 under neutral CNCF governance, and the data plane that most meshes and gateways already use"
+  ],
+  "limits": [
+    "No control plane included: hand-written configs are long, Protobuf-shaped YAML, so in practice you also choose and run Istio, Envoy Gateway, Consul or similar",
+    "Native extensions are C++ compiled into your own build with Bazel (about 2 GB of RAM per build core); the Wasm filter is still marked experimental, leaving Lua, dynamic modules (C++, Go, Rust) or an external gRPC processor",
+    "As a sidecar it costs something on every pod: Istio measured about 0.20 vCPU and 60 MB of memory per sidecar at 1,000 requests per second",
+    "Some features are not production-ready: HTTP/3 is alpha, and the OpenTelemetry tracer is marked work in progress, not intended for production use",
+    "Each quarterly release gets security fixes for only 12 months, so you upgrade at least once a year; official Windows support ended on August 31, 2023"
+  ],
+  "worksWith": [
+    { "id": "consul", "how": "is configured over xDS by" },
+    { "id": "grpc", "how": "translates gRPC-Web from browsers to" },
+    { "id": "kubernetes", "how": "runs as sidecars and gateways on" },
+    { "id": "prometheus", "how": "exposes per-cluster stats for scraping by" },
+    { "id": "opentelemetry", "how": "can export traces to" }
+  ],
+  "snippet": {
+    "lang": "yaml",
+    "title": "A static front proxy: route, timeout, retries, health checks",
+    "source": [
+      "# envoy.yaml; run with: envoy -c envoy.yaml (or the envoyproxy/envoy image)",
+      "static_resources:",
+      "  listeners:",
+      "  - name: ingress",
+      "    address:",
+      "      socket_address: { address: 0.0.0.0, port_value: 8080 }",
+      "    filter_chains:",
+      "    - filters:",
+      "      - name: envoy.filters.network.http_connection_manager",
+      "        typed_config:",
+      "          \"@type\": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
+      "          stat_prefix: ingress",
+      "          route_config:",
+      "            virtual_hosts:",
+      "            - name: api",
+      "              domains: [\"*\"]",
+      "              routes:",
+      "              - match: { prefix: \"/orders\" }",
+      "                route:",
+      "                  cluster: orders",
+      "                  timeout: 2s",
+      "                  retry_policy:",
+      "                    retry_on: \"5xx,reset,connect-failure\"",
+      "                    num_retries: 2",
+      "          http_filters:",
+      "          - name: envoy.filters.http.router",
+      "            typed_config:",
+      "              \"@type\": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router",
+      "  clusters:",
+      "  - name: orders",
+      "    type: STRICT_DNS            # re-resolves the name; xDS (EDS) replaces this in a mesh",
+      "    connect_timeout: 1s",
+      "    lb_policy: LEAST_REQUEST",
+      "    load_assignment:",
+      "      cluster_name: orders",
+      "      endpoints:",
+      "      - lb_endpoints:",
+      "        - endpoint: { address: { socket_address: { address: orders.internal, port_value: 9000 } } }",
+      "    health_checks:",
+      "    - timeout: 1s",
+      "      interval: 5s",
+      "      unhealthy_threshold: 2",
+      "      healthy_threshold: 1",
+      "      http_health_check: { path: /healthz }",
+      "admin:",
+      "  address:",
+      "    socket_address: { address: 127.0.0.1, port_value: 9901 }",
+      "# curl localhost:9901/stats/prometheus   # counters for Prometheus"
+    ]
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "Who programs the Envoys",
+      "intro": "Most people run Envoy through a control plane that writes its configuration for them.",
+      "items": [
+        { "name": "Istio", "tag": "CNCF graduated", "text": "Sidecar mode puts an Envoy next to every pod. Ambient mode uses a per-node ztunnel for mTLS and adds Envoy-based waypoint proxies only where L7 features are needed." },
+        { "name": "Envoy Gateway", "tag": "Envoy project", "text": "Runs Envoy as an API gateway, standalone or on Kubernetes, configured with the Kubernetes Gateway API. Version 1.0 shipped in March 2024." },
+        { "name": "Contour", "tag": "CNCF incubating", "text": "A Kubernetes ingress controller that serves as Envoy’s control plane, with its own `HTTPProxy` API for delegating routes between teams." },
+        { "name": "Consul", "tag": "BUSL", "text": "Configures Envoy sidecars over xDS with certificates from Consul’s CA (built in or Vault), and enforces intentions such as “web may call payments”." },
+        { "name": "Google Cloud Service Mesh", "tag": "managed", "text": "A managed control plane that serves xDS to Envoy proxies, or directly to gRPC apps with no proxy at all." },
+        { "name": "AWS App Mesh", "tag": "retired", "text": "AWS’s Envoy-based mesh reached end of support on September 30, 2026; AWS points users to ECS Service Connect." }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Envoy and open-source NGINX as a load balancer",
+      "intro": "Both are fast, free proxies. The main difference is how configuration changes reach them.",
+      "columns": ["Envoy", "NGINX (open source)"],
+      "rows": [
+        { "label": "Licence", "values": ["Apache 2.0", "BSD 2-Clause"] },
+        { "label": "Changing configuration", "values": ["Streamed in over xDS, or a static file and a hot restart", "Edit the file and run `nginx -s reload`"] },
+        { "label": "Adding backends at runtime", "values": ["Yes, through the endpoint API (EDS)", "Only with NGINX Plus’s API; open source can re-resolve a DNS name"] },
+        { "label": "Active health checks", "values": ["Built in", "NGINX Plus only"] },
+        { "label": "gRPC", "values": ["Native, plus gRPC-Web and JSON transcoding filters", "`grpc_pass` since 1.13.10"] },
+        { "label": "Metrics", "values": ["Counters for every subsystem, Prometheus format at `/stats/prometheus`", "Basic counters from `stub_status`; detailed metrics through NGINX Plus’s API"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In 2015 Lyft had about 30 services, mostly PHP and Python, talking through Amazon ELBs and a mix of per-language libraries, with HAProxy in a few places. Calls failed now and then, and no one could tell whether the fault lay in the service code, EC2 networking or the load balancer. Most developers, Matt Klein later wrote, “were afraid to have high volume service calls in critical paths”.",
+      "Klein’s answer, built at Lyft over about a year and a half, was Envoy: a C++ proxy that runs next to every service, so each app talks only to `localhost` while the proxies handle discovery, load balancing, retries and statistics. It started as Lyft’s front proxy and gradually replaced the ELBs between services. Lyft open-sourced it on September 14, 2016, when it ran on thousands of nodes and handled over 2 million requests per second.",
+      "What made it spread was configuration by API. Users wrote their own discovery servers instead of adapters, so in 2017 Envoy and Google moved those APIs to typed proto3 schemas served over gRPC streams: xDS. Istio was built on Envoy that May, Envoy joined the CNCF in September, and in November 2018 it became the foundation’s third graduated project, after Kubernetes and Prometheus."
+    ],
+    "choices": [
+      { "choice": "A separate process next to every app, not a library", "why": "Lyft ran PHP, Python and more. A proxy works with any language, and it can be upgraded across the fleet without redeploying every service, which library upgrades never allowed." },
+      { "choice": "Native C++ instead of a garbage-collected language", "why": "Klein argued that a component in every request path “should get out of the way as much as possible”; native code keeps tail latency low, and C++11 was more productive than the C used by other native proxies." },
+      { "choice": "Features as pluggable L4 and L7 filters", "why": "TCP proxying, TLS, HTTP routing, rate limiting, even MongoDB and DynamoDB statistics were written as filters in a chain, so new protocols and features slot in without changing the core." },
+      { "choice": "Configuration pushed over typed gRPC streams", "why": "The first REST APIs were untyped JSON and polled. Proto3 schemas over gRPC made generic control planes safe to write, and pushing updates could cut propagation from 30–60 seconds to 250–500 ms." }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "Lyft starts building Envoy, first as its front proxy" },
+      { "year": "2016", "text": "1.0 tagged September 12; open-sourced September 14" },
+      { "year": "2017", "text": "Istio launches on Envoy; xDS v2 APIs; joins the CNCF" },
+      { "year": "2018", "text": "Graduates from the CNCF on November 28, third after Kubernetes and Prometheus" },
+      { "year": "2023", "text": "Official Windows support ends August 31" },
+      { "year": "2024", "text": "Envoy Gateway 1.0 brings the Kubernetes Gateway API" },
+      { "year": "2026", "text": "AWS App Mesh, built on Envoy, reaches end of support" }
+    ],
+    "sources": [
+      { "label": "Lyft Engineering: Announcing Envoy, C++ L7 proxy and communication bus (Matt Klein, Sep 2016)", "url": "https://eng.lyft.com/announcing-envoy-c-l7-proxy-and-communication-bus-92520b6c8191", "archive": "https://web.archive.org/web/20261005001839/https://eng.lyft.com/announcing-envoy-c-l7-proxy-and-communication-bus-92520b6c8191" },
+      { "label": "GitHub: envoyproxy/envoy v1.0.0 release (Sep 12, 2016)", "url": "https://github.com/envoyproxy/envoy/releases/tag/v1.0.0" },
+      { "label": "Envoy blog: The universal data plane API (Matt Klein, Sep 2017)", "url": "https://blog.envoyproxy.io/the-universal-data-plane-api-d15cec7a", "archive": "https://web.archive.org/web/20210126182611/https://blog.envoyproxy.io/the-universal-data-plane-api-d15cec7a" },
+      { "label": "Istio: Introducing Istio, the 0.1 announcement (May 2017)", "url": "https://istio.io/latest/news/releases/0.x/announcing-0.1/" },
+      { "label": "CNCF: Envoy project page (accepted Sep 13, 2017; graduated Nov 28, 2018)", "url": "https://www.cncf.io/projects/envoy/" },
+      { "label": "CNCF press release: Envoy graduation (Nov 2018)", "url": "https://www.cncf.io/announcements/2018/11/28/cncf-announces-envoy-graduation/" },
+      { "label": "GitHub: envoyproxy/gateway v1.0.0 release (Mar 2024)", "url": "https://github.com/envoyproxy/gateway/releases/tag/v1.0.0" },
+      { "label": "AWS docs: What is AWS App Mesh? (end of support Sep 30, 2026)", "url": "https://docs.aws.amazon.com/app-mesh/latest/userguide/what-is-app-mesh.html" }
+    ]
+  },
+  "sources": [
+    { "label": "Envoy docs: What is Envoy", "url": "https://www.envoyproxy.io/docs/envoy/latest/intro/what_is_envoy" },
+    { "label": "Envoy docs: Threading model", "url": "https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/intro/threading_model" },
+    { "label": "Envoy docs: xDS configuration API overview (static, EDS, CDS, RDS)", "url": "https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/operations/dynamic_configuration" },
+    { "label": "Envoy docs: xDS REST and gRPC protocol (resource types)", "url": "https://www.envoyproxy.io/docs/envoy/latest/api-docs/xds_protocol" },
+    { "label": "Envoy docs: Hot restart", "url": "https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/operations/hot_restart" },
+    { "label": "Envoy docs: gRPC (trailers, gRPC-Web, JSON transcoding)", "url": "https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/other_protocols/grpc" },
+    { "label": "Envoy docs: Administration interface (`/stats/prometheus`)", "url": "https://www.envoyproxy.io/docs/envoy/latest/operations/admin" },
+    { "label": "Envoy docs: Tracing", "url": "https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/observability/tracing" },
+    { "label": "Envoy docs: OpenTelemetry tracer (work in progress)", "url": "https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/trace/v3/opentelemetry.proto" },
+    { "label": "Envoy docs: Wasm", "url": "https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/advanced/wasm" },
+    { "label": "Envoy docs: Wasm HTTP filter (experimental)", "url": "https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/wasm_filter" },
+    { "label": "Envoy docs: Dynamic modules (C++, Go and Rust SDKs)", "url": "https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/advanced/dynamic_modules" },
+    { "label": "Envoy docs: Lua filter", "url": "https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/lua_filter" },
+    { "label": "Envoy docs: External processing filter", "url": "https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/ext_proc_filter" },
+    { "label": "Envoy docs: Building (Bazel, 2 GB RAM per core, Windows support ended)", "url": "https://www.envoyproxy.io/docs/envoy/latest/start/building" },
+    { "label": "GitHub: envoyproxy/envoy RELEASES.md (quarterly releases, 12-month support)", "url": "https://github.com/envoyproxy/envoy/blob/main/RELEASES.md" },
+    { "label": "GitHub: envoyproxy/envoy LICENSE (Apache 2.0)", "url": "https://github.com/envoyproxy/envoy/blob/main/LICENSE" },
+    { "label": "CNCF: Envoy project page", "url": "https://www.cncf.io/projects/envoy/" },
+    { "label": "Istio docs: Architecture (Envoy sidecars)", "url": "https://istio.io/latest/docs/ops/deployment/architecture/" },
+    { "label": "Istio docs: Ambient mode overview (ztunnel, waypoints)", "url": "https://istio.io/latest/docs/ambient/overview/" },
+    { "label": "Istio docs: Configure waypoint proxies (Envoy-based)", "url": "https://istio.io/latest/docs/ambient/usage/waypoint/" },
+    { "label": "Istio docs: Performance and scalability (sidecar CPU and memory)", "url": "https://istio.io/latest/docs/ops/deployment/performance-and-scalability/" },
+    { "label": "CNCF: Istio project page (graduated Jul 2023)", "url": "https://www.cncf.io/projects/istio/" },
+    { "label": "Envoy Gateway docs", "url": "https://gateway.envoyproxy.io/docs/" },
+    { "label": "GitHub: envoyproxy/gateway v1.0.0 release (Mar 2024)", "url": "https://github.com/envoyproxy/gateway/releases/tag/v1.0.0" },
+    { "label": "Contour: Kubernetes ingress controller for Envoy", "url": "https://projectcontour.io/" },
+    { "label": "CNCF: Contour project page (incubating)", "url": "https://www.cncf.io/projects/contour/" },
+    { "label": "Consul docs: Envoy proxy configuration reference (xDS)", "url": "https://developer.hashicorp.com/consul/docs/reference/proxy/envoy" },
+    { "label": "Google Cloud docs: Cloud Service Mesh overview (Envoy or proxyless gRPC over xDS)", "url": "https://cloud.google.com/service-mesh/docs/overview" },
+    { "label": "AWS docs: What is AWS App Mesh? (end of support notice)", "url": "https://docs.aws.amazon.com/app-mesh/latest/userguide/what-is-app-mesh.html" },
+    { "label": "nginx docs: Beginner’s guide (`nginx -s reload`)", "url": "https://nginx.org/en/docs/beginners_guide.html" },
+    { "label": "nginx docs: ngx_http_upstream_module (`resolve`)", "url": "https://nginx.org/en/docs/http/ngx_http_upstream_module.html" },
+    { "label": "nginx docs: ngx_http_upstream_hc_module (commercial subscription)", "url": "https://nginx.org/en/docs/http/ngx_http_upstream_hc_module.html" },
+    { "label": "nginx docs: ngx_http_api_module (commercial subscription)", "url": "https://nginx.org/en/docs/http/ngx_http_api_module.html" },
+    { "label": "nginx docs: ngx_http_grpc_module (since 1.13.10)", "url": "https://nginx.org/en/docs/http/ngx_http_grpc_module.html" },
+    { "label": "nginx docs: ngx_http_stub_status_module", "url": "https://nginx.org/en/docs/http/ngx_http_stub_status_module.html" },
+    { "label": "nginx: LICENSE (BSD 2-Clause)", "url": "https://nginx.org/LICENSE" }
+  ],
+  "checked": "2026-10-06"
+}

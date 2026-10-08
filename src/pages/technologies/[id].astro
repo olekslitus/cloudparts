@@ -1,0 +1,274 @@
+---
+import { Code } from 'astro:components';
+import { ArchiveIcon, ArrowLeftRightIcon, CheckIcon, CodeIcon, ExternalLinkIcon, NetworkIcon, PencilIcon, ShapesIcon, XIcon } from 'lucide-react';
+import ArchCard from '@/components/ArchCard.astro';
+import BenchmarkList from '@/components/BenchmarkList.astro';
+import Breadcrumbs from '@/components/Breadcrumbs.astro';
+import CopyCode from '@/components/CopyCode.astro';
+import History from '@/components/History.astro';
+import LiveModel from '@/components/LiveModel';
+import Md from '@/components/Md.astro';
+import ResourceList from '@/components/ResourceList.astro';
+import SectionLabel from '@/components/SectionLabel.astro';
+import SourceList from '@/components/SourceList.astro';
+import TechCard from '@/components/TechCard.astro';
+import TechGraph from '@/components/TechGraph.astro';
+import TechSection from '@/components/TechSection.astro';
+import Base from '@/layouts/Base.astro';
+import { getCatalog, type CatalogTech } from '@/lib/catalog';
+import { diagramHere, diagramLinks } from '@/lib/links';
+import { href, PROVIDER_NAMES, RELATION_GROUPS, relationLabel } from '@/lib/nav';
+
+export async function getStaticPaths() {
+  const c = await getCatalog();
+  return c.technologies.map(t => ({ params: { id: t.id } }));
+}
+
+const c = await getCatalog();
+const t = c.tech(Astro.params.id) as CatalogTech;
+const cat = c.category(t.category);
+const part = c.part(cat.part);
+const primary = c.concept(t.concepts[0]);
+const kind = t.kind ? c.kind(t.kind) : undefined;
+const parent = t.parent ? c.tech(t.parent.id) : undefined;
+const children = c.childrenOf(t.id);
+const family = [...new Set(children.map(x => x.parent!.as))].map(as => ({ as, techs: children.filter(x => x.parent!.as === as) }));
+const archs = c.archsWithTech(t.id);
+const featured = archs[0];
+// an archived technology lists its recommended replacements first
+const recommended = (t.archived?.alternatives ?? []).map(id => c.tech(id));
+// siblings for a child (same relation first); otherwise other top-level technologies of the same concept and kind
+const peers = parent
+  ? c.childrenOf(parent.id).filter(x => x.id !== t.id).sort((a, b) => Number(a.parent!.as !== t.parent!.as) - Number(b.parent!.as !== t.parent!.as))
+  : c.technologies.filter(x => x.concepts[0] === t.concepts[0] && x.kind === t.kind && !x.parent && x.id !== t.id);
+const alternatives = [...recommended, ...peers.filter(x => !recommended.includes(x))];
+const commonPath = kind ? `concepts/${primary.id}/${kind.id}/` : `concepts/${primary.id}/`;
+const commonName = (kind ?? primary).name.toLowerCase();
+const since = t.archived && new Date(`${t.archived.since}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+const foundation = c.foundationOf(t);
+const resources = c.resourcesAbout('technologies', t.id);
+const benchmarks = c.benchmarksAbout('technologies', t.id);
+const compares = c.comparisons.filter(m => m.technologies.includes(t.id));
+const linked = c.edges.some(e => e.from === t.id || e.to === t.id);
+const anchors = t.sections.map(s => s.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''));
+const repo = import.meta.env.PUBLIC_REPO_URL as string | undefined;
+const pill = 'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs';
+---
+
+<Base title={t.name} description={t.summary} active={t.id} section="technologies">
+  <article>
+    <header class="max-w-3xl">
+      <Breadcrumbs items={[
+        { label: part.name, path: `concepts/#${part.id}` },
+        { label: cat.name, path: `topics/${cat.id}/` },
+        { label: primary.name, path: `concepts/${primary.id}/` },
+        ...(kind ? [{ label: kind.name, path: `concepts/${primary.id}/${kind.id}/` }] : []),
+        ...(parent ? [{ label: parent.name, path: `technologies/${parent.id}/` }] : []),
+      ]} />
+      <h1 class="text-4xl font-semibold tracking-tight text-balance sm:text-5xl">{t.name}</h1>
+      <p class="mt-3 text-lg leading-relaxed text-pretty text-muted-foreground"><Md text={t.summary} /></p>
+      <div class="mt-5 flex flex-wrap items-center gap-2">
+        {parent && (
+          <a href={href(`technologies/${parent.id}/`)} class="inline-flex items-center gap-1.5 rounded-full bg-foreground px-2.5 py-0.5 text-xs font-medium text-background transition hover:opacity-85">
+            <NetworkIcon className="size-3" />{relationLabel(t.parent!.as, parent.name)}
+          </a>
+        )}
+        {t.concepts.map(id => (
+          <a href={href(`concepts/${id}/`)} class="inline-flex items-center gap-1.5 rounded-full bg-brand-soft px-2.5 py-0.5 text-xs font-medium text-brand transition hover:ring-1 hover:ring-brand/40">
+            <ShapesIcon className="size-3" />{c.concept(id).name}
+          </a>
+        ))}
+        {foundation
+          ? <a href={href(`foundations/${foundation.id}/`)} class:list={[pill, 'transition hover:bg-muted']} title={`What it means to be a project of ${foundation.name}`}>{PROVIDER_NAMES[t.provider]}<span class="text-muted-foreground underline decoration-dotted underline-offset-2">· {t.vendor}</span></a>
+          : <span class={pill}>{PROVIDER_NAMES[t.provider]}{t.vendor && <span class="text-muted-foreground">· {t.vendor}</span>}</span>}
+        {t.license && <span class={pill}><span class="text-muted-foreground">Licence</span> {t.license}</span>}
+        <a href={t.website} class:list={[pill, 'transition hover:bg-muted']} rel="noopener">Website <ExternalLinkIcon className="size-3" /></a>
+        {t.repo && <a href={t.repo} class:list={[pill, 'transition hover:bg-muted']} rel="noopener"><CodeIcon className="size-3" />Source code{t.archived && ' (archived)'} <ExternalLinkIcon className="size-3" /></a>}
+      </div>
+    </header>
+
+    {t.archived && (
+      <aside class="mt-8 max-w-3xl rounded-xl border-l-4 border-(--warn) bg-(--warn)/10 px-4 py-3.5" aria-label="Archived">
+        <p class="flex items-center gap-2 font-semibold text-(--warn)"><ArchiveIcon className="size-4" />Archived since {since}</p>
+        <p class="mt-1.5 leading-relaxed"><Md text={t.archived.reason} /></p>
+        <p class="mt-3 flex flex-wrap items-center gap-2 text-sm">
+          <span class="text-muted-foreground">Maintained alternatives:</span>
+          {recommended.map(a => (
+            <a href={href(`technologies/${a.id}/`)} class="rounded-full border bg-background px-2.5 py-0.5 font-medium transition hover:border-foreground/30 hover:bg-muted">{a.name}</a>
+          ))}
+        </p>
+      </aside>
+    )}
+
+    {linked && (
+      <section class="mt-10">
+        <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <SectionLabel class="mb-0">How it fits with other technologies</SectionLabel>
+          <span class="hidden text-sm text-muted-foreground sm:inline">Each arrow reads left to right as a sentence</span>
+        </div>
+        <TechGraph tech={t} catalog={c} />
+      </section>
+    )}
+
+    <div class="mt-12 grid gap-10 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+      <section>
+        <SectionLabel>What it is</SectionLabel>
+        <div class="space-y-4 text-[17px] leading-relaxed">
+          {t.intro.map(p => <p><Md text={p} /></p>)}
+        </div>
+      </section>
+      <section class="grid content-start gap-8">
+        <div>
+          <SectionLabel>Why teams pick it</SectionLabel>
+          <ul class="space-y-2.5">
+            {t.strengths.map(u => (
+              <li class="flex gap-2.5 leading-snug">
+                <span class="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-(--ok)/15 text-(--ok)"><CheckIcon className="size-3.5" /></span>
+                <span><Md text={u} /></span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div>
+          <SectionLabel>Watch out for</SectionLabel>
+          <ul class="space-y-2.5">
+            {t.limits.map(u => (
+              <li class="flex gap-2.5 leading-snug">
+                <span class="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-(--bad)/15 text-(--bad)"><XIcon className="size-3.5" /></span>
+                <span><Md text={u} /></span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </section>
+    </div>
+
+    {family.length > 0 && (
+      <section class="mt-12">
+        <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <SectionLabel class="mb-0">The {t.name} family</SectionLabel>
+          <span class="text-sm text-muted-foreground">{children.length} technologies built from or on {t.name}</span>
+        </div>
+        <div class="grid gap-6">
+          {family.map(g => (
+            <div>
+              <h3 class="mb-2 text-sm font-medium">{RELATION_GROUPS[g.as]}</h3>
+              <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {g.techs.map(x => <TechCard tech={x} />)}
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+    )}
+
+    <section class="mt-12">
+      <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+        <SectionLabel class="mb-0">See it in a real stack</SectionLabel>
+        {featured && <a href={href(`architectures/${featured.id}/`)} class="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">{featured.title} →</a>}
+      </div>
+      {featured ? (
+        <>
+          <LiveModel client:visible diagram={featured.diagram} links={diagramLinks(c, featured.diagram, { tech: t.id })} highlight={diagramHere(featured.diagram, { tech: t.id })}>
+            <a href={href(`playground/?a=${featured.id}`)} class="hidden h-7 items-center rounded-md border px-2.5 text-[13px] font-medium transition hover:bg-muted sm:inline-flex">Open in playground</a>
+          </LiveModel>
+          {archs.length > 1 && (
+            <div class="mt-4 grid gap-3 sm:grid-cols-2">
+              {archs.slice(1).map(a => <ArchCard arch={a} catalog={c} highlight={t.id} />)}
+            </div>
+          )}
+        </>
+      ) : (
+        <a href={href('playground/')} class="flex items-center justify-between gap-3 rounded-xl border border-dashed px-5 py-4 text-sm text-muted-foreground transition hover:border-foreground/30 hover:text-foreground">
+          <span>No architecture uses {t.name} yet. Drop it into the playground and wire it up yourself.</span>
+          <span class="shrink-0 font-medium">Open playground →</span>
+        </a>
+      )}
+    </section>
+
+    {t.snippet && (
+      <section class="mt-12" data-codebox>
+        <div class="mb-3 flex items-center justify-between gap-2">
+          <SectionLabel class="mb-0">{t.snippet.title ?? 'In code'} · {t.snippet.lang}</SectionLabel>
+          <button type="button" data-copy class="inline-flex h-7 items-center gap-1.5 rounded-md border bg-background px-2.5 text-xs font-medium transition hover:bg-muted">Copy</button>
+        </div>
+        <div class="overflow-hidden rounded-xl bg-muted/50 ring-1 ring-foreground/10 [&_pre]:overflow-x-auto [&_pre]:p-4 [&_pre]:font-mono [&_pre]:text-[13px] [&_pre]:leading-relaxed">
+          <Code code={t.snippet.source} lang={t.snippet.lang} themes={{ light: 'github-light', dark: 'github-dark' }} />
+        </div>
+      </section>
+    )}
+
+    {t.history && <History history={t.history} />}
+
+    {alternatives.length > 0 && (
+      <section class="mt-12">
+        <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <SectionLabel class="mb-0">{t.archived ? 'Alternatives, recommended first' : parent ? `More of the ${parent.name} family` : 'Alternatives'}</SectionLabel>
+          <a href={href(commonPath)} class="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">What all {commonName} have in common →</a>
+        </div>
+        <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {alternatives.map(a => <TechCard tech={a} family={c.childrenOf(a.id)} note={parent && a.parent ? RELATION_GROUPS[a.parent.as] : undefined} />)}
+        </div>
+      </section>
+    )}
+
+    {compares.length > 0 && (
+      <section class="mt-12">
+        <SectionLabel>Compared side by side</SectionLabel>
+        <div class="flex flex-wrap gap-2">
+          {compares.map(m => (
+            <a href={href(`compare/${m.id}/`)} class="inline-flex items-center gap-2 rounded-lg border border-dashed px-3 py-1.5 text-sm font-medium transition hover:border-foreground/30 hover:bg-muted">
+              <ArrowLeftRightIcon className="size-3.5 text-muted-foreground" />{m.title}
+            </a>
+          ))}
+        </div>
+      </section>
+    )}
+
+    {resources.length > 0 && (
+      <section class="mt-12">
+        <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <SectionLabel class="mb-0">Worth exploring</SectionLabel>
+          <a href={href('resources/')} class="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">All resources →</a>
+        </div>
+        <ResourceList resources={resources} />
+      </section>
+    )}
+
+    {benchmarks.length > 0 && (
+      <section class="mt-12">
+        <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <SectionLabel class="mb-0">Benchmarks</SectionLabel>
+          <a href={href('benchmarks/')} class="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">How to read a benchmark →</a>
+        </div>
+        <BenchmarkList benchmarks={benchmarks} catalog={c} tech={t.id} />
+      </section>
+    )}
+
+    {t.sections.length > 0 && (
+      <div class="mt-16 border-t pt-10">
+        <SectionLabel>In depth</SectionLabel>
+        <nav class="flex flex-wrap gap-2" aria-label="On this page">
+          {t.sections.map((s, i) => (
+            <a href={`#${anchors[i]}`} class="rounded-full border px-3 py-1 text-sm text-muted-foreground transition hover:border-foreground/30 hover:text-foreground">{s.title}</a>
+          ))}
+        </nav>
+        {t.sections.map((s, i) => <TechSection section={s} anchor={anchors[i]} catalog={c} />)}
+      </div>
+    )}
+
+    <section class="mt-14 border-t pt-6 text-sm">
+      <SectionLabel>Sources · facts checked {t.checked}</SectionLabel>
+      <SourceList sources={t.sources} />
+      {repo && (
+        <p class="mt-6 text-muted-foreground">
+          <a href={`${repo}/edit/main/content/technologies/${t.id}.json`} class="inline-flex items-center gap-1.5 underline-offset-4 hover:text-foreground hover:underline">
+            <PencilIcon className="size-3.5" />Improve this page on GitHub
+          </a>
+        </p>
+      )}
+    </section>
+  </article>
+</Base>
+
+<CopyCode />

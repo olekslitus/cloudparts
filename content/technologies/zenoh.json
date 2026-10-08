@@ -1,0 +1,142 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Eclipse Zenoh",
+  "concepts": ["iot", "pubsub"],
+  "provider": "oss",
+  "vendor": "Eclipse Foundation; developed mainly by ZettaScale Technology",
+  "license": "Dual-licensed: EPL 2.0 or Apache 2.0",
+  "website": "https://zenoh.io/",
+  "repo": "https://github.com/eclipse-zenoh/zenoh",
+  "summary": "A pub/sub, query and storage protocol that runs peer to peer or through routers, from microcontrollers to the cloud; also a ROS 2 middleware.",
+  "intro": [
+    "Zenoh names data by key, a path such as `myhome/kitchen/temp`, and offers three things on keys. Publishers `put` values that every matching subscriber receives. A `get` sends a query to every queryable whose key expression matches, and wildcards such as `myhome/**` work on both sides. Storages are queryables that remember the latest value for each key they cover. Applications link a library: the reference implementation is in Rust, with bindings for C, C++, Python, Kotlin, Java, Go and TypeScript, plus zenoh-pico, a separate pure-C implementation for microcontrollers. In peer mode, the default, applications find each other on the local network by multicast scouting and talk directly, with no broker. In client mode a constrained device keeps a single session to a router, `zenohd`, and routers link sites together. Routers load plugins: a storage manager with backends such as memory or S3, a REST API on port 8000, and an MQTT plugin that acts as a broker for MQTT 3 and 5 clients.",
+    "Zenoh is an incubating Eclipse Foundation project, dual-licensed under EPL 2.0 and Apache 2.0, and free to use. Its main developer and sponsor is ZettaScale Technology, founded in 2022, which sells support and a commercial Zetta Platform. Zenoh 1.0 shipped in October 2024 with a stabilised API, and its ROS 2 middleware, `rmw_zenoh`, became a Tier 1 option alongside the DDS implementations in ROS 2 Kilted Kaiju (May 2025)."
+  ],
+  "strengths": [
+    "Pub/sub and queries on the same keys, so a dashboard can ask for the latest values and then subscribe to changes with one library",
+    "Peer to peer on a local network: two devices next to each other talk directly instead of through a remote broker",
+    "Scales down to microcontrollers with zenoh-pico; the project quotes a wire overhead of 4 to 6 bytes",
+    "A Tier 1 ROS 2 middleware since Kilted Kaiju, and plugins bridge MQTT and DDS systems into the same network"
+  ],
+  "limits": [
+    "A much smaller ecosystem than MQTT or Kafka: one main implementation, mostly from one company, and no cloud provider offers it as a managed service",
+    "Storages keep the latest value per key, not a replayable log; history needs a backend such as a database",
+    "Its own protocol: MQTT clients and DDS applications only join through plugins or bridges",
+    "The API changed substantially before 1.0, with a migration guide from 0.11, and the project is still incubating at Eclipse",
+    "With `rmw_zenoh`, ROS 2 nodes need a Zenoh router running to discover each other, because multicast discovery is off by default"
+  ],
+  "worksWith": [
+    { "id": "s3", "how": "keeps stored keys, through a backend, in" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Publish readings, then query the latest value from a router’s storage",
+    "source": [
+      "# pip install eclipse-zenoh",
+      "# router with a memory storage on myhome/**:  zenohd -c zenoh-myhome.json5  (see below)",
+      "import random, time",
+      "import zenoh",
+      "",
+      "with zenoh.open(zenoh.Config()) as session:  # peer mode: finds others by multicast",
+      "    session.declare_subscriber(",
+      "        \"myhome/**\", lambda s: print(\"live\", s.key_expr, s.payload.to_string())",
+      "    )",
+      "",
+      "    pub = session.declare_publisher(\"myhome/kitchen/temp\")",
+      "    for _ in range(5):",
+      "        pub.put(str(random.randint(15, 30)))",
+      "        time.sleep(1)",
+      "",
+      "    # a get is answered by whatever queryable matches: here, the router’s storage",
+      "    for reply in session.get(\"myhome/kitchen/temp\"):",
+      "        print(\"stored\", reply.ok.key_expr, reply.ok.payload.to_string())"
+    ]
+  },
+  "sections": [
+    {
+      "type": "code",
+      "title": "A router that stores what it sees",
+      "intro": "The `zenohd` configuration behind the snippet. The storage subscribes to `myhome/**` and answers queries for it; the REST plugin lets you read the same data with `curl http://localhost:8000/myhome/**`.",
+      "lang": "json",
+      "source": [
+        "{",
+        "  \"plugins\": {",
+        "    \"rest\": { \"http_port\": 8000 },",
+        "    \"storage_manager\": {",
+        "      \"storages\": {",
+        "        \"myhome\": {",
+        "          \"key_expr\": \"myhome/**\",",
+        "          \"volume\": { \"id\": \"memory\" }",
+        "        }",
+        "      }",
+        "    }",
+        "  }",
+        "}"
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Zenoh or MQTT?",
+      "intro": "Both carry small messages from devices on topics or keys. They differ in topology, in what they store, and in how many implementations exist.",
+      "columns": ["Zenoh", "MQTT"],
+      "rows": [
+        { "label": "Topology", "values": ["Peer to peer, client to router, or a mix, chosen per application", "Always client to broker"] },
+        { "label": "Operations", "values": ["Publish, subscribe, query (`get`), queryables and storages", "Publish and subscribe; 5.0 adds request/response properties"] },
+        { "label": "What it stores", "values": ["Latest value per key in storages, with pluggable backends", "One retained message per topic, plus queues for persistent sessions"] },
+        { "label": "Small devices", "values": ["zenoh-pico, a pure-C implementation", "Designed for small footprints; MQTT-SN for networks without TCP/IP"] },
+        { "label": "Implementations", "values": ["One main open-source implementation; the protocol spec is published by the project", "OASIS and ISO standard, with many brokers and client libraries"] },
+        { "label": "Managed cloud services", "values": ["None from the big clouds", "AWS IoT Core, Azure IoT Hub and Event Grid"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Angelo Corsaro, then CTO of PrismTech and co-chair of the OMG group behind the Data Distribution Service (DDS) standard, worked on very large distributed systems for military, aerospace and smart-city projects. He saw no single protocol that covered them end to end. DDS handled pub/sub well but, in his view, could not scale up to the internet or down to microcontrollers; CoAP was client/server; and MQTT made two devices on the same network talk through a remote broker. Nothing let you query data at rest without knowing where it lived.",
+      "Zenoh set out to cover all of it with one protocol: pub/sub, geo-distributed queries and storage, from microcontroller to data centre, in any topology. In 2020 the team brought it to the Eclipse Foundation and rewrote the router in Rust; the first Rust-based release, Aithusa, came out in October 2020 with DDS and ROS 2 integration. ZettaScale was founded in 2022 to develop it commercially.",
+      "Its biggest step came from robotics. In September 2023 the ROS 2 core team published a report choosing a non-DDS middleware to build a new RMW on, which became `rmw_zenoh`. Zenoh 1.0 followed in October 2024, and `rmw_zenoh` became Tier 1 in ROS 2 Kilted Kaiju in May 2025."
+    ],
+    "choices": [
+      { "choice": "Peer to peer first, routers optional", "why": "Sending traffic between two machines on the same network through a cloud broker adds latency and a single point of failure. Peers discover each other by multicast and talk directly; routers are added only where sessions must be shared or networks joined." },
+      { "choice": "Queries and storage in the protocol", "why": "Pub/sub alone only covers data in motion. Making queryables and storages first-class means an application can ask for data at rest by key without knowing which database holds it." },
+      { "choice": "A Rust core with a separate C version for microcontrollers", "why": "The 2020 rewrite put the router and main library in Rust, with other languages as bindings, while zenoh-pico reimplements the protocol in plain C for devices too small for the Rust stack." }
+    ],
+    "timeline": [
+      { "year": "2020", "text": "Zenoh moves to the Eclipse Foundation; Rust rewrite begins" },
+      { "year": "2020", "text": "Aithusa, the first Rust-based release, ships in October" },
+      { "year": "2022", "text": "ZettaScale Technology founded in May" },
+      { "year": "2023", "text": "ROS 2 core team picks Zenoh for a new non-DDS middleware" },
+      { "year": "2024", "text": "Zenoh 1.0 “Firesong” released on 21 October with a stable API" },
+      { "year": "2025", "text": "`rmw_zenoh` becomes Tier 1 in ROS 2 Kilted Kaiju" }
+    ],
+    "sources": [
+      { "label": "Zenoh docs: What is Zenoh? (the genesis of Zenoh)", "url": "https://zenoh.io/docs/overview/what-is-zenoh/" },
+      { "label": "Zenoh blog: Zenohtude (moving to Eclipse and a Rust rewrite, Jan 2020)", "url": "https://zenoh.io/blog/2020-01-01-zenohtude/" },
+      { "label": "Zenoh blog: Aithusa, the first Rust-based release (Oct 2020)", "url": "https://zenoh.io/blog/2020-10-08-aithusa/" },
+      { "label": "ZettaScale: About us (founded May 2022; first non-DDS middleware in ROS 2)", "url": "https://www.zettascale.tech/about-us/" },
+      { "label": "ROS Discourse: ROS 2 alternative middleware report (Sept 2023)", "url": "https://discourse.ros.org/t/ros-2-alternative-middleware-report/33771" },
+      { "label": "Zenoh blog: Zenoh 1.0.0 Firesong (Oct 2024)", "url": "https://zenoh.io/blog/2024-10-21-zenoh-firesong/" },
+      { "label": "ROS 2 docs source: Kilted Kaiju release notes (May 2025; rmw_zenoh_cpp is Tier 1)", "url": "https://github.com/ros2/ros2_documentation/blob/rolling/source/Releases/Release-Kilted-Kaiju.rst" }
+    ]
+  },
+  "sources": [
+    { "label": "eclipse-zenoh/zenoh README (structure, language bindings, zenohd)", "url": "https://github.com/eclipse-zenoh/zenoh" },
+    { "label": "eclipse-zenoh/zenoh LICENSE (EPL 2.0 or Apache 2.0)", "url": "https://github.com/eclipse-zenoh/zenoh/blob/main/LICENSE" },
+    { "label": "Zenoh docs: What is Zenoh? (wire overhead of 4 to 6 bytes, Eclipse incubation)", "url": "https://zenoh.io/docs/overview/what-is-zenoh/" },
+    { "label": "Zenoh docs: Your first Zenoh app (keys, pub/sub, storage, get)", "url": "https://zenoh.io/docs/getting-started/first-app/" },
+    { "label": "Zenoh docs: Deployment (peer, client and router modes, scouting)", "url": "https://zenoh.io/docs/getting-started/deployment/" },
+    { "label": "Zenoh docs: Storage manager plugin (backends and volumes)", "url": "https://zenoh.io/docs/manual/plugin-storage-manager/" },
+    { "label": "Zenoh docs: REST API", "url": "https://zenoh.io/docs/apis/rest/" },
+    { "label": "eclipse-zenoh/zenoh-backend-s3 (S3 and MinIO storage backend)", "url": "https://github.com/eclipse-zenoh/zenoh-backend-s3" },
+    { "label": "eclipse-zenoh/zenoh-plugin-mqtt (MQTT v3 and v5 clients)", "url": "https://github.com/eclipse-zenoh/zenoh-plugin-mqtt" },
+    { "label": "eclipse-zenoh/zenoh-plugin-ros2dds", "url": "https://github.com/eclipse-zenoh/zenoh-plugin-ros2dds" },
+    { "label": "eclipse-zenoh/zenoh-pico (pure-C implementation)", "url": "https://github.com/eclipse-zenoh/zenoh-pico" },
+    { "label": "eclipse-zenoh/zenoh-python examples (z_pub, z_sub, z_get)", "url": "https://github.com/eclipse-zenoh/zenoh-python/tree/main/examples" },
+    { "label": "Zenoh blog: Zenoh 1.0.0 Firesong (API stabilisation)", "url": "https://zenoh.io/blog/2024-10-21-zenoh-firesong/" },
+    { "label": "Zenoh docs: Migration guide v0.11 to v1.0", "url": "https://zenoh.io/docs/migration_1.0/concepts/" },
+    { "label": "Zenoh protocol specification", "url": "https://spec.zenoh.io/" },
+    { "label": "ros2/rmw_zenoh README (router needed for discovery)", "url": "https://github.com/ros2/rmw_zenoh" },
+    { "label": "ROS 2 docs source: Kilted Kaiju release notes (May 2025; rmw_zenoh_cpp is Tier 1)", "url": "https://github.com/ros2/ros2_documentation/blob/rolling/source/Releases/Release-Kilted-Kaiju.rst" },
+    { "label": "ZettaScale Technology: Zenoh commercial offering and Zetta Platform", "url": "https://www.zettascale.tech/" }
+  ],
+  "checked": "2026-10-06"
+}

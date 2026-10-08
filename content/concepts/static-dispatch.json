@@ -1,0 +1,105 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Static dispatch",
+  "category": "code",
+  "order": 50,
+  "summary": "The compiler decides which function each call runs, so the program jumps straight to it, or skips the call by inlining it.",
+  "howItWorks": "Every call in a program has to land on one piece of machine code. With static dispatch the compiler settles which one while compiling, using the types it can see. Overloading works this way: in C++ several functions can share a name, and the compiler picks one by the argument types, fixing the choice in the binary. Generics work this way in C++ (templates) and Rust: for each concrete type a generic function is used with, the compiler stamps out a separate copy with that type filled in, which Rust calls monomorphization. Each copy calls the right methods directly, so the optimizer can inline them, pasting the callee’s body into the caller and optimizing both together. The bill comes at build time and in the binary: a generic used with 20 types is compiled 20 times, which slows compilation and grows the executable. And every type has to be known when the program is compiled. A list that mixes types, or a plugin loaded later, needs dynamic dispatch instead.",
+  "analogy": "A printed timetable. Every train’s platform is fixed before the day starts, so nobody asks at the station; but adding a train means reprinting the timetable.",
+  "useWhen": [
+    "Hot loops where a call per element adds up: numeric code, parsers, collections",
+    "Containers and algorithms that should work for any type at full speed, like C++’s standard library or Rust’s `Vec<T>`",
+    "Every type the code will handle is known when you compile"
+  ],
+  "avoidWhen": [
+    "One collection must hold different types side by side; use dynamic dispatch",
+    "Plugins or library users add types after your code is compiled",
+    "Build time or binary size is the bottleneck, such as a large generic used with dozens of types"
+  ],
+  "example": "A Rust program uses `Option<i32>` and `Option<f64>`. The compiler generates two concrete types, as if you had written `Option_i32` and `Option_f64` by hand, and a generic function called with both gets two compiled copies. Nothing is looked up at run time, so the generic code runs exactly as fast as the hand-duplicated version would; the cost is two copies in the binary instead of one.",
+  "snippet": {
+    "lang": "rust",
+    "source": [
+      "trait Shape { fn area(&self) -> f64; }",
+      "struct Circle { r: f64 }",
+      "struct Square { s: f64 }",
+      "impl Shape for Circle { fn area(&self) -> f64 { 3.14159 * self.r * self.r } }",
+      "impl Shape for Square { fn area(&self) -> f64 { self.s * self.s } }",
+      "",
+      "// Static dispatch: one compiled copy of this function per type T",
+      "fn print_area<T: Shape>(x: T) {",
+      "    println!(\"{}\", x.area());   // a direct call the optimizer can inline",
+      "}",
+      "",
+      "fn main() {",
+      "    print_area(Circle { r: 1.0 });  // compiles print_area::<Circle>",
+      "    print_area(Square { s: 2.0 });  // compiles print_area::<Square>",
+      "}"
+    ]
+  },
+  "related": ["dynamic-dispatch","oop","functional"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "How languages compile generics and method calls",
+      "intro": "Most languages mix both kinds of dispatch. The difference is which one you get by default, and how generic code is turned into machine code.",
+      "corner": "Language",
+      "columns": ["Generic code becomes", "Method calls"],
+      "rows": [
+        { "label": "C++", "values": ["One compiled copy per set of template arguments; identical copies merged at link time", "Direct, unless the method is `virtual`, which goes through a vtable"] },
+        { "label": "Rust", "values": ["One copy per concrete type (monomorphization)", "Direct, unless you ask for a `dyn Trait`, which goes through a vtable"] },
+        { "label": "Go (1.18+)", "values": ["One copy per memory shape (all pointer types share one), plus a dictionary describing the actual types", "Interface method calls go through an itable of function pointers"] },
+        { "label": "C# / .NET", "values": ["The runtime specializes a copy per value type such as `int`, and shares one copy among all reference types", "Non-virtual by default; `virtual` and interface methods are resolved at run time"] },
+        { "label": "Java", "values": ["One copy: type parameters are erased to their bound or `Object`", "Most calls are virtual; the HotSpot JIT inlines hot ones and undoes it if a new class breaks its assumption"] },
+        { "label": "Python, JavaScript", "values": ["No separate copies: the same code runs for every type", "Looked up on the object at run time (duck typing); JITs such as V8 cache the lookup at each call site"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Picking a function by its argument types is old: Bjarne Stroustrup wrote that he knew from Algol 68 how operator overloading could be made to work, and function and operator overloading were among the main features of the first commercial release of C++ in 1985, next to virtual functions. Those overloads were all resolved by the compiler.",
+      "Generic containers came next. In 1988 Stroustrup presented templates at the USENIX C++ conference, because C++ had no good way to write a list or vector that worked for any type. He saw two roads: rely on dynamic typing and inheritance as Smalltalk did, or on static typing and type arguments. C++ took the static road. Templates are a purely compile- and link-time mechanism, and Cfront 3.0 shipped them in 1991. Stroustrup treated the space taken by too many instantiations as a language-level problem, not an implementation detail.",
+      "Later languages kept the idea and tuned the trade-off. Rust, stable since 2015, monomorphizes generics and promises they cost nothing at run time, at the price of compile time and code size. When Go added generics in 1.18 (2022), its team chose a middle path: one compiled copy per memory shape of the types, plus a dictionary passed at run time, so fewer copies are compiled than with full stamping-out."
+    ],
+    "choices": [
+      { "choice": "Instantiate templates automatically", "why": "Only when the whole program is known can the compiler tell which versions of a template are needed, and many are used indirectly through libraries. Stroustrup thought it unreasonable to make users request each one, as Ada’s explicit instantiation did." },
+      { "choice": "Treat code bloat as a design problem", "why": "Stroustrup doubted compilers would learn to share code between instantiations, so C++ relied on base classes to hold the type-independent part, compiled once. Rust’s performance guide gives the same advice today: move non-generic code into an inner non-generic function." },
+      { "choice": "Generics with no run-time cost", "why": "Rust’s promise is that generic code runs as fast as hand-written code for each type. Monomorphization delivers that, and it lets the optimizer inline across the generic boundary." },
+      { "choice": "Go: one copy per memory shape", "why": "Full stamping-out compiles the same instantiation again in every package that uses it. Grouping types by shape (for example, all pointers) and passing a dictionary keeps builds fast, at some run-time cost." }
+    ],
+    "timeline": [
+      { "year": "1985", "text": "First commercial C++ release, with function and operator overloading and virtual functions" },
+      { "year": "1988", "text": "Stroustrup presents templates at the USENIX C++ conference" },
+      { "year": "1991", "text": "Cfront 3.0 ships templates" },
+      { "year": "2015", "text": "Rust 1.0, with monomorphized generics" },
+      { "year": "2022", "text": "Go 1.18 adds generics, compiled per memory shape with dictionaries" }
+    ],
+    "sources": [
+      { "label": "Bjarne Stroustrup: A History of C++, 1979–1991 (HOPL-II)", "url": "https://www.stroustrup.com/hopl2.pdf" },
+      { "label": "Rust blog: Announcing Rust 1.0 (May 2015)", "url": "https://blog.rust-lang.org/2015/05/15/Rust-1.0/" },
+      { "label": "The Rust Programming Language: Generic data types (performance of code using generics)", "url": "https://doc.rust-lang.org/book/ch10-01-syntax.html" },
+      { "label": "The Rust Performance Book: Compile times (generic functions and LLVM IR bloat)", "url": "https://nnethercote.github.io/perf-book/compile-times.html" },
+      { "label": "Go release history: go1.18 released 2022-03-15", "url": "https://go.dev/doc/devel/release" },
+      { "label": "Go design doc: Generics implementation, stenciling (compile-time drawbacks)", "url": "https://github.com/golang/proposal/blob/master/design/generics-implementation-stenciling.md" },
+      { "label": "Go design doc: Go 1.18 implementation of generics via dictionaries and gcshape stenciling", "url": "https://github.com/golang/proposal/blob/master/design/generics-implementation-dictionaries-go1.18.md" }
+    ]
+  },
+  "sources": [
+    { "label": "The Rust Programming Language: Generic data types (monomorphization)", "url": "https://doc.rust-lang.org/book/ch10-01-syntax.html" },
+    { "label": "The Rust Programming Language: Trait objects (static vs dynamic dispatch, inlining)", "url": "https://doc.rust-lang.org/book/ch18-02-trait-objects.html" },
+    { "label": "The Rust Performance Book: Inlining", "url": "https://nnethercote.github.io/perf-book/inlining.html" },
+    { "label": "The Rust Performance Book: Compile times (generic functions instantiated many times)", "url": "https://nnethercote.github.io/perf-book/compile-times.html" },
+    { "label": "cppreference: Overload resolution", "url": "https://en.cppreference.com/w/cpp/language/overload_resolution.html" },
+    { "label": "cppreference: Templates (instantiation, merging at link time)", "url": "https://en.cppreference.com/w/cpp/language/templates.html" },
+    { "label": "cppreference: virtual function specifier", "url": "https://en.cppreference.com/w/cpp/language/virtual.html" },
+    { "label": "The Rust Reference: Trait objects (vtable, late binding)", "url": "https://doc.rust-lang.org/reference/types/trait-object.html" },
+    { "label": "Go design doc: Go 1.18 implementation of generics via dictionaries and gcshape stenciling", "url": "https://github.com/golang/proposal/blob/master/design/generics-implementation-dictionaries-go1.18.md" },
+    { "label": "Russ Cox: Go data structures: interfaces (itables)", "url": "https://research.swtch.com/interfaces" },
+    { "label": "Microsoft Learn: Generics in the runtime (C#)", "url": "https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/generics/generics-in-the-run-time" },
+    { "label": "Microsoft Learn: virtual (C# reference): methods are non-virtual by default", "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/virtual" },
+    { "label": "The Java Tutorials: Type erasure", "url": "https://docs.oracle.com/javase/tutorial/java/generics/erasure.html" },
+    { "label": "Oracle: The Java HotSpot performance engine architecture (inlining virtual calls, deoptimization)", "url": "https://www.oracle.com/java/technologies/whitepaper.html" },
+    { "label": "Python glossary: duck-typing", "url": "https://docs.python.org/3/glossary.html#term-duck-typing" },
+    { "label": "V8 blog: Fast properties in V8 (hidden classes and inline caches)", "url": "https://v8.dev/blog/fast-properties" }
+  ]
+}

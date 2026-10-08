@@ -1,0 +1,123 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "PgQue",
+  "concepts": ["queue", "stream"],
+  "provider": "oss",
+  "vendor": "Nikolay Samokhvalov (open-source project)",
+  "license": "Apache 2.0 (includes ISC-licensed PgQ code)",
+  "website": "https://pgque.dev/",
+  "repo": "https://github.com/NikolayS/pgque",
+  "summary": "Skype’s PgQ engine repackaged as one SQL file: a zero-bloat event log inside any Postgres 14+.",
+  "intro": [
+    "PgQue is a queue written only in SQL and PL/pgSQL, installed from one file into any Postgres 14 or newer, managed services included. Producers call `pgque.send`, which appends an event to the queue’s table. A ticker records ticks, each storing a snapshot of which transactions had committed; by default `pg_cron` runs it in a one-second slot that ticks every 100 ms, and `pg_timetable` or your own scheduler also work. A batch is every event whose transaction committed between two ticks, found by comparing the two snapshots, so no rows are locked. Each consumer subscribes and keeps its own cursor: `receive` returns its next batch and `ack` moves the cursor on. Several consumers each see every event, more like a Kafka topic than a work queue; experimental cooperative consumers split one consumer’s batches across a pool of workers.",
+    "Most Postgres queues update or delete each row after use, leaving dead tuples for VACUUM, which can’t remove them while a long transaction or a stalled replica holds the xmin horizon. PgQue never deletes rows on its hot path. Each queue is three child tables; the ticker writes into one at a time and, once every consumer has read past the oldest, empties it with `TRUNCATE`, which frees the storage at once and leaves nothing to vacuum. The cost is latency: about 52 ms median from send to receive at the default tick. It’s free under Apache 2.0, and very new: the repository was created in April 2026 and the latest release is 0.2.2."
+  ],
+  "strengths": [
+    "No dead tuples in the event tables, even with the xmin horizon pinned: in the project’s benchmark a `SKIP LOCKED` queue’s dead tuples grew about 14 times and its throughput fell 35%, while PgQue stayed at zero",
+    "Native fan-out: any number of consumers read the same log at their own pace without copying events",
+    "Pure SQL: no C extension, no `shared_preload_libraries` and no daemon, so it installs on RDS, Aurora, Cloud SQL, AlloyDB, Supabase and Neon",
+    "Retries with `nack`, a dead-letter queue, and separate reader, writer and admin roles come in the default install",
+    "The engine underneath, PgQ, has run in production since Skype built it in 2006, with hundreds of queues there by 2009"
+  ],
+  "limits": [
+    "Very new: created in April 2026 and still 0.x; its own README calls the API layer early-stage and marks cooperative consumers experimental",
+    "Nothing is delivered without a running ticker; with `pg_cron` it holds a background worker for each one-second slot, and `cron.job_run_details` grows until you purge it",
+    "Batching adds latency (about 52 ms median at 10 ticks a second), and send, tick and receive must be separate transactions; not for single-digit-millisecond dispatch",
+    "A stopped or slow consumer blocks table rotation, so the event tables keep growing until it catches up",
+    "No per-job priorities, scheduled delivery (`send_at`) or message TTL yet; for those, the project points to a job-queue framework"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "runs as plain PL/pgSQL inside" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "Two consumers on one queue, each receiving every event",
+    "source": [
+      "-- install once, from a clone of the repo: \\i sql/pgque.sql",
+      "select pgque.start();                         -- pg_cron ticker, 10 ticks a second",
+      "",
+      "select pgque.create_queue('orders');",
+      "select pgque.subscribe('orders', 'billing');",
+      "select pgque.subscribe('orders', 'emails');   -- also sees every event",
+      "",
+      "select pgque.send('orders', '{\"order_id\": 42, \"total\": 99.95}'::jsonb);",
+      "",
+      "-- in a later transaction, after the next tick",
+      "select * from pgque.receive('orders', 'billing', 100);",
+      "select pgque.ack(1);                          -- the batch_id from those rows"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "pgmq, PgQue and PgQueuer",
+      "intro": "All three keep queues in Postgres tables. They differ in what a reader gets, which languages can join in, and how old rows are cleaned up.",
+      "columns": ["pgmq", "PgQue", "PgQueuer"],
+      "rows": [
+        { "label": "Model", "values": ["Message queue: each message goes to one reader", "Shared event log: every subscribed consumer sees every event", "Job queue: Python workers run a handler per job"] },
+        { "label": "What you install", "values": ["SQL objects, as an extension or a plain SQL file", "One PL/pgSQL file, plus a scheduler that calls the ticker", "A Python package; `pgq install` creates its tables"] },
+        { "label": "Languages", "values": ["Any, through SQL; official Rust and Python clients", "Any, through SQL; first-party Python, Go and TypeScript clients", "Python 3.10+, async handlers"] },
+        { "label": "Handing out work", "values": ["`FOR UPDATE SKIP LOCKED`, then a visibility timeout", "Batches between ticks, found by comparing two transaction snapshots; no row locks", "`FOR UPDATE SKIP LOCKED`, then status `picked` with a heartbeat"] },
+        { "label": "Delivery", "values": ["Exactly once within the visibility timeout, then at least once", "At least once, in batches; about 52 ms median wait at the default 100 ms tick", "At least once; handlers must be idempotent"] },
+        { "label": "Retries", "values": ["The message reappears after the timeout; track `read_ct` yourself", "`nack` schedules a retry; a dead-letter queue after the limit", "`RetryRequested` with a delay, or hold failed jobs for review"] },
+        { "label": "Finished messages", "values": ["Deleted, or moved to an archive table", "Stay in the log; `ack` moves the consumer’s cursor", "Deleted from the queue; the outcome is appended to a log table"] },
+        { "label": "Dead rows and cleanup", "values": ["Updates and deletes leave dead rows for VACUUM; optional partitions dropped by pg_partman", "None on the hot path: three tables rotate and the oldest is emptied with `TRUNCATE`", "Deletes leave dead rows; `pgq autovac` makes autovacuum aggressive"] },
+        { "label": "Licence and maturity", "values": ["PostgreSQL licence; 1.0 in November 2023", "Apache 2.0; 0.x, first release April 2026", "MIT; 1.0 in May 2026"] }
+      ],
+      "notes": ["PgQue’s latency figure comes from its own committed benchmark."]
+    }
+  ],
+  "history": {
+    "story": [
+      "In 2006 Skype needed asynchronous processing and replication across its many Postgres databases. Marko Kreen built PgQ, a queue inside Postgres that reused the snapshot-based event handling of the Slony-I replication system. Its first user was Londiste, Skype’s replication tool. Skype open-sourced PgQ in 2007 as part of SkyTools, and by 2009 it ran hundreds of queues and consumers there. Events were served in batches between ticks made by a separate ticker, and the queue’s three tables were rotated rather than deleted from.",
+      "PgQ needed a C extension and the `pgqd` daemon, which managed services such as RDS and Cloud SQL don’t allow. Meanwhile most newer Postgres queues claimed rows with `SKIP LOCKED` and deleted them when done, and write-ups such as Brandur’s 2015 post about Que at Heroku showed backlogs building as dead tuples outran VACUUM.",
+      "In April 2026 Nikolay Samokhvalov, founder of Postgres.ai and co-host of Postgres.fm, released PgQue 0.1. It keeps the PgQ engine and builds on PgQ’s pure PL/pgSQL path, with `pg_cron` replacing `pgqd`, 64-bit transaction ids, and a `send`, `receive` and `ack` API on top. Version 0.2 in May added first-party clients and sub-second ticks."
+    ],
+    "choices": [
+      { "choice": "Batches from two snapshots, not row locks", "why": "Whether an event belongs to a batch depends only on transaction visibility between two ticks, so delivery needs no row locks or per-row deletes, and every consumer can run the same test against its own cursor." },
+      { "choice": "Rotate three tables and `TRUNCATE` the oldest", "why": "`TRUNCATE` drops a table’s storage at once with no dead tuples. Table inheritance is used rather than declarative partitioning because a cheap truncate-and-reuse cycle per table is exactly what rotation needs." },
+      { "choice": "Replace the `pgqd` daemon with `pg_cron`", "why": "Managed Postgres won’t load C extensions or run a custom daemon beside the database, but `pg_cron` is available on the major providers." },
+      { "choice": "Keep the engine, change the surface", "why": "PgQ’s batch, tick, rotation and consumer-tracking core had a decade of production use, so PgQue leaves it unchanged and only modernizes types and adds a friendlier API and roles." }
+    ],
+    "timeline": [
+      { "year": "2006", "text": "Marko Kreen starts PgQ at Skype, inspired by Slony-I" },
+      { "year": "2007", "text": "Open-sourced in SkyTools; Londiste replication is its first user" },
+      { "year": "2009", "text": "SkyTools 3 alpha adds cascading, cooperative consumers and the `pgqd` daemon" },
+      { "year": "2026", "text": "PgQue 0.1 ships in April as a single SQL file" },
+      { "year": "2026", "text": "0.2 adds Python, Go and TypeScript clients and sub-second ticks" }
+    ],
+    "sources": [
+      { "label": "PGCon 2009: Skytools: PgQ, queues and applications (slides)", "url": "https://www.pgcon.org/2009/schedule/attachments/91_pgq.pdf" },
+      { "label": "PostgreSQL wiki: SkyTools", "url": "https://wiki.postgresql.org/wiki/SkyTools" },
+      { "label": "PgQue docs: Concepts and heritage", "url": "https://github.com/NikolayS/pgque/blob/main/docs/concepts.md" },
+      { "label": "PgQue v0.1.0 release (Apr 2026)", "url": "https://github.com/NikolayS/pgque/releases/tag/v0.1.0" },
+      { "label": "PgQue v0.2.0 release (May 2026)", "url": "https://github.com/NikolayS/pgque/releases/tag/v0.2.0" },
+      { "label": "Postgres.fm: PgQue (May 2026)", "url": "https://postgres.fm/episodes/pgque" }
+    ]
+  },
+  "sources": [
+    { "label": "PgQue README", "url": "https://github.com/NikolayS/pgque/blob/main/README.md" },
+    { "label": "PgQue docs: Concepts and heritage (snapshots, rotation, benchmark)", "url": "https://github.com/NikolayS/pgque/blob/main/docs/concepts.md" },
+    { "label": "PgQue docs: Latency and tick tuning", "url": "https://github.com/NikolayS/pgque/blob/main/docs/latency-and-tuning.md" },
+    { "label": "PgQue home page", "url": "https://pgque.dev/" },
+    { "label": "PgQue v0.2.2 release (Oct 2026)", "url": "https://github.com/NikolayS/pgque/releases/tag/v0.2.2" },
+    { "label": "PgQue LICENSE (Apache 2.0)", "url": "https://github.com/NikolayS/pgque/blob/main/LICENSE" },
+    { "label": "PgQue NOTICE (PgQ, ISC licence)", "url": "https://github.com/NikolayS/pgque/blob/main/NOTICE" },
+    { "label": "PgQ source: pgq.maint_rotate_tables (TRUNCATE-based rotation)", "url": "https://github.com/pgq/pgq/blob/master/functions/pgq.maint_rotate_tables.sql" },
+    { "label": "Christophe Pettus: PgQue, two snapshots and a diff (May 2026)", "url": "https://thebuild.com/blog/2026/05/03/pgque-two-snapshots-and-a-diff/" },
+    { "label": "Hacker News: PgQue, zero-bloat Postgres queue (Apr 2026)", "url": "https://news.ycombinator.com/item?id=47817349" },
+    { "label": "Brandur: Postgres job queues and failure by MVCC (2015)", "url": "https://brandur.org/postgres-queues" },
+    { "label": "pgmq README", "url": "https://github.com/pgmq/pgmq/blob/main/README.md" },
+    { "label": "pgmq source: pgmq.sql (read with FOR UPDATE SKIP LOCKED)", "url": "https://github.com/pgmq/pgmq/blob/main/pgmq-extension/sql/pgmq.sql" },
+    { "label": "pgmq docs: Partitioned queues", "url": "https://github.com/pgmq/pgmq/blob/main/docs/partitioned-queues.md" },
+    { "label": "Tembo blog: Introducing PGMQ (exactly once within the visibility timeout)", "url": "https://tembo.io/blog/introducing-pgmq", "archive": "https://web.archive.org/web/20231204054249/https://tembo.io/blog/introducing-pgmq/" },
+    { "label": "pgmq v1.0.0 release (Nov 2023)", "url": "https://github.com/pgmq/pgmq/releases/tag/v1.0.0" },
+    { "label": "PgQueuer README", "url": "https://github.com/janbjorge/pgqueuer/blob/main/README.md" },
+    { "label": "PgQueuer docs: Architecture", "url": "https://github.com/janbjorge/pgqueuer/blob/main/docs/reference/architecture.md" },
+    { "label": "PgQueuer docs: Performance tuning (autovacuum)", "url": "https://github.com/janbjorge/pgqueuer/blob/main/docs/guides/performance-tuning.md" },
+    { "label": "PgQueuer ADR-0004: Delivery is at-least-once", "url": "https://github.com/janbjorge/pgqueuer/blob/main/docs/adr/ADR-0004-delivery-is-at-least-once.md" },
+    { "label": "PgQueuer docs: Database-level retry", "url": "https://github.com/janbjorge/pgqueuer/blob/main/docs/guides/retry.md" },
+    { "label": "PgQueuer v1.0.0 release (May 2026)", "url": "https://github.com/janbjorge/pgqueuer/releases/tag/v1.0.0" }
+  ],
+  "checked": "2026-10-06"
+}

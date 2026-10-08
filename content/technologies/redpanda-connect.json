@@ -1,0 +1,142 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Redpanda Connect",
+  "concepts": ["stream-processing"],
+  "provider": "oss",
+  "vendor": "Redpanda Data (acquired Benthos in May 2024)",
+  "license": "Mixed: the core engine (redpanda-data/benthos) is MIT, most connectors are Apache 2.0, and enterprise connectors and features are under the source-available Redpanda Community License and need a paid licence key; everything was MIT up to Benthos 4.27, and the split came with 4.28 in May 2024",
+  "website": "https://www.redpanda.com/connect",
+  "repo": "https://github.com/redpanda-data/connect",
+  "summary": "Formerly Benthos: one Go binary that runs a YAML pipeline of inputs, processors and outputs, with at-least-once delivery and no disk state of its own.",
+  "intro": [
+    "A Redpanda Connect pipeline is one YAML file with an `input` (a Kafka topic, an SQS queue, an HTTP endpoint, a database change stream), a list of `processors` that filter, enrich or reshape each message, and an `output` (another topic, an S3 bucket, a database, an Iceberg table). Most reshaping is written in Bloblang, a small mapping language made for it. The binary keeps no queue on disk: it acknowledges a message to the source only after the output has confirmed it, so with at-least-once sources and sinks a crash means messages are re-read, not lost. Because instances hold no state, you scale by running more copies, and streams mode runs many isolated pipelines in one process, managed through a REST API.",
+    "Ashley Jeffs built it as Benthos, under the MIT licence. Redpanda bought it in May 2024 and renamed it. The core engine now lives in its own MIT-licensed repository, the connectors moved to Apache 2.0, and a growing set of enterprise components, including every change-data-capture input, the Iceberg and Snowflake outputs and remote secrets management, are under the Redpanda Community License and stop working without a paid Enterprise licence key (a 30-day trial key is free). It runs standalone, through `rpk connect`, or as managed pipelines in Redpanda Cloud. WarpStream maintains Bento, an MIT fork of the code from before the licence change."
+  ],
+  "strengths": [
+    "A whole pipeline fits in one YAML file and one static binary or container, with health checks, Prometheus-style metrics and OpenTelemetry traces built in",
+    "At-least-once delivery without disks or checkpoints: messages are acknowledged upstream only after delivery, so instances are stateless and easy to scale",
+    "A very large connector catalog: message brokers, AWS, Azure and GCP services, SQL and NoSQL databases, HTTP, and change-data-capture from PostgreSQL, MySQL, MongoDB, SQL Server and Oracle",
+    "Bloblang makes the common job, mapping one document shape into another, short and testable",
+    "Custom inputs, processors and outputs can be written in Go as plugins against the public API"
+  ],
+  "limits": [
+    "Licence split: CDC inputs, the Iceberg, Snowflake, BigQuery Write API and Splunk connectors, and features such as secrets management need a paid Enterprise key; the list was two connectors at the 2024 acquisition and has grown since",
+    "Not a stateful stream processor: no checkpointed state, no event-time watermarks; the `system_window` buffer follows the system clock, can’t backfill, and drops messages that miss their window",
+    "At-least-once, not exactly-once: after a crash or retry, outputs can see duplicates, and deduplication (for example with a cache) is your job",
+    "Rename churn: the Benthos name, repo and community moved to Redpanda, and components such as `kafka_franz` are deprecated in favour of the unified `redpanda` input and output"
+  ],
+  "worksWith": [
+    { "id": "kafka", "how": "reads and writes topics in" },
+    { "id": "postgresql", "how": "streams row changes (CDC) out of" },
+    { "id": "s3", "how": "writes batched, compressed objects to" },
+    { "id": "iceberg", "how": "writes CDC streams into tables in" },
+    { "id": "prometheus", "how": "exposes pipeline metrics to" },
+    { "id": "opentelemetry", "how": "emits pipeline traces through" }
+  ],
+  "snippet": {
+    "lang": "yaml",
+    "title": "Read orders from Kafka, reshape them with Bloblang, write gzipped batches to S3",
+    "source": [
+      "# rpk connect run orders.yaml",
+      "input:",
+      "  redpanda:",
+      "    seed_brokers: [ \"kafka-1:9092\", \"kafka-2:9092\" ]",
+      "    topics: [ orders ]",
+      "    consumer_group: orders-to-s3",
+      "",
+      "pipeline:",
+      "  processors:",
+      "    - mapping: |",
+      "        root = if this.status == \"test\" { deleted() } else { this }",
+      "    - mapping: |",
+      "        root.order_id = this.id",
+      "        root.customer_id = this.customer.id",
+      "        root.total_cents = (this.total * 100).round()",
+      "        root.received_at = now()",
+      "",
+      "output:",
+      "  aws_s3:",
+      "    bucket: orders-archive",
+      "    path: orders/${! counter() }-${! timestamp_unix_nano() }.jsonl.gz",
+      "    batching:",
+      "      count: 1000",
+      "      period: 30s",
+      "      processors:",
+      "        - archive:",
+      "            format: lines",
+      "        - compress:",
+      "            algorithm: gzip"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Which licence covers what",
+      "intro": "Checked against the repository and docs on 2026-10-05.",
+      "columns": ["Licence", "Free to use?", "Examples"],
+      "rows": [
+        { "label": "Core engine (redpanda-data/benthos)", "values": ["MIT", "Yes", "Pipeline runtime, config, Bloblang, the Go plugin API"] },
+        { "label": "Most connectors (redpanda-data/connect)", "values": ["Apache 2.0", "Yes", "`redpanda` (Kafka) input and output, `aws_s3`, SQS, NATS, MQTT, AMQP, HTTP, `sql_insert`, Redis, Elasticsearch"] },
+        { "label": "Enterprise components", "values": ["Redpanda Community License", "Only with an Enterprise key (30-day trial available)", "`postgres_cdc`, `mysql_cdc`, `mongodb_cdc`, `microsoft_sql_server_cdc`, `oracledb_cdc`, `gcp_spanner_cdc`, `aws_dynamodb_cdc`, `iceberg`, `snowflake_streaming`, `gcp_bigquery_write_api`, `splunk_hec`, Salesforce, secrets management, allow and deny lists"] },
+        { "label": "Bento (warpstreamlabs/bento)", "values": ["MIT", "Yes", "Community fork of Benthos from before the May 2024 licence change, maintained by WarpStream"] }
+      ],
+      "notes": ["The community build (`redpanda-connect-community`) leaves the enterprise components out; the standard binary includes them but blocks them until a licence key is set."]
+    }
+  ],
+  "history": {
+    "story": [
+      "Moving data between systems is mostly plumbing: read from a queue, reshape each message, write it somewhere else, and lose nothing if the process crashes. Ashley Jeffs started Benthos in 2015 as a Go program for that job, with the tagline “fancy stream processing made operationally mundane”. Instead of storing messages on disk, it acknowledged each message to the source only after the output confirmed it, which gave at-least-once delivery with no state of its own. For years it was, in his words, “a mostly one-person show”, paid for indirectly through jobs, support contracts and sponsorships. Version 1.0 came out in January 2019, and Bloblang, its mapping language, in 2020.",
+      "On May 30, 2024, Redpanda acquired Benthos and renamed it Redpanda Connect. The core engine moved to a separate MIT-licensed repository, most connectors moved from MIT to Apache 2.0, and a few, starting with the Snowflake and Splunk outputs, went under the source-available Redpanda Community License. The next day WarpStream forked the pre-change code as Bento, objecting that integrations written by outside contributors had become proprietary."
+    ],
+    "choices": [
+      { "choice": "No disk state: at-least-once through acknowledgements", "why": "Holding back the acknowledgement to the source until the output confirms a message gives at-least-once delivery without persisting messages in transit, so an instance can be killed, moved or copied freely." },
+      { "choice": "A whole stream in one config file", "why": "From 1.0 a Benthos stream was four layers in one file: inputs, an optional buffer, processors and outputs. Declaring the pipeline instead of coding it keeps the boring work boring." },
+      { "choice": "Its own mapping language", "why": "JMESPath made small edits to a large document verbose and risky, and the AWK processor was a full language that was slower and easy to break. Jeffs designed Bloblang because mapping is “one of the most common boring tasks” in stream processing." },
+      { "choice": "Also a Go framework", "why": "The same engine is a library, so teams can compile their own inputs, processors and outputs into a custom binary instead of waiting for a built-in connector." }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "Ashley Jeffs makes the first commit to Benthos in September" },
+      { "year": "2019", "text": "Benthos 1.0 is released in January" },
+      { "year": "2020", "text": "Bloblang mapping language arrives in Benthos 3.12 and 3.13" },
+      { "year": "2022", "text": "Benthos 4.0 is released in April" },
+      { "year": "2024", "text": "Redpanda acquires Benthos and renames it Redpanda Connect; licences split" },
+      { "year": "2024", "text": "WarpStream forks the MIT code as Bento" }
+    ],
+    "sources": [
+      { "label": "GitHub: first Benthos commit by Ashley Jeffs (Sep 2015)", "url": "https://github.com/redpanda-data/connect/commit/86f255ffe719678401b200c505bf251af3884817" },
+      { "label": "Benthos v1.0.0 README (four layers, at-least-once without persistence, Go framework)", "url": "https://github.com/redpanda-data/connect/blob/v1.0.0/README.md" },
+      { "label": "Benthos changelog (1.0.0 January 2019, beta bloblang processor in 3.13 May 2020, 4.0.0 April 2022)", "url": "https://github.com/redpanda-data/connect/blob/main/CHANGELOG.md" },
+      { "label": "Ashley Jeffs: Sneak peek at Bloblang (Benthos blog, Apr 2020)", "url": "https://github.com/redpanda-data/connect/blob/v4.27.0/website/blog/2020-04-18-sneak-peek-at-bloblang.md" },
+      { "label": "Ashley Jeffs: What’s next for Benthos? (Benthos blog, Nov 2022)", "url": "https://github.com/redpanda-data/connect/blob/v4.27.0/website/blog/2022-11-07-whats-next.md" },
+      { "label": "Redpanda blog: Redpanda Connect (Benthos acquisition and licensing, May 30, 2024)", "url": "https://www.redpanda.com/blog/redpanda-connect" },
+      { "label": "WarpStream blog: Announcing Bento, the open-source fork of the project formerly known as Benthos (May 31, 2024)", "url": "https://www.warpstream.com/blog/announcing-bento-the-open-source-fork-of-the-project-formerly-known-as-benthos" }
+    ]
+  },
+  "sources": [
+    { "label": "Redpanda Connect README (delivery guarantees, metrics, tracing, CDC, plugins)", "url": "https://github.com/redpanda-data/connect" },
+    { "label": "Redpanda Connect licenses/README.md (Apache 2.0 and RCL)", "url": "https://github.com/redpanda-data/connect/blob/main/licenses/README.md" },
+    { "label": "Redpanda Community License text", "url": "https://github.com/redpanda-data/connect/blob/main/licenses/rcl.md" },
+    { "label": "Iceberg output source file (Redpanda Enterprise file header)", "url": "https://github.com/redpanda-data/connect/blob/main/internal/impl/iceberg/output_iceberg.go" },
+    { "label": "Community build entry point (free bundle only)", "url": "https://github.com/redpanda-data/connect/blob/main/cmd/redpanda-connect-community/main.go" },
+    { "label": "Benthos v4.27.0 LICENSE (MIT, Ashley Jeffs)", "url": "https://github.com/redpanda-data/connect/blob/v4.27.0/LICENSE" },
+    { "label": "Redpanda Connect v4.28.0 release (repo moved, core split out, May 2024)", "url": "https://github.com/redpanda-data/connect/releases/tag/v4.28.0" },
+    { "label": "redpanda-data/benthos: the MIT-licensed core engine", "url": "https://github.com/redpanda-data/benthos" },
+    { "label": "warpstreamlabs/bento: MIT fork", "url": "https://github.com/warpstreamlabs/bento" },
+    { "label": "Redpanda press release: Redpanda acquires Benthos (May 30, 2024)", "url": "https://www.redpanda.com/press/redpanda-acquires-benthos" },
+    { "label": "Redpanda Connect docs: About", "url": "https://docs.redpanda.com/connect/get-started/about/" },
+    { "label": "Redpanda Connect docs: Licensing (enterprise features, trial key)", "url": "https://docs.redpanda.com/connect/get-started/licensing/" },
+    { "label": "Redpanda Connect docs: Bloblang", "url": "https://docs.redpanda.com/connect/guides/bloblang/about/" },
+    { "label": "Redpanda Connect docs: Bloblang functions (deleted, now)", "url": "https://docs.redpanda.com/connect/guides/bloblang/functions/" },
+    { "label": "Redpanda Connect docs: Streams mode", "url": "https://docs.redpanda.com/connect/guides/streams_mode/about/" },
+    { "label": "Redpanda Connect docs: Windowed processing", "url": "https://docs.redpanda.com/connect/configuration/windowed_processing/" },
+    { "label": "Redpanda Connect docs: system_window buffer (dropped messages)", "url": "https://docs.redpanda.com/connect/components/buffers/system_window/" },
+    { "label": "Redpanda Connect docs: postgres_cdc input (enterprise licence)", "url": "https://docs.redpanda.com/connect/components/inputs/postgres_cdc/" },
+    { "label": "Redpanda Connect docs: iceberg output", "url": "https://docs.redpanda.com/connect/components/outputs/iceberg/" },
+    { "label": "Redpanda Connect docs: redpanda input", "url": "https://docs.redpanda.com/connect/components/inputs/redpanda/" },
+    { "label": "Redpanda Connect docs: kafka_franz input (deprecated in 4.68.0)", "url": "https://docs.redpanda.com/connect/components/inputs/kafka_franz/" },
+    { "label": "Redpanda Connect docs: aws_s3 output (batching into archives)", "url": "https://docs.redpanda.com/connect/components/outputs/aws_s3/" },
+    { "label": "Redpanda Cloud docs: Redpanda Connect in Redpanda Cloud", "url": "https://docs.redpanda.com/cloud-data-platform/develop/connect/about/" },
+    { "label": "Bento documentation", "url": "https://warpstreamlabs.github.io/bento/" }
+  ],
+  "checked": "2026-10-05"
+}

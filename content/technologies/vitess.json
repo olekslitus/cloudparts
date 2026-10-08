@@ -1,0 +1,147 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Vitess",
+  "concepts": ["relational"],
+  "provider": "oss",
+  "vendor": "Cloud Native Computing Foundation",
+  "license": "Apache 2.0",
+  "website": "https://vitess.io/",
+  "repo": "https://github.com/vitessio/vitess",
+  "summary": "A proxy layer, born at YouTube, that shards MySQL across many servers while the app still sees one database.",
+  "intro": [
+    "Vitess puts a layer of Go processes between your app and many ordinary MySQL servers. The app connects to VTGate with any MySQL driver. VTGate parses each query, looks up the VSchema, which says how each table is sharded, and sends the query to the right shards, merging results when it has to ask several. A keyspace is a logical database; in a sharded keyspace a vindex function such as `xxhash` turns each row’s sharding key into a keyspace ID, and each shard owns a range of IDs (`-80`, `80-`). Next to every MySQL instance runs a VTTablet that pools connections, rewrites or kills harmful queries, and manages replication and backups. Cluster state lives in a topology service (etcd by default, ZooKeeper or Consul), which is not on the query path, so queries keep flowing if it is briefly down.",
+    "Operations are workflows. `MoveTables` and `Reshard` copy data to new keyspaces or shards with VReplication, verify it with `VDiff`, then switch reads and writes over with seconds of read-only time. VTOrc watches every shard and runs an emergency reparent when a primary dies; semi-sync replication is recommended so failover loses no data. Vitess supports MySQL and Percona Server 8.0 and 8.4; v24 is the last release with 8.0. It is free under Apache 2.0, a graduated CNCF project, runs on Kubernetes through an open-source operator, and is sold as a managed service by PlanetScale, founded by its co-creators."
+  ],
+  "strengths": [
+    "Horizontal sharding of MySQL without sharding code in the app, and online resharding as data grows",
+    "Lightweight client connections multiplexed onto small MySQL pools, so thousands of connections are cheap",
+    "Automated failover with VTOrc, online schema changes, backups to S3, GCS or Ceph, and cell-aware multi-region layouts",
+    "Proven at scale: it served all of YouTube’s database traffic for years, and Slack, Square, GitHub and JD.com adopted it",
+    "Vendor-neutral governance under the CNCF since 2018, with PlanetScale as a managed option"
+  ],
+  "limits": [
+    "Not all of MySQL: `CALL` works only on an unsharded keyspace or a targeted shard, `CREATE PROCEDURE` must go to MySQL directly, views in sharded keyspaces are experimental and read-only, and temporary tables work only unsharded",
+    "Cross-shard reads may be inconsistent with each other and run at READ COMMITTED; atomic cross-shard writes need 2PC mode, which costs about 50% more per write",
+    "Sharded tables lose `auto_increment` to Vitess sequences, and a poor sharding key turns common queries into expensive scatter queries",
+    "Many moving parts to run: VTGate, VTTablet per MySQL, vtctld, VTOrc and a topology cluster; prebuilt binaries are fully supported only on Ubuntu",
+    "MySQL and Percona only: MariaDB can be imported but not run, and MySQL 8.0 users must move to 8.4 after v24"
+  ],
+  "worksWith": [
+    { "id": "mysql", "how": "shards and routes queries across" },
+    { "id": "kubernetes", "how": "runs via its operator on" },
+    { "id": "consul", "how": "can keep its topology in" },
+    { "id": "s3", "how": "writes MySQL backups to" },
+    { "id": "gcs", "how": "writes MySQL backups to" },
+    { "id": "ceph", "how": "can write backups to" },
+    { "id": "planetscale", "how": "is sold as a managed service by" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Move two tables to their own keyspace, then split it into two shards",
+    "source": [
+      "# 1. copy customer and corder out of the unsharded commerce keyspace",
+      "vtctldclient MoveTables --target-keyspace customer --workflow commerce2customer \\",
+      "  create --source-keyspace commerce --tables 'customer,corder'",
+      "vtctldclient VDiff --target-keyspace customer --workflow commerce2customer create",
+      "vtctldclient MoveTables --target-keyspace customer --workflow commerce2customer SwitchTraffic",
+      "vtctldclient MoveTables --target-keyspace customer --workflow commerce2customer complete",
+      "",
+      "# 2. shard customer by customer_id (xxhash vindex, sequences instead of auto_increment)",
+      "vtctldclient ApplySchema --sql-file create_commerce_seq.sql commerce",
+      "vtctldclient ApplyVSchema --vschema-file vschema_commerce_seq.json commerce",
+      "vtctldclient ApplyVSchema --vschema-file vschema_customer_sharded.json customer",
+      "",
+      "# 3. after starting tablets for shards -80 and 80-, split shard 0 into them",
+      "vtctldclient Reshard --target-keyspace customer --workflow cust2cust \\",
+      "  create --source-shards '0' --target-shards '-80,80-'",
+      "vtctldclient VDiff --target-keyspace customer --workflow cust2cust create",
+      "vtctldclient Reshard --target-keyspace customer --workflow cust2cust SwitchTraffic --tablet-types=rdonly,replica",
+      "vtctldclient Reshard --target-keyspace customer --workflow cust2cust SwitchTraffic",
+      "vtctldclient Reshard --target-keyspace customer --workflow cust2cust complete"
+    ]
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "The parts of a Vitess cluster",
+      "intro": "Each is a separate process; a small test cluster runs them all on one machine, production spreads them across hosts or pods.",
+      "items": [
+        { "name": "VTGate", "tag": "stateless proxy", "text": "Speaks the MySQL protocol (and gRPC) to apps, plans queries against the VSchema and routes them to shards. Run as many as you need behind a load balancer." },
+        { "name": "VTTablet", "tag": "one per MySQL", "text": "Sits beside each `mysqld`: connection pooling, query rules and limits, replication management, backups and the VReplication streams behind `MoveTables` and `Reshard`." },
+        { "name": "Topology service", "tag": "etcd, ZooKeeper or Consul", "text": "A global store for keyspaces, shards and each shard’s primary, plus a local one per cell for its tablets. Used for discovery and locks, not for serving queries." },
+        { "name": "VTOrc", "tag": "failure repair", "text": "A fork of Orchestrator that elects a primary for new shards, runs an emergency reparent when one dies, and fixes replication settings, following the keyspace’s durability policy." },
+        { "name": "vtctld and vtctldclient", "tag": "control plane", "text": "The admin server and CLI for schema and VSchema changes, workflows and reparenting." },
+        { "name": "VTAdmin", "tag": "web UI", "text": "A web UI (`vtadmin-web`) and API (`vtadmin-api`) for looking after clusters." }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "What changes when you shard MySQL with Vitess",
+      "intro": "Within one shard, a query behaves as in MySQL. These are the differences once a keyspace has several shards.",
+      "corner": "In MySQL",
+      "columns": ["In a sharded Vitess keyspace"],
+      "rows": [
+        { "label": "Transactions", "values": ["REPEATABLE READ within a shard; READ COMMITTED across shards, atomic only in 2PC mode"] },
+        { "label": "`auto_increment`", "values": ["Replaced by sequences: a single-row table in an unsharded keyspace hands out IDs in cached chunks"] },
+        { "label": "Stored procedures", "values": ["`CALL` only on a targeted shard, `IN` parameters only, no result sets"] },
+        { "label": "Views", "values": ["Experimental, read-only, all tables in one keyspace"] },
+        { "label": "Temporary tables", "values": ["Not supported"] },
+        { "label": "Joins and aggregates", "values": ["Mostly supported; VTGate merges results, and joins on the sharding key stay on one shard"] },
+        { "label": "Schema changes", "values": ["Managed online DDL across all shards, or plain DDL"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In 2010 YouTube’s MySQL database was close to running out of capacity at peak. Read replicas helped until writes outgrew a single primary, and then the application itself had to know which shard held each row. Vitess, created that year, moved that logic out of the app into a proxy between the app and MySQL, which also handles failover, connection pooling and protection from bad queries.",
+      "At YouTube it ran on Borg, Google’s cluster manager, and served all database traffic for more than five years while YouTube’s user base grew more than 50-fold. It was also released as open source. Version 2.0 reached general availability in 2016. In February 2018 the CNCF accepted Vitess as an incubating project, the same year its co-creators founded PlanetScale to sell it as a service, and in November 2019 it became the eighth CNCF project to graduate.",
+      "Vitess showed that MySQL could be scaled out without changing databases, and companies such as Slack, Square and GitHub adopted it."
+    ],
+    "choices": [
+      { "choice": "A proxy instead of sharding logic in the app", "why": "YouTube’s code had to pick a shard before every query. Moving routing into VTGate let the app see one database while the data spread over many MySQL servers." },
+      { "choice": "Keep real MySQL underneath", "why": "Each shard is still a MySQL primary with replicas, managed by a VTTablet beside it, so the storage engine, replication and tooling stay ones teams already trust." },
+      { "choice": "Many small instances", "why": "Vitess recommends about 250 GB per MySQL server: smaller instances replicate, back up and restore faster, and an outage affects less data." },
+      { "choice": "Built for a cluster scheduler", "why": "At YouTube it ran on Borg, so it was designed for processes that move between machines; the same design fits Kubernetes." }
+    ],
+    "timeline": [
+      { "year": "2010", "text": "Created at YouTube to scale its MySQL databases" },
+      { "year": "2016", "text": "Vitess 2.0 released" },
+      { "year": "2018", "text": "Accepted by the CNCF on 5 February; PlanetScale founded" },
+      { "year": "2019", "text": "Graduates from the CNCF on 5 November, the eighth project to do so" },
+      { "year": "2026", "text": "v24 adds cell-aware VTOrc; last release supporting MySQL 8.0" }
+    ],
+    "sources": [
+      { "label": "Vitess docs: History", "url": "https://vitess.io/docs/24.0/overview/history/" },
+      { "label": "Vitess docs: Cloud native (ran on Borg at YouTube)", "url": "https://vitess.io/docs/24.0/overview/cloud-native/" },
+      { "label": "vitessio/vitess on GitHub: release v2.0.0 (Jul 2016)", "url": "https://github.com/vitessio/vitess/releases/tag/v2.0.0" },
+      { "label": "CNCF: Vitess project page (accepted 5 Feb 2018, graduated 5 Nov 2019)", "url": "https://www.cncf.io/projects/vitess/" },
+      { "label": "CNCF: Cloud Native Computing Foundation announces Vitess graduation (Nov 2019)", "url": "https://www.cncf.io/announcements/2019/11/05/cloud-native-computing-foundation-announces-vitess-graduation/" },
+      { "label": "Vitess docs: Scalability philosophy (250 GB per MySQL server)", "url": "https://vitess.io/docs/24.0/overview/scalability-philosophy/" },
+      { "label": "PlanetScale: About (founded in 2018 by the co-creators of Vitess)", "url": "https://planetscale.com/about" }
+    ]
+  },
+  "sources": [
+    { "label": "Vitess docs: What is Vitess (components, adopters, comparison with MySQL)", "url": "https://vitess.io/docs/24.0/overview/whatisvitess/" },
+    { "label": "Vitess docs: Supported databases (MySQL and Percona 8.0, 8.4; v24 last with 8.0)", "url": "https://vitess.io/docs/24.0/overview/supported-databases/" },
+    { "label": "Vitess docs: Scalability philosophy (small instances, semi-sync, consistency, 2PC cost)", "url": "https://vitess.io/docs/24.0/overview/scalability-philosophy/" },
+    { "label": "Vitess docs: VTGate", "url": "https://vitess.io/docs/24.0/concepts/vtgate/" },
+    { "label": "Vitess docs: Tablet", "url": "https://vitess.io/docs/24.0/concepts/tablet/" },
+    { "label": "Vitess docs: Topology service", "url": "https://vitess.io/docs/24.0/concepts/topology-service/" },
+    { "label": "Vitess docs: Topology service reference (etcd2, zk2, consul)", "url": "https://vitess.io/docs/24.0/reference/features/topology-service/" },
+    { "label": "Vitess docs: Vindexes", "url": "https://vitess.io/docs/24.0/reference/features/vindexes/" },
+    { "label": "Vitess docs: MySQL compatibility", "url": "https://vitess.io/docs/24.0/reference/compatibility/mysql-compatibility/" },
+    { "label": "Vitess docs: MoveTables", "url": "https://vitess.io/docs/24.0/user-guides/migration/move-tables/" },
+    { "label": "Vitess docs: Resharding (sequences, vindexes, Reshard workflow)", "url": "https://vitess.io/docs/24.0/user-guides/configuration-advanced/resharding/" },
+    { "label": "Vitess docs: Managed, online schema changes", "url": "https://vitess.io/docs/24.0/user-guides/schema-changes/managed-online-schema-changes/" },
+    { "label": "Vitess docs: VTOrc", "url": "https://vitess.io/docs/24.0/user-guides/configuration-basic/vtorc/" },
+    { "label": "Vitess docs: Backup and restore (s3, gcs, ceph, file)", "url": "https://vitess.io/docs/24.0/user-guides/operating-vitess/backup-and-restore/overview/" },
+    { "label": "Vitess docs: Local install (Ubuntu the only fully supported OS)", "url": "https://vitess.io/docs/24.0/get-started/local/" },
+    { "label": "Vitess docs: Vitess Operator for Kubernetes", "url": "https://vitess.io/docs/24.0/get-started/operator/" },
+    { "label": "Vitess Operator on GitHub (Apache 2.0)", "url": "https://github.com/planetscale/vitess-operator" },
+    { "label": "vitessio/vitess on GitHub (Apache 2.0)", "url": "https://github.com/vitessio/vitess" },
+    { "label": "vitessio/vitess on GitHub: release v24.0.0 (Apr 2026)", "url": "https://github.com/vitessio/vitess/releases/tag/v24.0.0" },
+    { "label": "CNCF: Vitess graduation announcement (adopters: GitHub, Slack, Square, YouTube)", "url": "https://www.cncf.io/announcements/2019/11/05/cloud-native-computing-foundation-announces-vitess-graduation/" },
+    { "label": "PlanetScale: About", "url": "https://planetscale.com/about" }
+  ],
+  "checked": "2026-10-06"
+}

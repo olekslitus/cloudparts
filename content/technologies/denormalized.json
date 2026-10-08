@@ -1,0 +1,126 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Denormalized",
+  "concepts": ["stream-processing"],
+  "provider": "oss",
+  "vendor": "Denormalized (Probably Nothing Labs, Y Combinator Summer 2022), now inactive",
+  "license": "Apache 2.0 (from the first commit in July 2024)",
+  "website": "https://www.denormalized.io/",
+  "archived": {
+    "since": "2024-12-18",
+    "reason": "The last commit landed on 18 December 2024, a day after the last PyPI release, 0.0.13, and Y Combinator now lists the company as inactive and its two founders as former founders. The code still installs, but it never left early 0.0.x versions and nothing has been fixed since.",
+    "alternatives": ["arroyo", "quix-streams", "risingwave"]
+  },
+  "repo": "https://github.com/probably-nothing-labs/denormalized",
+  "summary": "An embeddable stream processing library in Rust, with Python bindings, built on Apache DataFusion. Abandoned since December 2024 at version 0.0.13.",
+  "intro": [
+    "Denormalized ran inside your own program instead of as a cluster. A Rust or Python program created a `Context`, pointed it at a Kafka topic and gave it one sample JSON event, from which it inferred the schema, plus the name of the event-time column. On that stream you chained DataFrame-style steps built from DataFusion expressions: `filter`, `select`, `with_column`, stream joins, and `window`, which grouped events by key into tumbling or sliding windows and aggregated them. Kafka messages were decoded into Apache Arrow record batches and run through streaming operators built on a fork of Apache DataFusion. Results went to another Kafka topic, to the console, to a Python function that received each Arrow batch, or into a Feast feature store through a helper class. With checkpointing switched on, operator state was saved in SlateDB, an embedded key-value store, at a path you chose, and a restarted job recovered from it.",
+    "It was built by a two-person San Francisco startup and published under Apache 2.0 for free; the plan was to find design partners, and the website promised millions of events per second on a single node. It never reached a stable release. The Python package stopped at 0.0.13 in December 2024, the repository has had no commits since, and Y Combinator lists the company as inactive. `pip install denormalized` still works, but against a pinned DataFusion fork and Arrow 53, with nobody fixing bugs."
+  ],
+  "strengths": [
+    "Embeddable: no cluster, JVM or separate service, just a library inside a Rust or Python process",
+    "Built on DataFusion and Arrow, so expressions, functions and record batches are the same ones the DataFusion ecosystem uses",
+    "Infers a topic’s schema from one sample JSON event, so a first pipeline is a few lines",
+    "Small, readable Apache 2.0 code base if you want to study or fork a streaming engine on DataFusion"
+  ],
+  "limits": [
+    "Abandoned: no commits or releases since December 2024, and the company behind it is inactive",
+    "Never got past 0.0.x; its own README calls it work in progress",
+    "Kafka was the only real-time source and sink, and there was no SQL interface; issues asking for SQL and NATS support are still open",
+    "Depends on a fork of DataFusion pinned to one commit rather than a release, so moving to a newer DataFusion means redoing that fork",
+    "One process only, with opt-in checkpointing on an early SlateDB version (0.2)"
+  ],
+  "worksWith": [
+    { "id": "datafusion", "how": "runs streaming operators on a fork of" },
+    { "id": "kafka", "how": "reads and writes topics in" },
+    { "id": "arrow", "how": "processes events as record batches of" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Per-sensor stats every second from one Kafka topic to another (last release, 0.0.13)",
+    "source": [
+      "# pip install denormalized==0.0.13",
+      "import json",
+      "",
+      "from denormalized import Context",
+      "from denormalized.datafusion import col, lit",
+      "from denormalized.datafusion import functions as f",
+      "",
+      "sample_event = {\"occurred_at_ms\": 100, \"sensor_name\": \"foo\", \"reading\": 0.0}",
+      "",
+      "ds = Context().from_topic(",
+      "    \"temperature\",             # Kafka topic to read",
+      "    json.dumps(sample_event),  # the schema is inferred from this sample",
+      "    \"localhost:9092\",",
+      "    \"occurred_at_ms\",          # event-time column",
+      ")",
+      "",
+      "(",
+      "    ds.window(",
+      "        [col(\"sensor_name\")],",
+      "        [",
+      "            f.count(col(\"reading\"), distinct=False, filter=None).alias(\"count\"),",
+      "            f.max(col(\"reading\")).alias(\"max\"),",
+      "            f.avg(col(\"reading\")).alias(\"average\"),",
+      "        ],",
+      "        1000,  # window length in milliseconds",
+      "        None,  # no slide: tumbling windows",
+      "    )",
+      "    .filter(col(\"max\") > lit(113))",
+      "    .sink_kafka(\"localhost:9092\", \"hot-sensors\")",
+      ")"
+    ]
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "Where to go instead",
+      "intro": "Maintained projects that cover what Denormalized set out to do.",
+      "items": [
+        { "name": "Arroyo", "tag": "Rust, DataFusion", "text": "The same foundations (Rust, Arrow, DataFusion) as a stream processing engine with SQL pipelines, windows, joins and checkpoints to object storage. It runs as a service or cluster rather than inside your program; MIT or Apache 2.0, owned by Cloudflare." },
+        { "name": "Quix Streams", "tag": "Python library", "text": "Closest to Denormalized’s Python API: a library you import into your own program, with a pandas-like streaming DataFrame over Kafka and per-key state in RocksDB backed up to Kafka. Apache 2.0." },
+        { "name": "RisingWave", "tag": "SQL database", "text": "If you would rather write SQL and query the results: a streaming database that keeps materialized views up to date and speaks the PostgreSQL protocol. A cluster, not a library; Apache 2.0 core." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Amey Chaugule, who had spent four years on Uber’s marketplace dynamics team, and Matt Green went through Y Combinator’s Summer 2022 batch as Probably Nothing Labs, building Gigabrain, a blockchain indexer that relied on stateful stream processing. The company later pivoted to Denormalized, a general-purpose stream processing engine.",
+      "Their argument, in an August 2024 Show HN post, was that DuckDB had shown how far a single machine can go, and that streaming jobs rarely compute over more than tens of gigabytes at a time, yet Flink makes you start a distributed JVM cluster for even the simplest stream. Denormalized was meant to be embedded in an application and handle hundreds of thousands of events per second, with a Flink-like dataflow API on top of Apache DataFusion and Arrow. Python bindings arrived on PyPI in October 2024, followed by checkpointing in SlateDB and an integration with the Feast feature store.",
+      "Releases stopped with 0.0.13 in December 2024. Open issues asked for SQL and more sources, but no further code was pushed, and Y Combinator now lists the company as inactive."
+    ],
+    "choices": [
+      { "choice": "An embeddable library instead of a cluster", "why": "The founders argued that most streaming workloads fit on one machine, as DuckDB had shown for analytics, so a JVM cluster was overhead most users didn’t need." },
+      { "choice": "Build on DataFusion and Arrow", "why": "Reusing an existing columnar query engine gave them expressions, functions, joins and aggregation without writing them from scratch; they kept a fork to add streaming operators." },
+      { "choice": "Infer the schema from a sample event", "why": "Their pitch was getting from an idea to a running pipeline quickly; deriving the schema from one JSON example saved writing it by hand." },
+      { "choice": "Rust core with Python bindings", "why": "The engine stayed in Rust, and Python bindings, promised in the Show HN post, opened it to Python data pipelines and to the Feast feature store." }
+    ],
+    "timeline": [
+      { "year": "2022", "text": "Founders join Y Combinator’s Summer 2022 batch as Probably Nothing Labs" },
+      { "year": "2024", "text": "Denormalized repository opens in July under Apache 2.0; Show HN in August" },
+      { "year": "2024", "text": "Python bindings on PyPI from October; Feast integration and SlateDB checkpoints follow" },
+      { "year": "2024", "text": "Last release, 0.0.13, on 17 December; last commit the next day" }
+    ],
+    "sources": [
+      { "label": "Y Combinator: Denormalized (Summer 2022, inactive, former founders, Probably Nothing Labs launch)", "url": "https://www.ycombinator.com/companies/denormalized" },
+      { "label": "Hacker News: Show HN: Denormalized, embeddable stream processing in Rust and DataFusion (Aug 2024)", "url": "https://news.ycombinator.com/item?id=41258276" },
+      { "label": "Denormalized: initial commit (13 July 2024)", "url": "https://github.com/probably-nothing-labs/denormalized/commit/97a2fb85" },
+      { "label": "Denormalized: last commit (18 December 2024)", "url": "https://github.com/probably-nothing-labs/denormalized/commit/643c14aa4c6ff9765e0d838f5d136472ed82ed6b" },
+      { "label": "PyPI: denormalized release history (0.0.4 in October 2024 to 0.0.13 in December 2024)", "url": "https://pypi.org/project/denormalized/#history" }
+    ]
+  },
+  "sources": [
+    { "label": "Denormalized README (embeddable, Kafka source and sink, windows, joins, SlateDB checkpoints, work in progress)", "url": "https://github.com/probably-nothing-labs/denormalized" },
+    { "label": "Denormalized LICENSE (Apache 2.0)", "url": "https://github.com/probably-nothing-labs/denormalized/blob/main/LICENSE" },
+    { "label": "Denormalized Cargo.toml (pinned DataFusion fork, Arrow 53, SlateDB 0.2)", "url": "https://github.com/probably-nothing-labs/denormalized/blob/main/Cargo.toml" },
+    { "label": "Denormalized Python API: Context.from_topic", "url": "https://github.com/probably-nothing-labs/denormalized/blob/main/py-denormalized/python/denormalized/context.py" },
+    { "label": "Denormalized Python API: DataStream (window, join, sink, sink_kafka)", "url": "https://github.com/probably-nothing-labs/denormalized/blob/main/py-denormalized/python/denormalized/data_stream.py" },
+    { "label": "Denormalized Python API: Feast integration", "url": "https://github.com/probably-nothing-labs/denormalized/blob/main/py-denormalized/python/denormalized/feast_data_stream.py" },
+    { "label": "Denormalized commit history (last commit 18 December 2024)", "url": "https://github.com/probably-nothing-labs/denormalized/commits/main" },
+    { "label": "Denormalized open issues (SQL support, NATS)", "url": "https://github.com/probably-nothing-labs/denormalized/issues" },
+    { "label": "PyPI: denormalized (latest 0.0.13)", "url": "https://pypi.org/project/denormalized/" },
+    { "label": "Denormalized website (page description: millions of events per second on a single node)", "url": "https://www.denormalized.io/" },
+    { "label": "Y Combinator: Denormalized (status inactive)", "url": "https://www.ycombinator.com/companies/denormalized" }
+  ],
+  "checked": "2026-10-06"
+}

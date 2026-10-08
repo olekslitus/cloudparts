@@ -1,0 +1,159 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Quix Streams",
+  "concepts": ["stream-processing"],
+  "provider": "oss",
+  "vendor": "Quix Analytics Ltd.",
+  "license": "Apache 2.0 (since the first open-source release in March 2023); Quix Cloud, the hosted platform, is proprietary",
+  "website": "https://quix.io/docs/quix-streams/introduction.html",
+  "repo": "https://github.com/quixio/quix-streams",
+  "summary": "A pure-Python library for stateful stream processing on Kafka: a pandas-like Streaming DataFrame, RocksDB state backed up to Kafka, and no cluster of its own.",
+  "intro": [
+    "Quix Streams is a library you import into your own Python program (3.11 or newer), not a server. An `Application` joins a Kafka consumer group, reads and deserializes messages, runs each one through a `StreamingDataFrame` (a declarative chain of steps written like pandas: `apply`, filters, column assignments, windows, joins, `group_by`) and produces the results to output topics or sinks. Kafka hands out the input partitions, so you scale by starting more copies of the same app. Stateful steps keep data per message key in a local RocksDB store, one per partition, and every change also goes to a compacted changelog topic in Kafka. When a partition moves to another copy, that copy replays the changelog before it processes anything. Every 5 seconds by default the app takes a checkpoint: it flushes sinks and the producer, commits the input offsets and writes state to disk. Delivery is at-least-once by default; `processing_guarantee=\"exactly-once\"` wraps each checkpoint in a Kafka transaction. Windows use event time, taken from the Kafka message timestamp or from a field you extract, and by default time moves forward separately for each key.",
+    "The library is Apache 2.0 and works with any Kafka-compatible broker, self-hosted or managed. Quix Analytics, founded by engineers from McLaren’s Formula 1 data platform, sells Quix Cloud for running these apps: hosted or bring-your-own Kafka (Confluent Cloud, Redpanda, Aiven), deployments on Kubernetes, projects tied to Git branches, pipelines defined in YAML, an online editor, logs and metrics. There is no public price list. The docs offer a time-limited free account after a call, and by October 2026 Quix’s website sold the platform mainly for hardware test and engineering data. The library itself is released every few weeks."
+  ],
+  "strengths": [
+    "Pure Python, with no JVM or language bridge, so pandas, NumPy and ML libraries run inside the processing steps and debugging stays in one language",
+    "Kafka Streams-style design without the JVM: local RocksDB state, changelog topics for recovery, consumer groups for scaling, nothing extra to operate",
+    "Exactly-once from Kafka to Kafka with one setting; Quix’s docs put the cost at about 10% slower than at-least-once at worst",
+    "Tumbling, hopping and sliding windows by time or by message count, session windows since 3.27, and as-of, interval and lookup joins",
+    "Ready-made sources and sinks for S3, Iceberg, PostgreSQL, BigQuery, Kinesis, Google Pub/Sub, MQTT, Redis and more, plus Avro, Protobuf and JSON with a schema registry"
+  ],
+  "limits": [
+    "Kafka is required, not optional: input, state backups and `group_by` repartitioning all go through Kafka topics, and each stateful app adds changelog topics",
+    "Parallelism is capped by the input topic’s partition count, and a copy that takes over partitions must rebuild their RocksDB state from the changelog first",
+    "Exactly-once covers Kafka output only; other sinks are flushed at each checkpoint and written again after a failure, and exactly-once output only becomes readable when the checkpoint commits",
+    "With the default per-key closing strategy, a key that stops sending keeps its last window open forever; `closing_strategy=\"partition\"` fixes that but can drop out-of-order messages across keys",
+    "Quix Cloud has no published prices, doesn’t support a schema registry, and comes from a company now focused on hardware engineering; version 3.27 raised the minimum to Python 3.11"
+  ],
+  "worksWith": [
+    { "id": "kafka", "how": "reads, writes and backs up its state in" },
+    { "id": "redpanda", "how": "runs against the Kafka API of" },
+    { "id": "s3", "how": "reads files from and writes batches to" },
+    { "id": "iceberg", "how": "writes streaming results into" },
+    { "id": "postgresql", "how": "sinks processed rows into" },
+    { "id": "bigquery", "how": "sinks processed rows into" },
+    { "id": "kinesis", "how": "reads from and writes to" },
+    { "id": "google-pubsub", "how": "reads from and writes to" },
+    { "id": "redis", "how": "writes keyed results to" },
+    { "id": "kubernetes", "how": "runs in Quix Cloud on" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Average temperature per sensor per minute, Kafka to Kafka, exactly once",
+    "source": [
+      "from datetime import timedelta",
+      "",
+      "from quixstreams import Application",
+      "from quixstreams.dataframe.windows import Count, Mean",
+      "",
+      "app = Application(",
+      "    broker_address=\"kafka-1:9092\",",
+      "    consumer_group=\"sensor-averages\",  # also names the state dir and changelog topics",
+      "    auto_offset_reset=\"earliest\",",
+      "    processing_guarantee=\"exactly-once\",",
+      ")",
+      "",
+      "# messages are keyed by sensor id; use the reading's own time, in ms, as event time",
+      "readings = app.topic(",
+      "    \"sensor-readings\",",
+      "    value_deserializer=\"json\",",
+      "    timestamp_extractor=lambda value, headers, ts, ts_type: value[\"ts_ms\"],",
+      ")",
+      "averages = app.topic(\"sensor-averages-1m\", value_serializer=\"json\")",
+      "",
+      "sdf = app.dataframe(readings)",
+      "sdf = sdf[sdf[\"temp_c\"] > -50]  # drop obviously broken readings",
+      "sdf = (",
+      "    sdf.tumbling_window(timedelta(minutes=1), grace_ms=timedelta(seconds=10))",
+      "    .agg(avg_c=Mean(\"temp_c\"), readings=Count())",
+      "    .final()  # one result per sensor per minute, once the window closes",
+      ")",
+      "sdf.to_topic(averages)  # {\"start\": ..., \"end\": ..., \"avg_c\": ..., \"readings\": ...}",
+      "",
+      "if __name__ == \"__main__\":",
+      "    app.run()  # start more copies to spread the partitions"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "The library or Quix Cloud",
+      "intro": "The same application code runs in both. Checked 2026-10-06.",
+      "columns": ["Quix Streams (library)", "Quix Cloud"],
+      "rows": [
+        { "label": "What it is", "values": ["A Python package: `pip install quixstreams`", "A hosted platform for building, deploying and monitoring Quix Streams apps"] },
+        { "label": "Kafka", "values": ["Any Kafka-compatible broker you run or rent", "Quix-hosted Kafka, or bring Confluent Cloud, Redpanda, Aiven or your own"] },
+        { "label": "Where apps run", "values": ["Anywhere Python runs: a VM, a container, your own Kubernetes", "Quix-managed Kubernetes, scaled by replicas, CPU and memory; dedicated infrastructure available"] },
+        { "label": "Extras", "values": ["None; bring your own CI/CD and monitoring", "Online editor, Git-linked environments, YAML pipelines, logs, metrics, live data views"] },
+        { "label": "Licence and price", "values": ["Apache 2.0, free", "Proprietary; no public price list, time-limited free account after booking a session"] }
+      ],
+      "notes": ["Quix Cloud doesn’t offer or let you configure a schema registry; apps can still use one directly."]
+    },
+    {
+      "type": "cards",
+      "title": "Other ways to do the same job",
+      "items": [
+        { "name": "Kafka Streams", "tag": "JVM", "text": "The design Quix Streams follows: a library with local RocksDB state, changelog topics and consumer-group scaling, but for Java and Scala, shipped with Apache Kafka." },
+        { "name": "Bytewax", "tag": "community-maintained", "text": "Python on a Rust engine (Timely Dataflow) with its own cluster mode and SQLite recovery. The company behind it stopped work in 2025; the last release is from November 2024." },
+        { "name": "PyFlink and PySpark", "tag": "JVM underneath", "text": "Python APIs over Flink and Spark, full distributed engines with clusters of their own. Your Python code runs next to a JVM, which Quix argues makes deploying and debugging harder." },
+        { "name": "Arroyo", "tag": "SQL", "text": "A Rust engine where the pipeline is SQL instead of Python, with checkpoints to object storage and its own cluster, now developed by Cloudflare." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Quix’s founders built the data platform at McLaren, where race decisions depend on high-frequency sensor data processed in milliseconds. They started Quix to give other teams that kind of real-time pipeline, began work on the library on 2 March 2020, and raised a $12.9 million Series A led by MMC Ventures in 2022, betting on Python as the language for analytics and machine learning.",
+      "On the company’s third birthday in March 2023 they open-sourced Quix Streams under Apache 2.0. That first version was written in C#, with Python bindings generated from ahead-of-time compiled .NET code, and was built around time-series telemetry: timestamped rows, stream contexts and buffers. Python users had to debug across two languages.",
+      "In November 2023 the 2.0 alpha replaced it entirely: pure Python, no .NET, a new Streaming DataFrame API and RocksDB state, close in spirit to Kafka Streams. Version 3.0 in October 2024 added branching and reading several topics in one app, and 2026 releases added session windows and moved the minimum to Python 3.11. Meanwhile the company’s own pitch shifted towards hardware test data and AI agents for engineers."
+    ],
+    "choices": [
+      { "choice": "A library, not a cluster", "why": "Like Kafka Streams, it runs inside your own process and leans on Kafka for partition assignment and state backups, so there is no separate processing cluster or orchestrator to run." },
+      { "choice": "Rewrite in pure Python", "why": "The first version wrapped a C# core. The 2.0 release notes say dropping .NET made the library more stable, safe and easier to maintain, and Python users no longer debug through generated bindings." },
+      { "choice": "A DataFrame-like API", "why": "The target users are data scientists and engineers who know pandas. Writing a stream job as column operations on an endless table keeps them in a familiar style while the library tracks state." },
+      { "choice": "State in local RocksDB, backed up to Kafka", "why": "Keeping state next to the code keeps each step fast, and changelog topics reuse Kafka’s replication for durability, so the only infrastructure needed is the broker you already have." }
+    ],
+    "timeline": [
+      { "year": "2020", "text": "Quix starts work on the library on 2 March" },
+      { "year": "2022", "text": "$12.9 million Series A led by MMC Ventures" },
+      { "year": "2023", "text": "Open-sourced in March as a C# library with Python bindings" },
+      { "year": "2023", "text": "2.0 alpha in November: pure Python, Streaming DataFrames, RocksDB state" },
+      { "year": "2024", "text": "3.0 in October adds branching and multiple input topics" },
+      { "year": "2026", "text": "3.27 in September adds session windows and requires Python 3.11" }
+    ],
+    "sources": [
+      { "label": "Quix blog: Introducing Quix Streams, an open source library for telemetry data streaming (Mar 2023)", "url": "https://quix.io/blog/open-sourcing-quix-streams", "archive": "https://web.archive.org/web/20231209221732/https://www.quix.io/blog/open-sourcing-quix-streams" },
+      { "label": "Quix blog: Quix raises $12.9m Series A (2022)", "url": "https://www.quix.io/blog/quix-raises-12-9-million-series-a-funding/", "archive": "https://web.archive.org/web/20221123123929/https://www.quix.io/blog/quix-raises-12-9-million-series-a-funding/" },
+      { "label": "Quix Streams v0.5.0 architecture notes (C# core, Python interop wrappers)", "url": "https://github.com/quixio/quix-streams/blob/v0.5.0/arch-notes.md" },
+      { "label": "GitHub: Quix Streams v2.0alpha2 release notes (Nov 2023)", "url": "https://github.com/quixio/quix-streams/releases/tag/v2.0alpha2" },
+      { "label": "Quix blog: Introducing Streaming DataFrames", "url": "https://quix.io/blog/introducing-streaming-dataframes", "archive": "https://web.archive.org/web/20250125103139/https://quix.io/blog/introducing-streaming-dataframes" },
+      { "label": "GitHub: Quix Streams v3.0.0 release notes (Oct 2024)", "url": "https://github.com/quixio/quix-streams/releases/tag/v3.0.0" },
+      { "label": "GitHub: Quix Streams v3.27.0 release notes (Sep 2026)", "url": "https://github.com/quixio/quix-streams/releases/tag/v3.27.0" },
+      { "label": "Quix: About (founded by the team behind McLaren Racing’s data platform)", "url": "https://quix.io/about/" }
+    ]
+  },
+  "sources": [
+    { "label": "Quix Streams README (features, requirements, deployment)", "url": "https://github.com/quixio/quix-streams" },
+    { "label": "Quix Streams LICENSE (Apache 2.0, Quix Analytics Ltd.)", "url": "https://github.com/quixio/quix-streams/blob/main/LICENSE" },
+    { "label": "Quix Streams requirements.txt (confluent-kafka, rocksdict)", "url": "https://github.com/quixio/quix-streams/blob/main/requirements.txt" },
+    { "label": "Quix Streams releases on GitHub", "url": "https://github.com/quixio/quix-streams/releases" },
+    { "label": "Quix Streams docs: Introduction", "url": "https://quix.io/docs/quix-streams/introduction.html" },
+    { "label": "Quix Streams docs: Stateful processing (RocksDB per partition, changelog topics, recovery)", "url": "https://quix.io/docs/quix-streams/advanced/stateful-processing.html" },
+    { "label": "Quix Streams docs: Checkpointing (5-second default, sink flushes, at-least-once default)", "url": "https://quix.io/docs/quix-streams/advanced/checkpointing.html" },
+    { "label": "Quix Streams docs: Configuration (processing guarantees, exactly-once overhead)", "url": "https://quix.io/docs/quix-streams/configuration.html" },
+    { "label": "Quix Streams docs: Windowing (event time, window types, grace periods, closing strategies)", "url": "https://quix.io/docs/quix-streams/windowing.html" },
+    { "label": "Quix Streams docs: Joins (as-of, interval, lookup)", "url": "https://quix.io/docs/quix-streams/joins.html" },
+    { "label": "Quix Streams docs: Group by (repartitioning through a topic)", "url": "https://quix.io/docs/quix-streams/groupby.html" },
+    { "label": "Quix Streams docs: Sinks", "url": "https://quix.io/docs/quix-streams/connectors/sinks/index.html" },
+    { "label": "Quix Streams docs: Sources", "url": "https://quix.io/docs/quix-streams/connectors/sources/index.html" },
+    { "label": "Quix Streams docs: Connecting to Quix Cloud (optional, no schema registry)", "url": "https://quix.io/docs/quix-streams/quix-platform.html" },
+    { "label": "Quix Cloud docs: Overview (hosted or third-party Kafka, Git, YAML, scaling)", "url": "https://quix.io/docs/quix-cloud/overview.html" },
+    { "label": "Quix docs: What is Quix (Kubernetes, time-limited free account)", "url": "https://quix.io/docs/kb/what-is-quix.html" },
+    { "label": "Quix homepage (Agentic AI for Systems Engineering)", "url": "https://quix.io/" },
+    { "label": "Quix: Product (Quix Data Platform for hardware testing)", "url": "https://quix.io/product/" },
+    { "label": "Kafka docs: Kafka Streams architecture", "url": "https://kafka.apache.org/43/streams/architecture/" },
+    { "label": "Bytewax README (community-maintained since 2025)", "url": "https://github.com/bytewax/bytewax" },
+    { "label": "Arroyo README", "url": "https://github.com/ArroyoSystems/arroyo" }
+  ],
+  "checked": "2026-10-06"
+}

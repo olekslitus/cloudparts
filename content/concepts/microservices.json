@@ -1,0 +1,128 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Microservices",
+  "category": "design",
+  "order": 20,
+  "summary": "Split one application into small services that each own their data and can be deployed on their own.",
+  "howItWorks": "Instead of one program, the application is a set of services, each built around one business capability (orders, payments, search) and owned by one team. Each runs in its own process, is deployed on its own schedule and keeps its own database; no other service may read that database directly. Services talk over the network: HTTP/JSON or gRPC calls when the caller needs an answer now, and messages through a queue or event bus when it doesn’t. An API gateway usually sits in front, routing each request to the service that owns it. The payoff is independence: a team can ship payments ten times a day without touching search, scale only the service that is hot, and pick a different language or database where it really helps. The costs move to the network and to operations. A call that was a function call now takes milliseconds and can fail or time out. A change that spans two services can no longer sit in one database transaction, so you coordinate it with a saga: a chain of local transactions with compensating steps that undo the earlier ones if a later one fails. Finding why a request was slow needs distributed tracing across services. And every service needs its own pipeline, monitoring, alerts and on-call owner, which is why the style pays off for large organisations and often hurts small ones.",
+  "analogy": "A food court instead of one restaurant kitchen. Each stall has its own staff, menu and fridge, and can change recipes or opening hours without asking the others. A meal that needs dishes from three stalls means three queues, and if one stall runs out, someone has to decide whether to refund the other two.",
+  "useWhen": [
+    "Many teams (dozens of engineers or more) are slowing each other down in one codebase and one release",
+    "Parts of the system have clearly different load, scaling or uptime needs",
+    "Domain boundaries are well understood and stable, often after a monolith has shown where they are",
+    "You already have automated deployment, monitoring and tracing, or the budget to build them"
+  ],
+  "avoidWhen": [
+    "A new product or a small team; start with a (modular) monolith",
+    "Most features change data in several places at once and need one transaction",
+    "Services would call each other in long synchronous chains for every request, so one slow service slows everything"
+  ],
+  "example": "A shop splits its checkout into Orders, Payments and Inventory services, each with its own database. Placing an order runs a saga: Orders records the order as pending, Payments charges the card, Inventory reserves the items. If Inventory finds an item out of stock, Payments refunds the charge and Orders marks the order cancelled. Each step is a local transaction, and the order is briefly “pending” where a monolith would have used one transaction.",
+  "related": ["monolith", "serverless-architecture", "serverless", "apigw", "rpc", "eventbus", "service-mesh", "service-layer"],
+  "diagram": {
+    "caption": "The gateway routes each request by path to the service that owns it, and each service answers from its own database. No service reads another’s data directly.",
+    "h": 270,
+    "nodes": [
+      {
+        "id": "cl",
+        "x": 85,
+        "y": 135,
+        "label": "Clients",
+        "sub": "web · mobile",
+        "emit": {"every": 420, "jitter": 0.35, "req": true, "types": ["orders", "pay", "search"], "colorByType": {"orders": 0, "pay": 1, "search": 2}},
+        "out": ["gw"]
+      },
+      {
+        "id": "gw",
+        "x": 255,
+        "y": 135,
+        "label": "API gateway",
+        "sub": "route by path",
+        "concept": "apigw",
+        "route": "type",
+        "rules": {"orders": ["ord"], "pay": ["pay"], "search": ["srch"]},
+        "out": ["ord", "pay", "srch"]
+      },
+      {"id": "ord", "x": 455, "y": 55, "label": "Orders", "sub": "/orders · team A", "out": ["ord-db"]},
+      {"id": "pay", "x": 455, "y": 135, "label": "Payments", "sub": "/pay · team B", "out": ["pay-db"]},
+      {"id": "srch", "x": 455, "y": 215, "label": "Search", "sub": "/search · team C", "out": ["srch-db"]},
+      {"id": "ord-db", "x": 660, "y": 55, "label": "Orders DB", "sub": "PostgreSQL", "mode": "reply", "delay": 80, "concept": "relational"},
+      {"id": "pay-db", "x": 660, "y": 135, "label": "Payments DB", "sub": "PostgreSQL", "mode": "reply", "delay": 80, "concept": "relational"},
+      {"id": "srch-db", "x": 660, "y": 215, "label": "Search index", "sub": "OpenSearch", "mode": "reply", "delay": 60, "concept": "search"}
+    ],
+    "events": [{"node": "pay", "at": 4000, "every": 12000, "dur": 3500, "text": "Payments down", "back": "Payments back"}]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "What moves when you split a monolith",
+      "intro": "The same work still has to happen; it changes shape and place.",
+      "corner": "Concern",
+      "columns": ["In a monolith", "In microservices"],
+      "rows": [
+        { "label": "Calling another part", "values": ["A function call in the same process", "A network call (HTTP, gRPC) or a message; it can be slow, fail or time out"] },
+        { "label": "Changing data in two places", "values": ["One database transaction", "A saga of local transactions with compensating steps, and a period where data is in between"] },
+        { "label": "Finding a slow request", "values": ["One process, one log, one profiler", "Distributed tracing across services, with a trace ID passed along every call"] },
+        { "label": "Deploying", "values": ["One pipeline, one artifact, everyone ships together", "One pipeline per service; teams ship on their own, but API changes need versioning"] },
+        { "label": "Running it", "values": ["One thing to monitor and keep up", "Many services, each needing monitoring, alerts, quotas and an on-call owner"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Splitting software along team lines is an old idea. In April 1968 Melvin Conway observed that any organisation that designs a system will produce a design that copies its own communication structure, which Fred Brooks later named Conway’s law. In the 2000s large enterprises tried service-oriented architecture (SOA), often built around heavyweight standards and an enterprise service bus. Amazon did its own version earlier and more strictly. By 2001 its monolithic front end couldn’t scale, and it moved to services that each hid their data behind an interface. Steve Yegge, an ex-Amazon engineer, recalled in a 2011 rant a mandate from Jeff Bezos “around 2002, plus or minus a year”: teams must expose data and functionality only through service interfaces over the network, with no direct reads of another team’s data store. In 2006 Werner Vogels said a single Amazon.com page called more than 100 services, and that the teams that build a service also run it.",
+      "Netflix followed after a database corruption in August 2008 stopped it from shipping DVDs for three days. Over seven years it rebuilt itself on AWS, from a monolithic app to hundreds of microservices, and called the style “fine-grained SOA”. In May 2011 a workshop of software architects near Venice discussed the term “microservice”, and in May 2012 the group settled on “microservices”. In March 2014 James Lewis and Martin Fowler published the article that defined it: suites of small, independently deployable services, organised around business capabilities, with decentralised data and “smart endpoints and dumb pipes”.",
+      "Within a year the backlash began from the same circle. Fowler’s “Microservice Premium” and “MonolithFirst” (2015) warned that the style adds its own complexity and that most systems should start as a monolith; Stefan Tilkov replied on Fowler’s site that starting with a monolith is usually the wrong choice. The debate has not ended, but the costs are now well known: network calls, eventual consistency, tracing and the platform work that every service needs."
+    ],
+    "choices": [
+      {
+        "choice": "Each service owns its data",
+        "why": "Amazon found that shared databases tied teams together and blocked scaling. Hiding each data store behind a service interface gave teams isolation, at the cost of no cross-service joins or transactions."
+      },
+      {
+        "choice": "Smart endpoints and dumb pipes",
+        "why": "Lewis and Fowler contrasted microservices with SOA’s enterprise service buses, which held routing and business logic. Microservices keep the logic in the services and use simple HTTP or a lightweight message bus between them."
+      },
+      {
+        "choice": "Services sized to teams",
+        "why": "Following Conway’s law, services are cut along business capabilities and owned by cross-functional teams. Lewis and Fowler noted that the largest services they saw matched Amazon’s two-pizza team: no more than about a dozen people."
+      },
+      {
+        "choice": "Compensate instead of locking",
+        "why": "Distributed transactions are hard and couple services in time, so microservices accept eventual consistency and fix failures with compensating operations. The idea goes back to sagas, proposed by Garcia-Molina and Salem in 1987 for long-lived database transactions."
+      }
+    ],
+    "timeline": [
+      { "year": "1968", "text": "Melvin Conway’s “How Do Committees Invent?” appears in Datamation" },
+      { "year": "1987", "text": "Garcia-Molina and Salem propose sagas: transactions undone by compensating steps" },
+      { "year": "2002", "text": "Bezos’s service-interface mandate at Amazon, by Steve Yegge’s later account" },
+      { "year": "2008", "text": "Netflix starts its seven-year move from a monolith to cloud microservices" },
+      { "year": "2012", "text": "Architects meeting near Venice settle on the name “microservices”" },
+      { "year": "2014", "text": "Lewis and Fowler publish “Microservices”" },
+      { "year": "2015", "text": "Fowler’s “MonolithFirst” and Tilkov’s “Don’t start with a monolith”" }
+    ],
+    "sources": [
+      { "label": "Melvin Conway: How Do Committees Invent? (Datamation, Apr 1968)", "url": "https://www.melconway.com/Home/Committees_Paper.html" },
+      { "label": "Melvin Conway: Conway’s Law (on the paper’s history and Brooks naming it)", "url": "https://www.melconway.com/Home/Conways_Law.html" },
+      { "label": "Hector Garcia-Molina and Kenneth Salem: Sagas (SIGMOD 1987)", "url": "https://www.cs.cornell.edu/andru/cs711/2002fa/reading/sagas.pdf" },
+      { "label": "Werner Vogels interviewed by Jim Gray: A Conversation with Werner Vogels (ACM Queue, Jun 2006)", "url": "https://queue.acm.org/detail.cfm?id=1142065", "archive": "https://web.archive.org/web/20210117172316/https://queue.acm.org/detail.cfm?id=1142065" },
+      { "label": "Steve Yegge: Stevey’s Google Platforms Rant (Oct 2011), copy on GitHub", "url": "https://gist.github.com/chitchcock/1281611" },
+      { "label": "Netflix: Completing the Netflix Cloud Migration (Feb 2016)", "url": "https://about.netflix.com/en/news/completing-the-netflix-cloud-migration" },
+      { "label": "James Lewis and Martin Fowler: Microservices (Mar 2014), including the Venice workshop and the SOA sidebar", "url": "https://martinfowler.com/articles/microservices.html" },
+      { "label": "Martin Fowler: Microservice Premium (May 2015)", "url": "https://martinfowler.com/bliki/MicroservicePremium.html" },
+      { "label": "Martin Fowler: MonolithFirst (Jun 2015)", "url": "https://martinfowler.com/bliki/MonolithFirst.html" },
+      { "label": "Stefan Tilkov: Don’t start with a monolith (Jun 2015)", "url": "https://martinfowler.com/articles/dont-start-monolith.html" }
+    ]
+  },
+  "sources": [
+    { "label": "James Lewis and Martin Fowler: Microservices (Mar 2014)", "url": "https://martinfowler.com/articles/microservices.html" },
+    { "label": "Martin Fowler: Microservice Premium (May 2015), on the complexity the style adds", "url": "https://martinfowler.com/bliki/MicroservicePremium.html" },
+    { "label": "Martin Fowler: MonolithFirst (Jun 2015)", "url": "https://martinfowler.com/bliki/MonolithFirst.html" },
+    { "label": "Werner Vogels: A Conversation with Werner Vogels (ACM Queue, Jun 2006), on data owned by services and “you build it, you run it”", "url": "https://queue.acm.org/detail.cfm?id=1142065", "archive": "https://web.archive.org/web/20210117172316/https://queue.acm.org/detail.cfm?id=1142065" },
+    { "label": "Hector Garcia-Molina and Kenneth Salem: Sagas (SIGMOD 1987)", "url": "https://www.cs.cornell.edu/andru/cs711/2002fa/reading/sagas.pdf" },
+    { "label": "gRPC docs: Introduction to gRPC", "url": "https://grpc.io/docs/what-is-grpc/introduction/" },
+    { "label": "OpenTelemetry docs: Traces (the path of a request through your application)", "url": "https://opentelemetry.io/docs/concepts/signals/traces/" },
+    { "label": "Shopify Engineering: Deconstructing the Monolith (Feb 2019), on the costs of microservices", "url": "https://shopify.engineering/deconstructing-monolith-designing-software-maximizes-developer-productivity" },
+    { "label": "Steve Yegge: Stevey’s Google Platforms Rant (Oct 2011), on what Amazon learned running services", "url": "https://gist.github.com/chitchcock/1281611" }
+  ]
+}

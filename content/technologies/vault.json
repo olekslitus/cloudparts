@@ -1,0 +1,188 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "HashiCorp Vault",
+  "concepts": [
+    "secrets"
+  ],
+  "provider": "vendor",
+  "vendor": "HashiCorp, an IBM company",
+  "license": "Business Source License 1.1 (source-available, not OSI open source); MPL 2.0 before the August 2023 change",
+  "website": "https://www.hashicorp.com/en/products/vault",
+  "repo": "https://github.com/hashicorp/vault",
+  "summary": "A secrets server that can mint short-lived database and cloud credentials on demand, not just store passwords.",
+  "intro": [
+    "Vault is a server that apps talk to over an HTTP API. It starts sealed: everything it keeps is encrypted, and it can’t read its own data until it is unsealed, either by operators entering shares of a key split with Shamir’s Secret Sharing or automatically with a cloud KMS key. Data is written encrypted to a storage backend, usually its Integrated Storage, which replicates across the cluster’s nodes with Raft. A client logs in through an auth method (a Kubernetes service account, an AWS IAM role, OIDC, AppRole) and gets a token whose policies list the paths it may read or write.",
+    "What sets Vault apart is dynamic secrets. Instead of storing one shared database password, the database secrets engine creates a new PostgreSQL user for each request, with a lease such as one hour, and drops that user when the lease expires or is revoked. The same idea covers AWS credentials, and other engines issue TLS certificates (PKI) or encrypt data for apps without handing out the key (Transit). In August 2023 HashiCorp moved Vault from MPL 2.0 to the Business Source License 1.1, and IBM completed its purchase of HashiCorp in February 2025. OpenBao, a community fork of the last MPL-licensed code run by the Linux Foundation’s OpenSSF, keeps an open-source line with a Vault-compatible API."
+  ],
+  "strengths": [
+    "Dynamic, leased credentials: every app instance gets its own database user that expires on its own",
+    "One identity-based system for secrets, certificates and encryption across clouds, Kubernetes and on-premises",
+    "Many auth methods, so workloads log in with an identity they already have instead of a stored password",
+    "Every request can be written to an audit log"
+  ],
+  "limits": [
+    "Running it is real work: unsealing after restarts, a Raft cluster, backups and upgrades; if Vault is down, apps can’t fetch or renew their secrets",
+    "No longer OSI open source; OpenBao is the open-source alternative",
+    "Namespaces for multi-tenancy need Vault Enterprise or HCP Vault Dedicated",
+    "Apps must renew leases and handle rotated credentials, or you add Vault Agent or an operator to do it for them",
+    "Only protects secrets that are put into it; finding ones already leaked into code, wikis or chat is HCP Vault Radar, a separate paid service, and matching those leaks against Vault needs Vault Enterprise or HCP Vault Dedicated"
+  ],
+  "worksWith": [
+    {
+      "id": "postgresql",
+      "how": "creates short-lived database users in"
+    },
+    {
+      "id": "mysql",
+      "how": "creates short-lived database users in"
+    },
+    {
+      "id": "aws-iam",
+      "how": "issues short-lived AWS credentials through"
+    },
+    {
+      "id": "kubernetes",
+      "how": "authenticates pods with tokens from"
+    }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Hand out one-hour PostgreSQL users with the database secrets engine",
+    "source": [
+      "vault secrets enable database",
+      "",
+      "vault write database/config/orders-db \\",
+      "    plugin_name=postgresql-database-plugin \\",
+      "    allowed_roles=app \\",
+      "    connection_url=\"postgresql://{{username}}:{{password}}@db.internal:5432/orders\" \\",
+      "    username=vault password=\"$VAULT_DB_PASSWORD\"",
+      "",
+      "vault write database/roles/app db_name=orders-db default_ttl=1h max_ttl=24h \\",
+      "    creation_statements=\"CREATE ROLE \\\"{{name}}\\\" WITH LOGIN PASSWORD '{{password}}' VALID UNTIL '{{expiration}}'; GRANT SELECT ON ALL TABLES IN SCHEMA public TO \\\"{{name}}\\\";\"",
+      "",
+      "vault read database/creds/app   # a new username and password, leased for 1 hour"
+    ]
+  },
+  "history": {
+    "story": [
+      "By the mid-2010s a typical system needed a multitude of secrets: database credentials, API keys for outside services, credentials for services to talk to each other. HashiCorp co-founder Armon Dadgar later described what most companies had as “a sprawl of secret material”, spread across application source code, configuration management, config files and plain text. Knowing who read which secret was hard, and adding key rotation, secure storage and detailed audit logs was almost impossible without building your own tool.",
+      "HashiCorp started Vault to be one central place for secrets, with encryption, access control and auditing. Mitchell Hashimoto announced it on April 28, 2015. The idea that set it apart was dynamic secrets: rather than storing a long-lived database password, Vault creates a fresh credential for each client, with a lease, and revokes it when the lease ends. If one application instance is compromised, only its own credential needs revoking.",
+      "Vault reached 1.0 in December 2018, the result of nearly four years of work. In 2023 HashiCorp moved it to the Business Source License, and the community forked the last open-source version as OpenBao, now run by the Linux Foundation’s OpenSSF. In April 2026, with HashiCorp part of IBM, Vault 2.0 became its first new major version since 1.0."
+    ],
+    "choices": [
+      { "choice": "Generate credentials on demand instead of storing them", "why": "A credential that exists for an hour and belongs to one client is worth little if it leaks, and can be revoked on its own. This “moving attack surface” was the main reason to build Vault rather than an encrypted password store." },
+      { "choice": "Every secret has a lease", "why": "Clients must renew leases, so Vault always knows who is still using what, can refuse a renewal, and can revoke a single secret or everything one user ever read." },
+      { "choice": "Treat the storage backend as untrusted", "why": "Vault encrypts everything before it leaves the process, so whoever can read the disk or database underneath still sees only ciphertext. Storage only has to be durable, not trusted." },
+      { "choice": "Seal the master key with Shamir’s Secret Sharing", "why": "The key that decrypts everything is split into shares held by different people, and a threshold of them (three by default) must come together to unseal Vault, so no single person can decrypt the data." }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "Announced by HashiCorp in April, with dynamic secrets from day one" },
+      { "year": "2018", "text": "Vault 1.0 in December; cloud auto-unseal becomes open source" },
+      { "year": "2023", "text": "Moves to the Business Source License; the community forks it as OpenBao" },
+      { "year": "2025", "text": "IBM completes its acquisition of HashiCorp" },
+      { "year": "2026", "text": "Vault 2.0 released in April, adopting IBM’s support lifecycle" }
+    ],
+    "sources": [
+      { "label": "HashiCorp blog: Vault announcement (Mitchell Hashimoto, Apr 2015)", "url": "https://www.hashicorp.com/en/blog/vault-announcement" },
+      { "label": "HashiCorp: The journey to Vault 1.0 (Armon Dadgar, 2018)", "url": "https://www.hashicorp.com/en/resources/journey-vault-1-0" },
+      { "label": "HashiCorp blog: HashiCorp Vault 1.0 (Dec 2018)", "url": "https://www.hashicorp.com/en/blog/vault-1-0" },
+      { "label": "HashiCorp blog: HashiCorp adopts Business Source License (Aug 2023)", "url": "https://www.hashicorp.com/en/blog/hashicorp-adopts-business-source-license" },
+      { "label": "IBM newsroom: IBM completes acquisition of HashiCorp (Feb 2025)", "url": "https://newsroom.ibm.com/2025-02-27-ibm-completes-acquisition-of-hashicorp,-creates-comprehensive,-end-to-end-hybrid-cloud-platform" },
+      { "label": "Vault docs: Release notes 2.x (GA April 2026)", "url": "https://developer.hashicorp.com/vault/docs/updates/release-notes" },
+      { "label": "InfoQ: HashiCorp Vault 2.0 marks shift to IBM lifecycle (Apr 2026)", "url": "https://www.infoq.com/news/2026/04/vault-2-0-ibm-identity/" },
+      { "label": "OpenBao: a fork of Vault managed by the Linux Foundation’s OpenSSF", "url": "https://openbao.org/" },
+      { "label": "Vault docs: vault operator init (default 5 key shares, threshold 3)", "url": "https://developer.hashicorp.com/vault/docs/commands/operator/init" }
+    ]
+  },
+  "sources": [
+    {
+      "label": "Vault docs: How Vault works",
+      "url": "https://developer.hashicorp.com/vault/docs/about-vault/how-vault-works"
+    },
+    {
+      "label": "Vault docs: Seal/unseal (Shamir and auto unseal)",
+      "url": "https://developer.hashicorp.com/vault/docs/concepts/seal"
+    },
+    {
+      "label": "Vault docs: AWS KMS seal",
+      "url": "https://developer.hashicorp.com/vault/docs/configuration/seal/awskms"
+    },
+    {
+      "label": "Vault docs: Integrated Storage (Raft) backend",
+      "url": "https://developer.hashicorp.com/vault/docs/configuration/storage/raft"
+    },
+    {
+      "label": "Vault docs: Auth methods",
+      "url": "https://developer.hashicorp.com/vault/docs/auth"
+    },
+    {
+      "label": "Vault docs: Policies",
+      "url": "https://developer.hashicorp.com/vault/docs/concepts/policies"
+    },
+    {
+      "label": "Vault docs: Database secrets engine",
+      "url": "https://developer.hashicorp.com/vault/docs/secrets/databases"
+    },
+    {
+      "label": "Vault docs: PostgreSQL database secrets engine",
+      "url": "https://developer.hashicorp.com/vault/docs/secrets/databases/postgresql"
+    },
+    {
+      "label": "Vault docs: Lease, renew, and revoke",
+      "url": "https://developer.hashicorp.com/vault/docs/concepts/lease"
+    },
+    {
+      "label": "Vault docs: AWS secrets engine",
+      "url": "https://developer.hashicorp.com/vault/docs/secrets/aws"
+    },
+    {
+      "label": "Vault docs: PKI secrets engine",
+      "url": "https://developer.hashicorp.com/vault/docs/secrets/pki"
+    },
+    {
+      "label": "Vault docs: Transit secrets engine",
+      "url": "https://developer.hashicorp.com/vault/docs/secrets/transit"
+    },
+    {
+      "label": "Vault docs: Audit devices",
+      "url": "https://developer.hashicorp.com/vault/docs/audit"
+    },
+    {
+      "label": "Vault docs: Namespaces (Enterprise or HCP Vault Dedicated)",
+      "url": "https://developer.hashicorp.com/vault/docs/enterprise/namespaces"
+    },
+    {
+      "label": "Vault docs: Vault Agent",
+      "url": "https://developer.hashicorp.com/vault/docs/agent-and-proxy/agent"
+    },
+    {
+      "label": "GitHub: hashicorp/vault LICENSE (BSL 1.1 for Vault 1.15.0 and later)",
+      "url": "https://github.com/hashicorp/vault/blob/main/LICENSE"
+    },
+    {
+      "label": "HashiCorp blog: HashiCorp adopts Business Source License (Aug 2023)",
+      "url": "https://www.hashicorp.com/en/blog/hashicorp-adopts-business-source-license"
+    },
+    {
+      "label": "IBM newsroom: IBM completes acquisition of HashiCorp (Feb 2025)",
+      "url": "https://newsroom.ibm.com/2025-02-27-ibm-completes-acquisition-of-hashicorp,-creates-comprehensive,-end-to-end-hybrid-cloud-platform"
+    },
+    {
+      "label": "OpenBao docs: Migrating from Vault (API compatibility)",
+      "url": "https://openbao.org/docs/guides/migration/"
+    },
+    {
+      "label": "OpenBao: a fork of Vault managed by the Linux Foundation’s OpenSSF",
+      "url": "https://openbao.org/"
+    },
+    {
+      "label": "Vault Radar docs: What is Vault Radar?",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud"
+    },
+    {
+      "label": "Vault Radar docs: Correlate findings with Vault (Enterprise or Dedicated only)",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/agent/correlate-vault"
+    }
+  ],
+  "checked": "2026-10-05"
+}

@@ -1,0 +1,68 @@
+{
+  "$schema": "../../.astro/collections/architectures.schema.json",
+  "title": "Code sandboxes for AI agents",
+  "order": 70,
+  "summary": "An agent’s code runs in a fresh Firecracker microVM per task, isolated by its own kernel, with outputs saved to S3.",
+  "intro": "AI agents write and run code you haven’t reviewed, on behalf of many different customers. Running that in a shared container is risky, because containers share the host’s kernel. Here every task gets its own Firecracker microVM: hardware-isolated like a full VM, but booting in under 125 ms, so it can be created per task and thrown away afterwards.",
+  "fits": "Platforms running untrusted or multi-tenant code",
+  "diagram": {
+    "caption": "Agents send code to run. The API checks quotas, the scheduler places each task on a host, and a fresh microVM boots (amber) to run it. Outputs go to S3 and the result returns to the agent. Idle microVMs are discarded.",
+    "w": 860,
+    "h": 290,
+    "zones": [{ "x": 530, "y": 40, "w": 190, "h": 210, "label": "Bare-metal host · KVM" }],
+    "nodes": [
+      {
+        "id": "agents", "x": 85, "y": 145, "label": "AI agents", "sub": "run this code",
+        "emit": { "req": true, "jitter": 0.4, "phases": [[3000, 900], [2200, 220], [2600, 1200]], "cycle": true }, "out": ["api"]
+      },
+      { "id": "api", "x": 250, "y": 145, "label": "Sandbox API", "sub": "auth · quotas", "concept": "apigw", "mode": "gate", "p": 0.96, "denyText": "quota exceeded", "out": ["sched"] },
+      { "id": "sched", "x": 415, "y": 145, "label": "Scheduler", "sub": "picks a host", "out": ["vms"] },
+      {
+        "id": "vms", "x": 625, "y": 155, "label": "Firecracker", "sub": "one microVM per task", "tech": "firecracker",
+        "kind": "pool", "max": 8, "work": 900, "idle": 1200, "cold": 125, "coldText": "boot 125 ms", "scaleText": "discarded", "out": ["s3"]
+      },
+      { "id": "s3", "x": 795, "y": 155, "label": "Amazon S3", "sub": "outputs", "tech": "s3", "mode": "reply", "delay": 50 }
+    ]
+  },
+  "steps": [
+    {
+      "title": "The API admits the task",
+      "text": "An agent submits code plus limits (CPU, memory, time). The API authenticates the caller and enforces per-customer quotas before anything is started.",
+      "nodes": ["agents", "api"]
+    },
+    {
+      "title": "The scheduler picks a host",
+      "text": "Hosts are bare-metal machines (or VMs with nested virtualisation) because Firecracker needs KVM. The scheduler places the task on one with spare capacity.",
+      "nodes": ["sched"]
+    },
+    {
+      "title": "A fresh microVM runs the code",
+      "text": "Firecracker boots a minimal kernel and root filesystem, or restores a pre-booted snapshot, in a fraction of a second. The code runs with its own kernel, a jailed process around the VM, and no route to other customers.",
+      "nodes": ["vms"]
+    },
+    {
+      "title": "Outputs are saved, the VM is destroyed",
+      "text": "Files the code produced are uploaded to S3 and the result returns to the agent. The microVM is then thrown away, so nothing leaks into the next task.",
+      "nodes": ["vms", "s3"]
+    }
+  ],
+  "good": [
+    "Hardware isolation per task: an exploit inside one sandbox doesn’t reach the host kernel others share",
+    "Fast enough to create per task, so no state carries over between customers",
+    "High density: thousands of small microVMs per host",
+    "Snapshots make start-up even faster and let long sessions pause and resume"
+  ],
+  "watch": [
+    "Needs KVM: bare-metal instances or nested virtualisation, which limits where you can run it",
+    "You build the orchestration yourself (networking, images, snapshots), or buy a platform that has",
+    "GPU and device support is limited compared with containers",
+    "Network egress from sandboxes needs strict rules, or agents can be used to attack other systems"
+  ],
+  "swaps": [
+    { "text": "Don’t want to run hosts? Hosted sandbox platforms and AWS Lambda run code in microVMs for you. Cloudflare Workers use lighter V8 isolates instead, which share one process rather than each having a kernel.", "techs": ["lambda", "cloudflare-workers"] },
+    { "text": "If the code is your own and trusted, plain containers on Kubernetes are simpler.", "techs": ["kubernetes", "docker"] }
+  ],
+  "sources": [
+    { "label": "Google Cloud docs: Nested virtualization (KVM inside a VM)", "url": "https://docs.cloud.google.com/compute/docs/instances/nested-virtualization/overview" }
+  ]
+}

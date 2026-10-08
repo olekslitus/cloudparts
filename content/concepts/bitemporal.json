@@ -1,0 +1,153 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Bitemporal modeling",
+  "category": "modeling",
+  "order": 50,
+  "summary": "Record two timelines for every fact, when it was true in the world and when the database knew it, so you can correct the past without losing what you once believed.",
+  "howItWorks": "An ordinary table holds the current state, and an update overwrites it. A valid-time table (SQL:2011 calls it application time) gives each row a period, `valid_from` and `valid_to`, for when the fact is true in the real world, so a price or an address has a history and can even be set for the future. A transaction-time table (system time) adds a second period that the database fills in itself: when the row entered the database and when it was superseded. An update closes the old row instead of overwriting it, so you can read the table as it stood at any past moment. A bitemporal table has both, four timestamps per row. That separates a change (the customer moved on 15 March) from a correction (we had the date wrong), and answers questions like “what premium did we think applied on 10 March, on the day we sent the March invoice?”. Periods are closed-open, `[from, to)`, and an open end is stored as a far-future value such as 9999-12-31. Nothing is updated in place: each change closes rows in system time and inserts new ones, so tables grow, primary keys need non-overlapping periods, and every query needs two time conditions, usually with system time defaulting to now.",
+  "analogy": "A ship’s logbook kept in ink. It records where the ship was each day; when the navigator finds a mistake she doesn’t erase it, she adds a dated correction. Anyone can read the log as it stood on any day, or the best current account of any voyage.",
+  "useWhen": [
+    "Insurance, payroll, banking and trading, where decisions made on old information must be explained later",
+    "Records you must reproduce exactly as reported on a past date, for auditors or regulators",
+    "Data that arrives late or gets corrected after the fact, such as back-dated trades or retroactive pay rises"
+  ],
+  "avoidWhen": [
+    "You only need the current state, or a simple audit log of who changed what",
+    "The business forbids retroactive changes, so a change always takes effect when it’s recorded",
+    "The team can’t afford the extra complexity: every read, key and join has to think about two periods"
+  ],
+  "example": "An insurer records Mia’s car policy on 10 January at €40 a month from 1 January. On 20 March she reports that she moved on 1 March to a pricier postcode, so the premium is €52 from that date, and the March invoice sent on 25 March charges it. On 5 April she sends the removal firm’s receipt: the move was really on 15 March. Nobody edits rows. The old rows are closed in system time and corrected ones inserted. Asked today what the premium was on 10 March, the table says €40; asked what it believed on 25 March, it still says €52, which explains the invoice and the refund that follows.",
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "-- SQL:2011 bitemporal table, in MariaDB 10.4+ syntax (Db2 is similar)",
+      "CREATE TABLE policy (",
+      "  policy_id  INT,",
+      "  premium    DECIMAL(8,2),",
+      "  valid_from DATE,                                -- valid (application) time",
+      "  valid_to   DATE,",
+      "  row_start  TIMESTAMP(6) AS ROW START INVISIBLE,  -- system (transaction) time",
+      "  row_end    TIMESTAMP(6) AS ROW END INVISIBLE,",
+      "  PERIOD FOR valid_time (valid_from, valid_to),",
+      "  PERIOD FOR SYSTEM_TIME (row_start, row_end)",
+      ") WITH SYSTEM VERSIONING;",
+      "",
+      "INSERT INTO policy (policy_id, premium, valid_from, valid_to)",
+      "VALUES (17, 40.00, '2026-01-01', '9999-12-31');",
+      "",
+      "-- From 15 March the premium is 52: the row is split in valid time,",
+      "-- and the old version is kept in system time automatically",
+      "UPDATE policy FOR PORTION OF valid_time FROM '2026-03-15' TO '9999-12-31'",
+      "SET premium = 52.00",
+      "WHERE policy_id = 17;",
+      "",
+      "-- What did we believe on 25 March about the premium on 10 March?",
+      "SELECT premium",
+      "FROM policy FOR SYSTEM_TIME AS OF TIMESTAMP '2026-03-25 00:00:00'",
+      "WHERE policy_id = 17",
+      "  AND valid_from <= '2026-03-10' AND valid_to > '2026-03-10';"
+    ]
+  },
+  "related": ["tsdb","warehouse","backup","relational"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "Mia’s policy, row by row",
+      "intro": "Valid time says when a premium applies; recorded (system) time says when the database held that belief. ∞ stands for 9999-12-31. Each period includes its start and excludes its end.",
+      "corner": "Row",
+      "columns": ["Valid from","Valid to","Recorded from","Recorded to","Premium","Why the row exists"],
+      "rows": [
+        { "label": "1", "values": ["2026-01-01","∞","2026-01-10","2026-03-20","€40","Policy starts; closed when the move is reported"] },
+        { "label": "2", "values": ["2026-01-01","2026-03-01","2026-03-20","2026-04-05","€40","Change: old premium until the move"] },
+        { "label": "3", "values": ["2026-03-01","∞","2026-03-20","2026-04-05","€52","Change: new premium from the reported move date"] },
+        { "label": "4", "values": ["2026-01-01","2026-03-15","2026-04-05","∞","€40","Correction: the move was really on 15 March"] },
+        { "label": "5", "values": ["2026-03-15","∞","2026-04-05","∞","€52","Correction: new premium from the real date"] }
+      ],
+      "notes": [
+        "Rows 1 to 3 are never deleted. Ending their recorded period is what keeps the old beliefs readable.",
+        "A table with only valid time would have rows 4 and 5 and no trace of the March invoice’s premium; a table with only system time couldn’t say the move happened before it was reported."
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Asking the table questions",
+      "intro": "Every question pins both timelines: pick the rows whose recorded period contains “known as of”, then the one whose valid period contains “valid at”.",
+      "corner": "Question",
+      "columns": ["Valid at","Known as of","Row","Answer"],
+      "rows": [
+        { "label": "Premium on 28 February, as the 25 February invoice saw it", "values": ["2026-02-28","2026-02-25","1","€40"] },
+        { "label": "Premium on 10 March, as the 25 March invoice saw it", "values": ["2026-03-10","2026-03-25","3","€52"] },
+        { "label": "Premium on 10 March, as we know today", "values": ["2026-03-10","today","4","€40"] },
+        { "label": "Premium on 1 May, as we know today", "values": ["2026-05-01","today","5","€52"] }
+      ],
+      "notes": ["The second and third rows disagree, and both are right: that difference is the refund owed for 1 to 14 March."]
+    },
+    {
+      "type": "cards",
+      "title": "Where it’s built in",
+      "intro": "SQL:2011 standardized both timelines, but support is uneven, and many teams still keep the four columns themselves.",
+      "items": [
+        { "name": "IBM Db2", "tag": "both", "text": "System-period, application-period and bitemporal tables. Db2 10 was the commercial implementation the authors of the SQL:2011 temporal features pointed to." },
+        { "name": "MariaDB", "tag": "both", "text": "System-versioned tables since 10.3.4 (January 2018), application-time periods with `FOR PORTION OF` since 10.4.3 (February 2019), and the two combined as bitemporal tables. Today’s docs also cover `WITHOUT OVERLAPS` keys." },
+        { "name": "SQL Server and Azure SQL", "tag": "system time", "text": "System-versioned temporal tables since SQL Server 2016: a current table plus a history table, queried with `FOR SYSTEM_TIME`. They are system-versioned only, so valid time is ordinary columns you manage yourself." },
+        { "name": "Oracle Database", "tag": "both, differently", "text": "Flashback Query (`AS OF`) reads past states from undo data for as long as it’s retained, Flashback Time Travel archives history for longer, and Temporal Validity adds valid-time periods." },
+        { "name": "PostgreSQL", "tag": "valid-time keys", "text": "PostgreSQL 18 added `WITHOUT OVERLAPS` primary keys and `PERIOD` foreign keys over range columns. SQL:2011 system-versioned and application-time period tables are still listed as unsupported." },
+        { "name": "XTDB and Datomic", "tag": "built around time", "text": "XTDB (MPL-2.0; 2.0 in June 2025) keeps `_valid_from`, `_valid_to`, `_system_from` and `_system_to` on every row automatically. Datomic records transaction time: any database value can be read `as-of` a past transaction, `since` one, or as full history." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In 1985 Richard Snodgrass and Ilsoo Ahn proposed “A Taxonomy of Time in Databases” to clear up confusion about the time attributes researchers kept adding. They separated transaction time (when a fact was stored) from valid time (when it was true in reality), plus user-defined time, and argued that future database systems should support them, since a system with only transaction time can roll back to an incorrect past state, while one with only valid time can’t show what it used to believe. A table with both came to be called bitemporal.",
+      "Snodgrass then pushed to standardize it. A committee he chaired, formed by email in July 1993, published the TSQL2 language specification in September 1994 and a book in 1995, and a temporal part of the SQL standard, SQL/Temporal, was started. In 1999 his book “Developing Time-Oriented Database Applications in SQL” showed how to build valid-time, transaction-time and bitemporal tables in plain SQL; it is now free to download from his site. The standards work met strong criticism: Hugh Darwen and C. J. Date argued that TSQL2’s hidden timestamp columns and statement modifiers broke the relational model, and SQL/Temporal was cancelled in 2001.",
+      "A different design, periods defined over ordinary pairs of columns, made it into SQL:2011, published in December 2011, with application-time period tables, system-versioned tables and the two combined. IBM Db2 10 was the first implementation its authors knew of; MariaDB, SQL Server (system time only) and others followed, and XTDB and Datomic built databases around time. In 2021 Martin Fowler’s “Bitemporal History” explained the idea with a payroll example using the friendlier terms “actual” and “record” time, and noted that the best approach is often to avoid bitemporality unless retroactive changes force it."
+    ],
+    "choices": [
+      { "choice": "Two independent time axes", "why": "Snodgrass and Ahn showed that when a fact is true and when it is recorded are orthogonal. Keeping both lets you fix the past (valid time) without rewriting what you once knew (transaction time)." },
+      { "choice": "Periods over pairs of ordinary columns, not a new data type", "why": "A PERIOD type would have to be added to every driver, stored-procedure language and ETL tool. SQL:2011 names a pair of start and end columns as a period instead, so existing tools keep working." },
+      { "choice": "Closed-open periods with a far-future end", "why": "With `[start, end)` adjacent periods meet without overlapping or leaving gaps, so “current” is simply the row whose end is the maximum value, 9999-12-31 in practice." },
+      { "choice": "The database owns system time", "why": "For audit and compliance, users must not be able to edit history. In system-versioned tables the database sets the timestamps and only current rows can change, so the recorded history can’t be tampered with." }
+    ],
+    "timeline": [
+      { "year": "1985", "text": "Snodgrass and Ahn’s “A Taxonomy of Time in Databases” separates valid and transaction time" },
+      { "year": "1994", "text": "The TSQL2 temporal extension to SQL-92 is published" },
+      { "year": "1999", "text": "Snodgrass publishes “Developing Time-Oriented Database Applications in SQL”" },
+      { "year": "2001", "text": "The SQL/Temporal standards project is cancelled amid controversy" },
+      { "year": "2011", "text": "SQL:2011 adds application-time periods and system-versioned tables" },
+      { "year": "2018", "text": "MariaDB 10.3.4 adds system-versioned tables" },
+      { "year": "2021", "text": "Martin Fowler publishes “Bitemporal History”" },
+      { "year": "2025", "text": "XTDB 2.0 ships bitemporal SQL; PostgreSQL 18 adds temporal keys" }
+    ],
+    "sources": [
+      { "label": "Snodgrass and Ahn: A Taxonomy of Time in Databases (SIGMOD 1985)", "url": "https://www2.cs.arizona.edu/~rts/pubs/SIGMOD85.pdf" },
+      { "label": "Richard Snodgrass: TSQL2 Temporal Query Language (committee, specification and book)", "url": "https://www2.cs.arizona.edu/~rts/tsql2.html" },
+      { "label": "Richard Snodgrass: Publications (book published July 1999, free PDF)", "url": "https://www2.cs.arizona.edu/~rts/publications.html" },
+      { "label": "Snodgrass: Developing Time-Oriented Database Applications in SQL (Morgan Kaufmann, 1999), full PDF", "url": "https://www2.cs.arizona.edu/~rts/tdbbook.pdf" },
+      { "label": "Darwen and Date: An Overview and Analysis of Proposals Based on the TSQL2 Approach (2005 draft)", "url": "https://www.dcs.warwick.ac.uk/~hugh/TTM/OnTSQL2.pdf" },
+      { "label": "Kulkarni and Michels: Temporal features in SQL:2011 (SIGMOD Record, Sep 2012)", "url": "https://sigmodrecord.org/publications/sigmodRecord/1209/pdfs/07.industry.kulkarni.pdf" },
+      { "label": "MariaDB 10.3.4 release notes: system-versioned tables (Jan 2018)", "url": "https://mariadb.com/docs/release-notes/community-server/old-releases/10.3/10.3.4" },
+      { "label": "Martin Fowler: Bitemporal History (Apr 2021)", "url": "https://martinfowler.com/articles/bitemporal-history.html" },
+      { "label": "xtdb/xtdb on GitHub: release v2.0.0 (Jun 2025)", "url": "https://github.com/xtdb/xtdb/releases/tag/v2.0.0" },
+      { "label": "PostgreSQL 18 release notes: temporal constraints (Sep 2025)", "url": "https://www.postgresql.org/docs/18/release-18.html" }
+    ]
+  },
+  "sources": [
+    { "label": "Snodgrass: Developing Time-Oriented Database Applications in SQL (1999), section 2.3 on bitemporal tables", "url": "https://www2.cs.arizona.edu/~rts/tdbbook.pdf" },
+    { "label": "Kulkarni and Michels: Temporal features in SQL:2011 (SIGMOD Record, Sep 2012)", "url": "https://sigmodrecord.org/publications/sigmodRecord/1209/pdfs/07.industry.kulkarni.pdf" },
+    { "label": "Martin Fowler: Bitemporal History (Apr 2021)", "url": "https://martinfowler.com/articles/bitemporal-history.html" },
+    { "label": "MariaDB docs: Bitemporal tables", "url": "https://mariadb.com/docs/server/reference/sql-structure/temporal-tables/bitemporal-tables" },
+    { "label": "MariaDB docs: System-versioned tables", "url": "https://mariadb.com/docs/server/reference/sql-structure/temporal-tables/system-versioned-tables" },
+    { "label": "MariaDB docs: Application-time periods (FOR PORTION OF, WITHOUT OVERLAPS)", "url": "https://mariadb.com/docs/server/reference/sql-structure/temporal-tables/application-time-periods" },
+    { "label": "MariaDB 10.3.4 release notes: system-versioned tables (Jan 2018)", "url": "https://mariadb.com/docs/release-notes/community-server/old-releases/10.3/10.3.4" },
+    { "label": "MariaDB 10.4.3 release notes: application-time periods (Feb 2019)", "url": "https://mariadb.com/docs/release-notes/community-server/old-releases/10.4/10.4.3" },
+    { "label": "Microsoft Learn: Temporal tables (SQL Server 2016 and later)", "url": "https://learn.microsoft.com/en-us/sql/relational-databases/tables/temporal-tables?view=sql-server-ver17" },
+    { "label": "IBM Db2 12.1 docs: Bitemporal tables", "url": "https://www.ibm.com/docs/en/db2/12.1.0?topic=tables-bitemporal" },
+    { "label": "Oracle Database 19c Development Guide: Using Oracle Flashback Technology", "url": "https://docs.oracle.com/en/database/oracle/oracle-database/19/adfns/flashback.html" },
+    { "label": "PostgreSQL 18 release notes: WITHOUT OVERLAPS and PERIOD constraints (Sep 2025)", "url": "https://www.postgresql.org/docs/18/release-18.html" },
+    { "label": "PostgreSQL docs: CREATE TABLE (temporal keys over range columns)", "url": "https://www.postgresql.org/docs/current/sql-createtable.html" },
+    { "label": "PostgreSQL docs: Unsupported SQL features (T180 system-versioned, T181 application-time period tables)", "url": "https://www.postgresql.org/docs/current/unsupported-features-sql-standard.html" },
+    { "label": "XTDB docs: Key concepts (temporal columns and bitemporality)", "url": "https://docs.xtdb.com/concepts/key-concepts.html" },
+    { "label": "xtdb/xtdb on GitHub (MPL-2.0)", "url": "https://github.com/xtdb/xtdb" },
+    { "label": "Datomic docs: Filters (as-of, since, history)", "url": "https://docs.datomic.com/reference/filters.html" }
+  ]
+}

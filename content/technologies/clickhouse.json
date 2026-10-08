@@ -1,0 +1,105 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "ClickHouse",
+  "concepts": ["warehouse", "olap"],
+  "provider": "oss",
+  "vendor": "ClickHouse, Inc.",
+  "license": "Apache 2.0",
+  "website": "https://clickhouse.com/",
+  "repo": "https://github.com/ClickHouse/ClickHouse",
+  "summary": "An open-source column-oriented database for real-time analytics, fast enough to serve dashboards over billions of rows.",
+  "intro": [
+    "ClickHouse stores each column separately and keeps every table sorted by its `ORDER BY` key. Its main table engine, MergeTree, writes each insert as a new immutable part, and background merges combine parts into bigger ones. Instead of indexing every row, it keeps a sparse primary index with one entry per granule of 8,192 rows. That index is small enough to stay in memory, so a query that filters on the sort key reads only the granules that can match, and vectorised execution scans them on every core.",
+    "Unlike a lake query engine, ClickHouse owns its storage and is built for constant ingest plus queries that return in milliseconds, which is why it’s common behind user-facing analytics, observability and logs. It can also reach outside data: table functions read and write Parquet and other files on S3 and work with Iceberg and Delta Lake tables in place, and the Kafka table engine consumes topics continuously. ClickHouse is Apache 2.0 licensed; ClickHouse Cloud runs it on AWS, Google Cloud and Azure with storage and compute separated."
+  ],
+  "strengths": [
+    "Very fast aggregations over billions of rows, with strong per-column compression",
+    "Handles high insert rates, and materialized views can pre-aggregate data as it arrives",
+    "Runs as a single binary on a laptop, as a self-hosted cluster or as ClickHouse Cloud",
+    "Queries S3, Parquet, Iceberg and Kafka directly"
+  ],
+  "limits": [
+    "Many tiny inserts create many parts and merges fall behind; batch inserts or use async inserts",
+    "Updates and deletes run as mutations or lightweight deletes, not cheap row-level edits as in PostgreSQL",
+    "The sort key decides performance: queries that don’t filter on it read far more data",
+    "Self-hosted clusters mean running sharding, replication and ClickHouse Keeper yourself"
+  ],
+  "worksWith": [
+    { "id": "s3", "how": "reads and writes files in" },
+    { "id": "parquet", "how": "reads and writes" },
+    { "id": "iceberg", "how": "can query tables in" },
+    { "id": "delta-lake", "how": "can query tables in" },
+    { "id": "kafka", "how": "consumes topics from" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "A MergeTree table, filled from Parquet on S3, then queried",
+    "source": [
+      "CREATE TABLE events (",
+      "    ts DateTime,",
+      "    user_id UInt64,",
+      "    event LowCardinality(String),",
+      "    duration_ms UInt32",
+      ") ENGINE = MergeTree",
+      "ORDER BY (event, ts);",
+      "",
+      "INSERT INTO events",
+      "SELECT * FROM s3('https://acme-raw.s3.amazonaws.com/events/2026-10-*.parquet', 'Parquet');",
+      "",
+      "SELECT event, count() AS n, quantile(0.95)(duration_ms) AS p95_ms",
+      "FROM events",
+      "WHERE ts >= now() - INTERVAL 1 DAY",
+      "GROUP BY event ORDER BY n DESC;"
+    ]
+  },
+  "history": {
+    "story": [
+      "Yandex.Metrica, a web analytics service from the Russian search company Yandex, took in several hundred thousand events per second. It first stored them in MySQL’s MyISAM engine, but events from different websites arrived interleaved, so every report needed countless disk seeks; by 2011 the system held 580 billion rows and its disk arrays ran at 100% load. A purpose-built store called Metrage then pre-aggregated the data, which was reliable but only worked for fixed reports, because every way of grouping the data had to be listed ahead of time.",
+      "In 2009, Alexey Milovidov and his team started an experiment: generate reports in real time from raw, non-aggregated data that itself grows in real time. After three years it went into production in 2012, powering Metrica. The name combines “Clickstream” and “Data wareHouse”. Yandex open-sourced ClickHouse under Apache 2.0 in 2016. By 2017 Metrica’s ClickHouse database held 25.1 trillion rows, and its main cluster had grown to 426 servers.",
+      "Companies such as Uber, eBay and Cisco adopted it. In 2021 ClickHouse, Inc. was incorporated, headquartered in the San Francisco Bay Area, with an initial $50 million from Index Ventures and Benchmark, and it now runs ClickHouse Cloud."
+    ],
+    "choices": [
+      { "choice": "Store raw events, not pre-built aggregates", "why": "Pre-aggregation limited users to reports someone had planned. Querying non-aggregated data lets anyone slice it any way, and the team reasoned that the total computation might even go down." },
+      { "choice": "Merge-based storage tuned for constant inserts", "why": "Metrica’s data arrived as a steady stream of small batches. Writing immutable sorted parts and merging them in the background, like an LSM tree, keeps inserts fast and reads sequential." },
+      { "choice": "A sparse index instead of indexing every row", "why": "Keeping one index entry per granule of 8,192 rows makes the index small enough to stay in memory, while still letting queries skip most of the table when they filter on the sort key." },
+      { "choice": "A native C++ binary, not a JVM program", "why": "Native code avoids garbage-collection pauses and can use SIMD instructions directly. Shipping one statically linked binary with no dependencies lets the same database run on an old laptop or a large cluster." }
+    ],
+    "timeline": [
+      { "year": "2009", "text": "Alexey Milovidov starts ClickHouse as an experiment at Yandex" },
+      { "year": "2012", "text": "Goes into production powering Yandex.Metrica" },
+      { "year": "2016", "text": "Open-sourced under Apache 2.0" },
+      { "year": "2021", "text": "ClickHouse, Inc. incorporated; $250 million Series B at a $2 billion valuation" },
+      { "year": "2022", "text": "ClickHouse Cloud opens for early access" },
+      { "year": "2025", "text": "Raises a $350 million Series C" },
+      { "year": "2026", "text": "Raises a $400 million Series D and acquires Langfuse" }
+    ],
+    "sources": [
+      { "label": "ClickHouse: Our story (company history and funding)", "url": "https://clickhouse.com/company/our-story" },
+      { "label": "Alexey Milovidov: Evolution of data structures in Yandex.Metrica (2017)", "url": "https://highscalability.com/blog/2017/9/18/evolution-of-data-structures-in-yandexmetrica.html" },
+      { "label": "Schulze et al.: ClickHouse, Lightning Fast Analytics for Everyone (VLDB 2024)", "url": "https://www.vldb.org/pvldb/vol17/p3731-schulze.pdf", "archive": "https://web.archive.org/web/20261004015339/https://www.vldb.org/pvldb/vol17/p3731-schulze.pdf" },
+      { "label": "ClickHouse FAQ: What does “ClickHouse” mean?", "url": "https://clickhouse.com/docs/faq/general/dbms-naming" },
+      { "label": "ClickHouse docs: Adopters", "url": "https://clickhouse.com/docs/about-us/adopters" }
+    ]
+  },
+  "sources": [
+    { "label": "ClickHouse docs: What is ClickHouse?", "url": "https://clickhouse.com/docs/intro" },
+    { "label": "ClickHouse on GitHub (Apache 2.0)", "url": "https://github.com/ClickHouse/ClickHouse" },
+    { "label": "ClickHouse docs: MergeTree", "url": "https://clickhouse.com/docs/engines/table-engines/mergetree-family/mergetree" },
+    { "label": "ClickHouse docs: A practical introduction to primary indexes (sparse index, granules)", "url": "https://clickhouse.com/docs/optimize/sparse-primary-indexes" },
+    { "label": "Schulze et al.: ClickHouse, Lightning Fast Analytics for Everyone (VLDB 2024)", "url": "https://www.vldb.org/pvldb/vol17/p3731-schulze.pdf", "archive": "https://web.archive.org/web/20261004015339/https://www.vldb.org/pvldb/vol17/p3731-schulze.pdf" },
+    { "label": "ClickHouse docs: Compression in ClickHouse", "url": "https://clickhouse.com/docs/data-compression/compression-in-clickhouse" },
+    { "label": "ClickHouse docs: Incremental materialized views", "url": "https://clickhouse.com/docs/materialized-view/incremental-materialized-view" },
+    { "label": "ClickHouse docs: Bulk inserts", "url": "https://clickhouse.com/docs/optimize/bulk-inserts" },
+    { "label": "ClickHouse docs: Asynchronous inserts", "url": "https://clickhouse.com/docs/optimize/asynchronous-inserts" },
+    { "label": "ClickHouse docs: Updating and deleting data with mutations", "url": "https://clickhouse.com/docs/guides/developer/mutations" },
+    { "label": "ClickHouse docs: Lightweight delete", "url": "https://clickhouse.com/docs/guides/developer/lightweight-delete" },
+    { "label": "ClickHouse docs: ClickHouse Keeper", "url": "https://clickhouse.com/docs/guides/sre/keeper/clickhouse-keeper" },
+    { "label": "ClickHouse docs: s3 table function", "url": "https://clickhouse.com/docs/sql-reference/table-functions/s3" },
+    { "label": "ClickHouse docs: iceberg table function", "url": "https://clickhouse.com/docs/sql-reference/table-functions/iceberg" },
+    { "label": "ClickHouse docs: deltaLake table function", "url": "https://clickhouse.com/docs/sql-reference/table-functions/deltalake" },
+    { "label": "ClickHouse docs: Kafka table engine", "url": "https://clickhouse.com/docs/engines/table-engines/integrations/kafka" },
+    { "label": "ClickHouse Cloud docs: Overview (compute separate from storage)", "url": "https://clickhouse.com/docs/cloud/overview" },
+    { "label": "ClickHouse Cloud docs: Architecture (AWS, GCP, Azure)", "url": "https://clickhouse.com/docs/cloud/reference/architecture" }
+  ],
+  "checked": "2026-10-05"
+}

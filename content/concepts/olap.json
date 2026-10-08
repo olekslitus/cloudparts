@@ -1,0 +1,188 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Real-time analytics databases",
+  "category": "analytics",
+  "order": 45,
+  "summary": "Columnar databases that make streaming events queryable within seconds and answer many small analytical queries at once, fast enough to sit behind an app.",
+  "howItWorks": "A real-time analytics database stores events column by column, like a warehouse, but it is built for a different workload: many small queries every second, from an app or an API, on data that is seconds old. Ingestion never stops. The database reads a stream such as a Kafka topic, or takes HTTP posts, and indexes new rows in memory, where queries can already see them. It then writes them out as immutable columnar files, called segments or parts, sorted by time and a key, and merges small files into bigger ones in the background. Queries stay fast because they read little. Indexes skip most of the data: Druid keeps a bitmap for every value of a column, ClickHouse a sparse index on the sort key, Pinot a star-tree of pre-aggregated values. Pre-aggregation shrinks it further: rows can be rolled up at ingestion (one row per minute per page instead of one per click), or a materialized view keeps running totals updated on every insert. Hot data sits on local disk or in memory, and the full copy usually lives in object storage. Compared with a warehouse, which loads in batches and spends a lot of compute on each big query from a few analysts, the goal here is freshness in seconds and hundreds or thousands of concurrent queries that each return in milliseconds, mostly against one wide event table; joins and row updates are weaker. Compared with a time-series database, which is organised around series (a metric plus tags) and retention, these systems expect high-cardinality columns such as user IDs and URLs and arbitrary filters and group-bys across many columns, although the two overlap.",
+  "analogy": "The scoreboard in a stadium rather than the league’s archive. It changes within seconds of each play and thousands of people read it at once, because it shows running tallies kept up all game, not the footage of every play. The archive, like a warehouse, has everything, for slower and deeper questions afterwards.",
+  "useWhen": [
+    "Analytics inside your product: per-customer dashboards, usage meters and leaderboards that many users load at once",
+    "Data that must be queryable seconds after it happens: ad spend, fraud signals, game or device events arriving on a stream",
+    "Filters and group-bys over high-cardinality columns (user IDs, URLs, SKUs) answered in well under a second",
+    "APIs that return aggregates at hundreds or thousands of queries per second"
+  ],
+  "avoidWhen": [
+    "Occasional analyst questions over years of history across many joined tables; a warehouse or lakehouse is cheaper and better at joins",
+    "Records that change one by one by primary key: Druid can only overwrite whole time ranges, and most others make updates costly (Pinot’s upserts are the exception)",
+    "Small data or few users: PostgreSQL with good indexes, or DuckDB, is far less to run",
+    "You need every raw event later but plan to roll up at ingestion; rollup throws the detail away"
+  ],
+  "example": "An email platform shows each of its 20,000 customers a live opens-and-clicks dashboard. Delivery events, about 50,000 a second, flow through Kafka into ClickHouse, and a materialized view keeps counts per customer, campaign and minute. A dashboard load runs four queries filtered on `customer_id`; each reads a few thousand pre-aggregated rows and returns in about 20 ms, even at 1,000 queries a second during a big send. Raw events stay in the base table for 30 days, for drill-downs.",
+  "providers": {
+    "aws": "No dedicated service. Redshift streaming ingestion lands Kinesis or MSK data in materialized views; OpenSearch Service covers log and event analytics; otherwise people run ClickHouse, Druid or Pinot on EC2 or EKS, or use ClickHouse Cloud or Imply Polaris, which run on AWS",
+    "gcp": "No dedicated service either: BigQuery with the Storage Write API for streaming rows and BI Engine’s in-memory cache for dashboard queries; or ClickHouse Cloud or Tinybird in Google Cloud regions",
+    "azure": "Azure Data Explorer and Eventhouse in Microsoft Fabric Real-Time Intelligence (both queried with KQL): streaming ingestion, answers in milliseconds to seconds",
+    "oss": "ClickHouse, Apache Druid, Apache Pinot, StarRocks, Apache Doris; as services: ClickHouse Cloud, Tinybird (on ClickHouse), Imply (Druid), StarTree (Pinot), PhoenixAI (formerly CelerData, StarRocks), Firebolt, Alibaba Cloud Hologres; also CedarDB (one engine for transactions and analytics); early: Pivot (Postgres protocol over Iceberg and Delta tables), ScramDB (pre-release)"
+  },
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "-- ClickHouse: raw events, sorted the way customers ask about them",
+      "CREATE TABLE events (",
+      "    ts DateTime,",
+      "    customer_id UInt32,",
+      "    page String,",
+      "    duration_ms UInt32",
+      ") ENGINE = MergeTree",
+      "ORDER BY (customer_id, ts);",
+      "",
+      "-- A rollup kept current on every insert: one row per customer, page and minute",
+      "CREATE TABLE page_minutes (",
+      "    minute DateTime,",
+      "    customer_id UInt32,",
+      "    page String,",
+      "    views UInt64,",
+      "    total_ms UInt64",
+      ") ENGINE = SummingMergeTree",
+      "ORDER BY (customer_id, page, minute);",
+      "",
+      "CREATE MATERIALIZED VIEW page_minutes_mv TO page_minutes AS",
+      "SELECT toStartOfMinute(ts) AS minute, customer_id, page,",
+      "       count() AS views, sum(duration_ms) AS total_ms",
+      "FROM events",
+      "GROUP BY minute, customer_id, page;",
+      "",
+      "-- What one customer’s dashboard asks, many times a second",
+      "SELECT page, sum(views) AS views, sum(total_ms) / sum(views) AS avg_ms",
+      "FROM page_minutes",
+      "WHERE customer_id = 4812 AND minute >= now() - INTERVAL 1 HOUR",
+      "GROUP BY page",
+      "ORDER BY views DESC",
+      "LIMIT 10;"
+    ]
+  },
+  "related": ["warehouse", "tsdb", "stream-processing", "query-engines", "stream"],
+  "diagram": {
+    "caption": "Events land on a stream, and ingest tasks add them to the store within seconds. Meanwhile customer dashboards fire many small queries; each comes back quickly because it reads only indexed, pre-aggregated columns.",
+    "h": 270,
+    "nodes": [
+      {
+        "id": "ev",
+        "x": 90,
+        "y": 65,
+        "label": "App events",
+        "sub": "clicks · views",
+        "emit": { "every": 300, "jitter": 0.4, "cycle": true },
+        "out": ["topic"]
+      },
+      {
+        "id": "topic",
+        "x": 285,
+        "y": 65,
+        "kind": "log",
+        "cells": 6,
+        "retain": 40,
+        "label": "Topic: events",
+        "sub": "Kafka",
+        "concept": "stream",
+        "readers": [{ "to": "ingest", "every": 340, "name": "ingest" }]
+      },
+      {
+        "id": "ingest",
+        "x": 480,
+        "y": 65,
+        "label": "Ingest tasks",
+        "sub": "index · roll up",
+        "out": ["store"]
+      },
+      {
+        "id": "store",
+        "x": 665,
+        "y": 140,
+        "label": "Real-time store",
+        "sub": "columnar · indexed",
+        "mode": "reply",
+        "delay": 40
+      },
+      {
+        "id": "dash",
+        "x": 90,
+        "y": 215,
+        "label": "Customer dashboards",
+        "sub": "thousands of users",
+        "emit": { "every": 220, "jitter": 0.5, "req": true, "color": 3 },
+        "out": ["api"]
+      },
+      {
+        "id": "api",
+        "x": 480,
+        "y": 215,
+        "label": "Analytics API",
+        "sub": "WHERE customer_id = ?",
+        "concept": "web-api",
+        "out": ["store"]
+      }
+    ]
+  },
+  "history": {
+    "story": [
+      "E. F. Codd coined “OLAP” in 1993, in a paper written for Arbor Software, maker of the Essbase cube database. Classic OLAP meant cubes: aggregates computed ahead of time from a warehouse and browsed by analysts. They were fast, but the data was hours old and only the planned dimensions could be sliced.",
+      "Internet companies with floods of events needed more. In 2011 Metamarkets, which sold ad analytics dashboards, found relational databases too slow for arbitrary drill-downs, while pre-computing aggregates into a key-value store took over 24 hours as dimensions grew. It built Druid, a column store with bitmap indexes that made streaming events queryable at once. LinkedIn built Pinot for member-facing features such as Who Viewed Profile, and Yandex open-sourced ClickHouse, born in web analytics, in 2016.",
+      "These systems moved analytics from a few analysts to end users: thousands of people at once, on data seconds old. Druid and Pinot became top-level Apache projects in 2019 and 2021, StarRocks and Apache Doris followed, and most are now also sold as managed services."
+    ],
+    "choices": [
+      { "choice": "Query raw or lightly rolled-up events, not pre-built cubes", "why": "Cubes limited users to reports someone had planned, and rebuilding them took hours. Metamarkets needed any combination of dimensions at sub-second latency, so Druid aggregated only lightly at ingestion and computed the rest at query time." },
+      { "choice": "Make new rows queryable while still in memory", "why": "Druid’s real-time nodes kept an in-memory index that queries could read directly, then periodically persisted it to columnar files and handed finished segments to other nodes. Data was visible within seconds without waiting for a batch load." },
+      { "choice": "Indexes that skip data instead of scanning it", "why": "Many concurrent queries are only affordable if each touches little data. Druid borrowed bitmap indexes from search engines, ClickHouse keeps a sparse index on the sort key, and Pinot’s star-tree index stores pre-aggregated results across several columns." },
+      { "choice": "Keep the master copy in shared storage", "why": "Druid writes immutable segments to deep storage such as S3 or HDFS, and query servers only cache them. A failed server is replaced by downloading segments again, and even a whole cluster can be rebuilt." }
+    ],
+    "timeline": [
+      { "year": "1993", "text": "E. F. Codd coins the term OLAP" },
+      { "year": "2011", "text": "Metamarkets introduces Druid for real-time ad analytics" },
+      { "year": "2012", "text": "Druid is open-sourced in October" },
+      { "year": "2016", "text": "Yandex open-sources ClickHouse" },
+      { "year": "2018", "text": "Pinot, built at LinkedIn, enters the Apache Incubator" },
+      { "year": "2019", "text": "Druid becomes a top-level Apache project" },
+      { "year": "2021", "text": "Pinot graduates to a top-level Apache project" }
+    ],
+    "sources": [
+      { "label": "Wikipedia: Online analytical processing (Codd, 1993, Arbor Software and Essbase; supplement)", "url": "https://en.wikipedia.org/wiki/Online_analytical_processing" },
+      { "label": "Eric Tschetter (Metamarkets): Introducing Druid, real-time analytics at a billion rows per second (April 2011)", "url": "https://github.com/druid-io/druid-io.github.io/blob/src/_posts/2011-04-30-introducing-druid.md" },
+      { "label": "Eric Tschetter (Metamarkets): Introducing Druid, the open-source release (October 2012)", "url": "https://github.com/druid-io/druid-io.github.io/blob/src/_posts/2012-10-24-introducing-druid.md" },
+      { "label": "Yang et al.: Druid, A Real-time Analytical Data Store (SIGMOD 2014)", "url": "http://static.druid.io/docs/druid.pdf" },
+      { "label": "Apache Pinot docs: Introduction (originally built at LinkedIn)", "url": "https://docs.pinot.apache.org/" },
+      { "label": "ClickHouse: Our story (open-sourced in 2016)", "url": "https://clickhouse.com/company/our-story" },
+      { "label": "Apache Incubator: Druid project status (graduated 2019-12-18)", "url": "https://incubator.apache.org/projects/druid.html" },
+      { "label": "Apache Incubator: Pinot project status (entered 2018-10-21, graduated 2021-07-21)", "url": "https://incubator.apache.org/projects/pinot.html" }
+    ]
+  },
+  "sources": [
+    { "label": "Apache Druid docs: Introduction (real-time ingestion, bitmap indexes, sub-second queries)", "url": "https://druid.apache.org/docs/latest/design/" },
+    { "label": "Apache Druid docs: Segments (columnar files, dictionaries, bitmaps)", "url": "https://druid.apache.org/docs/latest/design/segments" },
+    { "label": "Apache Druid docs: Data rollup", "url": "https://druid.apache.org/docs/latest/ingestion/rollup" },
+    { "label": "Apache Druid docs: Data updates (no single-record updates by primary key)", "url": "https://druid.apache.org/docs/latest/data-management/update" },
+    { "label": "Apache Druid docs: Architecture (deep storage, Historicals caching segments)", "url": "https://druid.apache.org/docs/latest/design/architecture" },
+    { "label": "Apache Pinot docs: Introduction (user-facing analytics, streaming ingestion)", "url": "https://docs.pinot.apache.org/" },
+    { "label": "Apache Pinot docs: Stream ingestion with upsert", "url": "https://docs.pinot.apache.org/manage-data/data-import/upsert-and-dedup/upsert" },
+    { "label": "Apache Pinot docs: Star-tree index", "url": "https://docs.pinot.apache.org/basics/indexing/star-tree-index" },
+    { "label": "ClickHouse docs: A practical introduction to primary indexes (sparse index)", "url": "https://clickhouse.com/docs/optimize/sparse-primary-indexes" },
+    { "label": "ClickHouse docs: Incremental materialized views (a trigger on inserted blocks)", "url": "https://clickhouse.com/docs/materialized-view/incremental-materialized-view" },
+    { "label": "ClickHouse docs: SummingMergeTree", "url": "https://clickhouse.com/docs/engines/table-engines/mergetree-family/summingmergetree" },
+    { "label": "ClickHouse Cloud docs: Architecture (AWS, GCP, Azure)", "url": "https://clickhouse.com/docs/cloud/reference/architecture" },
+    { "label": "Amazon Redshift docs: Streaming ingestion to a materialized view (Kinesis, MSK)", "url": "https://docs.aws.amazon.com/redshift/latest/dg/materialized-view-streaming-ingestion.html" },
+    { "label": "Amazon OpenSearch Service docs: What is Amazon OpenSearch Service?", "url": "https://docs.aws.amazon.com/opensearch-service/latest/developerguide/what-is.html" },
+    { "label": "Imply: Polaris pricing (AWS regions)", "url": "https://imply.io/pricing/" },
+    { "label": "BigQuery docs: Introduction to the Storage Write API", "url": "https://cloud.google.com/bigquery/docs/write-api" },
+    { "label": "BigQuery docs: Introduction to BI Engine", "url": "https://cloud.google.com/bigquery/docs/bi-engine-intro" },
+    { "label": "Tinybird docs: ClickHouse interface (AWS and GCP regions)", "url": "https://www.tinybird.co/docs/forward/query-data/clickhouse-interface" },
+    { "label": "Microsoft Learn: What is Azure Data Explorer?", "url": "https://learn.microsoft.com/en-us/azure/data-explorer/data-explorer-overview" },
+    { "label": "Microsoft Learn: Eventhouse overview (Fabric Real-Time Intelligence)", "url": "https://learn.microsoft.com/en-us/fabric/real-time-intelligence/eventhouse" },
+    { "label": "StarRocks docs: Architecture", "url": "https://docs.starrocks.io/docs/introduction/Architecture/" },
+    { "label": "PhoenixAI: StarRocks (formerly CelerData)", "url": "https://www.phoenixdata.ai/starrocks" },
+    { "label": "Apache Doris: real-time analytics database", "url": "https://doris.apache.org/" },
+    { "label": "StarTree docs: StarTree Cloud, built on Apache Pinot", "url": "https://docs.startree.ai/" },
+    { "label": "Firebolt: analytical database", "url": "https://www.firebolt.io/" },
+    { "label": "Alibaba Cloud: Hologres", "url": "https://www.alibabacloud.com/en/product/hologres" }
+  ]
+}

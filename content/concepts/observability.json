@@ -1,0 +1,156 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Observability",
+  "category": "observe",
+  "order": 10,
+  "summary": "Logs, metrics and traces that tell you what your system is doing.",
+  "howItWorks": "Observability means emitting enough telemetry to answer questions about production you didn’t think to ask in advance. Logs are timestamped records of events. Metrics are numbers aggregated over time, like requests per second or p95 latency. Traces follow one request across every service it touches. A collector such as OpenTelemetry gathers all three and ships them to storage, dashboards and alerting.",
+  "analogy": "A car’s gauges, trip log and dashcam. The gauges show how it’s doing now, the log shows what happened, and the dashcam shows one whole journey.",
+  "useWhen": [
+    "Every production system, from the first day",
+    "Alerting on symptoms users feel: errors, latency, saturation",
+    "Finding the slow step in a request that crosses many services"
+  ],
+  "avoidWhen": [
+    "Debug-level logging of everything in production; the bill grows fast",
+    "Alerting on every metric; page people only for what needs a human"
+  ],
+  "example": "A jump in p95 latency fires an alert. The trace of one slow request shows 1.8 s inside a single database query, and that service’s logs show the slowdown began right after a deploy.",
+  "providers": {
+    "aws": "CloudWatch (metrics, Logs, Application Signals; X-Ray traces in the CloudWatch console)",
+    "gcp": "Cloud Logging, Monitoring, Trace",
+    "azure": "Azure Monitor, Application Insights",
+    "oss": "OpenTelemetry, Prometheus, Grafana, Jaeger, GreptimeDB, ClickStack (ClickHouse with the HyperDX UI and an OpenTelemetry collector); agents: Fluentd, Fluent Bit, Logstash, Telegraf, Vector; hosted: Datadog, Better Stack, Sentry (errors and traces)"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "from opentelemetry import trace, metrics",
+      "tracer = trace.get_tracer(\"api\")",
+      "latency = metrics.get_meter(\"api\").create_histogram(\"http.server.request.duration\", unit=\"s\")",
+      "",
+      "with tracer.start_as_current_span(\"GET /wells/{id}\") as span:   # trace",
+      "    span.set_attribute(\"well.id\", 42)",
+      "    log.info(\"fetching well status\", extra={\"well_id\": 42})    # log",
+      "    latency.record(0.0385, {\"http.route\": \"/wells/{id}\"})        # metric"
+    ]
+  },
+  "related": ["tsdb","cicd","alerting","logs","metrics","traces"],
+  "diagram": {
+    "caption": "Two services emit logs, metrics and traces. The collector routes each kind to its own store, and now and then a metric crosses its threshold and fires an alert.",
+    "h": 280,
+    "nodes": [
+      {
+        "id": "api",
+        "x": 95,
+        "y": 80,
+        "label": "API service",
+        "sub": "instrumented",
+        "emit": {
+          "every": 420,
+          "jitter": 0.3,
+          "types": ["log","metric","trace"],
+          "colorByType": {"log":0,"metric":1,"trace":2}
+        },
+        "out": ["col"]
+      },
+      {
+        "id": "wk",
+        "x": 95,
+        "y": 200,
+        "label": "Worker",
+        "sub": "instrumented",
+        "emit": {
+          "every": 650,
+          "jitter": 0.3,
+          "types": ["log","metric","trace"],
+          "colorByType": {"log":0,"metric":1,"trace":2}
+        },
+        "out": ["col"]
+      },
+      {
+        "id": "col",
+        "x": 320,
+        "y": 140,
+        "label": "Collector",
+        "sub": "OpenTelemetry",
+        "route": "type",
+        "rules": {"log":["logs"],"metric":["metrics"],"trace":["traces"]}
+      },
+      {"id":"logs","x":540,"y":55,"label":"Logs","sub":"searchable events","mode":"sink"},
+      {
+        "id": "metrics",
+        "x": 540,
+        "y": 140,
+        "label": "Metrics",
+        "sub": "numbers over time",
+        "mode": "gate",
+        "p": 0.1,
+        "quiet": true,
+        "allowText": "p95 > 2 s",
+        "out": ["page"],
+        "concept": "tsdb"
+      },
+      {"id":"traces","x":540,"y":225,"label":"Traces","sub":"request timelines","mode":"sink"},
+      {"id":"page","x":700,"y":140,"label":"Alert","sub":"on-call","mode":"sink","concept":"alerting"}
+    ]
+  },
+  "history": {
+    "story": [
+      "The word comes from control theory: in 1960 Rudolf Kálmán described a system as observable if its internal state can be inferred from its outputs. Running software started with simpler questions. Nagios, first released as NetSaint in 1999, ran checks against hosts and services and sent an alert when something failed and again when it recovered. Graphite, and StatsD, which Etsy released in early 2011, let engineers send and chart almost any number they cared about.",
+      "Distributed systems outgrew that. Google’s 2010 Dapper paper described how one request could touch many services, written by different teams in different languages across thousands of machines, and how sampling made it cheap enough to trace requests in production. In 2012 SoundCloud, with hundreds of services and thousands of instances, started Prometheus because its StatsD and Graphite setup couldn’t slice metrics by instance or endpoint.",
+      "“Observability” became the name for the goal: being able to answer questions about production you didn’t think to ask in advance, rather than only watching checks and dashboards someone set up beforehand. Metrics, logs and traces became known as its three pillars. In 2019 the OpenTracing and OpenCensus projects merged into OpenTelemetry, a vendor-neutral way to produce all three, which graduated from the CNCF in May 2026."
+    ],
+    "choices": [
+      { "choice": "Follow requests, not just machines", "why": "When one user action crosses dozens of services, per-host graphs can show that something is slow but not where. A trace records each step of one request, with timings, so the slow hop stands out." },
+      { "choice": "Sample instead of recording everything", "why": "Dapper’s designers needed tracing to be always on with low overhead, so they recorded only a fraction of requests. Sampling is still how tracing stays affordable at scale." },
+      { "choice": "Dimensions on every data point", "why": "Labels such as instance, endpoint and status let you slice the same data in ways nobody planned for, which is the difference between monitoring known failures and exploring new ones." },
+      { "choice": "Standardise instrumentation, not the backend", "why": "Instrumenting code is the expensive part. A vendor-neutral standard means you instrument once and can change where the data goes without touching application code." }
+    ],
+    "timeline": [
+      { "year": "1960", "text": "Rudolf Kálmán defines observability in control theory" },
+      { "year": "1999", "text": "NetSaint, later renamed Nagios, is released" },
+      { "year": "2010", "text": "Google publishes the Dapper paper on distributed tracing" },
+      { "year": "2012", "text": "Prometheus begins at SoundCloud" },
+      { "year": "2019", "text": "OpenTracing and OpenCensus merge into OpenTelemetry" },
+      { "year": "2026", "text": "OpenTelemetry graduates from the CNCF in May" }
+    ],
+    "sources": [
+      { "label": "R. E. Kalman: On the general theory of control systems (IFAC, 1960)", "url": "https://doi.org/10.1016/S1474-6670(17)70094-8" },
+      { "label": "Wikipedia: Observability (control theory)", "url": "https://en.wikipedia.org/wiki/Observability" },
+      { "label": "Nagios: History (NetSaint, 1999)", "url": "https://www.nagios.org/about/history/" },
+      { "label": "Nagios Core docs: Notifications (problems and recoveries)", "url": "https://assets.nagios.com/downloads/nagioscore/docs/nagioscore/4/en/notifications.html" },
+      { "label": "Etsy Code as Craft: Measure anything, measure everything (StatsD, Feb 2011)", "url": "https://codeascraft.com/2011/02/15/measure-anything-measure-everything/", "archive": "https://web.archive.org/web/20130608093521/http://codeascraft.com:80/2011/02/15/measure-anything-measure-everything/" },
+      { "label": "Dapper, a large-scale distributed systems tracing infrastructure (2010)", "url": "https://research.google/pubs/dapper-a-large-scale-distributed-systems-tracing-infrastructure/" },
+      { "label": "SoundCloud: Prometheus, monitoring at SoundCloud (2015)", "url": "https://developers.soundcloud.com/blog/prometheus-monitoring-at-soundcloud" },
+      { "label": "OpenTelemetry docs: Observability primer (unknown unknowns)", "url": "https://opentelemetry.io/docs/concepts/observability-primer/" },
+      { "label": "Wikipedia: Observability (software), pillars of observability", "url": "https://en.wikipedia.org/wiki/Observability_(software)" },
+      { "label": "CNCF blog: A brief history of OpenTelemetry (so far), 2019", "url": "https://www.cncf.io/blog/2019/05/21/a-brief-history-of-opentelemetry-so-far/" },
+      { "label": "CNCF: OpenTelemetry graduation announcement (May 2026)", "url": "https://www.cncf.io/announcements/2026/05/21/cloud-native-computing-foundation-announces-opentelemetrys-graduation-solidifying-status-as-the-de-facto-observability-standard/" }
+    ]
+  },
+  "sources": [
+    { "label": "OpenTelemetry docs: Observability primer", "url": "https://opentelemetry.io/docs/concepts/observability-primer/" },
+    { "label": "OpenTelemetry docs: What is OpenTelemetry?", "url": "https://opentelemetry.io/docs/what-is-opentelemetry/" },
+    { "label": "OpenTelemetry docs: Python instrumentation", "url": "https://opentelemetry.io/docs/languages/python/instrumentation/" },
+    { "label": "OpenTelemetry semantic conventions: HTTP metrics (http.server.request.duration)", "url": "https://opentelemetry.io/docs/specs/semconv/http/http-metrics/" },
+    { "label": "AWS docs: What is Amazon CloudWatch?", "url": "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/WhatIsCloudWatch.html" },
+    { "label": "AWS docs: What is AWS X-Ray?", "url": "https://docs.aws.amazon.com/xray/latest/devguide/aws-xray.html" },
+    { "label": "Google Cloud docs: Cloud Logging overview", "url": "https://cloud.google.com/logging/docs/overview" },
+    { "label": "Google Cloud docs: Cloud Monitoring overview", "url": "https://cloud.google.com/monitoring/docs/monitoring-overview" },
+    { "label": "Google Cloud docs: Cloud Trace overview", "url": "https://cloud.google.com/trace/docs/overview" },
+    { "label": "Microsoft Learn: Azure Monitor overview", "url": "https://learn.microsoft.com/en-us/azure/azure-monitor/fundamentals/overview" },
+    { "label": "Microsoft Learn: Application Insights overview", "url": "https://learn.microsoft.com/en-us/azure/azure-monitor/app/app-insights-overview" },
+    { "label": "Prometheus docs: Overview", "url": "https://prometheus.io/docs/introduction/overview/" },
+    { "label": "Grafana docs: Data sources", "url": "https://grafana.com/docs/grafana/latest/datasources/" },
+    { "label": "Jaeger docs", "url": "https://www.jaegertracing.io/docs/latest/" },
+    { "label": "Datadog docs: Getting started", "url": "https://docs.datadoghq.com/getting_started/" },
+    { "label": "Better Stack docs", "url": "https://betterstack.com/docs/" },
+    { "label": "Sentry docs: Event grouping and fingerprints", "url": "https://docs.sentry.io/concepts/data-management/event-grouping/" },
+    { "label": "Fluent Bit manual: Fluentd and Fluent Bit", "url": "https://docs.fluentbit.io/manual/about/fluentd-and-fluent-bit" },
+    { "label": "Telegraf docs", "url": "https://docs.influxdata.com/telegraf/v1/" },
+    { "label": "GreptimeDB docs: Architecture", "url": "https://docs.greptime.com/user-guide/concepts/architecture" },
+    { "label": "AWS X-Ray docs: Use a console (X-Ray in the CloudWatch console)", "url": "https://docs.aws.amazon.com/xray/latest/devguide/aws-xray-interface-console.html" },
+    { "label": "AWS What’s New: CloudWatch Application Signals is generally available (June 2024)", "url": "https://aws.amazon.com/about-aws/whats-new/2024/06/amazon-cloudwatch-application-signals-application-monitoring/" }
+  ]
+}

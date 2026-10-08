@@ -1,0 +1,130 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Blue-green deployments",
+  "category": "delivery",
+  "order": 75,
+  "summary": "Run two full copies of production, release to the idle one, then switch all traffic over at once; switching back is the rollback.",
+  "howItWorks": "You keep two production environments, as identical as you can make them, called blue and green. One is live; the other is idle. To release, you deploy the new version to the idle environment and test it there, on production infrastructure, with no customer traffic. Then you flip the router: a load balancer listener, a DNS record or a Kubernetes Service selector now points at the new environment, and every new request goes there. The old environment keeps running untouched, so if something goes wrong you flip back in seconds instead of redeploying. Once the release has settled, the old side becomes the place where the next release is staged. The cost is capacity: for the duration of a release, and permanently if you keep a warm standby, you run two of everything. The hard part is shared state. Both environments usually talk to the same database, so a schema change has to work with both versions: first expand the schema so old and new code both work, switch, and only later contract it by removing what the old version needed. The name is also used loosely: some people call this an A/B deployment or (at Netflix) red/black, while OpenShift uses “A/B deployment” for a weighted traffic split. A/B testing is something else again: an experiment that shows two variants to different users to compare their behaviour.",
+  "analogy": "A theatre with two identical stages. The next show is set up and rehearsed on the dark stage while the audience watches the lit one; at curtain time the seats swivel round. If the new show falls apart, they swivel back.",
+  "useWhen": [
+    "Rollback has to take seconds, not another full deployment",
+    "You want to test the new version on real production infrastructure before any customer sees it",
+    "Releases that can’t run mixed with the old version for long, such as a changed wire protocol between front end and back end"
+  ],
+  "avoidWhen": [
+    "You can’t afford, or can’t provision, a second full copy of the environment",
+    "Database or other stateful changes that the old version can’t live with; rolling back the code won’t roll back the data",
+    "You want to limit how many users see a bad release; a switch sends everyone over at once, so use a canary"
+  ],
+  "example": "A ticketing site runs 12 instances behind a load balancer (blue, v7). The pipeline starts 12 more instances of v8 (green), runs smoke tests through a test listener, and then points the production listener at green. Ten minutes later error rates rise on checkout. The on-call engineer points the listener back at blue, still running v7, and the errors stop within a minute. Green is kept for debugging; once v8.1 passes its tests there, the switch is tried again, and blue is scaled down an hour after that.",
+  "providers": {
+    "aws": "Amazon ECS blue/green deployments (built in since July 2025); CodeDeploy blue/green for EC2 and ECS",
+    "gcp": "Cloud Run revisions: deploy with `--no-traffic`, then send 100% of traffic to the new revision; older revisions stay for rollback",
+    "azure": "App Service deployment slots (deploy to staging, then swap); Container Apps multiple revision mode",
+    "oss": "Argo Rollouts (`blueGreen` strategy), Spinnaker, Flagger"
+  },
+  "snippet": {
+    "lang": "yaml",
+    "source": [
+      "# Argo Rollouts: a Rollout replaces the Deployment",
+      "apiVersion: argoproj.io/v1alpha1",
+      "kind: Rollout",
+      "metadata:",
+      "  name: tickets",
+      "spec:",
+      "  replicas: 12",
+      "  selector:",
+      "    matchLabels: { app: tickets }",
+      "  template:",
+      "    metadata:",
+      "      labels: { app: tickets }",
+      "    spec:",
+      "      containers:",
+      "        - name: tickets",
+      "          image: registry.example.com/tickets:8",
+      "  strategy:",
+      "    blueGreen:",
+      "      activeService: tickets-active     # production traffic",
+      "      previewService: tickets-preview   # the new version, for tests only",
+      "      autoPromotionEnabled: false       # wait for a human to switch",
+      "      scaleDownDelaySeconds: 600        # keep the old side 10 min for rollback",
+      "# kubectl argo rollouts promote tickets    # flip traffic to the new side"
+    ]
+  },
+  "related": ["rolling-deployments", "canary", "lb", "dns", "cicd"],
+  "diagram": {
+    "caption": "The router sends every request to one environment at a time. At each switch all traffic moves at once, and the other side stays running, ready to take it back. A request already travelling to the side being switched off is lost here; real switches drain in-flight requests before the old side stops.",
+    "h": 270,
+    "nodes": [
+      {
+        "id": "users",
+        "x": 100,
+        "y": 135,
+        "label": "Users",
+        "sub": "requests",
+        "emit": {"every": 380, "jitter": 0.3, "req": true},
+        "out": ["router"]
+      },
+      {
+        "id": "router",
+        "x": 330,
+        "y": 135,
+        "label": "Router",
+        "sub": "load balancer or DNS",
+        "concept": "lb",
+        "out": ["blue", "green"]
+      },
+      {"id": "blue", "x": 600, "y": 65, "label": "Blue environment", "sub": "v1, full capacity", "mode": "reply", "delay": 120},
+      {"id": "green", "x": 600, "y": 205, "label": "Green environment", "sub": "v2, full capacity", "mode": "reply", "delay": 120}
+    ],
+    "events": [
+      {"node": "green", "at": 0, "every": 12000, "dur": 6000, "text": "idle: v2 staged", "back": "live: traffic switched"},
+      {"node": "blue", "at": 6000, "every": 12000, "dur": 6000, "text": "idle: kept for rollback", "back": "live: switched back"}
+    ]
+  },
+  "history": {
+    "story": [
+      "Releasing used to mean downtime: stop the old version, install the new one, start it again and hope. Jez Humble later recalled that on a 2005 ThoughtWorks project, the one that began his work on continuous delivery, the team used a pattern called blue-green deployment to get sub-second downtime and rollback even though a deployment took tens of minutes. Martin Fowler credits the name to “some foggy combination” of Daniel Terhorst-North and Jez Humble.",
+      "Humble and David Farley described the technique in their book Continuous Delivery, published in July 2010, and in March 2010 Fowler summarised it on his bliki as an underused idea: two production environments, as identical as possible, with the router switched from one to the other. He pointed out that the same mechanism works as a hot standby, so every release also tests the disaster-recovery procedure, and in a 2015 update added the database advice: separate schema changes from application releases.",
+      "Cloud load balancers and orchestrators turned the pattern into a setting. Netflix built it into Spinnaker under the name red/black; in 2023 Spinnaker added a blue/green strategy described as functionally equivalent and deprecated red/black, because users were more familiar with the industry term. AWS CodeDeploy, Azure App Service slots, Argo Rollouts and, since July 2025, Amazon ECS itself offer it out of the box."
+    ],
+    "choices": [
+      { "choice": "Two complete environments instead of upgrading in place", "why": "Nothing in the live environment is touched during a release, so the new version can be tested on production infrastructure first, and the old version is still running if you need it." },
+      { "choice": "Switch at the router", "why": "Changing where requests go is fast and reversible. Fowler notes the switch can be a router, a web server bounce or separate IP addresses; what matters is that both sides can be swapped in one step." },
+      { "choice": "Decouple schema changes from releases", "why": "Two application versions usually share one database. Changing the schema first so it supports both versions, and removing the old parts only after the release has settled, keeps the rollback possible." }
+    ],
+    "timeline": [
+      { "year": "2005", "text": "A ThoughtWorks project uses blue-green deployment for sub-second cutover" },
+      { "year": "2010", "text": "Fowler’s bliki entry in March; Humble and Farley’s Continuous Delivery in July" },
+      { "year": "2014", "text": "Danilo Sato describes ParallelChange (expand and contract) on Fowler’s site" },
+      { "year": "2015", "text": "Fowler adds the database advice to his blue-green entry" },
+      { "year": "2023", "text": "Spinnaker adds blue/green and deprecates its Netflix-specific red/black name" },
+      { "year": "2025", "text": "Amazon ECS adds built-in blue/green deployments in July" }
+    ],
+    "sources": [
+      { "label": "Martin Fowler: BlueGreenDeployment (Mar 2010, updated 2015)", "url": "https://martinfowler.com/bliki/BlueGreenDeployment.html" },
+      { "label": "Jez Humble: Continuous Delivery patterns (the 2005 project)", "url": "https://continuousdelivery.com/implementing/patterns/" },
+      { "label": "InformIT: Continuous Delivery by Jez Humble and David Farley (published Jul 27, 2010)", "url": "https://www.informit.com/store/continuous-delivery-reliable-software-releases-through-9780321601919" },
+      { "label": "Martin Fowler: Continuous Delivery, book page (2010)", "url": "https://martinfowler.com/books/continuousDelivery.html" },
+      { "label": "Danilo Sato: ParallelChange (May 2014)", "url": "https://martinfowler.com/bliki/ParallelChange.html" },
+      { "label": "spinnaker.io pull request #333: change red/black to blue/green (Apr 2023)", "url": "https://github.com/spinnaker/spinnaker.io/pull/333" },
+      { "label": "AWS What’s New: Amazon ECS enables built-in blue/green deployments (Jul 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/07/amazon-ecs-built-in-blue-green-deployments/" }
+    ]
+  },
+  "sources": [
+    { "label": "Martin Fowler: BlueGreenDeployment", "url": "https://martinfowler.com/bliki/BlueGreenDeployment.html" },
+    { "label": "Danilo Sato: ParallelChange (expand, migrate, contract)", "url": "https://martinfowler.com/bliki/ParallelChange.html" },
+    { "label": "Google SRE Workbook: Canarying releases (blue/green uses twice the resources)", "url": "https://sre.google/workbook/canarying-releases/" },
+    { "label": "Amazon ECS docs: Blue/green deployments (bake time, lifecycle hooks, double resource usage)", "url": "https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-type-blue-green.html" },
+    { "label": "CodeDeploy docs: Deployment configurations (blue/green traffic rerouting)", "url": "https://docs.aws.amazon.com/codedeploy/latest/userguide/deployment-configurations.html" },
+    { "label": "Google Cloud docs: Cloud Run rollbacks, gradual rollouts and traffic migration", "url": "https://cloud.google.com/run/docs/rollouts-rollbacks-traffic-migration" },
+    { "label": "Microsoft Learn: Set up staging environments in Azure App Service (deployment slots, swap, roll back a swap)", "url": "https://learn.microsoft.com/en-us/azure/app-service/deploy-staging-slots" },
+    { "label": "Microsoft Learn: Revisions in Azure Container Apps", "url": "https://learn.microsoft.com/en-us/azure/container-apps/revisions" },
+    { "label": "Argo Rollouts docs: BlueGreen deployment strategy", "url": "https://argoproj.github.io/argo-rollouts/features/bluegreen/" },
+    { "label": "Spinnaker docs: Concepts (deployment strategies)", "url": "https://spinnaker.io/docs/concepts/" },
+    { "label": "Flagger on GitHub: deployment strategies", "url": "https://github.com/fluxcd/flagger" },
+    { "label": "TechTarget: What is blue/green deployment? (also known as A/B deployment)", "url": "https://www.techtarget.com/searchitoperations/definition/blue-green-deployment" },
+    { "label": "Red Hat OpenShift docs: Deployments (route-based A/B deployments split traffic by weight)", "url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.14/html/building_applications/deployments", "archive": "https://web.archive.org/web/20260510174658/https://docs.redhat.com/en/documentation/openshift_container_platform/4.14/html/building_applications/deployments" },
+    { "label": "spinnaker.io pull request #333: Red/Black is Netflix-specific phrasing for blue/green", "url": "https://github.com/spinnaker/spinnaker.io/pull/333" }
+  ]
+}

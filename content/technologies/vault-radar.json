@@ -1,0 +1,398 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "HCP Vault Radar",
+  "concepts": [
+    "secrets"
+  ],
+  "provider": "vendor",
+  "vendor": "HashiCorp, an IBM company",
+  "license": "Proprietary: an HCP software-as-a-service; the `vault-radar` CLI and agent ship as closed-source binaries under a HashiCorp licence agreement",
+  "website": "https://www.hashicorp.com/en/products/vault/hcp-vault-radar",
+  "summary": "A hosted scanner that finds leaked secrets and personal data in code, wikis, tickets and chat, checks which ones still work, and helps move them into Vault.",
+  "intro": [
+    "Vault Radar is a service in the HashiCorp Cloud Platform (HCP). You connect data sources, such as a GitHub organization, a Confluence site or a Slack workspace, and Radar scans each one in full when it is added, then again on every new commit and pull request. Short-lived scan workers, isolated per project, clone the minimum they need into a temporary directory and look for about 330 secret types, personal data (PII) and non-inclusive language, using patterns, entropy and Base64 decoding. Radar doesn’t keep the secrets it finds: it hashes each value with Argon2id and a per-customer salt, then with a per-project HMAC key, and stores only that hash and where it was found. For sources HCP can’t reach, you run the agent, part of the `vault-radar` CLI, on Kubernetes or a Linux host in your network. It polls HCP for jobs, scans with credentials that stay local, and uploads only metadata.",
+    "What it adds to plain pattern matching is triage. For about 120 secret types Radar calls the issuing service to see whether the secret still works, and it ranks a finding critical when the secret is active and still in the latest version of a file or page, high when it is active but only in history, and low for PII. When the agent is connected to Vault Enterprise or HCP Vault Dedicated, Radar indexes Vault’s KV secrets as hashes and marks leaks that match a secret Vault manages, and from the findings list you can copy a leaked value into a Vault KV path before rotating it. The CLI also runs on its own, in CI pipelines, as a pre-commit hook, or against folders, Docker images, AWS Parameter Store and HCP Terraform variables. Radar grew out of BluBracket, a secret-scanning startup HashiCorp bought in June 2023, and became generally available in April 2025."
+  ],
+  "strengths": [
+    "Looks beyond git: Confluence, Jira, Slack, Microsoft Teams, Amazon S3, Docker images, AWS Parameter Store and HCP Terraform variables end up in one inventory",
+    "Ranks findings by whether the secret still works and is still in the latest version, so triage starts with live leaks",
+    "Ties into Vault: flags leaked copies of secrets Vault manages and copies leaked values into Vault KV as a first remediation step",
+    "The hybrid agent keeps data-source credentials and content inside your network; HCP only receives hashes and metadata",
+    "Pull request checks, pre-commit hooks and CI commands for GitHub, GitLab, Bitbucket and Azure DevOps"
+  ],
+  "limits": [
+    "Proprietary and tied to HCP: there is no self-hosted control plane, and the agent and most CLI scans need an HCP project, which supplies the salt for hashing findings",
+    "Vault correlation and copying secrets into Vault need Vault Enterprise or HCP Vault Dedicated; Vault Community Edition isn’t supported",
+    "The free trial covers 2 data sources and 100 resources, with only built-in patterns and Jira and Slack integrations; anything larger needs the paid Essentials tier",
+    "Fewer detectors than the free TruffleHog: about 330 built-in secret types (Base64 variants included), about 120 with a live check",
+    "Hard limits and betas: repositories over 2 GB aren’t scanned, a GitHub connection covers 5,000 repositories, and SharePoint, OneDrive, EC2, EBS and HCP Terraform variable scans are beta"
+  ],
+  "worksWith": [
+    {
+      "id": "vault",
+      "how": "copies leaked secrets into"
+    },
+    {
+      "id": "github-actions",
+      "how": "runs pull request scans in"
+    },
+    {
+      "id": "terraform",
+      "how": "scans workspace variables (beta) in"
+    },
+    {
+      "id": "s3",
+      "how": "scans objects for secrets in"
+    },
+    {
+      "id": "kubernetes",
+      "how": "runs its self-hosted scanning agent on"
+    }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Scan a repository’s history against a Vault index, then block new leaks at commit time",
+    "source": [
+      "# A service principal with the Vault Radar CLI User role in your HCP project",
+      "export HCP_PROJECT_ID=... HCP_CLIENT_ID=... HCP_CLIENT_SECRET=...",
+      "",
+      "# Hash every KV v2 secret version in Vault into a local index (beta)",
+      "export VAULT_ADDR=https://vault.internal:8200 VAULT_TOKEN=...",
+      "vault-radar index vault --outfile vault-index.jsonl",
+      "",
+      "# Clone and scan every reachable commit; findings that match a Vault secret show its Vault path",
+      "export VAULT_RADAR_GIT_TOKEN=...   # a GitHub token that can clone the repo",
+      "vault-radar scan repo -u https://github.com/acme/payments-api \\",
+      "    --index-file vault-index.jsonl -o findings.jsonl -f json",
+      "",
+      "# Reject commits that add a finding of high severity or worse",
+      "vault-radar install git pre-commit-hook   # needs a Vault Radar licence",
+      "mkdir -p .hashicorp/vault-radar",
+      "echo '{\"fail_severity\": \"high\"}' > .hashicorp/vault-radar/config.json"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Vault Radar or a free scanner?",
+      "intro": "GitHub, gitleaks and TruffleHog all find secrets in git for free or close to it. Radar’s case rests on the sources outside git, the ranking, and the tie-in with Vault.",
+      "corner": "",
+      "columns": [
+        "HCP Vault Radar",
+        "GitHub secret scanning",
+        "gitleaks",
+        "TruffleHog (open source)"
+      ],
+      "rows": [
+        {
+          "label": "Licence and cost",
+          "values": [
+            "Proprietary HCP subscription; small free trial, then the paid Essentials tier",
+            "Free on public repositories; private repositories need the paid GitHub Secret Protection on a Team or Enterprise plan",
+            "MIT, free; the `gitleaks-action` for GitHub needs a free licence key on organization repositories",
+            "AGPL-3.0, free; a paid TruffleHog Enterprise adds continuous monitoring"
+          ]
+        },
+        {
+          "label": "Where it looks",
+          "values": [
+            "GitHub, GitLab, Bitbucket, Azure DevOps, Confluence, Jira, Slack, Teams, S3, Docker images, Parameter Store, HCP Terraform variables",
+            "Full git history on all branches, plus issues, pull requests, discussions, wikis and secret gists, on GitHub only",
+            "Git repositories, folders and files, and anything piped to `stdin`",
+            "Git, GitHub, GitLab, S3, Google Cloud Storage, Docker images, files, Jenkins, Postman, Elasticsearch, Hugging Face"
+          ]
+        },
+        {
+          "label": "Checks whether a secret still works",
+          "values": [
+            "Yes, for about 120 of about 330 built-in types",
+            "Yes, when validity checks are turned on: GitHub asks the issuing service",
+            "No; matches regular expressions with optional entropy thresholds",
+            "Yes, for over 700 detectors, by logging in to the issuing service"
+          ]
+        },
+        {
+          "label": "Stops a leak before it lands",
+          "values": [
+            "Pre-commit hook, pull request checks, CI commands, pre-receive hooks",
+            "Push protection blocks pushes on GitHub’s side; on for personal pushes to public repositories, and needs Secret Protection on a repository",
+            "Pre-commit hook and a GitHub Action",
+            "Pre-commit hook, a GitHub Action, and a `--fail` flag for CI"
+          ]
+        },
+        {
+          "label": "Link to a secrets manager",
+          "values": [
+            "Matches findings against Vault, AWS Secrets Manager and Azure Key Vault; copies leaked values into Vault Enterprise or HCP Vault Dedicated",
+            "None; partner providers are notified of their leaked tokens so they can revoke them",
+            "None",
+            "None; `trufflehog analyze` reports what a found key can access"
+          ]
+        },
+        {
+          "label": "Where it runs",
+          "values": [
+            "HCP, or an agent or CLI in your network that reports to HCP",
+            "On GitHub",
+            "Anywhere: one binary or container",
+            "Anywhere: one binary or container"
+          ]
+        }
+      ],
+      "notes": [
+        "If your code lives on GitHub and your leaks would be in code, GitHub’s own scanning plus push protection covers most of the ground. Radar earns its price when secrets also leak into wikis, tickets and chat, or when you already run Vault Enterprise and want leaks matched against it.",
+        "The gitleaks maintainer has declared it feature complete: future releases are security patches only."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Ways to run it",
+      "items": [
+        {
+          "name": "HCP scanning",
+          "tag": "hosted",
+          "text": "Radar’s own workers in HCP clone and scan sources reachable from the internet. Simplest to set up; HCP holds the data-source credentials in its secrets manager."
+        },
+        {
+          "name": "Agent",
+          "tag": "in your network",
+          "text": "`vault-radar agent exec` in a Kubernetes deployment or on a Linux host. It polls HCP for scan jobs and keeps credentials local; needed for on-premises sources and for Vault correlation and copying."
+        },
+        {
+          "name": "CLI",
+          "tag": "pipelines and laptops",
+          "text": "The same binary scans a repo, folder, Docker image or Parameter Store on demand, runs `scan ci pr` in a pipeline, and installs a pre-commit hook. Most scans need HCP credentials so hashes match across runs."
+        },
+        {
+          "name": "Editor and AI tools",
+          "tag": "developer side",
+          "text": "A VS Code extension highlights secrets when a file is opened or saved and can copy them into Vault, without talking to HCP. An MCP server lets an AI assistant query a project’s data sources and findings."
+        }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "A secrets manager protects only the secrets that are put into it. The rest end up in source code, wikis, tickets and chat, where anyone who can read them can use them. BluBracket, a Palo Alto start-up led by co-founder and CEO Prakash Linga, sold scanning for secrets hidden in “source code, development environments, internal websites, chat services, ticketing systems, and other locations.” HashiCorp announced it had acquired BluBracket on June 27, 2023. HashiCorp’s James Bayer explained why: “we’ve never had the capability to discover and find secrets and then import them into Vault.”",
+      "The scanner was rebuilt as a service in HCP and opened as an alpha, HCP Vault Radar, at HashiConf in October 2023. A limited beta followed in January 2024 and limited availability in March; by then Radar checked whether Google Cloud, AWS and GitHub credentials were live and matched findings against Vault. HashiCorp raised the severity of leaks that match a Vault secret because “Most credentials in Vault are used in critical production environments.”",
+      "Radar became generally available on April 30, 2025, two months after IBM completed its purchase of HashiCorp, with the ability to copy discovered secrets straight into Vault. The beta matched leaks against Vault Community Edition too; the current documentation limits that to Vault Enterprise and HCP Vault Dedicated."
+    ],
+    "choices": [
+      {
+        "choice": "Keep a hash of each finding, never the secret",
+        "why": "A database of every leaked credential would be a target in itself. Radar stores an Argon2id hash, HMACed with a per-project key, so recovering a value needs the original source; matching against Vault works by comparing hashes."
+      },
+      {
+        "choice": "Rank by whether the secret works and is still current",
+        "why": "Scanners that only match patterns drown teams in test keys and long-dead credentials. Radar weighs version history, entropy and a live check to put active secrets in current files at the top."
+      },
+      {
+        "choice": "A hybrid agent that only calls out",
+        "why": "Many repositories and wikis sit behind firewalls, and security teams don’t want a SaaS holding their credentials. The agent polls HCP for jobs from inside the network, so no inbound access is needed and credentials never leave it."
+      },
+      {
+        "choice": "Check findings against the secrets manager",
+        "why": "A leaked value that also lives in Vault is probably a production credential. Matching the two tells a team what to rotate first and where the managed copy is."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "2023",
+        "text": "HashiCorp acquires BluBracket in June to add secret scanning"
+      },
+      {
+        "year": "2023",
+        "text": "HCP Vault Radar alpha announced at HashiConf in October"
+      },
+      {
+        "year": "2024",
+        "text": "Limited beta in January, then limited availability in March"
+      },
+      {
+        "year": "2025",
+        "text": "IBM completes its acquisition of HashiCorp in February"
+      },
+      {
+        "year": "2025",
+        "text": "Generally available in April, with copying of leaked secrets into Vault"
+      },
+      {
+        "year": "2026",
+        "text": "Slack scanning reaches general availability in CLI 0.41 in January"
+      }
+    ],
+    "sources": [
+      {
+        "label": "HashiCorp blog: HashiCorp acquires BluBracket to add secrets scanning (Jun 2023)",
+        "url": "https://www.hashicorp.com/en/blog/announcing-acquisition-of-blubracket"
+      },
+      {
+        "label": "HashiCorp blog: New HCP Vault Radar and Vault Enterprise features fight secret sprawl at HashiConf 2023 (Oct 2023)",
+        "url": "https://www.hashicorp.com/en/blog/new-hcp-vault-secrets-radar-and-other-features-fight-secrets-sprawl"
+      },
+      {
+        "label": "HashiCorp blog: HCP Vault Radar begins limited beta (Jan 2024)",
+        "url": "https://www.hashicorp.com/en/blog/hcp-vault-radar-begins-limited-beta"
+      },
+      {
+        "label": "HashiCorp blog: HCP Vault Radar for secret discovery enters limited availability (Mar 2024)",
+        "url": "https://www.hashicorp.com/en/blog/hcp-vault-radar-for-secret-discovery-enters-limited-availability"
+      },
+      {
+        "label": "HashiCorp blog: HCP Vault Radar goes GA with Vault import (Apr 2025)",
+        "url": "https://www.hashicorp.com/en/blog/hcp-vault-radar-goes-ga-with-vault-import"
+      },
+      {
+        "label": "IBM newsroom: IBM completes acquisition of HashiCorp (Feb 2025)",
+        "url": "https://newsroom.ibm.com/2025-02-27-ibm-completes-acquisition-of-hashicorp,-creates-comprehensive,-end-to-end-hybrid-cloud-platform"
+      },
+      {
+        "label": "Vault Radar docs: CLI changelog (0.41.0: Slack scanning GA)",
+        "url": "https://developer.hashicorp.com/vault-radar/cloud/cli/changelog"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "Vault Radar docs: What is Vault Radar?",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud"
+    },
+    {
+      "label": "Vault Radar docs: Security model (scan workers, hashing, hybrid agent)",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/security-model"
+    },
+    {
+      "label": "Vault Radar docs: FAQ (Argon2id and HMAC, severity rules, Base64)",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/faq"
+    },
+    {
+      "label": "Vault Radar docs: Risk severity",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/manage/severity"
+    },
+    {
+      "label": "Vault Radar docs: Secret types (with activeness checks)",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/manage/secret-types"
+    },
+    {
+      "label": "Vault Radar docs: Product tiers and limits",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/get-started/product-tiers"
+    },
+    {
+      "label": "Vault Radar docs: Agent overview",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/agent/overview"
+    },
+    {
+      "label": "Vault Radar docs: Deploy the agent (Kubernetes or Linux)",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/agent/deploy"
+    },
+    {
+      "label": "Vault Radar docs: Correlate findings with Vault (Enterprise or Dedicated only)",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/agent/correlate-vault"
+    },
+    {
+      "label": "Vault Radar docs: Correlate findings with AWS Secrets Manager",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/agent/correlate-aws-secrets-manager"
+    },
+    {
+      "label": "Vault Radar docs: Correlate findings with Azure Key Vault",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/agent/correlate-azure-key-vault"
+    },
+    {
+      "label": "Vault Radar docs: Copy leaked secrets into HashiCorp Vault",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/remediate-secrets/copy-secrets"
+    },
+    {
+      "label": "Vault Radar docs: CLI (install, commands, HCP connection)",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/cli"
+    },
+    {
+      "label": "Vault Radar docs: scan repo",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/cli/scan/repo"
+    },
+    {
+      "label": "Vault Radar docs: index vault (beta)",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/cli/index/vault"
+    },
+    {
+      "label": "Vault Radar docs: install git pre-commit-hook",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/cli/install/git"
+    },
+    {
+      "label": "Vault Radar docs: scan ci (GitHub Actions, GitLab, Bitbucket examples)",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/cli/scan/ci/overview"
+    },
+    {
+      "label": "Vault Radar docs: scan git pre-receive hooks",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/cli/scan/git/pre-receive/overview"
+    },
+    {
+      "label": "Vault Radar docs: scan tfe-variables (beta)",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/cli/scan/tfe-variables"
+    },
+    {
+      "label": "Vault Radar docs: Scan GitHub for secrets (5,000 repositories per connection)",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/get-started/add-data-sources/github"
+    },
+    {
+      "label": "Vault Radar docs: Pull request check policies",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/manage/create-pull-request-check-policies"
+    },
+    {
+      "label": "Vault Radar docs: Scan Microsoft Teams",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/get-started/add-data-sources/microsoft-teams"
+    },
+    {
+      "label": "Vault Radar docs: Scan Microsoft SharePoint (beta)",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/get-started/add-data-sources/microsoft-sharepoint"
+    },
+    {
+      "label": "Vault Radar docs: Scan Amazon EC2 (beta)",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/get-started/add-data-sources/aws-ec2"
+    },
+    {
+      "label": "Vault Radar docs: IDE extension",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/ide"
+    },
+    {
+      "label": "Vault Radar docs: MCP server overview",
+      "url": "https://developer.hashicorp.com/vault-radar/cloud/mcp-server/overview"
+    },
+    {
+      "label": "HashiCorp releases: vault-radar binaries (shipped with a proprietary licence agreement)",
+      "url": "https://releases.hashicorp.com/vault-radar/"
+    },
+    {
+      "label": "HashiCorp: HCP Vault Radar product page",
+      "url": "https://www.hashicorp.com/en/products/vault/hcp-vault-radar"
+    },
+    {
+      "label": "HashiCorp blog: HCP Vault Radar goes GA with Vault import (Apr 2025)",
+      "url": "https://www.hashicorp.com/en/blog/hcp-vault-radar-goes-ga-with-vault-import"
+    },
+    {
+      "label": "GitHub Docs: Secret scanning",
+      "url": "https://docs.github.com/en/code-security/secret-scanning/introduction/about-secret-scanning"
+    },
+    {
+      "label": "GitHub Docs: Push protection",
+      "url": "https://docs.github.com/en/code-security/secret-scanning/introduction/about-push-protection"
+    },
+    {
+      "label": "GitHub Docs: About GitHub Advanced Security (Secret Protection)",
+      "url": "https://docs.github.com/en/get-started/learning-about-github/about-github-advanced-security"
+    },
+    {
+      "label": "GitHub: gitleaks README (MIT; feature complete)",
+      "url": "https://github.com/gitleaks/gitleaks"
+    },
+    {
+      "label": "GitHub: gitleaks-action README (licence key for organizations)",
+      "url": "https://github.com/gitleaks/gitleaks-action"
+    },
+    {
+      "label": "GitHub: TruffleHog README (AGPL-3.0; 800+ types, verification)",
+      "url": "https://github.com/trufflesecurity/trufflehog"
+    }
+  ],
+  "checked": "2026-10-05"
+}

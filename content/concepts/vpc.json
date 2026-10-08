@@ -1,0 +1,134 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Virtual private clouds",
+  "category": "network",
+  "order": 50,
+  "summary": "Your own private, isolated network inside the cloud.",
+  "howItWorks": "A virtual private cloud is a software-defined network with an IP range you choose, like `10.0.0.0/16`, split into subnets. Public subnets route to the internet; private subnets have no inbound path from it. Route tables, security groups and network ACLs decide what may talk to what, and a NAT gateway lets private machines make outbound calls without being reachable.",
+  "analogy": "A gated campus. The lobby faces the street, the labs are deep inside behind badge-only doors, and deliveries leave through a one-way loading dock.",
+  "useWhen": [
+    "Every production deployment: databases and internal services stay off the internet",
+    "Connecting the cloud to an office or data center over VPN",
+    "Separating environments or teams"
+  ],
+  "avoidWhen": [
+    "Treating it as your whole security story; you still need IAM, patching and encryption",
+    "Overlapping IP ranges between networks you may later want to connect"
+  ],
+  "example": "Only the load balancer sits in a public subnet. The app servers and database live in private subnets, and the database accepts port 5432 only from the app servers’ security group. Apps download packages through a NAT gateway.",
+  "providers": {
+    "aws": "VPC",
+    "gcp": "VPC network",
+    "azure": "Virtual Network (VNet)",
+    "oss": "WireGuard, Tailscale, Calico"
+  },
+  "snippet": {
+    "lang": "ts",
+    "source": [
+      "// AWS CDK: one VPC, three tiers of subnets",
+      "const vpc = new ec2.Vpc(this, \"Main\", {",
+      "  ipAddresses: ec2.IpAddresses.cidr(\"10.0.0.0/16\"),",
+      "  maxAzs: 2,",
+      "  subnetConfiguration: [",
+      "    { name: \"public\", subnetType: ec2.SubnetType.PUBLIC },",
+      "    { name: \"app\",    subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },",
+      "    { name: \"db\",     subnetType: ec2.SubnetType.PRIVATE_ISOLATED },",
+      "  ],",
+      "});"
+    ]
+  },
+  "related": ["lb","iam","secrets","remote-access"],
+  "diagram": {
+    "caption": "Internet traffic can only enter through the load balancer in the public subnet. The app servers and database have no public address, and the app servers reach the internet outbound through the NAT gateway.",
+    "h": 300,
+    "zones": [
+      {"x":178,"y":12,"w":570,"h":276,"label":"VPC 10.0.0.0/16"},
+      {"x":194,"y":42,"w":170,"h":232,"label":"Public subnet"},
+      {"x":380,"y":42,"w":352,"h":232,"label":"Private subnets"}
+    ],
+    "nodes": [
+      {
+        "id": "inet",
+        "x": 82,
+        "y": 112,
+        "label": "Internet",
+        "sub": "users",
+        "emit": {"every":800,"jitter":0.4,"req":true,"color":0},
+        "out": ["lb"]
+      },
+      {
+        "id": "lb",
+        "x": 279,
+        "y": 112,
+        "label": "Load balancer",
+        "sub": "public IP",
+        "out": ["app"],
+        "concept": "lb"
+      },
+      {
+        "id": "app",
+        "x": 470,
+        "y": 112,
+        "label": "App servers",
+        "sub": "no public IP",
+        "out": ["db"],
+        "emit": {"every":2600,"jitter":0.3,"to":["nat"],"color":2}
+      },
+      {
+        "id": "db",
+        "x": 645,
+        "y": 112,
+        "label": "Database",
+        "sub": "10.0.3.12:5432",
+        "mode": "reply",
+        "delay": 80
+      },
+      {"id":"nat","x":279,"y":222,"label":"NAT gateway","sub":"outbound only","out":["pkg"]},
+      {"id":"pkg","x":82,"y":222,"label":"Package mirror","sub":"pypi.org","mode":"sink"}
+    ]
+  },
+  "history": {
+    "story": [
+      "In a company’s own data center, isolation came from wiring and switches: separate cables, then VLANs that split one switch fabric into separate networks, plus firewalls at the edges and VPNs back to the office. The first public clouds threw that away. When EC2 launched in 2006, every customer’s machines shared one flat network, protected only by per-instance security groups. Enterprises wanted the cloud’s flexibility but not that exposure, and they needed cloud machines to fit into their existing address plans and reach their data centers.",
+      "Amazon introduced the Virtual Private Cloud in August 2009: a logically isolated network with an IP range the customer picks, split into subnets and joined to the corporate network by an IPsec VPN. Making that work for many customers on shared hardware needed network virtualization, where software maps each tenant’s virtual network onto the physical one. Nicira, founded in 2007 by Martin Casado, Nick McKeown and Scott Shenker, built a business on the idea, and VMware bought it for about $1.26 billion in 2012.",
+      "The private network then became the default. AWS gave every new account a VPC from 2013 and shut down its old shared network in 2023, and Google Cloud and Azure offer the same model as VPC networks and VNets."
+    ],
+    "choices": [
+      { "choice": "An overlay on top of the physical network", "why": "Tenants choose their own addresses, which often overlap, and VLANs top out at 4,094 IDs. Wrapping each tenant’s packets in an outer header (as VXLAN does, with 16 million segment IDs) lets one physical network carry them all." },
+      { "choice": "Customers choose their own private IP ranges", "why": "A cloud network has to look like an extension of the corporate one, reachable over VPN without renumbering anything." },
+      { "choice": "Public and private are just routing", "why": "Copying the data center model of subnets, route tables, gateways and firewalls let network teams reuse what they already knew, instead of learning a new security model." }
+    ],
+    "timeline": [
+      { "year": "2006", "text": "EC2 launches with all customers on one shared, flat network" },
+      { "year": "2007", "text": "Nicira founded to pursue software-defined network virtualization" },
+      { "year": "2009", "text": "Amazon VPC introduced: isolated networks linked to data centers by VPN" },
+      { "year": "2012", "text": "VMware buys Nicira for about $1.26 billion" },
+      { "year": "2014", "text": "VXLAN overlay protocol documented in RFC 7348" },
+      { "year": "2023", "text": "AWS retires EC2-Classic, its last shared flat network" }
+    ],
+    "sources": [
+      { "label": "Werner Vogels: Seamlessly extending the data center, introducing Amazon VPC (2009)", "url": "https://www.allthingsdistributed.com/2009/08/amazon_virtual_private_cloud.html" },
+      { "label": "AWS News Blog: Virtual Private Clouds for Everyone (2013)", "url": "https://aws.amazon.com/blogs/aws/amazon-ec2-update-virtual-private-clouds-for-everyone/" },
+      { "label": "Werner Vogels: Farewell EC2-Classic, it’s been swell (2023)", "url": "https://www.allthingsdistributed.com/2023/09/farewell-ec2-classic.html" },
+      { "label": "RFC 7348: Virtual eXtensible Local Area Network (VXLAN) (2014)", "url": "https://www.rfc-editor.org/rfc/rfc7348" },
+      { "label": "Nicira: About us, naming founders Nick McKeown, Scott Shenker and Martin Casado (2012)", "url": "http://www.nicira.com/en/about-us", "archive": "https://web.archive.org/web/20120209043037/http://www.nicira.com/en/about-us" },
+      { "label": "VMware press release: VMware to acquire Nicira (July 2012)", "url": "http://www.vmware.com/company/news/releases/vmw-nicira-07-23-12.html", "archive": "https://web.archive.org/web/20120726020600/http://www.vmware.com:80/company/news/releases/vmw-nicira-07-23-12.html" },
+      { "label": "Wikipedia: Nicira (founding year)", "url": "https://en.wikipedia.org/wiki/Nicira" }
+    ]
+  },
+  "sources": [
+    { "label": "AWS docs: How Amazon VPC works", "url": "https://docs.aws.amazon.com/vpc/latest/userguide/how-it-works.html" },
+    { "label": "AWS docs: Subnets for your VPC (public and private subnets)", "url": "https://docs.aws.amazon.com/vpc/latest/userguide/configure-subnets.html" },
+    { "label": "AWS docs: Infrastructure security (security groups vs network ACLs)", "url": "https://docs.aws.amazon.com/vpc/latest/userguide/infrastructure-security.html" },
+    { "label": "AWS docs: Security group referencing", "url": "https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html" },
+    { "label": "AWS docs: NAT gateways", "url": "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html" },
+    { "label": "AWS docs: VPC peering and overlapping CIDR blocks", "url": "https://docs.aws.amazon.com/vpc/latest/peering/vpc-peering-basics.html" },
+    { "label": "AWS CDK docs: aws-ec2 module (Vpc, IpAddresses.cidr, SubnetType)", "url": "https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_ec2-readme.html" },
+    { "label": "Google Cloud docs: VPC networks", "url": "https://cloud.google.com/vpc/docs/vpc" },
+    { "label": "Microsoft Learn: What is Azure Virtual Network?", "url": "https://learn.microsoft.com/en-us/azure/virtual-network/virtual-networks-overview" },
+    { "label": "Microsoft Learn: Azure Virtual Network FAQ (VNet)", "url": "https://learn.microsoft.com/en-us/azure/virtual-network/virtual-networks-faq" },
+    { "label": "WireGuard: fast, modern, secure VPN tunnel", "url": "https://www.wireguard.com/" },
+    { "label": "Tailscale docs: What is Tailscale?", "url": "https://tailscale.com/kb/1151/what-is-tailscale" },
+    { "label": "Calico docs: About Calico", "url": "https://docs.tigera.io/calico/latest/about/" }
+  ]
+}

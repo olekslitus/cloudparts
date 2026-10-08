@@ -1,0 +1,66 @@
+{
+  "$schema": "../../.astro/collections/architectures.schema.json",
+  "title": "Web app on Kubernetes",
+  "order": 40,
+  "summary": "A load balancer spreads requests over app pods on Kubernetes, which check Redis before going to PostgreSQL.",
+  "intro": "The workhorse shape for a web product that outgrew one server. Your app is packaged as a container image and runs as several identical pods on Kubernetes, which restarts them when they crash and adds more when they’re busy. A load balancer spreads traffic across them. Frequently read data is answered from a Redis cache, so PostgreSQL only handles the misses and the writes.",
+  "fits": "Product teams with steady traffic and several services",
+  "diagram": {
+    "caption": "Requests are spread across the pods. Each pod asks Redis first; hits come straight back, misses go on to PostgreSQL. Every 12 seconds one pod is taken down and the load balancer routes around it while Kubernetes replaces it.",
+    "w": 880,
+    "h": 280,
+    "nodes": [
+      { "id": "users", "x": 80, "y": 140, "label": "Users", "sub": "browsers", "emit": { "every": 300, "jitter": 0.45, "req": true }, "out": ["lb"] },
+      { "id": "lb", "x": 250, "y": 140, "label": "Load balancer", "sub": "AWS ALB", "tech": "alb", "out": ["pod-a", "pod-b", "pod-c"] },
+      { "id": "pod-a", "x": 450, "y": 55, "label": "App pod", "sub": "api:2.3.1", "tech": "kubernetes", "out": ["cache"] },
+      { "id": "pod-b", "x": 450, "y": 140, "label": "App pod", "sub": "api:2.3.1", "tech": "kubernetes", "out": ["cache"] },
+      { "id": "pod-c", "x": 450, "y": 225, "label": "App pod", "sub": "api:2.3.1", "tech": "kubernetes", "out": ["cache"] },
+      { "id": "cache", "x": 640, "y": 140, "label": "Redis", "sub": "cache-aside", "tech": "redis", "mode": "cache", "p": 0.75, "out": ["db"] },
+      { "id": "db", "x": 805, "y": 140, "label": "PostgreSQL", "sub": "primary", "tech": "postgresql", "mode": "reply", "delay": 70 }
+    ],
+    "events": [{ "node": "pod-b", "at": 4000, "every": 12000, "dur": 3500, "text": "pod crashed", "back": "replaced" }]
+  },
+  "steps": [
+    {
+      "title": "The load balancer picks a healthy pod",
+      "text": "An Application Load Balancer receives each request and forwards it to one of the pods registered as healthy. A pod that fails two health checks in a row (sent every 30 seconds by default) stops getting traffic.",
+      "nodes": ["users", "lb"]
+    },
+    {
+      "title": "Kubernetes keeps the pods running",
+      "text": "A Deployment asks for three replicas of the `api` image. If one crashes or its node dies, Kubernetes starts a replacement; a HorizontalPodAutoscaler can add replicas when CPU climbs.",
+      "nodes": ["pod-a", "pod-b", "pod-c"]
+    },
+    {
+      "title": "Redis answers the common reads",
+      "text": "The app looks up the key in Redis first. On a hit it returns immediately; on a miss it queries PostgreSQL and stores the result in Redis with an expiry, so the next request is a hit.",
+      "nodes": ["cache"]
+    },
+    {
+      "title": "PostgreSQL holds the truth",
+      "text": "All writes and cache misses go to PostgreSQL. It’s the one stateful piece, so it usually runs as a managed service with a standby replica and automatic backups.",
+      "nodes": ["db"]
+    }
+  ],
+  "good": [
+    "Pods are interchangeable, so losing one costs nothing but a little capacity",
+    "The cache takes most of the read load off the database, which is the hardest part to scale",
+    "The same container image runs in development, CI and production",
+    "Kubernetes gives one way to deploy, scale and roll back every service the team runs"
+  ],
+  "watch": [
+    "Kubernetes itself is a system to learn, upgrade and secure; managed offerings help but don’t remove that",
+    "Cache invalidation: after a write, stale entries must be deleted or allowed to expire",
+    "PostgreSQL is still one primary; heavy write growth eventually needs read replicas, partitioning or sharding",
+    "If Redis goes down, every request becomes a miss; make sure the database can survive that surge"
+  ],
+  "swaps": [
+    { "text": "Not ready for Kubernetes? Run the same containers on Fargate or Cloud Run and let the platform manage the machines.", "techs": ["fargate", "cloud-run"] },
+    { "text": "Self-hosted or multi-cloud? Use NGINX as an ingress in front of the pods instead of a cloud load balancer.", "techs": ["nginx"] },
+    { "text": "Add Prometheus to scrape every pod and Grafana to chart it, so you see the cache hit rate and database latency.", "techs": ["prometheus", "grafana"] },
+    { "text": "Deploy with Argo CD: it watches a Git repository and keeps the cluster matching it.", "techs": ["argo-cd"] }
+  ],
+  "sources": [
+    { "label": "AWS docs: Health checks for Application Load Balancer target groups", "url": "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html" }
+  ]
+}

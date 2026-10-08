@@ -1,0 +1,167 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "CloudNativePG",
+  "concepts": ["relational", "orchestration"],
+  "provider": "oss",
+  "vendor": "CloudNativePG community (started at 2ndQuadrant and EDB)",
+  "license": "Apache 2.0",
+  "website": "https://cloudnative-pg.io/",
+  "repo": "https://github.com/cloudnative-pg/cloudnative-pg",
+  "summary": "A Kubernetes operator that runs highly available PostgreSQL with no Patroni and no StatefulSets: the Kubernetes API itself holds the cluster’s state.",
+  "intro": [
+    "CloudNativePG adds a `Cluster` resource to Kubernetes. You declare how many instances you want, the Postgres image and the storage, and the operator creates one pod and one or more persistent volume claims per instance: a primary and streaming replicas. It doesn’t use a `StatefulSet`, because that controller treats every pod the same; CloudNativePG runs its own pod controller so it can update replicas before the primary, resize volumes, and keep WAL and data volumes in step. Inside every pod the first process (PID 1) is the instance manager, which starts `postgres`, answers Kubernetes’ health probes, exports metrics and archives WAL. There is no Patroni, repmgr or etcd of its own: the operator keeps the cluster’s status in the Kubernetes API and uses it as the only source of truth.",
+    "Applications connect through three Services the operator keeps up to date: `-rw` always points at the primary, `-ro` at the replicas and `-r` at any instance. When the primary fails its readiness probe, the operator shuts it down, waits for the replicas to stop receiving WAL, and promotes one of them; since 1.30 an instance must also hold a Kubernetes `Lease` before it can promote. The old primary comes back as a replica, resynchronised with `pg_rewind`. Backups go to object storage (Amazon S3, Google Cloud Storage, Azure Blob Storage or S3-compatible stores) through the Barman Cloud plugin, or to Kubernetes volume snapshots. With a WAL archive the project promises a recovery point of 5 minutes or less. It is free under Apache 2.0, a CNCF Sandbox project since January 2025, and EDB sells support and a commercial build."
+  ],
+  "strengths": [
+    "Kubernetes-native design: no external failover tool or separate consensus store to run, and `kubectl` shows the cluster’s state in the `Cluster` resource",
+    "Its own pod controller handles what a `StatefulSet` can’t: replicas first, then a switchover for the primary, volume resizing, and separate WAL volumes",
+    "Batteries included: PgBouncer poolers, Prometheus metrics on port 9187, declarative databases, roles, publications and subscriptions, and replica clusters in another Kubernetes cluster for disaster recovery",
+    "Vendor-neutral governance under the CNCF, a new minor release every few months, and commercial support from several companies, including EDB and Percona"
+  ],
+  "limits": [
+    "Kubernetes and vanilla PostgreSQL only: no VMs, no other databases, and no Postgres forks unless their features come as extensions",
+    "Backups are mid-migration: the built-in Barman Cloud support has been deprecated since 1.26 (May 2025) and is due to be removed in 1.31, so existing clusters must move to the plugin, which also needs cert-manager or your own certificates",
+    "Asynchronous replication is the default; zero-data-loss failover needs synchronous replication, which adds write latency",
+    "Only physical backups are managed; `pg_dump` is left to you, and the docs warn it isn’t enough for business continuity",
+    "Each minor release is supported only until three months after the next one, so you upgrade the operator several times a year"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "runs highly available clusters of" },
+    { "id": "kubernetes", "how": "keeps cluster state in the API of" },
+    { "id": "s3", "how": "backs up WAL and base backups to" },
+    { "id": "gcs", "how": "backs up WAL and base backups to" },
+    { "id": "azure-blob", "how": "backs up WAL and base backups to" },
+    { "id": "prometheus", "how": "exposes Postgres metrics to" }
+  ],
+  "snippet": {
+    "lang": "yaml",
+    "title": "A three-instance cluster that archives WAL to S3 through the Barman Cloud plugin, with a nightly backup",
+    "source": [
+      "apiVersion: barmancloud.cnpg.io/v1",
+      "kind: ObjectStore",
+      "metadata:",
+      "  name: s3-store",
+      "spec:",
+      "  retentionPolicy: \"30d\"            # keep 30 days of point-in-time recovery",
+      "  configuration:",
+      "    destinationPath: s3://acme-pg-backups/",
+      "    s3Credentials:",
+      "      accessKeyId:     { name: aws-creds, key: ACCESS_KEY_ID }",
+      "      secretAccessKey: { name: aws-creds, key: ACCESS_SECRET_KEY }",
+      "    wal:",
+      "      compression: gzip",
+      "---",
+      "apiVersion: postgresql.cnpg.io/v1",
+      "kind: Cluster",
+      "metadata:",
+      "  name: orders",
+      "spec:",
+      "  instances: 3                       # one primary, two streaming replicas",
+      "  storage:",
+      "    size: 50Gi",
+      "  plugins:",
+      "  - name: barman-cloud.cloudnative-pg.io",
+      "    isWALArchiver: true",
+      "    parameters:",
+      "      barmanObjectName: s3-store",
+      "---",
+      "apiVersion: postgresql.cnpg.io/v1",
+      "kind: ScheduledBackup",
+      "metadata:",
+      "  name: orders-nightly",
+      "spec:",
+      "  schedule: \"0 0 0 * * *\"          # six fields: seconds come first",
+      "  cluster:",
+      "    name: orders",
+      "  method: plugin",
+      "  pluginConfiguration:",
+      "    name: barman-cloud.cloudnative-pg.io",
+      "",
+      "# apps connect to orders-rw (primary), orders-ro (replicas) or orders-r (any)"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Three common ways to run Postgres on Kubernetes",
+      "intro": "All three are free operators that give you a primary, streaming replicas, automatic failover and backups to object storage. They differ in who decides failover, what does the backups, and the terms on the images you run.",
+      "corner": "",
+      "columns": ["CloudNativePG", "PGO (Crunchy Data)", "Percona Operator for PostgreSQL"],
+      "rows": [
+        { "label": "Who decides failover", "values": ["The operator and each pod’s instance manager, through the Kubernetes API and a `Lease`", "Patroni in each pod, racing for a lease kept on a Kubernetes Endpoints object", "Patroni, as in PGO (Percona’s operator is based on PGO)"] },
+        { "label": "Pods run by", "values": ["Its own pod controller", "One `StatefulSet` per instance", "Inherited from PGO"] },
+        { "label": "Backups", "values": ["Barman Cloud plugin to object storage, or volume snapshots", "pgBackRest, up to four repositories (volume, S3, GCS, Azure)", "pgBackRest"] },
+        { "label": "Code licence", "values": ["Apache 2.0", "Apache 2.0", "Apache 2.0"] },
+        { "label": "Default images", "values": ["Community images from the project", "Crunchy’s images: free in production only for organisations under 50 employees", "Percona’s images, with no licence fees"] },
+        { "label": "Steward", "values": ["CNCF Sandbox project (started by EDB)", "Crunchy Data, which is joining Snowflake", "Percona"] }
+      ],
+      "notes": [
+        "Other options include Zalando’s Postgres Operator (Patroni and WAL-G inside its Spilo images), StackGres and Kubegres.",
+        "PGO can run images you build yourself from PGDG packages, which avoids Crunchy’s image terms."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "For years the advice was not to run databases on Kubernetes. Two things changed that for the Postgres team at 2ndQuadrant: local persistent volumes became generally available in Kubernetes 1.14 in April 2019, and the operator pattern became the standard way to automate stateful software. In August 2019 Simon Riggs, then 2ndQuadrant’s CEO, asked Gabriele Bartolini, whose team had created the Barman backup tool, to lead a Kubernetes initiative. By December their benchmarks showed Postgres on bare-metal Kubernetes performing almost exactly like Postgres on bare-metal Linux.",
+      "They set strict rules for the operator: light, immutable images with only `postgres` inside, a fully declarative API, and failover decided through the Kubernetes API server rather than by repmgr (which some of the team had worked on), Patroni or Stolon. Work on Cloud Native Postgres started in February 2020. EDB bought 2ndQuadrant that September, shipped a first stable release in February 2021 and built its BigAnimal cloud service on it.",
+      "On April 21, 2022, EDB renamed the operator CloudNativePG, opened its repository with more than 1,400 commits of history under Apache 2.0, released version 1.15.0 and applied to the CNCF, handing governance to a community of maintainers. The CNCF accepted it into the Sandbox on January 21, 2025. Since 1.26 the project has been moving backups out of the core into plugins through its CNPG-I interface, starting with Barman Cloud."
+    ],
+    "choices": [
+      { "choice": "No Patroni or external consensus store", "why": "Kubernetes already has a consistent store, the API server. Using it as the only source of truth means one fewer distributed system to run, and the cluster’s state is visible with ordinary Kubernetes tools." },
+      { "choice": "Its own pod controller instead of a StatefulSet", "why": "A StatefulSet treats pods as interchangeable and can’t resize volumes. Postgres has one primary, some changes must reach replicas first and others the primary first, so the operator needs to know each instance’s role." },
+      { "choice": "Immutable application containers", "why": "Each image runs a single `postgres` of one version, with no SSH or systemd. Updates mean a new image and a rolling replacement, which is repeatable and fits GitOps." },
+      { "choice": "Backups as plugins", "why": "Moving WAL archiving and base backups behind the CNPG-I interface lets the core stay backup-agnostic, so Barman Cloud, snapshots or other tools can be maintained and released separately." }
+    ],
+    "timeline": [
+      { "year": "2019", "text": "2ndQuadrant starts its Kubernetes initiative in August after Kubernetes 1.14 adds local persistent volumes" },
+      { "year": "2020", "text": "Cloud Native Postgres development begins in February; EDB acquires 2ndQuadrant in September" },
+      { "year": "2021", "text": "First stable release of Cloud Native Postgres, in February" },
+      { "year": "2022", "text": "Renamed CloudNativePG and open-sourced under Apache 2.0 with version 1.15.0, April 21" },
+      { "year": "2025", "text": "Accepted into the CNCF Sandbox in January; 1.26 in May deprecates built-in Barman Cloud for the plugin" },
+      { "year": "2026", "text": "1.30 in June adds a Kubernetes `Lease` that gates primary promotion" }
+    ],
+    "sources": [
+      { "label": "EDB blog: Introducing CloudNativePG, a new open source Kubernetes operator for Postgres (Apr 2022)", "url": "https://www.enterprisedb.com/blog/introducing-cloudnativepg-new-open-source-kubernetes-operator-postgres" },
+      { "label": "Kubernetes blog: Local persistent volumes GA in Kubernetes 1.14 (Apr 2019)", "url": "https://kubernetes.io/blog/2019/04/04/kubernetes-1.14-local-persistent-volumes-ga/" },
+      { "label": "CloudNativePG v1.15.0 release on GitHub (Apr 21, 2022)", "url": "https://github.com/cloudnative-pg/cloudnative-pg/releases/tag/v1.15.0" },
+      { "label": "CNCF: CloudNativePG project page (accepted at Sandbox, Jan 21, 2025)", "url": "https://www.cncf.io/projects/cloudnativepg/" },
+      { "label": "CloudNativePG v1.26.0 release notes (May 2025): CNCF governance, Barman Cloud deprecation", "url": "https://github.com/cloudnative-pg/cloudnative-pg/releases/tag/v1.26.0" },
+      { "label": "CloudNativePG v1.30.0 release notes (Jun 2026): primary `Lease`", "url": "https://github.com/cloudnative-pg/cloudnative-pg/releases/tag/v1.30.0" },
+      { "label": "CloudNativePG FAQ (immutable containers, why no Patroni, 2019 bare-metal pilot)", "url": "https://cloudnative-pg.io/docs/devel/faq/" },
+      { "label": "CloudNativePG docs: Custom Pod Controller", "url": "https://cloudnative-pg.io/docs/devel/controller/" }
+    ]
+  },
+  "sources": [
+    { "label": "CloudNativePG README: scope, design principles, custom resources", "url": "https://github.com/cloudnative-pg/cloudnative-pg" },
+    { "label": "CloudNativePG LICENSE (Apache 2.0)", "url": "https://github.com/cloudnative-pg/cloudnative-pg/blob/main/LICENSE" },
+    { "label": "CloudNativePG FAQ: why no Patroni or StatefulSets, other Postgres operators, operator outages", "url": "https://cloudnative-pg.io/docs/devel/faq/" },
+    { "label": "CloudNativePG docs: Custom Pod Controller (PVC resizing, replicas before primary)", "url": "https://cloudnative-pg.io/docs/devel/controller/" },
+    { "label": "CloudNativePG docs: Postgres instance manager (PID 1, probes)", "url": "https://cloudnative-pg.io/docs/devel/instance_manager/" },
+    { "label": "CloudNativePG docs: Architecture (`-rw`, `-ro` and `-r` services, synchronous replication)", "url": "https://cloudnative-pg.io/docs/devel/architecture/" },
+    { "label": "CloudNativePG docs: Automated failover (two-phase failover, primary `Lease`)", "url": "https://cloudnative-pg.io/docs/devel/failover/" },
+    { "label": "CloudNativePG docs: Backup (plugins, volume snapshots, RPO of 5 minutes or less, no pg_dump)", "url": "https://cloudnative-pg.io/docs/devel/backup/" },
+    { "label": "Barman Cloud Plugin docs: Introduction (requires CloudNativePG 1.26+ and cert-manager; S3, GCS, Azure)", "url": "https://cloudnative-pg.io/plugin-barman-cloud/docs/intro/" },
+    { "label": "Barman Cloud Plugin docs: Usage (`ObjectStore`, `isWALArchiver`, plugin backups)", "url": "https://github.com/cloudnative-pg/plugin-barman-cloud/blob/main/web/docs/usage.md" },
+    { "label": "Barman Cloud Plugin docs: Retention policies", "url": "https://github.com/cloudnative-pg/plugin-barman-cloud/blob/main/web/docs/retention.md" },
+    { "label": "CloudNativePG v1.30.0 release notes (in-tree Barman Cloud now removed in 1.31)", "url": "https://github.com/cloudnative-pg/cloudnative-pg/releases/tag/v1.30.0" },
+    { "label": "CloudNativePG docs: Connection pooling (PgBouncer `Pooler`)", "url": "https://cloudnative-pg.io/docs/devel/connection_pooling/" },
+    { "label": "CloudNativePG docs: Monitoring (Prometheus metrics on port 9187)", "url": "https://cloudnative-pg.io/docs/devel/monitoring/" },
+    { "label": "CloudNativePG docs: Supported releases (cadence, support window, Kubernetes and Postgres versions)", "url": "https://cloudnative-pg.io/docs/devel/supported_releases/" },
+    { "label": "CNCF: CloudNativePG project page (Sandbox)", "url": "https://www.cncf.io/projects/cloudnativepg/" },
+    { "label": "EDB blog: Introducing CloudNativePG (EDB support and EDB Postgres for Kubernetes)", "url": "https://www.enterprisedb.com/blog/introducing-cloudnativepg-new-open-source-kubernetes-operator-postgres" },
+    { "label": "PGO docs: High availability (Patroni lease on an Endpoints object)", "url": "https://access.crunchydata.com/documentation/postgres-operator/latest/architecture/high-availability" },
+    { "label": "PGO source: instance controller (a StatefulSet per instance)", "url": "https://github.com/CrunchyData/postgres-operator/blob/main/internal/controller/postgrescluster/instance.go" },
+    { "label": "PGO docs: Backup configuration (pgBackRest, up to four repositories)", "url": "https://access.crunchydata.com/documentation/postgres-operator/latest/tutorials/backups-disaster-recovery/backups" },
+    { "label": "Crunchy Data Developer Program terms of use (production limits for the images)", "url": "https://www.crunchydata.com/developers/terms-of-use" },
+    { "label": "PGO 6.0.x release notes (build your own images from PGDG packages)", "url": "https://access.crunchydata.com/documentation/postgres-operator/6.0/releases/6.0.x" },
+    { "label": "Percona Operator for PostgreSQL README (based on Crunchy’s PGO, Apache 2.0)", "url": "https://github.com/percona/percona-postgresql-operator" },
+    { "label": "Percona Operator for PostgreSQL docs: Architecture (Patroni, pgBackRest, PgBouncer)", "url": "https://docs.percona.com/percona-operator-for-postgresql/latest/architecture.html" },
+    { "label": "Percona: Cloud native (operators with no licensing fees; production support for CloudNativePG)", "url": "https://www.percona.com/cloud-native/" },
+    { "label": "CloudNativePG: Commercial support (companies offering services)", "url": "https://cloudnative-pg.io/support/" },
+    { "label": "Crunchy Data blog: Crunchy Data joins Snowflake (Jun 2025)", "url": "https://www.crunchydata.com/blog/crunchy-data-joins-snowflake" },
+    { "label": "Zalando Postgres Operator on GitHub (powered by Patroni; WAL-G via Spilo)", "url": "https://github.com/zalando/postgres-operator" },
+    { "label": "Zalando Spilo: environment (WAL-G backups)", "url": "https://github.com/zalando/spilo/blob/master/ENVIRONMENT.rst" }
+  ],
+  "checked": "2026-10-06"
+}

@@ -1,0 +1,162 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Remote procedure calls",
+  "category": "network",
+  "order": 70,
+  "summary": "Call a function on another machine as if it were local: a shared interface, generated stubs and a compact encoding.",
+  "howItWorks": "Both sides share an interface definition (IDL), such as a `.proto` file, that lists a service’s methods and the types of their arguments and results. A code generator turns it into a client stub and server code for each language. Your code calls the stub like a local function; the stub encodes the arguments, usually in a binary format that tags each field with a number instead of its name, and sends them over a transport. gRPC uses HTTP/2, so many calls share one long-lived connection and either side can stream a sequence of messages. The server side decodes the request, runs your handler and sends back a result or a status code. Because the network can fail or stall, the caller sets a deadline and retries only failures that are safe to repeat. Versions evolve through those field numbers: new fields get new numbers, old numbers are never reused, and old and new code keep understanding each other. Compared with REST and JSON, the contract is a typed method rather than a URL and a verb, and the bytes mean nothing without the schema. Compared with a queue or pub/sub, the caller waits for an answer from a server that has to be up right now.",
+  "analogy": "Phoning a colleague in another office instead of walking over. You ask in an agreed format, wait on the line for the answer, and hang up if it takes too long. If they’re out, you know at once; leaving a note on their desk would be a queue.",
+  "useWhen": [
+    "Calls between your own services, where both sides can share a schema and payload size and latency matter",
+    "Teams in several languages that want one typed contract and generated clients for each",
+    "Streams over one connection: progress updates, telemetry, or messages flowing both ways",
+    "Many concurrent calls between the same services, multiplexed over one long-lived HTTP/2 connection"
+  ],
+  "avoidWhen": [
+    "Public APIs for unknown clients: plain HTTP and JSON is easier to call, cache and debug, and browsers need gRPC-Web through a proxy or Connect to speak gRPC",
+    "Work that can wait or must survive the receiver being down; put it on a queue",
+    "One event that several services react to; that’s pub/sub, not one call per consumer",
+    "Chatty, fine-grained calls over long distances, where every call pays a full round trip"
+  ],
+  "example": "`checkout` calls `orders.GetOrder(id: 4812)` with a 300 ms deadline. The generated stub encodes the request as 3 bytes of Protocol Buffers (the JSON `{\"id\":4812}` is 11), sends it on an HTTP/2 connection it already holds to one of three `orders` servers, and gets back an `Order` or a status such as `NOT_FOUND`. When a server restarts, calls that fail with `UNAVAILABLE` are retried; when `orders` is slow, checkout gets `DEADLINE_EXCEEDED` after 300 ms instead of hanging. Later the team adds `string tracking_url = 7;` and old clients keep working, skipping the field they don’t know.",
+  "providers": {
+    "aws": "No RPC framework of its own: you run gRPC or Thrift in your services. Application Load Balancer, CloudFront and VPC Lattice can carry gRPC calls over HTTP/2, and ALB health checks can test gRPC status codes",
+    "gcp": "Cloud Run serves gRPC, including streaming over HTTP/2; API Gateway and Cloud Endpoints add auth, quotas and monitoring to gRPC APIs and can translate HTTP/JSON into gRPC; Cloud Service Mesh supports proxyless gRPC",
+    "azure": "App Service on Linux and Container Apps ingress serve gRPC; Application Gateway for Containers routes it; API Management passes gRPC through in the self-hosted gateway and (in preview) newer classic-tier instances, not the v2 tiers",
+    "oss": "gRPC; Apache Thrift; Cap’n Proto RPC (object references, promise pipelining); Connect (speaks gRPC, gRPC-Web and its own protocol over HTTP/1.1 or HTTP/2); Twirp (Protobuf or JSON over plain HTTP)"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "# orders.proto (the contract both sides compile):",
+      "#   service Orders { rpc GetOrder(GetOrderRequest) returns (Order); }",
+      "#   message GetOrderRequest { int64 id = 1; }",
+      "#   message Order { int64 id = 1; string status = 2; }",
+      "import json",
+      "import grpc",
+      "import orders_pb2, orders_pb2_grpc  # python -m grpc_tools.protoc --python_out=. --grpc_python_out=. orders.proto",
+      "",
+      "# Retries are set per method in the channel’s service config",
+      "service_config = json.dumps({\"methodConfig\": [{",
+      "    \"name\": [{\"service\": \"shop.Orders\"}],",
+      "    \"retryPolicy\": {",
+      "        \"maxAttempts\": 3,",
+      "        \"initialBackoff\": \"0.1s\",",
+      "        \"maxBackoff\": \"1s\",",
+      "        \"backoffMultiplier\": 2,",
+      "        \"retryableStatusCodes\": [\"UNAVAILABLE\"],",
+      "    },",
+      "}]})",
+      "channel = grpc.insecure_channel(\"orders.internal:50051\", options=[(\"grpc.service_config\", service_config)])",
+      "orders = orders_pb2_grpc.OrdersStub(channel)",
+      "",
+      "try:",
+      "    # Reads like a local call: the stub encodes, sends over HTTP/2 and waits at most 300 ms",
+      "    order = orders.GetOrder(orders_pb2.GetOrderRequest(id=4812), timeout=0.3)",
+      "    print(order.status)",
+      "except grpc.RpcError as err:",
+      "    print(err.code())  # e.g. StatusCode.DEADLINE_EXCEEDED"
+    ]
+  },
+  "related": ["apigw", "service-mesh", "lb", "queue", "pubsub", "web-api"],
+  "diagram": {
+    "caption": "Each call waits for its reply. The client stub encodes the arguments and spreads calls over the order servers on connections it keeps open. While server 2 restarts, calls go only to server 1.",
+    "h": 270,
+    "zones": [
+      { "x": 15, "y": 40, "w": 420, "h": 120, "label": "Checkout process" }
+    ],
+    "nodes": [
+      {
+        "id": "app",
+        "x": 120,
+        "y": 105,
+        "label": "Checkout code",
+        "sub": "orders.GetOrder(4812)",
+        "emit": { "every": 650, "jitter": 0.3, "req": true, "color": 0 },
+        "out": ["stub"]
+      },
+      {
+        "id": "stub",
+        "x": 320,
+        "y": 105,
+        "label": "Client stub",
+        "sub": "Protobuf · deadline 300 ms",
+        "route": "rr",
+        "out": ["s1", "s2"]
+      },
+      { "id": "s1", "x": 620, "y": 70, "label": "Orders server 1", "sub": "HTTP/2 · :50051", "mode": "reply", "delay": 120 },
+      { "id": "s2", "x": 620, "y": 195, "label": "Orders server 2", "sub": "HTTP/2 · :50051", "mode": "reply", "delay": 120 }
+    ],
+    "events": [
+      { "node": "s2", "at": 3500, "every": 11000, "dur": 4000, "text": "UNAVAILABLE", "back": "serving" }
+    ]
+  },
+  "history": {
+    "story": [
+      "Before RPC, programs that talked over a network had to pack and unpack messages by hand, which at Xerox PARC was work for “a select group of communication experts”. In 1984 Andrew Birrell and Bruce Jay Nelson described the RPC system they built for the Cedar environment: a programmer wrote an interface module, a tool called Lupine generated the stubs, and a remote call looked like a local one. They even chose to give calls no time-out, because local calls have none.",
+      "Sun published its RPC protocol, with data encoded in XDR, as RFC 1050 in 1988. CORBA 1.0 followed in 1991 with an interface definition language for distributed objects. Facebook open-sourced Thrift in 2007: one language-neutral file defined types and services, and numbered fields let old and new versions talk. Google had used its own system, Stubby, for over a decade, but it was tied to Google’s infrastructure.",
+      "In February 2015 Google open-sourced gRPC, a successor to Stubby built on HTTP/2 and Protocol Buffers. Its stated principles turned away from distributed objects and “the fallacies of ignoring the network”: coarse-grained messages, deadlines, cancellation and streaming. gRPC 1.0 shipped in 2016 and the project joined the CNCF in 2017."
+    ],
+    "choices": [
+      {
+        "choice": "Stubs generated from an interface definition",
+        "why": "Birrell and Nelson wanted programmers to write only the interface, the caller and the server. Lupine generated the code that packed arguments and dispatched calls, and both sides were type-checked against the same interface."
+      },
+      {
+        "choice": "Numbered fields instead of whole-program versions",
+        "why": "Sun RPC versioned whole remote programs, so a server ran several versions side by side. Thrift tagged every field and argument with an identifier, so old code could skip fields it didn’t know and staged rollouts didn’t break callers."
+      },
+      {
+        "choice": "Deadlines and cancellation, not calls that wait forever",
+        "why": "Cedar RPC left out time-outs to feel like a local call. gRPC’s principles say a client may set a timeout and cancellation can cascade down a chain of calls, so servers stop work nobody is waiting for."
+      },
+      {
+        "choice": "HTTP/2 as the transport",
+        "why": "Stubby predated public standards. gRPC needed a wire protocol that survives common internet infrastructure, and HTTP/2 brought multiplexed streams and flow control over one connection."
+      }
+    ],
+    "timeline": [
+      { "year": "1984", "text": "Birrell and Nelson publish “Implementing Remote Procedure Calls”" },
+      { "year": "1988", "text": "Sun publishes its RPC protocol as RFC 1050" },
+      { "year": "1991", "text": "CORBA 1.0 defines an IDL for distributed objects" },
+      { "year": "2007", "text": "Facebook open-sources Thrift in April" },
+      { "year": "2015", "text": "Google open-sources gRPC, the successor to Stubby, in February" },
+      { "year": "2016", "text": "gRPC 1.0 is released in August" },
+      { "year": "2017", "text": "gRPC joins the Cloud Native Computing Foundation in March" }
+    ],
+    "sources": [
+      { "label": "Birrell and Nelson: Implementing Remote Procedure Calls (ACM TOCS, February 1984)", "url": "https://dl.acm.org/doi/10.1145/2080.357392" },
+      { "label": "RFC 1050: RPC, Remote Procedure Call Protocol Specification (Sun Microsystems, April 1988)", "url": "https://www.rfc-editor.org/rfc/rfc1050" },
+      { "label": "OMG: CORBA history (CORBA 1.0, October 1991)", "url": "https://www.omg.org/corba/history_of_corba.htm" },
+      { "label": "Slee, Agarwal and Kwiatkowski: Thrift, scalable cross-language services implementation (Facebook, April 2007)", "url": "https://thrift.apache.org/static/files/thrift-20070401.pdf" },
+      { "label": "Apache Thrift: About (open-sourced April 2007)", "url": "https://thrift.apache.org/about" },
+      { "label": "Google Developers Blog: Introducing gRPC, a new open source HTTP/2 RPC framework (February 2015)", "url": "https://developers.googleblog.com/introducing-grpc-a-new-open-source-http2-rpc-framework/" },
+      { "label": "gRPC blog: gRPC motivation and design principles (Stubby, September 2015)", "url": "https://grpc.io/blog/principles/" },
+      { "label": "gRPC blog: gRPC project is now 1.0 (August 2016)", "url": "https://grpc.io/blog/ga-announcement/" },
+      { "label": "CNCF blog: Cloud Native Computing Foundation to host gRPC from Google (March 2017)", "url": "https://www.cncf.io/blog/2017/03/01/cloud-native-computing-foundation-host-grpc-google/" }
+    ]
+  },
+  "sources": [
+    { "label": "gRPC docs: Core concepts (service definitions, unary and streaming RPCs)", "url": "https://grpc.io/docs/what-is-grpc/core-concepts/" },
+    { "label": "gRPC docs: Deadlines (no default deadline, DEADLINE_EXCEEDED)", "url": "https://grpc.io/docs/guides/deadlines/" },
+    { "label": "gRPC docs: Retry (service config, retryable status codes, backoff)", "url": "https://grpc.io/docs/guides/retry/" },
+    { "label": "gRPC over HTTP/2 protocol specification", "url": "https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md" },
+    { "label": "gRPC docs: gRPC-Web basics (browser calls through an Envoy proxy)", "url": "https://grpc.io/docs/platforms/web/basics/" },
+    { "label": "Protocol Buffers docs: Encoding (field numbers and wire types)", "url": "https://protobuf.dev/programming-guides/encoding/" },
+    { "label": "Protocol Buffers docs: Language guide, proto3 (assigning field numbers, updating a message type)", "url": "https://protobuf.dev/programming-guides/proto3/" },
+    { "label": "Connect docs: Introduction (gRPC, gRPC-Web and the Connect protocol)", "url": "https://connectrpc.com/docs/introduction" },
+    { "label": "Twirp on GitHub (Protobuf or JSON over HTTP 1.1)", "url": "https://github.com/twitchtv/twirp" },
+    { "label": "Cap’n Proto: RPC protocol (capabilities, promise pipelining, round trips)", "url": "https://capnproto.org/rpc.html" },
+    { "label": "Elastic Load Balancing docs: Target groups for Application Load Balancers (gRPC protocol version, gRPC health check codes)", "url": "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-target-groups.html" },
+    { "label": "Amazon CloudFront docs: Using gRPC with CloudFront distributions", "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/distribution-using-grpc.html" },
+    { "label": "Amazon VPC Lattice docs: Target groups (HTTP/2 and gRPC protocol versions)", "url": "https://docs.aws.amazon.com/vpc-lattice/latest/ug/target-groups.html" },
+    { "label": "Cloud Run docs: Using gRPC", "url": "https://cloud.google.com/run/docs/triggering/grpc" },
+    { "label": "API Gateway (Google Cloud) docs: gRPC overview", "url": "https://cloud.google.com/api-gateway/docs/grpc-overview" },
+    { "label": "Cloud Endpoints docs: Endpoints for gRPC (HTTP/JSON transcoding)", "url": "https://cloud.google.com/endpoints/docs/grpc/about-grpc" },
+    { "label": "Google Cloud docs: Cloud Service Mesh overview (proxyless gRPC)", "url": "https://cloud.google.com/service-mesh/docs/overview" },
+    { "label": "Microsoft Learn: Configure gRPC on App Service", "url": "https://learn.microsoft.com/en-us/azure/app-service/configure-grpc" },
+    { "label": "Microsoft Learn: Ingress in Azure Container Apps (HTTP/2, gRPC)", "url": "https://learn.microsoft.com/en-us/azure/container-apps/ingress-overview" },
+    { "label": "Microsoft Learn: gRPC with Application Gateway for Containers", "url": "https://learn.microsoft.com/en-us/azure/application-gateway/for-containers/grpc" },
+    { "label": "Microsoft Learn: Import a gRPC API to Azure API Management (gateway support)", "url": "https://learn.microsoft.com/en-us/azure/api-management/grpc-api" }
+  ]
+}

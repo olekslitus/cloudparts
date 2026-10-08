@@ -1,0 +1,98 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Amazon Kinesis Data Streams",
+  "concepts": ["stream"],
+  "provider": "aws",
+  "vendor": "Amazon Web Services",
+  "license": "Proprietary",
+  "website": "https://aws.amazon.com/kinesis/data-streams/",
+  "summary": "AWS’s serverless event stream, split into shards that each keep records in order.",
+  "intro": [
+    "A Kinesis data stream is a set of shards. Each record normally carries a partition key; Kinesis hashes it with MD5 to choose a shard, so records with the same key stay in order. Since September 2026, on-demand streams can also spread records without a key when order doesn’t matter. In provisioned mode each shard accepts up to 1 MB/s or 1,000 records/s of writes and serves 2 MB/s of reads, and you split or merge shards to scale. In on-demand mode Kinesis manages the shards itself: a new stream starts at 4 MB/s of writes and keeps room for twice its peak of the previous 30 days.",
+    "Records stay for 24 hours by default, extendable to 365 days, and each can be up to 10 MiB. Ordinary consumers poll with `GetRecords` and share each shard’s 2 MB/s. Enhanced fan-out consumers get their own 2 MB/s per shard, pushed over HTTP/2 with about 70 ms of delay; a stream allows 20 of them, or 50 with On-demand Advantage in supported Regions. On-demand streams can also deliver records straight to S3, or into Apache Iceberg tables on Amazon S3 Tables, without a consumer application."
+  ],
+  "strengths": [
+    "Serverless: no brokers or disks, and on-demand mode removes shard planning",
+    "Consumers can re-read anything inside the retention window, up to 365 days",
+    "Plugs into Lambda, Amazon Data Firehose and Managed Service for Apache Flink with no glue code",
+    "Built-in delivery to S3 and Iceberg tables replaces a separate loader for the common case"
+  ],
+  "limits": [
+    "One partition key can’t exceed a single shard’s 1 MB/s or 1,000 records/s, so a hot key throttles",
+    "Polling consumers share 2 MB/s and 5 reads per second per shard; several consumers need enhanced fan-out, which costs extra",
+    "Its own API, not Kafka’s: Kafka clients and Connect don’t work against it (Amazon MSK is AWS’s Kafka)",
+    "Provisioned shards bill by the hour even when idle, and On-demand Standard adds a fixed charge per stream"
+  ],
+  "worksWith": [
+    { "id": "s3", "how": "can deliver records directly to" },
+    { "id": "iceberg", "how": "can write streaming tables in" },
+    { "id": "dynamodb", "how": "keeps consumer checkpoints (KCL) in" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Create an on-demand stream, write a record and read the shard",
+    "source": [
+      "aws kinesis create-stream --stream-name clicks \\",
+      "  --stream-mode-details StreamMode=ON_DEMAND",
+      "",
+      "aws kinesis put-record --stream-name clicks --partition-key user-42 \\",
+      "  --data '{\"page\": \"/pricing\"}' --cli-binary-format raw-in-base64-out",
+      "",
+      "ITERATOR=$(aws kinesis get-shard-iterator --stream-name clicks \\",
+      "  --shard-id shardId-000000000000 --shard-iterator-type TRIM_HORIZON \\",
+      "  --query ShardIterator --output text)",
+      "aws kinesis get-records --shard-iterator \"$ITERATOR\" --limit 100",
+      "",
+      "# keep a week of history instead of the default 24 hours",
+      "aws kinesis increase-stream-retention-period --stream-name clicks --retention-period-hours 168"
+    ]
+  },
+  "history": {
+    "story": [
+      "In 2013 the big-data tools on AWS, such as Hadoop and data warehouses, worked in batches. Companies that needed to act on clickstreams, logs or trades within seconds assembled their own systems from open-source parts, which AWS described as complex, hard to operate and unreliable. AWS’s Terry Hanold put the problem this way: database and MapReduce technologies “are fundamentally batch-based, and struggle with enabling real-time decisions” on a stream of data that never ends.",
+      "AWS announced Amazon Kinesis at re:Invent on November 14, 2013 and opened it to all customers that December. Like Apache Kafka, which LinkedIn had open-sourced in 2011, it was a log split into ordered pieces, here called shards, that consumers read at their own pace. Unlike Kafka, it was a managed service with its own API: you chose a number of shards, each taking up to 1 MB/s of writes, and records were kept for 24 hours.",
+      "Kinesis grew into a family, starting with Firehose in 2015, and the original service became Kinesis Data Streams. Later releases removed most of its early limits: retention of up to 365 days, an on-demand mode with no shards to plan, and records of up to 10 MiB."
+    ],
+    "choices": [
+      { "choice": "Shards as the unit of capacity and price", "why": "Each shard has fixed limits, so throughput, cost and ordering are easy to reason about. The cost was planning: until on-demand mode in 2021, you split and merged shards yourself." },
+      { "choice": "A partition key hashed to pick the shard", "why": "Hashing the key with MD5 spreads records across shards while keeping all records for one key, such as one user, in order on one shard." },
+      { "choice": "Reading doesn’t remove records", "why": "Records stayed for 24 hours whoever had read them, so several applications could process the same stream and a crashed consumer could pick up where it left off." },
+      { "choice": "Coordination in a client library", "why": "The Kinesis Client Library “handles the details of load balancing, coordination, and error handling” on the consumer side, which kept the service itself simple." }
+    ],
+    "timeline": [
+      { "year": "2013", "text": "Announced at re:Invent in November; open to all customers in December" },
+      { "year": "2015", "text": "Firehose launches; the original is renamed Kinesis Streams" },
+      { "year": "2018", "text": "Enhanced fan-out gives each consumer its own read throughput" },
+      { "year": "2020", "text": "Retention can be extended to 365 days" },
+      { "year": "2021", "text": "On-demand mode removes shard planning" },
+      { "year": "2025", "text": "Records of up to 10 MiB; On-demand Advantage mode" }
+    ],
+    "sources": [
+      { "label": "AWS News Blog: Amazon Kinesis, real-time processing of streaming big data (Nov 2013)", "url": "https://aws.amazon.com/blogs/aws/amazon-kinesis-real-time-processing-of-streamed-data/" },
+      { "label": "Amazon press release: AWS announces Amazon Kinesis (Nov 2013)", "url": "https://press.aboutamazon.com/2013/11/amazon-web-services-announces-amazon-kinesis" },
+      { "label": "AWS What’s New: Amazon Kinesis available for all customers (Dec 2013)", "url": "https://aws.amazon.com/about-aws/whats-new/2013/12/16/amazon-kinesis-available-for-all-customers/" },
+      { "label": "AWS What’s New: Introducing Amazon Kinesis Firehose (Oct 2015)", "url": "https://aws.amazon.com/about-aws/whats-new/2015/10/introducing-amazon-kinesis-firehose/" },
+      { "label": "AWS What’s New: Kinesis Data Streams adds enhanced fan-out and HTTP/2 (Aug 2018)", "url": "https://aws.amazon.com/about-aws/whats-new/2018/08/stream_data_65_faster_with_5x_higher_fan_out_using_new_kinesis_data_streams_features/" },
+      { "label": "AWS What’s New: Kinesis Data Streams retention of up to one year (Nov 2020)", "url": "https://aws.amazon.com/about-aws/whats-new/2020/11/amazon-kinesis-data-streams-enables-data-stream-retention/" },
+      { "label": "AWS What’s New: Announcing Kinesis Data Streams On-Demand (Nov 2021)", "url": "https://aws.amazon.com/about-aws/whats-new/2021/11/amazon-kinesis-data-streams-on-demand/" },
+      { "label": "AWS What’s New: Kinesis Data Streams supports 10x larger record sizes (Oct 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/10/amazon-kinesis-data-streams-10x-larger-record-sizes/" },
+      { "label": "AWS What’s New: Kinesis Data Streams launches On-demand Advantage mode (Nov 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/11/amazon-kinesis-data-streams-ondemand-advantage/" }
+    ]
+  },
+  "sources": [
+    { "label": "AWS docs: Kinesis Data Streams quotas and limits", "url": "https://docs.aws.amazon.com/streams/latest/dev/service-sizes-and-limits.html" },
+    { "label": "AWS docs: Kinesis Data Streams terminology and concepts", "url": "https://docs.aws.amazon.com/streams/latest/dev/key-concepts.html" },
+    { "label": "AWS docs: Choose the right mode to stream in", "url": "https://docs.aws.amazon.com/streams/latest/dev/how-do-i-size-a-stream.html" },
+    { "label": "AWS docs: Enhanced fan-out consumers", "url": "https://docs.aws.amazon.com/streams/latest/dev/enhanced-consumers.html" },
+    { "label": "AWS docs: Streaming tables and S3 delivery", "url": "https://docs.aws.amazon.com/streams/latest/dev/data-delivery.html" },
+    { "label": "AWS: Kinesis Data Streams pricing", "url": "https://aws.amazon.com/kinesis/data-streams/pricing/" },
+    { "label": "AWS docs: KCL concepts (DynamoDB lease table, checkpointing)", "url": "https://docs.aws.amazon.com/streams/latest/dev/kcl-concepts.html" },
+    { "label": "AWS docs: Using Lambda with Kinesis Data Streams", "url": "https://docs.aws.amazon.com/lambda/latest/dg/with-kinesis.html" },
+    { "label": "AWS docs: Amazon Data Firehose, reading from Kinesis Data Streams", "url": "https://docs.aws.amazon.com/firehose/latest/dev/writing-with-kinesis-streams.html" },
+    { "label": "AWS docs: Managed Service for Apache Flink streaming sources", "url": "https://docs.aws.amazon.com/managed-flink/latest/java/how-sources.html" },
+    { "label": "AWS docs: Kinesis Data Streams API reference", "url": "https://docs.aws.amazon.com/kinesis/latest/APIReference/Welcome.html" },
+    { "label": "AWS docs: What is Amazon MSK?", "url": "https://docs.aws.amazon.com/msk/latest/developerguide/what-is-msk.html" },
+    { "label": "AWS What’s New: Kinesis Data Streams service-managed partition keys (Sep 2026)", "url": "https://aws.amazon.com/about-aws/whats-new/2026/09/kinesis/service-managed-partition-keys/" }
+  ],
+  "checked": "2026-10-05"
+}

@@ -1,0 +1,196 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Actor model",
+  "category": "compute",
+  "order": 60,
+  "summary": "Many small stateful objects, each with a mailbox, that handle one message at a time and are spread across a cluster by their ID.",
+  "howItWorks": "An actor is a small object that owns some private state and a mailbox. Nothing outside can read or change that state; other code can only send the actor a message, which lands in its mailbox. The runtime takes one message at a time from the mailbox and runs the actor’s handler on it, so the code inside reads like plain sequential code with no locks. Concurrency comes from having many actors: an idle actor is just an object in memory, so a single process can hold millions of them on a small pool of threads. While handling a message an actor can update its state, send messages, reply, or create child actors. Actors form a tree, and a parent supervises its children: when one fails, the parent restarts it with fresh state, stops it, or lets it carry on, instead of every caller handling the error. An actor reference works the same whether the actor is in the same process or on another machine (location transparency), so the runtime can spread actors over a cluster. With sharding, each actor has an ID such as `cart-4812`; the runtime hashes the ID to a shard, runs that shard on exactly one node, routes every message for that ID there and moves shards when nodes join or leave. Virtual actors, introduced by Orleans and also used by Service Fabric and Dapr, go further: an actor always exists logically, is activated on its first message, is removed from memory when idle and keeps its state in a database. Messages between actors are usually delivered at most once, in order per sender, so state that must survive a crash is persisted (often as events) and important requests are retried. Compared with a queue, which hands each job to any free worker, an actor system routes each message to the one object that owns that ID’s state.",
+  "analogy": "An office where everyone has an in-tray. You never walk over and edit a colleague’s files; you drop a note in their tray. Each person works through their tray one note at a time, can pass notes on or bring in a helper, and a team lead replaces anyone who falls ill. The notes reach the right desk even after people move to another floor.",
+  "useWhen": [
+    "Many independent things with their own changing state: shopping carts, game sessions, chat rooms, devices (“digital twins”)",
+    "State that should have exactly one writer at a time, without database locks or optimistic-retry loops",
+    "Hot state kept in memory for low latency, with changes persisted in the background as events or snapshots",
+    "Long-lived sessions or connections, such as WebSockets, that need a single home that can move when a node goes away"
+  ],
+  "avoidWhen": [
+    "Stateless request handling; ordinary services or serverless functions are simpler",
+    "Queries across many entities (“all carts over $100”); those need a database or a projection, not thousands of actor calls",
+    "Simple background jobs where any worker will do; a queue and a worker pool is easier to run",
+    "Teams without time to learn asynchronous messaging: at-most-once delivery, message versioning, cluster membership and split-brain handling are real costs, and the runtime becomes a core dependency"
+  ],
+  "example": "A shop models each cart as an actor. The web tier sends “add sku-9” for `cart-4812` to the cluster; the ID hashes to shard 17, which lives on node B. If the cart isn’t in memory, node B starts it and replays its stored events, then applies the command, persists a new event and replies in a few milliseconds. Two fast clicks from the same customer are handled one after the other, never at the same time. When node B is drained for an upgrade, its shards move to nodes A and C, and the next message for `cart-4812` restarts the cart there from its events. Carts that see no messages for a few minutes are removed from memory.",
+  "providers": {
+    "aws": "No managed actor runtime. Teams run Akka, Apache Pekko, Orleans or Dapr on their own compute such as EKS; Orleans and Akka both have plugins that keep actor state in DynamoDB, Orleans can track cluster membership there too, and Akka’s own managed service runs in AWS regions",
+    "gcp": "No managed actor runtime. Teams run Akka, Apache Pekko, Orleans or Dapr on GKE or VMs; Akka’s managed Serverless service runs in Google Cloud regions too, and its BYOC option deploys into your own Google Cloud VPC",
+    "azure": "Service Fabric Reliable Actors (virtual actors with single-threaded turns); Dapr actors in Azure Container Apps (GA, though Microsoft notes Dapr’s actor SDK packages aren’t compatible yet); Orleans, Microsoft’s own open-source virtual-actor framework, runs on AKS, App Service or Container Apps and stores state in Azure Storage or Cosmos DB",
+    "oss": "Erlang/OTP and Elixir (processes and supervisors on the BEAM VM); Apache Pekko (JVM, Apache 2.0) and Akka (JVM, BSL since 2.7); Microsoft Orleans (.NET, virtual actors, MIT); Proto.Actor (.NET and Go); Dapr actors (a sidecar, any language); Ray actors (Python). Cloudflare Durable Objects is a hosted take on the same idea: one single-threaded object per name, with its own storage"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "# pip install ray   (Ray actors: one Python object per cart; its calls run one at a time)",
+      "import ray",
+      "",
+      "ray.init()",
+      "",
+      "@ray.remote(max_restarts=3)  # restarted if its process dies; in-memory state starts over",
+      "class Cart:",
+      "    def __init__(self, cart_id: str):",
+      "        self.cart_id = cart_id",
+      "        self.items: dict[str, int] = {}",
+      "",
+      "    def add(self, sku: str, qty: int = 1) -> dict[str, int]:",
+      "        # no lock needed: calls to this actor run serially, in the order they were sent",
+      "        self.items[sku] = self.items.get(sku, 0) + qty",
+      "        return dict(self.items)",
+      "",
+      "def cart(cart_id: str):",
+      "    # address the actor by name: created on first use, reused afterwards",
+      "    return Cart.options(name=f\"cart-{cart_id}\", get_if_exists=True).remote(cart_id)",
+      "",
+      "c = cart(\"4812\")",
+      "refs = [c.add.remote(\"sku-1\"), c.add.remote(\"sku-2\"), c.add.remote(\"sku-1\")]  # sent at once",
+      "print(ray.get(refs[-1]))                          # {'sku-1': 2, 'sku-2': 1}",
+      "print(ray.get(cart(\"4812\").add.remote(\"sku-3\")))  # the same actor, found by name"
+    ]
+  },
+  "related": ["serverless", "workflow", "queue", "containers", "oop", "multithreading", "event-loop"],
+  "diagram": {
+    "caption": "Each request carries a cart ID (its colour). The router hashes the ID, so every message for one cart reaches the same actor, which handles one at a time while the rest wait in its mailbox. Now and then cart-77 crashes; its supervisor restarts it, and messages that arrive meanwhile are lost unless the sender retries.",
+    "h": 270,
+    "zones": [
+      { "x": 485, "y": 18, "w": 235, "h": 160, "label": "Node A" },
+      { "x": 485, "y": 184, "w": 235, "h": 74, "label": "Node B" }
+    ],
+    "nodes": [
+      {
+        "id": "web",
+        "x": 95,
+        "y": 135,
+        "label": "Web tier",
+        "sub": "add item to cart",
+        "emit": { "every": 330, "jitter": 0.4, "req": true, "colorByKey": 3 },
+        "out": ["router"]
+      },
+      {
+        "id": "router",
+        "x": 310,
+        "y": 135,
+        "label": "Shard router",
+        "sub": "hash(cart ID) → node",
+        "route": "hash",
+        "out": ["a1", "a2", "a3"]
+      },
+      {
+        "id": "a1",
+        "x": 602,
+        "y": 62,
+        "kind": "pool",
+        "label": "cart-4812",
+        "sub": "mailbox · one at a time",
+        "min": 1,
+        "max": 1,
+        "work": 420,
+        "mode": "reply",
+        "delay": 10
+      },
+      {
+        "id": "a2",
+        "x": 602,
+        "y": 138,
+        "kind": "pool",
+        "label": "cart-77",
+        "sub": "mailbox · one at a time",
+        "min": 1,
+        "max": 1,
+        "work": 420,
+        "mode": "reply",
+        "delay": 10
+      },
+      {
+        "id": "a3",
+        "x": 602,
+        "y": 226,
+        "kind": "pool",
+        "label": "cart-305",
+        "sub": "mailbox · one at a time",
+        "min": 1,
+        "max": 1,
+        "work": 420,
+        "mode": "reply",
+        "delay": 10
+      }
+    ],
+    "events": [
+      { "node": "a2", "at": 5000, "every": 13000, "dur": 1800, "text": "crashed", "back": "restarted by supervisor" }
+    ]
+  },
+  "history": {
+    "story": [
+      "In 1973 Carl Hewitt, Peter Bishop and Richard Steiger proposed building artificial-intelligence programs from a single kind of object, the actor. Numbers, procedures and data structures would all be active agents that do nothing except react to messages, and the formalism had no need for goto, interrupts or semaphores.",
+      "Erlang reached the same shape from practical needs. From 1986 Joe Armstrong and colleagues at the Ericsson Computer Science Laboratory looked for a better way to program telephone exchanges, which juggle huge numbers of calls at once and must keep running while faulty parts are fixed. Erlang processes are lightweight, share nothing and talk by asynchronous messages, and the OTP libraries added supervision trees that restart failed processes. Armstrong’s history of the language never mentions Hewitt’s actors. Ericsson built its AXD301 switch this way and released Erlang as open source in December 1998.",
+      "Akka brought Erlang-style actors and supervision to the JVM in 2009. In 2014 Microsoft Research described Orleans, whose virtual actors are activated on demand and never explicitly created or destroyed, an idea Service Fabric and Dapr also use. Cloudflare’s Durable Objects (2020) sell the same model as a hosted service."
+    ],
+    "choices": [
+      {
+        "choice": "Share nothing; communicate only by messages",
+        "why": "Shared memory guarded by locks is hard to get right and doesn’t stretch across machines. A message works the same whether the receiver is in the same process or on another server, which is what lets an actor system spread over a cluster."
+      },
+      {
+        "choice": "Handle one message at a time",
+        "why": "Each actor’s code can be written as simple sequential code that updates its own state without locks. Parallelism comes from running many actors at once, not from threads inside one."
+      },
+      {
+        "choice": "Let it crash, and let a supervisor restart it",
+        "why": "In a telephone exchange some errors are inevitable. Erlang/OTP arranged processes in supervision trees, where each supervisor monitors its children and restarts them on failure, so error handling lives in one place and the system keeps running."
+      },
+      {
+        "choice": "Virtual actors that always exist",
+        "why": "The Orleans team found that popular actor platforms still left developers to handle placement, activation and failure themselves. Making actors logical entities that the runtime activates, places and removes took those problems off the developer."
+      }
+    ],
+    "timeline": [
+      { "year": "1973", "text": "Hewitt, Bishop and Steiger propose the actor formalism at IJCAI" },
+      { "year": "1986", "text": "Work on Erlang begins at the Ericsson Computer Science Laboratory" },
+      { "year": "1998", "text": "Ericsson announces the AXD301 switch; Open Source Erlang released in December" },
+      { "year": "2009", "text": "Akka 0.5 brings Erlang-style actors to the JVM" },
+      { "year": "2014", "text": "Microsoft Research describes Orleans and its virtual actors" },
+      { "year": "2020", "text": "Cloudflare launches Durable Objects" },
+      { "year": "2022", "text": "Akka moves to the BSL; the Apache Pekko fork enters incubation" }
+    ],
+    "sources": [
+      { "label": "Hewitt, Bishop and Steiger: A Universal Modular ACTOR Formalism for Artificial Intelligence (IJCAI 1973)", "url": "https://www.ijcai.org/Proceedings/73/Papers/027B.pdf" },
+      { "label": "Joe Armstrong: A History of Erlang (HOPL III, June 2007)", "url": "https://dl.acm.org/doi/10.1145/1238844.1238850" },
+      { "label": "Erlang/OTP: About (Ericsson Computer Science Laboratory, OTP)", "url": "https://www.erlang.org/about" },
+      { "label": "akka/akka-core on GitHub: tag v0.5 (July 2009)", "url": "https://github.com/akka/akka-core/releases/tag/v0.5" },
+      { "label": "Microsoft Research: Orleans, distributed virtual actors for programmability and scalability (MSR-TR-2014-41, March 2014)", "url": "https://www.microsoft.com/en-us/research/publication/orleans-distributed-virtual-actors-for-programmability-and-scalability/" },
+      { "label": "Cloudflare Blog: Introducing Workers Durable Objects (Sep 2020)", "url": "https://blog.cloudflare.com/introducing-workers-durable-objects/" },
+      { "label": "Akka blog: Why we are changing the license for Akka (Jonas Bonér, Sep 2022)", "url": "https://akka.io/blog/why-we-are-changing-the-license-for-akka" },
+      { "label": "Apache Incubator: Pekko project status (entered incubation October 2022)", "url": "https://incubator.apache.org/projects/pekko.html" }
+    ]
+  },
+  "sources": [
+    { "label": "Akka docs: What problems does the actor model solve? (mailboxes, behavior)", "url": "https://doc.akka.io/libraries/akka-core/current/typed/guide/actors-intro.html" },
+    { "label": "Akka docs: Message delivery reliability (at-most-once, ordering per sender–receiver pair)", "url": "https://doc.akka.io/libraries/akka-core/current/general/message-delivery-reliability.html" },
+    { "label": "Akka docs: Cluster Sharding (entities by ID, one place in the cluster)", "url": "https://doc.akka.io/libraries/akka-core/current/typed/cluster-sharding.html" },
+    { "label": "Akka docs: Fault tolerance (supervision, restart)", "url": "https://doc.akka.io/libraries/akka-core/current/typed/fault-tolerance.html" },
+    { "label": "Akka docs: Akka Persistence DynamoDB", "url": "https://doc.akka.io/libraries/akka-persistence-dynamodb/current/" },
+    { "label": "Akka blog: Akka 3 FAQ (Serverless regions on AWS and Google Cloud, BYOC)", "url": "https://akka.io/blog/akka-3-frequently-asked-questions" },
+    { "label": "Erlang/OTP docs: Design principles (supervision trees)", "url": "https://www.erlang.org/doc/system/design_principles.html" },
+    { "label": "Elixir: home page (runs on the Erlang VM)", "url": "https://elixir-lang.org/" },
+    { "label": "Microsoft Learn: Orleans overview (virtual actors, grains, silos, hosting options)", "url": "https://learn.microsoft.com/en-us/dotnet/orleans/overview" },
+    { "label": "Microsoft Learn: Orleans grain persistence (Azure Storage, Cosmos DB, DynamoDB providers)", "url": "https://learn.microsoft.com/en-us/dotnet/orleans/grains/grain-persistence/" },
+    { "label": "Microsoft Learn: Orleans cluster management (DynamoDB membership table)", "url": "https://learn.microsoft.com/en-us/dotnet/orleans/implementation/cluster-management" },
+    { "label": "dotnet/orleans on GitHub (MIT licence)", "url": "https://github.com/dotnet/orleans" },
+    { "label": "Microsoft Learn: Introduction to Service Fabric Reliable Actors", "url": "https://learn.microsoft.com/en-us/azure/service-fabric/service-fabric-reliable-actors-introduction" },
+    { "label": "Dapr docs: Actors overview (virtual actors, placement, turn-based access)", "url": "https://docs.dapr.io/developing-applications/building-blocks/actors/actors-overview/" },
+    { "label": "Microsoft Learn: Dapr in Azure Container Apps (actors GA, SDK compatibility note)", "url": "https://learn.microsoft.com/en-us/azure/container-apps/dapr-overview" },
+    { "label": "Ray docs: Actors (methods on one actor run serially)", "url": "https://docs.ray.io/en/latest/ray-core/actors.html" },
+    { "label": "Ray docs: Named actors (get_if_exists)", "url": "https://docs.ray.io/en/latest/ray-core/actors/named-actors.html" },
+    { "label": "Ray docs: Actor fault tolerance (max_restarts)", "url": "https://docs.ray.io/en/latest/ray-core/fault_tolerance/actors.html" },
+    { "label": "Proto.Actor for .NET on GitHub", "url": "https://github.com/asynkron/protoactor-dotnet" },
+    { "label": "Proto.Actor for Go on GitHub", "url": "https://github.com/asynkron/protoactor-go" },
+    { "label": "Cloudflare docs: What are Durable Objects? (actor programming model, single-threaded, private storage)", "url": "https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/" },
+    { "label": "Apache Pekko: home page", "url": "https://pekko.apache.org/" }
+  ]
+}

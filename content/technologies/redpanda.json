@@ -1,0 +1,143 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Redpanda",
+  "concepts": ["stream", "pubsub"],
+  "provider": "vendor",
+  "vendor": "Redpanda Data",
+  "license": "BSL 1.1 (each release becomes Apache 2.0 after four years); enterprise features under the Redpanda Community License",
+  "website": "https://www.redpanda.com/",
+  "repo": "https://github.com/redpanda-data/redpanda",
+  "summary": "A Kafka-compatible streaming broker rewritten in C++ as one binary, with no JVM and no ZooKeeper.",
+  "intro": [
+    "Redpanda is a single C++ binary that speaks Kafka’s wire protocol, so Kafka clients from version 0.11 on connect to it unchanged. It is built on the Seastar framework: each thread is pinned to one CPU core, and threads pass messages to each other instead of sharing memory behind locks. Every partition is its own Raft group, with one leader and its followers; a write counts as committed once a majority of replicas have it in their log. Cluster metadata, such as topics and users, lives in a controller partition that all brokers replicate with Raft, so there is no ZooKeeper or separate controller to run. The same binary also serves a Schema Registry and an HTTP proxy. For production Redpanda asks for at least two physical cores, 2 GB of memory per core, and local NVMe disks with XFS or ext4.",
+    "The Community Edition is free under the Business Source License 1.1: you may run it for anything except selling Redpanda itself as a streaming or queuing service, and each release turns into Apache 2.0 four years after it ships. Several features need a paid enterprise licence (new clusters get a 30-day trial): Tiered Storage, which moves older log segments to S3, GCS or Azure storage; Iceberg topics, which also write a topic’s records as an Apache Iceberg table in Parquet; Cloud Topics (since v26.1), which skip local disks and write straight to object storage at 1 to 2 seconds of end-to-end latency; plus role-based access control, audit logs and continuous data balancing. Redpanda Cloud runs it for you as Serverless (multi-tenant, billed on uptime, partitions, data in and out, and storage), Dedicated, or BYOC in your own cloud account."
+  ],
+  "strengths": [
+    "Kafka clients and tools work against it, and Redpanda tests the Java client, librdkafka, franz-go, Sarama, KafkaJS and others",
+    "One binary with Raft built in: no JVM, ZooKeeper, KRaft controllers or separate Schema Registry to deploy",
+    "The thread-per-core design is built to get high throughput and low tail latency out of fewer machines",
+    "Per-topic storage choices in one cluster: local disks, tiered, Iceberg tables, or diskless Cloud Topics for cheap, latency-tolerant data",
+    "BYOC clusters run in your own AWS, Azure or Google Cloud account, managed by Redpanda"
+  ],
+  "limits": [
+    "Source-available, not open source: the BSL forbids offering Redpanda as a commercial streaming service, and code only becomes Apache 2.0 four years after release",
+    "Tiered Storage, Iceberg topics, Cloud Topics, RBAC, OIDC login and continuous balancing need an enterprise licence; once the 30-day trial ends they can’t be turned on without one",
+    "A few Kafka gaps: no request-rate quotas, one SCRAM mechanism per user, and no server-side KIP-890, so Kafka 4.x clients fall back to the older transaction protocol",
+    "Expects tuned hardware: at least two physical cores and 2 GB of memory per core, local NVMe disks with XFS or ext4, and 10 GigE networking",
+    "Enterprise and BYOC prices are quote-only on an annual commitment, and Serverless rates appear only in a price estimator"
+  ],
+  "worksWith": [
+    { "id": "kafka", "how": "speaks the client protocol of" },
+    { "id": "s3", "how": "offloads older log segments to" },
+    { "id": "gcs", "how": "can offload log segments to" },
+    { "id": "azure-blob", "how": "can offload log segments to" },
+    { "id": "iceberg", "how": "can write topics as tables in" },
+    { "id": "redpanda-connect", "how": "runs managed pipelines with" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Start a dev cluster with rpk, produce keyed records and read them as a group",
+    "source": [
+      "# three brokers in Docker, plus an rpk profile pointing at them",
+      "rpk container start -n 3",
+      "",
+      "rpk topic create orders -p 6 -r 3",
+      "echo '{\"total\": 99}' | rpk topic produce orders -k customer-42",
+      "",
+      "rpk topic consume orders -g billing -o start",
+      "rpk group describe billing",
+      "",
+      "# with object storage and an enterprise licence configured:",
+      "rpk topic create clicks -c redpanda.storage.mode=tiered   # old segments go to object storage",
+      "rpk topic create logs -c redpanda.storage.mode=cloud      # Cloud Topic: no local disk"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Apache Kafka, Redpanda and WarpStream",
+      "intro": "All three speak the Kafka protocol, so the same clients connect to each. They differ in what a broker is, where the records sit, and what you trade for cost.",
+      "columns": ["Apache Kafka", "Redpanda", "WarpStream"],
+      "rows": [
+        { "label": "What you run", "values": ["Java brokers (Java 17+)", "One C++ binary per broker, one thread per core", "Stateless Go Agents; WarpStream hosts the control plane"] },
+        { "label": "Cluster metadata", "values": ["KRaft controllers, a Raft log; no ZooKeeper since 4.0", "A controller partition replicated by Raft across all brokers", "WarpStream’s cloud keeps which file holds which offsets"] },
+        { "label": "Where records live", "values": ["Broker disks, copied to follower brokers; tiered storage optional", "Broker disks, one Raft group per partition; Tiered Storage and Cloud Topics are enterprise options", "Only in your object storage bucket; Agents have no disks"] },
+        { "label": "Latency", "values": ["Set by disks and broker-to-broker replication; no object store in the write path", "Same model as Kafka, with Redpanda claiming up to 10x lower p99; Cloud Topics: 1 to 2 s end to end", "Default p99: 500 ms to produce, 900 ms end to end; under 50 ms to produce with S3 Express and lightning topics"] },
+        { "label": "Cross-zone traffic", "values": ["Replication crosses zones; follower fetching can keep reads local", "Same; follower fetching and leader pinning reduce it, Cloud Topics replicate through object storage", "None for produce or fetch: clients use Agents in their own zone"] },
+        { "label": "Adding capacity", "values": ["Add brokers, then move partitions with the reassignment tool", "Add brokers; continuous data balancing needs an enterprise licence", "Add or remove Agents; no data moves"] },
+        { "label": "Licence", "values": ["Apache 2.0", "BSL 1.1, plus a paid licence for enterprise features", "Proprietary"] },
+        { "label": "Managed by someone else", "values": ["Amazon MSK, Confluent Cloud, Azure Event Hubs (protocol) and others", "Redpanda Cloud: Serverless, Dedicated, BYOC", "WarpStream BYOC (Agents in your account) or Serverless"] }
+      ],
+      "notes": ["Latency figures are each vendor’s own published numbers, checked 2026-10-05."]
+    },
+    {
+      "type": "cards",
+      "title": "Ways to run Redpanda",
+      "items": [
+        { "name": "Community Edition", "tag": "self-managed, free", "text": "The BSL-licensed binary on your own machines or Kubernetes. Everything except the enterprise features; you handle upgrades, disks and capacity." },
+        { "name": "Enterprise Edition", "tag": "self-managed, licence key", "text": "The same binary with a licence key that unlocks Tiered Storage, Iceberg topics, Cloud Topics, RBAC, audit logs and continuous balancing." },
+        { "name": "Serverless", "tag": "Redpanda’s cloud", "text": "Multi-tenant on AWS (GCP in beta), up to 100 MB/s of writes and 5,000 partitions, 99.9% SLA. Pay as you go on uptime, partitions, data in and out, and storage; new accounts get $100 of credit for 30 days." },
+        { "name": "Dedicated", "tag": "Redpanda’s cloud", "text": "Single-tenant clusters on AWS, Azure or Google Cloud across several zones, up to 400 MB/s of writes, 99.99% SLA." },
+        { "name": "BYOC", "tag": "your cloud account", "text": "Redpanda runs the cluster inside your AWS, Azure or Google Cloud account, up to 2 GB/s of writes, so data stays in your network. Sold on an annual commitment." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "By 2019 Kafka was the standard log for event streams, but running it meant a JVM cluster plus ZooKeeper. Alexander Gallego, who had earlier built the stream processor concord.io, wrote down a wish list for something better: “As easy to run as nginx. No dependencies. Ability to flush to disk with acks=-1. Leverage a huge and active ecosystem. It must be fast, really fast.” He wrote the first line of code on 7 January 2019. Kafka, he later argued, was designed when storage was expensive, and hardware had changed since.",
+      "His company, Vectorized, released Redpanda in November 2020 as source-available under the BSL. The goal was “to deter cloud providers from offering our work as a service”, while letting almost everyone else use it freely. Because it spoke Kafka’s protocol, existing clients and tools worked on day one. In 2022 the company renamed itself Redpanda Data and launched a managed cloud.",
+      "Redpanda has since grown from a broker into a platform: tiered storage, a connector framework through its 2024 purchase of Benthos (now Redpanda Connect), topics that double as Iceberg tables, and in 2026 diskless Cloud Topics."
+    ],
+    "choices": [
+      { "choice": "Kafka’s wire protocol instead of a new API", "why": "Gallego wanted to “leverage a huge and active ecosystem”. Speaking Kafka’s protocol meant every existing client, connector and tool worked without changes." },
+      { "choice": "C++ on Seastar, one thread per core", "why": "Pinning each thread to a core and passing messages between threads avoids context switches and expensive locks. Gallego’s view was that Kafka had been designed for slower, costlier storage than today’s." },
+      { "choice": "Raft everywhere, including metadata", "why": "One consensus algorithm for every partition and for the controller removed the need for ZooKeeper and let Redpanda ship as a single binary with no dependencies." },
+      { "choice": "Source-available under the BSL", "why": "The licence lets anyone run it except as a competing hosted service, and each release becomes Apache 2.0 after four years, a model Redpanda credits MariaDB and CockroachDB with pioneering." }
+    ],
+    "timeline": [
+      { "year": "2019", "text": "Alexander Gallego writes the first line of code in January" },
+      { "year": "2020", "text": "Released as source-available under the BSL in November" },
+      { "year": "2021", "text": "Tiered Storage arrives in December" },
+      { "year": "2022", "text": "Vectorized becomes Redpanda Data; Redpanda Cloud launches in November" },
+      { "year": "2024", "text": "Buys Benthos and relaunches it as Redpanda Connect" },
+      { "year": "2025", "text": "Iceberg topics become generally available in 25.1" },
+      { "year": "2026", "text": "Version 26.1 adds Cloud Topics, written straight to object storage" }
+    ],
+    "sources": [
+      { "label": "Alexander Gallego (Redpanda): Redpanda is now free and source available (Nov 2020)", "url": "https://www.redpanda.com/blog/open-source" },
+      { "label": "Alexander Gallego (Redpanda): Seed and Series A announcement (Jan 2021)", "url": "https://www.redpanda.com/blog/redpanda-announces-series-a-lightspeed-venture-partners-gv" },
+      { "label": "Redpanda licenses README (BSL for the core, RCL for enterprise features; credits MariaDB and CockroachDB)", "url": "https://github.com/redpanda-data/redpanda/blob/dev/licenses/README.md" },
+      { "label": "GitHub commit: licensor changed from Vectorized, Inc. to Redpanda Data, Inc. (Mar 2022)", "url": "https://github.com/redpanda-data/redpanda/commit/312733e559ce046861ce018cd3ccde9071e9a383" },
+      { "label": "Redpanda blog: Bringing Tiered Storage, Wasm data transforms and Protobuf to Redpanda (Dec 2021)", "url": "https://www.redpanda.com/blog/introducing-tiered-storage-protobuf-support-wasm-data-transforms" },
+      { "label": "Redpanda blog: Redpanda Cloud brings the Kafka API to the cloud (Nov 2022)", "url": "https://www.redpanda.com/blog/introducing-redpanda-cloud-for-kafka" },
+      { "label": "Redpanda blog: Introducing Redpanda Connect (May 2024)", "url": "https://www.redpanda.com/blog/redpanda-connect" },
+      { "label": "Redpanda blog: Redpanda 25.1, Iceberg Topics now generally available (Apr 2025)", "url": "https://www.redpanda.com/blog/redpanda-25-1-iceberg-topics-ga" },
+      { "label": "Redpanda blog: Redpanda 26.1 and Cloud Topics (Mar 2026)", "url": "https://www.redpanda.com/blog/26-1-r1-cloud-topics" }
+    ]
+  },
+  "sources": [
+    { "label": "Redpanda docs: Architecture (Raft per partition, controller partition, thread-per-core with Seastar)", "url": "https://docs.redpanda.com/streaming/current/get-started/architecture/" },
+    { "label": "Redpanda docs: Introduction to Redpanda (single binary, up to 10x lower p99 claim)", "url": "https://docs.redpanda.com/streaming/current/get-started/intro-to-events/" },
+    { "label": "Redpanda docs: Kafka compatibility (validated clients and exceptions)", "url": "https://docs.redpanda.com/streaming/current/develop/kafka-clients/" },
+    { "label": "Redpanda docs: Licenses and enterprise features", "url": "https://docs.redpanda.com/streaming/current/get-started/licensing/overview/" },
+    { "label": "Redpanda Business Source License 1.1 (additional use grant, change date, Apache 2.0)", "url": "https://github.com/redpanda-data/redpanda/blob/dev/licenses/bsl.md" },
+    { "label": "Redpanda docs: Tiered Storage (S3, GCS, Azure Blob Storage and ADLS)", "url": "https://docs.redpanda.com/streaming/current/manage/tiered-storage/" },
+    { "label": "Redpanda docs: Manage Cloud Topics (latency, enterprise licence)", "url": "https://docs.redpanda.com/streaming/current/develop/manage-topics/cloud-topics/" },
+    { "label": "Redpanda docs: About Iceberg topics", "url": "https://docs.redpanda.com/streaming/current/manage/iceberg/about-iceberg-topics/" },
+    { "label": "Redpanda docs: Production requirements (cores, memory, file system, NVMe, network)", "url": "https://docs.redpanda.com/streaming/current/deploy/redpanda/manual/production/requirements/" },
+    { "label": "Redpanda Cloud docs: Overview (Serverless, Dedicated, BYOC comparison)", "url": "https://docs.redpanda.com/cloud-data-platform/get-started/cloud-overview/" },
+    { "label": "Redpanda Cloud docs: Billing (Serverless metrics)", "url": "https://docs.redpanda.com/cloud-data-platform/billing/billing/" },
+    { "label": "Redpanda pricing (Serverless pay as you go; BYOC on annual commitment)", "url": "https://www.redpanda.com/pricing" },
+    { "label": "rpk reference: rpk container start", "url": "https://docs.redpanda.com/streaming/current/reference/rpk/rpk-container/rpk-container-start/" },
+    { "label": "rpk reference: rpk topic create", "url": "https://docs.redpanda.com/streaming/current/reference/rpk/rpk-topic/rpk-topic-create/" },
+    { "label": "rpk reference: rpk topic consume", "url": "https://docs.redpanda.com/streaming/current/reference/rpk/rpk-topic/rpk-topic-consume/" },
+    { "label": "Kafka docs: Quickstart (requires Java 17+)", "url": "https://kafka.apache.org/43/getting-started/quickstart/" },
+    { "label": "Kafka docs: KRaft", "url": "https://kafka.apache.org/43/operations/kraft/" },
+    { "label": "Kafka docs: Basic Kafka operations (partition reassignment tool)", "url": "https://kafka.apache.org/43/operations/basic-kafka-operations/" },
+    { "label": "Kafka docs: Tiered storage", "url": "https://kafka.apache.org/43/operations/tiered-storage/" },
+    { "label": "WarpStream docs: Architecture", "url": "https://docs.warpstream.com/warpstream/overview/architecture" },
+    { "label": "WarpStream docs: Low latency clusters (latency table)", "url": "https://docs.warpstream.com/warpstream/kafka/advanced-agent-deployment-options/low-latency-clusters" },
+    { "label": "WarpStream docs: Read path (per-zone cache, follower fetching)", "url": "https://docs.warpstream.com/warpstream/overview/architecture/read-path" }
+  ],
+  "checked": "2026-10-05"
+}

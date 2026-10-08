@@ -1,0 +1,201 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "ETL & ELT pipelines",
+  "category": "analytics",
+  "order": 60,
+  "summary": "Copy data from app databases, SaaS APIs, files and streams into a warehouse or lake, then reshape it into tables people can query.",
+  "howItWorks": "A pipeline has three stages and a scheduler. Extract reads the source. A full extract copies everything each time, which is simple but slow; an incremental extract keeps a cursor, such as the highest `updated_at` seen or an API’s page token, and asks only for what changed since. For databases, change data capture (CDC) reads the database’s own transaction log (PostgreSQL’s write-ahead log, MySQL’s binlog), so it sees every insert, update and delete, including deletes a cursor query would miss, without scanning the tables. Load writes the batch into the destination: append for events that never change, or merge (upsert) on the primary key so a changed row replaces its old version. Sources also change shape, which is called schema drift: a new column appears in the API, and the loader either adds it to the table or blocks it. Transform turns raw tables into clean ones: SQL models build on each other (`stg_orders` feeds `fct_revenue`), tests check that keys are unique and not null, and the dependency graph gives you lineage, so you can see what breaks if a column changes. In classic ETL the transform runs on a separate server before loading, so only finished tables reach the warehouse. In ELT the raw data is loaded first and transformed inside the warehouse with SQL, which keeps a raw copy to rebuild from when the logic changes. An orchestrator such as Airflow or Dagster runs it all on a schedule, in dependency order, retries failed steps and reruns past days (backfills). Reverse ETL runs the other way: it pushes modelled tables from the warehouse back into tools like a CRM.",
+  "analogy": "A restaurant’s supply chain. ETL is a supplier who washes, peels and portions everything before delivery because the kitchen is tiny. ELT is a big walk-in fridge: everything arrives raw and the cooks prep it in-house, however today’s menu needs it. The orchestrator is the prep schedule on the wall.",
+  "useWhen": [
+    "Analytics needs data from many systems (app database, billing, CRM, ad platforms) in one place",
+    "Reports can be minutes or hours behind the source",
+    "You want raw history in the warehouse so models can be rebuilt when business logic changes",
+    "Mirroring a production database into analytics without running heavy queries on it (CDC)"
+  ],
+  "avoidWhen": [
+    "The app needs the answer in milliseconds; read from the service, a replica or a cache",
+    "You must react to each event within seconds (fraud checks, alerts); use stream processing",
+    "Source and warehouse are both in one cloud and a managed zero-ETL integration already replicates what you need"
+  ],
+  "example": "Every 15 minutes a connector reads new changes to the `orders` table from Postgres’s write-ahead log and pulls new charges from the billing API using the cursor it saved after the last run. Both land as raw tables in the warehouse: changed orders are merged on `order_id`, and when the billing API adds a `tax_code` field a new column appears. At 06:00 the orchestrator runs the SQL models: `stg_orders` cleans the raw table and `fct_revenue` joins it with charges. One night a bug duplicates orders; the `unique` test on `order_id` fails, the models downstream are skipped, and the finance dashboard shows yesterday’s numbers instead of wrong ones.",
+  "providers": {
+    "aws": "AWS Glue (serverless Spark ETL jobs, crawlers, Data Catalog); DMS for full load plus CDC from database logs; zero-ETL integrations that replicate Aurora, RDS, DynamoDB and apps such as Salesforce into Redshift",
+    "gcp": "Datastream (serverless CDC into BigQuery, Cloud Storage or Iceberg); BigQuery Data Transfer Service for SaaS, ads and storage sources; Dataflow (Apache Beam) for code-heavy pipelines; Dataform for SQL transformations in BigQuery",
+    "azure": "Data Factory in Microsoft Fabric (copy job with CDC, pipelines, Dataflow Gen2, mirroring, dbt jobs), the successor to Azure Data Factory (pipelines, Copy activity, mapping data flows on Spark)",
+    "oss": "Extract and load: Airbyte (Elastic License 2.0, source-available), Meltano (Singer taps and targets), Apache NiFi, Debezium for log-based CDC, OLake (Apache 2.0, databases to Iceberg). Transform: dbt, SQLMesh. Both in one tool: Bruin. Orchestration: Apache Airflow, Dagster. Managed services: Fivetran, Estuary, Artie"
+  },
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "-- Load: apply the latest extracted batch (one row per id, newest change)",
+      "MERGE INTO raw.orders AS t",
+      "USING raw.orders_changes AS s",
+      "  ON t.id = s.id",
+      "WHEN MATCHED AND s.op = 'delete' THEN DELETE",
+      "WHEN MATCHED THEN UPDATE SET status = s.status, amount = s.amount, updated_at = s.updated_at",
+      "WHEN NOT MATCHED AND s.op <> 'delete' THEN",
+      "  INSERT (id, status, amount, created_at, updated_at)",
+      "  VALUES (s.id, s.status, s.amount, s.created_at, s.updated_at);",
+      "",
+      "-- Transform: a model rebuilt from the raw table on every run",
+      "CREATE OR REPLACE TABLE analytics.daily_revenue AS",
+      "SELECT CAST(created_at AS DATE) AS day, SUM(amount) AS revenue",
+      "FROM raw.orders",
+      "WHERE status = 'paid'",
+      "GROUP BY 1;",
+      "",
+      "-- Test: passes when it returns zero rows",
+      "SELECT id, COUNT(*) AS copies FROM raw.orders GROUP BY id HAVING COUNT(*) > 1;"
+    ]
+  },
+  "related": ["stream-processing", "warehouse", "lakehouse", "workflow"],
+  "diagram": {
+    "caption": "Order changes come from the database’s log and charges from an API cursor. The loader merges both into raw tables, SQL models rebuild clean tables from them, and a failed test stops a bad batch before it reaches the marts.",
+    "w": 800,
+    "h": 280,
+    "zones": [
+      { "x": 15, "y": 14, "w": 360, "h": 252, "label": "Sources" },
+      { "x": 530, "y": 14, "w": 255, "h": 252, "label": "Warehouse" }
+    ],
+    "nodes": [
+      {
+        "id": "db",
+        "x": 90,
+        "y": 70,
+        "label": "App database",
+        "sub": "orders",
+        "emit": { "every": 700, "jitter": 0.4, "color": 0 },
+        "out": ["wal"]
+      },
+      {
+        "id": "wal",
+        "x": 270,
+        "y": 70,
+        "kind": "log",
+        "cells": 6,
+        "retain": 40,
+        "label": "Change log",
+        "sub": "WAL · CDC",
+        "readers": [{ "to": "load", "every": 1200, "batch": 3, "name": "CDC" }]
+      },
+      {
+        "id": "api",
+        "x": 90,
+        "y": 210,
+        "label": "Billing API",
+        "sub": "charges · cursor",
+        "emit": { "every": 2200, "jitter": 0.3, "color": 1 },
+        "out": ["load"]
+      },
+      {
+        "id": "load",
+        "x": 445,
+        "y": 140,
+        "kind": "pool",
+        "label": "Extract & load",
+        "sub": "merge on key",
+        "min": 1,
+        "max": 2,
+        "work": 300,
+        "out": ["raw"]
+      },
+      {
+        "id": "raw",
+        "x": 657,
+        "y": 58,
+        "label": "Raw tables",
+        "sub": "one per source table",
+        "out": ["models"]
+      },
+      {
+        "id": "models",
+        "x": 657,
+        "y": 140,
+        "kind": "pool",
+        "label": "SQL models",
+        "sub": "build · tests",
+        "min": 1,
+        "max": 1,
+        "work": 500,
+        "mode": "gate",
+        "p": 0.9,
+        "denyText": "test failed",
+        "out": ["marts"],
+        "concept": "warehouse"
+      },
+      {
+        "id": "marts",
+        "x": 657,
+        "y": 222,
+        "label": "Marts",
+        "sub": "fct_revenue",
+        "mode": "sink"
+      }
+    ]
+  },
+  "history": {
+    "story": [
+      "Data warehouses needed filling. From the late 1980s, batch jobs pulled records out of operational systems, cleaned and reshaped them on a separate server, and loaded only the finished tables. Transforming first made sense because, as a Fivetran history puts it, “storage, computation and bandwidth were extremely scarce”. Companies such as Informatica, founded in 1993, sold tools for building these jobs.",
+      "Cloud warehouses changed the arithmetic. Amazon Redshift (2012), BigQuery and Snowflake made storage cheap and compute elastic, so it became simpler to load raw copies and transform them later with SQL inside the warehouse. Managed connectors such as Fivetran took over extraction, and dbt (2016), “the T in ELT” in Tristan Handy’s words, turned that SQL into versioned, tested code. Airflow, started at Airbnb in 2014, gave these jobs an open-source scheduler, and Debezium (2016) streamed changes straight from database logs.",
+      "The market is now consolidating. Salesforce bought Informatica in 2025, and Fivetran, which added reverse ETL by buying Census, completed a merger with dbt Labs in June 2026."
+    ],
+    "choices": [
+      { "choice": "Transform before loading (ETL)", "why": "Warehouse storage and compute were scarce and expensive, so jobs cut data down and conformed it on the way in. Only clean, finished tables took up warehouse space." },
+      { "choice": "Load raw, transform inside the warehouse (ELT)", "why": "Once storage cost cents per gigabyte and compute scaled on demand, keeping a raw copy became cheap. Models can then be rebuilt from it whenever the business logic changes, without extracting again." },
+      { "choice": "Read the database log instead of querying tables (CDC)", "why": "A cursor query on `updated_at` misses deletes and loads the source with scans. The transaction log already records every change in order, so tools such as Debezium and DMS read it instead." },
+      { "choice": "Transformations as code", "why": "The dbt viewpoint argued analytics had “a workflow problem”: SQL scattered across scripts and BI tools. Keeping models in version control with tests brought the review and testing habits of software teams." }
+    ],
+    "timeline": [
+      { "year": "1988", "text": "Devlin and Murphy at IBM describe a warehouse loaded from operational systems" },
+      { "year": "1993", "text": "Informatica is founded; graphical ETL tools spread through the 1990s" },
+      { "year": "2012", "text": "Amazon Redshift launches; cheap warehouse compute makes ELT practical" },
+      { "year": "2015", "text": "Airbnb announces Airflow, its open-source workflow scheduler, in June" },
+      { "year": "2016", "text": "Debezium 0.1 reads MySQL’s binlog; dbt is first released" },
+      { "year": "2025", "text": "Fivetran agrees to buy Census (reverse ETL); Salesforce completes its Informatica purchase" },
+      { "year": "2026", "text": "Fivetran and dbt Labs complete their merger on 1 June" }
+    ],
+    "sources": [
+      { "label": "Devlin and Murphy: An architecture for a business and information system (IBM Systems Journal, 1988)", "url": "https://doi.org/10.1147/sj.271.0060" },
+      { "label": "Fivetran blog: ETL vs ELT (Charles Wang, August 2022)", "url": "https://www.fivetran.com/blog/etl-vs-elt" },
+      { "label": "Wikipedia: Informatica (founding, supplement)", "url": "https://en.wikipedia.org/wiki/Informatica" },
+      { "label": "Salesforce press release: Salesforce completes acquisition of Informatica (November 2025)", "url": "https://www.salesforce.com/news/press-releases/2025/11/18/salesforce-completes-acquisition-of-informatica/" },
+      { "label": "AWS News Blog: Amazon Redshift, the new AWS data warehouse (November 2012)", "url": "https://aws.amazon.com/blogs/aws/amazon-redshift-the-new-aws-data-warehouse/" },
+      { "label": "dbt Labs blog: What, exactly, is dbt? (Tristan Handy, October 2017)", "url": "https://www.getdbt.com/blog/what-exactly-is-dbt" },
+      { "label": "dbt docs: The dbt viewpoint (RJMetrics, 2015–2016)", "url": "https://docs.getdbt.com/community/resources/viewpoint" },
+      { "label": "dbt Labs blog: Of the community, by the community, for the community (Tristan Handy, June 2021; dbt started five years earlier)", "url": "https://www.getdbt.com/blog/of-the-community-by-the-community-for-the-community" },
+      { "label": "Apache Airflow docs: Project history", "url": "https://airflow.apache.org/docs/apache-airflow/stable/project.html" },
+      { "label": "Debezium blog: Debezium 0.1 released (March 2016)", "url": "https://debezium.io/blog/2016/03/18/Debezium-0-1-Released/" },
+      { "label": "Fivetran press release: Fivetran signs agreement to acquire Census (May 2025)", "url": "https://www.fivetran.com/press/fivetran-signs-agreement-to-acquire-census-delivering-the-first-end-to-end-data-movement-platform-for-the-ai-era" },
+      { "label": "Fivetran press release: Fivetran + dbt Labs complete merger (June 2026)", "url": "https://www.fivetran.com/press/fivetran-dbt-labs-complete-merger-to-create-the-data-infrastructure-for-trusted-ai-agents" }
+    ]
+  },
+  "sources": [
+    { "label": "AWS DMS docs: Creating tasks for ongoing replication (CDC from transaction logs)", "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html" },
+    { "label": "Debezium docs: Architecture (binlog and logical replication readers)", "url": "https://debezium.io/documentation/reference/stable/architecture.html" },
+    { "label": "Fivetran docs: PostgreSQL connector (logical replication vs query-based sync)", "url": "https://fivetran.com/docs/connectors/databases/postgresql" },
+    { "label": "Fivetran docs: Sync overview (initial and incremental syncs)", "url": "https://fivetran.com/docs/core-concepts/syncoverview" },
+    { "label": "Fivetran docs: Schema change settings (allow all, allow columns, block all)", "url": "https://fivetran.com/docs/core-concepts/features/data-blocking-column-hashing/config" },
+    { "label": "Singer specification (taps, targets, state bookmarks)", "url": "https://hub.meltano.com/singer/spec" },
+    { "label": "dbt docs: Introduction (models, `ref()`, tests, docs)", "url": "https://docs.getdbt.com/docs/introduction" },
+    { "label": "dbt docs: Data tests (queries that return failing rows)", "url": "https://docs.getdbt.com/docs/build/data-tests" },
+    { "label": "dbt docs: `dbt build` (a failed test skips downstream models)", "url": "https://docs.getdbt.com/reference/commands/build" },
+    { "label": "Microsoft Learn: What is Data Factory in Microsoft Fabric? (ETL vs ELT, copy job, mirroring)", "url": "https://learn.microsoft.com/en-us/fabric/data-factory/data-factory-overview" },
+    { "label": "Microsoft Learn: Introduction to Azure Data Factory", "url": "https://learn.microsoft.com/en-us/azure/data-factory/introduction" },
+    { "label": "AWS Glue docs: What is AWS Glue?", "url": "https://docs.aws.amazon.com/glue/latest/dg/what-is-glue.html" },
+    { "label": "Amazon Redshift docs: Zero-ETL integrations (supported sources)", "url": "https://docs.aws.amazon.com/redshift/latest/mgmt/zero-etl-using.html" },
+    { "label": "Google Cloud docs: Datastream overview", "url": "https://docs.cloud.google.com/datastream/docs/overview" },
+    { "label": "Google Cloud docs: BigQuery Data Transfer Service introduction", "url": "https://docs.cloud.google.com/bigquery/docs/dts-introduction" },
+    { "label": "Google Cloud docs: Dataflow overview (Apache Beam)", "url": "https://docs.cloud.google.com/dataflow/docs/overview" },
+    { "label": "Google Cloud docs: Dataform overview (SQLX, `ref()`, assertions)", "url": "https://docs.cloud.google.com/dataform/docs/overview" },
+    { "label": "Airbyte on GitHub", "url": "https://github.com/airbytehq/airbyte" },
+    { "label": "Meltano docs", "url": "https://docs.meltano.com/" },
+    { "label": "Apache NiFi", "url": "https://nifi.apache.org/" },
+    { "label": "SQLMesh on GitHub", "url": "https://github.com/SQLMesh/sqlmesh" },
+    { "label": "Bruin on GitHub (ingestion, SQL and Python transforms, quality checks)", "url": "https://github.com/bruin-data/bruin" },
+    { "label": "Apache Airflow docs: Tasks (retries)", "url": "https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/tasks.html" },
+    { "label": "Dagster docs", "url": "https://dagster.io/docs" },
+    { "label": "Estuary docs", "url": "https://docs.estuary.dev/" },
+    { "label": "Artie docs: Quickstart (managed CDC streaming)", "url": "https://www.artie.com/docs/quickstart" },
+    { "label": "Fivetran docs: 2026 pricing updates (Activations, reverse ETL)", "url": "https://fivetran.com/docs/core-concepts/usage-based-pricing/pricing-updates/2026-pricing-updates" }
+  ]
+}

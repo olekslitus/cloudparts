@@ -1,0 +1,130 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "chDB",
+  "concepts": ["query-engines"],
+  "provider": "oss",
+  "vendor": "ClickHouse, Inc.",
+  "license": "Apache 2.0",
+  "website": "https://clickhouse.com/chdb",
+  "repo": "https://github.com/chdb-io/chdb",
+  "summary": "The ClickHouse engine packaged as a library: run ClickHouse SQL inside a Python, Go, Rust or Node.js program, with no server.",
+  "intro": [
+    "chDB is ClickHouse compiled into a library that loads into your own process. A call such as `chdb.query(sql, \"DataFrame\")` goes straight into ClickHouse’s parser, planner and vectorised engine, with no server, socket or child process; the result comes back in any ClickHouse output format (CSV, JSON, Arrow, Parquet or a pandas DataFrame), handed to Python through a `memoryview` to avoid copying. By default it keeps nothing: tables live in memory and disappear with the process. Open a connection or session on a path and it keeps tables on disk in the same format as `clickhouse-local`, so the two can share a database directory. It reaches data where it sits through ClickHouse’s table functions, such as `file()`, `s3()`, `url()`, `mysql()` and `postgresql()`, and the `Python()` table function queries a pandas DataFrame or Arrow table in place.",
+    "The engine itself ships as `chdb-core` (26.9.0, September 2026), versioned like ClickHouse. The `chdb` Python package (4.4.0) sits on top and adds DataStore, a pandas-compatible API that records a chain of pandas calls and compiles it into one ClickHouse query when you ask for the result. Bindings exist for C/C++, Go, Rust, Node.js, Bun, Java, Ruby, .NET, Zig and WebAssembly, at very different stages of maturity. It is Apache 2.0 licensed and free; ClickHouse, Inc. took the project over in March 2024 and employs its creator. Version 4.4 adds `chdb.durable`, which keeps a database’s state in an S3, GCS or Azure bucket you own, with a lease that guarantees a single writer."
+  ],
+  "strengths": [
+    "The full ClickHouse SQL dialect and function library from a `pip install`, with no server to run",
+    "Reads and writes 60+ formats, and queries S3, URLs, MySQL and PostgreSQL directly through ClickHouse table functions",
+    "SQL over pandas DataFrames and Arrow tables in place, or pandas-style code run on the engine through DataStore",
+    "The same SQL runs later on a ClickHouse server or ClickHouse Cloud, and on-disk databases are interchangeable with `clickhouse-local`",
+    "Apache 2.0, with a full-time team at ClickHouse, Inc."
+  ],
+  "limits": [
+    "The Python package supports Linux and macOS only; there are no native Windows wheels",
+    "One process can have only one active data path: switching to a different on-disk database means closing the first",
+    "Outside Python, C/C++, Node.js and Go, the bindings are marked early or experimental in the project’s own capability matrix",
+    "Python UDFs are scalar only, receive every argument as a string and are called once per row",
+    "One machine and one process, like DuckDB: it isn’t a shared server for many users"
+  ],
+  "worksWith": [
+    { "id": "clickhouse", "how": "packages the engine of" },
+    { "id": "parquet", "how": "reads and writes" },
+    { "id": "arrow", "how": "reads and returns tables as" },
+    { "id": "s3", "how": "reads and writes files in" },
+    { "id": "postgresql", "how": "imports and exports files for" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "SQL over Parquet on S3 and a pandas DataFrame, in one process",
+    "source": [
+      "import chdb",
+      "import pandas as pd",
+      "",
+      "# ClickHouse SQL straight over Parquet files, returned as a DataFrame",
+      "daily = chdb.query(\"\"\"",
+      "    SELECT toDate(ts) AS day, count() AS views",
+      "    FROM s3('https://acme-raw.s3.amazonaws.com/clicks/2026-09-*.parquet', 'Parquet')",
+      "    GROUP BY day ORDER BY day",
+      "\"\"\", \"DataFrame\")",
+      "",
+      "# Join it with an in-memory DataFrame through the Python() table function",
+      "targets = pd.DataFrame({\"day\": daily[\"day\"], \"goal\": 50_000})",
+      "chdb.query(\"\"\"",
+      "    SELECT d.day, d.views, t.goal, d.views >= t.goal AS hit",
+      "    FROM Python(daily) AS d JOIN Python(targets) AS t USING (day)",
+      "\"\"\", \"Pretty\").show()",
+      "",
+      "# Keep tables between runs: a session on a directory",
+      "from chdb import session",
+      "sess = session.Session(\"./clicks_db\")",
+      "sess.query(\"\"\"",
+      "    CREATE TABLE IF NOT EXISTS clicks ENGINE = MergeTree ORDER BY ts AS",
+      "    SELECT * FROM s3('https://acme-raw.s3.amazonaws.com/clicks/2026-09-*.parquet', 'Parquet')",
+      "\"\"\")"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "chDB or DuckDB?",
+      "intro": "Both run analytical SQL inside your process with no server. The difference is mostly where the engine came from and where you can take your queries next.",
+      "corner": "",
+      "columns": ["chDB", "DuckDB"],
+      "rows": [
+        { "label": "Engine", "values": ["ClickHouse, a server database, packaged as a library", "Built from scratch for embedding, at CWI from 2018"] },
+        { "label": "SQL dialect", "values": ["ClickHouse SQL", "Close to PostgreSQL’s dialect"] },
+        { "label": "Storage", "values": ["In memory by default; on-disk tables in the `clickhouse-local` format", "Its own single-file database, or files in place"] },
+        { "label": "Formats and sources", "values": ["60+ ClickHouse formats; table functions for S3, URLs, MySQL, PostgreSQL", "Parquet, CSV, JSON; extensions for S3, Iceberg, Delta Lake, PostgreSQL"] },
+        { "label": "DataFrames", "values": ["`Python(df)` table function; DataStore runs pandas code as SQL", "Queries pandas, Polars and Arrow objects by variable name"] },
+        { "label": "Next step up", "values": ["Same SQL on a ClickHouse server or ClickHouse Cloud", "MotherDuck, or DuckDB’s own Quack server protocol"] },
+        { "label": "Platforms", "values": ["Linux and macOS (Python)", "Linux, macOS and Windows"] },
+        { "label": "Licence and owner", "values": ["Apache 2.0; ClickHouse, Inc.", "MIT; DuckDB Foundation"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "ClickHouse had long shipped `clickhouse-local`, a single binary that runs SQL over local and remote files without a server. But data scientists live in Python, and calling a separate binary through pipes meant starting a process for every query and copying every result. In February 2023, Auxten Wang wanted to read large annotation datasets from a Jupyter notebook while training computer-vision models, without waiting on slow Hive clusters. Over the Lunar New Year he built a prototype that linked ClickHouse’s 900,000 lines of C++ straight into a Python module.",
+      "Lorenzo Mangani of QXIP soon joined, adding Go, Node.js and Rust bindings, and the projects moved to a chdb-io GitHub organisation. ClickHouse, Inc. promoted chDB in its 23.7 release call and an August 2023 blog post. In March 2024 it announced that chDB was now part of ClickHouse and that Auxten would work on it full-time, with chDB tracking ClickHouse releases. chDB 4, announced in March 2026, split the engine into `chdb-core` and added DataStore, aimed at people who write pandas rather than SQL."
+    ],
+    "choices": [
+      { "choice": "Link the engine into the process instead of wrapping the binary", "why": "Running `clickhouse-local` through pipes added 10 to 50 ms of process start per query, copied every result and ruled out Python UDFs and SQL on DataFrames." },
+      { "choice": "Hand results over in memory, not through stdout", "why": "Writing output into ClickHouse’s in-memory write buffer and exposing it through Python’s `memoryview` avoids copying results from C++ into Python objects." },
+      { "choice": "Keep the `clickhouse-local` storage format", "why": "A chDB database directory can be opened by `clickhouse-local` and vice versa, so data moves between the two without export." }
+    ],
+    "timeline": [
+      { "year": "2023", "text": "Auxten Wang starts chDB in February; v0.1.0 in March, v1.0.0 in December" },
+      { "year": "2024", "text": "chDB becomes part of ClickHouse, Inc. in March" },
+      { "year": "2025", "text": "chDB 3.0 in January" },
+      { "year": "2026", "text": "chDB 4 adds the pandas-compatible DataStore; the engine becomes `chdb-core`" },
+      { "year": "2026", "text": "September: durable storage on object stores and a PostgreSQL extension" }
+    ],
+    "sources": [
+      { "label": "ClickHouse blog: chDB, a rocket engine on a bicycle (Auxten, Sep 2023)", "url": "https://clickhouse.com/blog/chdb-embedded-clickhouse-rocket-engine-on-a-bicycle" },
+      { "label": "ClickHouse blog: Welcome, chDB (Aug 2023)", "url": "https://clickhouse.com/blog/welcome-chdb-to-clickhouse" },
+      { "label": "ClickHouse blog: chDB joins the ClickHouse family (Mar 2024)", "url": "https://clickhouse.com/blog/chdb-joins-clickhouse-family" },
+      { "label": "ClickHouse blog: Announcing chDB 4, write Pandas, run ClickHouse (Mar 2026)", "url": "https://clickhouse.com/blog/chdb.4-0-pandas-hex" },
+      { "label": "chDB on GitHub: v1.0.0 release (Dec 2023)", "url": "https://github.com/chdb-io/chdb/releases/tag/v1.0.0" },
+      { "label": "chDB on GitHub: v3.0.0 release (Jan 2025)", "url": "https://github.com/chdb-io/chdb/releases/tag/v3.0.0" }
+    ]
+  },
+  "sources": [
+    { "label": "chDB README (features, APIs, binding capability matrix, platforms, licence)", "url": "https://github.com/chdb-io/chdb" },
+    { "label": "chdb-core README (engine package, distributions, architecture)", "url": "https://github.com/chdb-io/chdb-core" },
+    { "label": "chdb-core v26.9.0 release (Sep 2026)", "url": "https://github.com/chdb-io/chdb-core/releases/tag/v26.9.0" },
+    { "label": "chDB v4.4.0 release notes (durable layer, Sep 2026)", "url": "https://github.com/chdb-io/chdb/releases/tag/v4.4.0" },
+    { "label": "chdb on PyPI (Python 3.9+, Apache 2.0)", "url": "https://pypi.org/project/chdb/" },
+    { "label": "ClickHouse docs: chDB (key features, language bindings)", "url": "https://clickhouse.com/docs/chdb" },
+    { "label": "ClickHouse blog: chDB joins the ClickHouse family (storage format shared with clickhouse-local)", "url": "https://clickhouse.com/blog/chdb-joins-clickhouse-family" },
+    { "label": "ClickHouse blog: The journey to zero-copy, chDB on pandas DataFrames (Jan 2026)", "url": "https://clickhouse.com/blog/chdb-journey-to-zero-copy" },
+    { "label": "ClickHouse blog: chDB Durable Layer for agent memory (Sep 2026)", "url": "https://clickhouse.com/blog/chdb-durable-layer-for-agent-memory" },
+    { "label": "ClickHouse blog: Introducing the chdb Postgres extension (Sep 2026)", "url": "https://clickhouse.com/blog/introducing-chdb-postgres" },
+    { "label": "ClickHouse docs: s3 table function", "url": "https://clickhouse.com/docs/sql-reference/table-functions/s3" },
+    { "label": "DuckDB docs: PostgreSQL compatibility of the SQL dialect", "url": "https://duckdb.org/docs/current/sql/dialect/postgresql_compatibility" },
+    { "label": "DuckDB docs: SQL on pandas", "url": "https://duckdb.org/docs/current/guides/python/sql_on_pandas" },
+    { "label": "DuckDB: Installation (platforms)", "url": "https://duckdb.org/install/" },
+    { "label": "DuckDB blog: Quack, the DuckDB client-server protocol (May 2026)", "url": "https://duckdb.org/2026/05/12/quack-remote-protocol.html" },
+    { "label": "DuckDB FAQ: DuckDB Foundation and MIT licence", "url": "https://duckdb.org/faq" }
+  ],
+  "checked": "2026-10-06"
+}

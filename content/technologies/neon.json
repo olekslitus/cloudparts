@@ -1,0 +1,145 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Neon",
+  "concepts": ["relational"],
+  "provider": "vendor",
+  "vendor": "Databricks",
+  "license": "Proprietary service; the storage engine and Postgres changes are Apache 2.0 on GitHub",
+  "website": "https://neon.com/",
+  "repo": "https://github.com/neondatabase/neon",
+  "summary": "Serverless Postgres that keeps data in a shared storage layer, so compute can scale to zero and a branch of the database is a pointer, not a copy.",
+  "intro": [
+    "Neon splits Postgres in two. A compute node runs ordinary Postgres (14 to 18) with RAM and a local NVMe cache, but owns no durable state. Instead of writing WAL to its own disk, it streams WAL to several safekeepers, and a commit succeeds once a quorum of them acknowledges it through a Paxos-based protocol. Pageservers turn that WAL into data pages and upload them to object storage as immutable layer files. When compute misses a page in its caches, it asks a pageserver for the page as of a log position (`GetPage@LSN`), and the pageserver rebuilds it from the nearest image plus later WAL. Because old versions are never overwritten, a branch is a copy-on-write view of a past position, and restoring to any moment in the history window is the same operation. Storage is spread across availability zones; there are no standby computes, and a failed compute is restarted, typically within seconds to minutes.",
+    "Neon has belonged to Databricks since 2025, and the same engine now runs both as Neon, for developers and agent platforms, and as Databricks Lakebase. It runs in 8 AWS regions and is billed by usage, with no monthly minimum. As checked on 2026-10-06: the Free plan gives 100 projects, each with 100 CU-hours a month (a CU is about 4 GB of RAM) and 1 GB of storage. Launch costs $0.106 per CU-hour and Scale $0.222, with storage at $0.35 per GB-month and history at $0.20 per GB-month of retained WAL. Compute scales to zero after 5 minutes idle and wakes in a few hundred milliseconds."
+  ],
+  "strengths": [
+    "Branches are instant copy-on-write views, so every pull request, test run or agent can get a full copy of production that costs nothing until it diverges",
+    "Scale to zero and autoscaling, billed per CU-hour: idle databases cost only storage, and the Free plan covers 100 small projects",
+    "Point-in-time restore and branching from the past without backups, within a history window of up to 7 days (Launch) or 30 days (Scale)",
+    "Standard Postgres with extensions such as pgvector, PostGIS and TimescaleDB, and PgBouncer pooling up to 10,000 connections",
+    "Commits are durable once a quorum of safekeepers in different zones has the WAL, with a secondary pageserver ready if one fails"
+  ],
+  "limits": [
+    "No standby compute on Neon: if compute fails it is restarted, so applications must handle disconnects of seconds to minutes; high availability is listed as coming soon, while Lakebase on Databricks has it",
+    "Waking from zero adds a few hundred milliseconds; computes above 16 CU never scale to zero, and connected logical replication subscribers keep compute running",
+    "Storage bills have several parts: retained WAL in the history window, child branches that become as expensive as a root once they fall out of that window, and $1.50 a month per branch beyond the 10 or 25 included",
+    "AWS only now: Azure regions stopped taking new projects on 7 April 2026 and stopped getting features on 5 October 2026, and a project can’t change region",
+    "The public GitHub repo went from hundreds of commits a month to a handful after July 2025, with no tagged release since; its README covers running Neon on a workstation for small experiments"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "runs with separated storage" },
+    { "id": "s3", "how": "keeps page history in" },
+    { "id": "databricks", "how": "is owned by and shares its engine with" },
+    { "id": "timescaledb", "how": "offers as a Postgres extension" },
+    { "id": "datadog", "how": "exports metrics and logs to" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "A branch per pull request with the Neon CLI",
+    "source": [
+      "# brew install neonctl, or: npm i -g neon@latest",
+      "neon login",
+      "neon set-context --project-id shop-1234",
+      "",
+      "# an instant copy-on-write copy of production for PR 482, autoscaling 0.25 to 2 CU",
+      "neon branches create --name preview/pr-482 --parent production --cu 0.25-2",
+      "",
+      "# run the migration against the branch, not production",
+      "psql \"$(neon connection-string preview/pr-482)\" -f migrations/0042_add_order_notes.sql",
+      "psql \"$(neon connection-string preview/pr-482 --pooled)\" -c 'SELECT count(*) FROM orders'",
+      "",
+      "# bad deploy at 10:30? look at production as it was just before",
+      "neon branches create --name incident-check --parent 2026-10-06T10:29:00Z",
+      "",
+      "# merged: throw the branch away; its storage and compute stop billing",
+      "neon branches delete preview/pr-482"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Free, Launch or Scale?",
+      "intro": "List prices from Neon’s pricing page, checked 2026-10-06. Paid plans have no base fee; usage starts from zero.",
+      "corner": "",
+      "columns": ["Free", "Launch", "Scale"],
+      "rows": [
+        { "label": "Compute", "values": ["100 CU-hours a month per project", "$0.106 per CU-hour", "$0.222 per CU-hour"] },
+        { "label": "Largest compute", "values": ["2 CU (8 GB RAM)", "16 CU (64 GB RAM)", "56 CU (224 GB RAM)"] },
+        { "label": "Scale to zero", "values": ["After 5 minutes, always on", "After 5 minutes, can be disabled", "Configurable"] },
+        { "label": "Database storage", "values": ["1 GB per project", "$0.35 per GB-month", "$0.35 per GB-month"] },
+        { "label": "Instant restore history", "values": ["Up to 6 hours or 1 GB of changes", "Up to 7 days, $0.20 per GB-month of WAL", "Up to 30 days, $0.20 per GB-month of WAL"] },
+        { "label": "Projects and branches", "values": ["100 projects, 10 branches each", "100 projects, 10 branches each; extra branches $0.002 an hour", "1,000+ projects, 25 branches each; extra branches $0.002 an hour"] },
+        { "label": "Public egress", "values": ["5 GB per project", "500 GB per project, then $0.10 per GB", "500 GB per project, then $0.10 per GB"] },
+        { "label": "Compliance", "values": ["GDPR, ISO", "GDPR, ISO", "Adds SLAs, HIPAA, SOC 2 report, Private Link"] }
+      ],
+      "notes": [
+        "An always-on database at the 0.25 CU minimum uses about 182.5 CU-hours a month: about $19 on Launch before storage.",
+        "Neon cut compute prices in November 2025 (Launch from $0.14, Scale from $0.26 per CU-hour) after cutting storage from $1.75 to $0.35 per GB-month in August."
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Neon or Lakebase on Databricks?",
+      "intro": "Databricks sells the same database, Lakebase Postgres, in two places. The engine and core features (branching, autoscaling, scale to zero, read replicas, instant restore) are the same; what surrounds it differs.",
+      "corner": "",
+      "columns": ["Neon", "Lakebase on Databricks"],
+      "rows": [
+        { "label": "Built for", "values": ["Developers, start-ups, agent and app-generation platforms", "Companies already on Databricks; data and AI teams"] },
+        { "label": "Around the database", "values": ["Managed Better Auth, Object Storage, Functions, AI Gateway", "Unity Catalog governance, lakehouse analytics, notebooks"] },
+        { "label": "High availability", "values": ["Coming soon", "Yes"] },
+        { "label": "Azure", "values": ["Regions deprecated in 2026", "Supported"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Postgres ties a database to one machine and its disk. Scaling means migrating to a bigger machine, failover means paying for whole extra servers, and a realistic copy for development means copying all the data. Amazon Aurora and Microsoft’s Socrates had shown that a database could replace its local disk with a shared storage service, but none of those designs were open source or native to Postgres.",
+      "Nikita Shamgunov, Heikki Linnakangas, a Postgres committer, and Stas Kelvich started Neon in 2021 to rebuild Postgres storage for the cloud without forking Postgres. Heikki integrated the storage with upstream Postgres, and Stas built the storage layer and WAL streaming. Their twist on Aurora was to make object storage the home of all history, which made branches and time travel cheap. Neon launched publicly in June 2022 behind a waitlist, released its code under Apache 2.0, and became generally available in April 2024 after scaling to more than 700,000 databases.",
+      "By 2025 more than 80% of new Neon databases were being created by AI agents rather than people. Databricks announced it would acquire Neon on 14 May 2025, and the engine became the base of Databricks Lakebase as well as Neon itself."
+    ],
+    "choices": [
+      { "choice": "Separate safekeepers from pageservers", "why": "Aurora used one storage service, Microsoft’s later SQL Server design two. Neon chose two: the consensus code is easier to verify on its own, and safekeepers only append while pageservers read, write and update, so each can run on hardware suited to it." },
+      { "choice": "Stream WAL out and read pages back, without forking Postgres", "why": "Postgres already writes every change as WAL records that name the pages they touch. Sending them over the network and fetching pages by RPC needed only small changes to Postgres, so users keep full compatibility." },
+      { "choice": "Treat old page versions like current ones", "why": "Read replicas and point-in-time recovery both need old pages. Keeping every version, with cold data moved to object storage, replaced backups and the WAL archive and made restoring or branching from the past a cheap lookup instead of hours of replay." },
+      { "choice": "No SANs or third-party filesystems", "why": "Tools such as Delphix built database copies on ZFS, but a filesystem the team didn’t control would be hard to integrate with the cloud and expensive, so they built storage that understands Postgres." }
+    ],
+    "timeline": [
+      { "year": "2021", "text": "Shamgunov, Linnakangas and Kelvich start Neon; code on GitHub from March" },
+      { "year": "2022", "text": "Public launch behind a waitlist in June" },
+      { "year": "2024", "text": "Generally available in April" },
+      { "year": "2025", "text": "Databricks announces the acquisition on 14 May; prices cut through the year" },
+      { "year": "2026", "text": "Azure regions deprecated in April; Neon runs on AWS only" }
+    ],
+    "sources": [
+      { "label": "Neon blog: Architecture decisions in Neon, by Heikki Linnakangas (Jul 2022)", "url": "https://neon.com/blog/architecture-decisions-in-neon" },
+      { "label": "Neon blog: SELECT ’Hello, World’, serverless Postgres built for the cloud (Jun 2022)", "url": "https://neon.com/blog/hello-world" },
+      { "label": "Neon blog: Neon is generally available (Apr 2024)", "url": "https://neon.com/blog/neon-ga" },
+      { "label": "Neon blog: Neon and Databricks, a new chapter (May 2025)", "url": "https://neon.com/blog/neon-and-databricks" },
+      { "label": "Databricks press release: Databricks agrees to acquire Neon (May 2025)", "url": "https://www.databricks.com/company/newsroom/press-releases/databricks-agrees-acquire-neon-help-developers-deliver-ai-systems" },
+      { "label": "Neon blog: Major compute price reduction on Neon (Nov 2025)", "url": "https://neon.com/blog/major-compute-price-reduction-on-neon" },
+      { "label": "neondatabase/neon on GitHub (repository opened March 2021)", "url": "https://github.com/neondatabase/neon" },
+      { "label": "Neon docs: Azure regions deprecation (Apr 2026)", "url": "https://neon.com/docs/import/azure-regions-deprecation" }
+    ]
+  },
+  "sources": [
+    { "label": "Neon: Pricing (checked 2026-10-06)", "url": "https://neon.com/pricing" },
+    { "label": "Neon docs: The lakebase architecture (compute, safekeepers, pageservers, object storage)", "url": "https://neon.com/docs/introduction/architecture-overview" },
+    { "label": "Neon blog: WAL + S3, Lakebase storage for the era of agents (Aug 2026)", "url": "https://neon.com/blog/wal-s3-lakebase-storage-for-the-era-of-agents" },
+    { "label": "Neon docs: High availability", "url": "https://neon.com/docs/introduction/high-availability" },
+    { "label": "Neon docs: Scale to zero", "url": "https://neon.com/docs/introduction/scale-to-zero" },
+    { "label": "Neon docs: Branching", "url": "https://neon.com/docs/introduction/branching" },
+    { "label": "Neon docs: Regions", "url": "https://neon.com/docs/introduction/regions" },
+    { "label": "Neon docs: Azure regions deprecation", "url": "https://neon.com/docs/import/azure-regions-deprecation" },
+    { "label": "Neon docs: Postgres version support (14 to 18)", "url": "https://neon.com/docs/postgresql/postgres-version-support" },
+    { "label": "Neon docs: Neon and Lakebase", "url": "https://neon.com/docs/introduction/neon-and-lakebase" },
+    { "label": "Neon blog: Major compute price reduction on Neon (Nov 2025)", "url": "https://neon.com/blog/major-compute-price-reduction-on-neon" },
+    { "label": "Neon CLI: branches", "url": "https://neon.com/docs/cli/branches" },
+    { "label": "Neon CLI: connection-string", "url": "https://neon.com/docs/cli/connection-string" },
+    { "label": "Neon CLI: install", "url": "https://neon.com/docs/cli/install" },
+    { "label": "neondatabase/neon on GitHub (Apache 2.0, architecture overview)", "url": "https://github.com/neondatabase/neon" },
+    { "label": "neondatabase/neon: commit history", "url": "https://github.com/neondatabase/neon/commits/main/" },
+    { "label": "neondatabase/neon: releases (latest July 2025)", "url": "https://github.com/neondatabase/neon/releases" },
+    { "label": "Databricks press release: Databricks agrees to acquire Neon (May 2025)", "url": "https://www.databricks.com/company/newsroom/press-releases/databricks-agrees-acquire-neon-help-developers-deliver-ai-systems" }
+  ],
+  "checked": "2026-10-06"
+}

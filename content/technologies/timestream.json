@@ -1,0 +1,144 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Amazon Timestream",
+  "concepts": ["tsdb"],
+  "provider": "aws",
+  "vendor": "Amazon Web Services",
+  "license": "Proprietary service; Timestream for InfluxDB runs open-source InfluxDB 2.x (MIT) and InfluxDB 3 Core (MIT or Apache 2.0), while InfluxDB 3 Enterprise and 2.x read replicas add InfluxData licence fees",
+  "website": "https://aws.amazon.com/timestream/",
+  "summary": "AWS’s time-series databases: a serverless engine now closed to new customers, and managed InfluxDB 2 and 3.",
+  "intro": [
+    "The name covers two different products. Timestream for LiveAnalytics, generally available since September 2020, is serverless: you create databases and tables and send records (a timestamp, dimensions such as `well_id`, and measures) through the AWS SDK. Writes land in an in-memory store replicated across three Availability Zones; after a retention period you set per table, data moves to a magnetic store laid out for large reads, and late-arriving data can be written there directly. Tables split into partitions by time and by dimension values, and SQL queries with time-series functions run on a worker fleet sized to each query, billed in Timestream Compute Units (one TCU is 4 vCPUs and 16 GB of memory). AWS closed LiveAnalytics to new customers on June 20, 2025; existing accounts keep using it, and AWS points newcomers to Timestream for InfluxDB.",
+    "Timestream for InfluxDB, generally available since March 2024, is managed InfluxDB priced like a database server: you pick an instance class and storage, and AWS runs the open-source engine in your VPC with patching, backups and optional Multi-AZ failover. It started with InfluxDB 2.7; read replica clusters need an InfluxData add-on bought in AWS Marketplace. Since October 2025 it also runs InfluxDB 3 as clusters that keep data as Parquet files in Amazon S3 and cache recent data on the nodes. The Core edition is one node without compaction, meant for recent data; Enterprise grows to 15 nodes (since March 2026), compacts files for long retention, and adds an InfluxData licence fee per vCPU-hour. In US East (N. Virginia) on 2026-10-06, a `db.influx.large` instance cost $0.239 an hour, LiveAnalytics queries $0.518 per TCU-hour, and InfluxDB 3 storage $0.023 per GB-month."
+  ],
+  "strengths": [
+    "Existing LiveAnalytics users get a database with no servers to size or patch, where ingestion, storage and queries scale separately and data tiers from memory to magnetic storage on its own",
+    "Timestream for InfluxDB keeps the open InfluxDB APIs, line protocol, Telegraf and client libraries, so code moves between self-hosted InfluxDB and AWS",
+    "InfluxDB 3 clusters keep data in S3 and bill storage on what is actually stored, separately from compute",
+    "AWS operations built in: Multi-AZ standby with automatic failover, backups and restore, maintenance windows, customer managed KMS keys, VPC and IAM integration"
+  ],
+  "limits": [
+    "LiveAnalytics is closed to new customers since June 20, 2025; AWS’s migration guide exports data to S3 and loads it into Timestream for InfluxDB or Aurora/RDS PostgreSQL",
+    "Timestream for InfluxDB is not serverless: instances bill every hour they run (per second, 10-minute minimum), and Multi-AZ doubles both instance and storage prices",
+    "Licence fees on top of AWS charges: 2.x read replicas and InfluxDB 3 Enterprise are billed by InfluxData through AWS Marketplace, and the read replica add-on can only be subscribed to in the console",
+    "InfluxDB 3 Core is a single node without compaction that AWS doesn’t recommend for long-term storage, and every InfluxDB 3 cluster pays for at least 200 GB of storage",
+    "No host access, and InfluxDB 2.x instances top out at 16 TiB of storage; AWS advises staying under 10 million series per instance"
+  ],
+  "worksWith": [
+    { "id": "s3", "how": "keeps InfluxDB 3 data and exports in" },
+    { "id": "telegraf", "how": "receives metrics from" },
+    { "id": "grafana", "how": "is charted by" },
+    { "id": "aws-iot-core", "how": "receives device data routed by" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Create a Multi-AZ InfluxDB 2 instance and write line protocol",
+    "source": [
+      "ID=$(aws timestream-influxdb create-db-instance \\",
+      "  --name plant-metrics \\",
+      "  --db-instance-type db.influx.large \\",
+      "  --db-storage-type InfluxIOIncludedT1 \\",
+      "  --allocated-storage 100 \\",
+      "  --deployment-type WITH_MULTIAZ_STANDBY \\",
+      "  --username admin --password \"$INFLUX_ADMIN_PASSWORD\" \\",
+      "  --organization plant --bucket sensors \\",
+      "  --vpc-subnet-ids subnet-0a1b2c3d subnet-4e5f6a7b \\",
+      "  --vpc-security-group-ids sg-0123abcd \\",
+      "  --no-publicly-accessible \\",
+      "  --query id --output text)",
+      "",
+      "# wait for AVAILABLE, then read the endpoint",
+      "aws timestream-influxdb get-db-instance --identifier \"$ID\" --query '[status, endpoint]'",
+      "",
+      "# from inside the VPC: write with the InfluxDB v2 API on port 8086",
+      "curl -X POST \"https://$ENDPOINT:8086/api/v2/write?org=plant&bucket=sensors&precision=s\" \\",
+      "  -H \"Authorization: Token $INFLUX_TOKEN\" \\",
+      "  --data-binary 'pressure,well=w17 psi=812.5 1791273600'"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "LiveAnalytics, InfluxDB 2 or InfluxDB 3?",
+      "intro": "Three engines share the Timestream name. Only the two InfluxDB options are open to new AWS accounts.",
+      "columns": ["LiveAnalytics", "Timestream for InfluxDB 2", "Timestream for InfluxDB 3"],
+      "rows": [
+        { "label": "New customers", "values": ["No, closed since June 20, 2025", "Yes", "Yes"] },
+        { "label": "How it runs", "values": ["Serverless; AWS sizes everything", "One instance you size, optional Multi-AZ standby or read replica cluster", "A cluster of nodes you size: Core is one node, Enterprise up to 15"] },
+        { "label": "Where data lives", "values": ["Memory store, then magnetic store, by table retention settings", "Instance storage (Influx IOPS Included SSD, up to 16 TiB)", "Parquet files in Amazon S3, cached on the nodes"] },
+        { "label": "Queries", "values": ["SQL with time-series functions", "Flux and InfluxQL", "SQL through the InfluxDB 3 APIs"] },
+        { "label": "You pay for", "values": ["Data written, memory and magnetic storage, query TCU-hours", "Instance-hours and provisioned storage", "Node-hours, stored data (200 GB minimum), plus an InfluxData licence per vCPU-hour for Enterprise"] }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "List prices in US East (N. Virginia)",
+      "intro": "On-demand list prices checked on 2026-10-06 from the AWS price list. Data transfer out and backups are extra.",
+      "corner": "Item",
+      "columns": ["Price"],
+      "rows": [
+        { "label": "LiveAnalytics: writes", "values": ["$0.50 per GB ingested; each write is counted in 1 KiB units"] },
+        { "label": "LiveAnalytics: memory store", "values": ["$0.036 per GB-hour"] },
+        { "label": "LiveAnalytics: magnetic store", "values": ["$0.03 per GB-month"] },
+        { "label": "LiveAnalytics: queries", "values": ["$0.518 per TCU-hour, per-second billing with a 30-second minimum"] },
+        { "label": "InfluxDB 2: `db.influx.medium` (1 vCPU, 8 GiB)", "values": ["$0.120 an hour, $0.239 with Multi-AZ"] },
+        { "label": "InfluxDB 2: `db.influx.large` (2 vCPU, 16 GiB)", "values": ["$0.239 an hour, $0.478 with Multi-AZ"] },
+        { "label": "InfluxDB 2: storage, 3K IOPS tier", "values": ["$0.10 per GB-month, $0.20 with Multi-AZ"] },
+        { "label": "InfluxDB 3: `db.influxIOIncluded.large` node (2 vCPU, 16 GiB)", "values": ["$0.264 an hour per node, S3 requests included"] },
+        { "label": "InfluxDB 3: object storage", "values": ["$0.023 per GB-month, minimum charge for 200 GB"] }
+      ],
+      "notes": [
+        "InfluxDB 3 Enterprise and InfluxDB 2 read replicas add InfluxData licence fees, billed separately through AWS Marketplace."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "AWS announced Amazon Timestream at re:Invent in November 2018 as a preview of a serverless time-series database for server logs, sensor data and industrial telemetry. Its pitch was cost and scale: AWS claimed it would process trillions of events a day at one tenth the cost of relational databases, keeping recent data in memory and moving history to cheaper storage automatically.",
+      "General availability took nearly two years, until September 2020. Scheduled queries, multi-measure records and direct writes to the magnetic store followed in 2021, and compute-unit query pricing in 2024. Meanwhile many teams already ran InfluxDB, so in March 2024 AWS added a second engine under the same name: managed open-source InfluxDB, in the style of RDS.",
+      "In May 2025 AWS said it would close the original engine, renamed Timestream for LiveAnalytics, to new customers from June 20, 2025, and recommended InfluxDB instead. Managed InfluxDB 3, with data on S3, arrived in October 2025."
+    ],
+    "choices": [
+      { "choice": "Serverless, with ingestion, storage and queries decoupled", "why": "AWS wanted each layer to scale on its own and to avoid correlated failures as the system grows, so customers never size servers." },
+      { "choice": "A memory store and a magnetic store in one table", "why": "Most time-series writes and dashboard reads touch recent data, so it stays in memory, while older data moves to storage organized for large scans, and one query reads across both." },
+      { "choice": "Partitions split by dimension values as well as time", "why": "Nearly all writes arrive around the current time, so splitting by time alone would not spread write traffic or let queries skip data." },
+      { "choice": "Run open-source InfluxDB for the second engine", "why": "Teams with InfluxDB code, Telegraf agents and dashboards could move to a managed service without rewriting against a new API." }
+    ],
+    "timeline": [
+      { "year": "2018", "text": "Timestream announced in preview at re:Invent" },
+      { "year": "2020", "text": "Generally available in September in four Regions" },
+      { "year": "2021", "text": "Scheduled queries, multi-measure records and magnetic store writes" },
+      { "year": "2024", "text": "Timestream for InfluxDB launches in March; TCU query pricing in April" },
+      { "year": "2025", "text": "LiveAnalytics closed to new customers in June; InfluxDB 3 in October" }
+    ],
+    "sources": [
+      { "label": "AWS What’s New: Announcing Amazon Timestream, preview (November 2018)", "url": "https://aws.amazon.com/about-aws/whats-new/2018/11/announcing-amazon-timestream/" },
+      { "label": "AWS What’s New: Amazon Timestream is now generally available (September 2020)", "url": "https://aws.amazon.com/about-aws/whats-new/2020/09/amazon-timestream-now-generally-available/" },
+      { "label": "AWS What’s New: Scheduled queries, multi-measure records and magnetic storage writes (November 2021)", "url": "https://aws.amazon.com/about-aws/whats-new/2021/11/amazon-timestream-scheduled-queries-multi-measure-records-magnetic-storage-writes/" },
+      { "label": "AWS What’s New: Amazon Timestream for InfluxDB is now generally available (March 2024)", "url": "https://aws.amazon.com/about-aws/whats-new/2024/03/amazon-timestream-influxdb-available/" },
+      { "label": "AWS What’s New: AWS service changes (May 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/05/aws-service-changes" },
+      { "label": "AWS What’s New: Amazon Timestream now supports InfluxDB 3 (October 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/10/amazon-timestream-influxdb-3/" }
+    ]
+  },
+  "sources": [
+    { "label": "Timestream docs: LiveAnalytics availability change (closed to new customers June 20, 2025)", "url": "https://docs.aws.amazon.com/timestream/latest/developerguide/AmazonTimestreamForLiveAnalytics-availability-change.html" },
+    { "label": "Timestream docs: LiveAnalytics architecture (memory and magnetic stores, partitions, cells)", "url": "https://docs.aws.amazon.com/timestream/latest/developerguide/architecture.html" },
+    { "label": "Timestream docs: Timestream Compute Units (TCU)", "url": "https://docs.aws.amazon.com/timestream/latest/developerguide/tcu.html" },
+    { "label": "Timestream docs: Metering writes (1 KiB units)", "url": "https://docs.aws.amazon.com/timestream/latest/developerguide/metering-and-pricing.writes.html" },
+    { "label": "Timestream docs: Migration guide (export to S3, InfluxDB or Aurora/RDS PostgreSQL targets)", "url": "https://docs.aws.amazon.com/timestream/latest/developerguide/migration-guide.html" },
+    { "label": "Timestream docs: What is Timestream for InfluxDB? (instances, storage, billing, cardinality advice)", "url": "https://docs.aws.amazon.com/timestream/latest/developerguide/timestream-for-influxdb.html" },
+    { "label": "Timestream docs: Read replica licensing through AWS Marketplace", "url": "https://docs.aws.amazon.com/timestream/latest/developerguide/timestream-for-influx-rr-licensing.html" },
+    { "label": "Timestream docs: Amazon Timestream for InfluxDB 3 (Core and Enterprise, S3 storage, billing)", "url": "https://docs.aws.amazon.com/timestream/latest/developerguide/influxdb3.html" },
+    { "label": "Timestream docs: Document history for Timestream for InfluxDB", "url": "https://docs.aws.amazon.com/timestream/latest/developerguide/doc-history-influxdb.html" },
+    { "label": "AWS What’s New: InfluxDB 3 expanded multi-node clusters, up to 15 nodes (March 2026)", "url": "https://aws.amazon.com/about-aws/whats-new/2026/03/amazon-timestream-for-influxdb-3-multi-node-cluster/" },
+    { "label": "AWS What’s New: Timestream for InfluxDB adds read replica support (February 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/02/amazon-timestream-influxdb-read-replica-support/" },
+    { "label": "AWS What’s New: Timestream for InfluxDB backup and restore (2026)", "url": "https://aws.amazon.com/about-aws/whats-new/2026/07/timestream-influxdb-backup-restore/" },
+    { "label": "AWS What’s New: Timestream for InfluxDB supports customer managed keys (August 2026)", "url": "https://aws.amazon.com/about-aws/whats-new/2026/08/amazon-timestream-influxdb-cmk/" },
+    { "label": "AWS What’s New: AWS IoT Core native InfluxDB routing (August 2026)", "url": "https://aws.amazon.com/about-aws/whats-new/2026/08/aws-iot-core-influxdb/" },
+    { "label": "Amazon Timestream pricing", "url": "https://aws.amazon.com/timestream/pricing/" },
+    { "label": "AWS Price List: Amazon Timestream, us-east-1 (published 2026-09-11, checked 2026-10-06)", "url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonTimestream/current/us-east-1/index.json" },
+    { "label": "AWS CLI reference: timestream-influxdb create-db-instance", "url": "https://docs.aws.amazon.com/cli/latest/reference/timestream-influxdb/create-db-instance.html" },
+    { "label": "GitHub: influxdata/influxdb licence files (main: MIT and Apache 2.0; main-2.x: MIT)", "url": "https://github.com/influxdata/influxdb" }
+  ],
+  "checked": "2026-10-06"
+}

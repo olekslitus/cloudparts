@@ -1,0 +1,180 @@
+{
+  "$schema": "../../.astro/collections/architectures.schema.json",
+  "title": "Serverless web app on AWS",
+  "order": 30,
+  "summary": "CloudFront serves the site from S3 and sends API calls through API Gateway to Lambda functions backed by DynamoDB.",
+  "intro": "A web app with no servers to patch and almost no cost when nobody is using it. Static files (HTML, JavaScript, images) sit in S3 behind CloudFront’s cache. API calls go through API Gateway, which checks and throttles them, to Lambda functions that start on demand and keep their state in DynamoDB. Every piece scales by itself, and you pay per request.",
+  "fits": "Startups and side projects; spiky or unpredictable traffic",
+  "diagram": {
+    "caption": "Page loads go to CloudFront and are mostly cache hits; misses fetch from S3. API calls go to API Gateway, pass its throttle and run on Lambda, which reads and writes DynamoDB. Watch Lambda add instances, with cold starts in amber, when calls bunch up.",
+    "w": 840,
+    "h": 300,
+    "nodes": [
+      {
+        "id": "users",
+        "x": 85,
+        "y": 150,
+        "label": "Users",
+        "sub": "browsers & apps",
+        "emit": {
+          "every": 380,
+          "jitter": 0.45,
+          "req": true,
+          "types": [
+            "page",
+            "api",
+            "api"
+          ],
+          "colorByType": {
+            "page": 1,
+            "api": 0
+          }
+        },
+        "route": "type",
+        "rules": {
+          "page": [
+            "cdn"
+          ],
+          "api": [
+            "api"
+          ]
+        }
+      },
+      {
+        "id": "cdn",
+        "x": 280,
+        "y": 70,
+        "label": "Amazon CloudFront",
+        "sub": "edge cache",
+        "tech": "cloudfront",
+        "mode": "cache",
+        "p": 0.8,
+        "out": [
+          "s3"
+        ]
+      },
+      {
+        "id": "s3",
+        "x": 500,
+        "y": 70,
+        "label": "Amazon S3",
+        "sub": "HTML · JS · images",
+        "tech": "s3",
+        "mode": "reply",
+        "delay": 60
+      },
+      {
+        "id": "api",
+        "x": 300,
+        "y": 225,
+        "label": "Amazon API Gateway",
+        "sub": "auth · throttling",
+        "tech": "api-gateway",
+        "mode": "gate",
+        "p": 0.97,
+        "denyText": "429 throttled",
+        "out": [
+          "fn"
+        ]
+      },
+      {
+        "id": "fn",
+        "x": 520,
+        "y": 225,
+        "label": "AWS Lambda",
+        "sub": "one per request",
+        "tech": "lambda",
+        "kind": "pool",
+        "max": 6,
+        "work": 300,
+        "idle": 2200,
+        "cold": 400,
+        "out": [
+          "db"
+        ]
+      },
+      {
+        "id": "db",
+        "x": 740,
+        "y": 225,
+        "label": "DynamoDB",
+        "sub": "orders table",
+        "tech": "dynamodb",
+        "mode": "reply",
+        "delay": 15
+      }
+    ]
+  },
+  "steps": [
+    {
+      "title": "The page comes from the edge",
+      "text": "A browser asks CloudFront for the site. Most files are already cached at the edge location nearest the user; on a miss, CloudFront fetches them from the S3 bucket and keeps a copy.",
+      "nodes": [
+        "users",
+        "cdn",
+        "s3"
+      ]
+    },
+    {
+      "title": "API calls are checked first",
+      "text": "Calls to the API’s own domain go to API Gateway, which validates the user’s token and enforces rate limits before any of your code runs. Requests over the limit get a `429`.",
+      "nodes": [
+        "users",
+        "api"
+      ]
+    },
+    {
+      "title": "Lambda runs your handler",
+      "text": "Each call runs a Lambda function. If no instance is free, Lambda starts a new one (a cold start, from under 100 ms to over a second); idle instances are reclaimed after a while.",
+      "nodes": [
+        "fn"
+      ]
+    },
+    {
+      "title": "State lives in DynamoDB",
+      "text": "The function reads and writes items in DynamoDB, which answers in single-digit milliseconds at any scale. Because functions keep nothing between calls, any instance can serve any request.",
+      "nodes": [
+        "db"
+      ]
+    }
+  ],
+  "good": [
+    "Close to zero cost at zero traffic, and no servers or capacity to manage",
+    "Each layer scales independently and automatically, from one request a day to thousands a second",
+    "The CDN absorbs most page traffic and keeps static files close to users",
+    "Security boundaries are explicit: the gateway authenticates, IAM controls what each function may touch"
+  ],
+  "watch": [
+    "Cold starts add latency to the first requests after a quiet spell or during a burst",
+    "Lambda’s 15-minute limit and stateless model don’t suit long jobs or persistent connections",
+    "DynamoDB rewards designing tables around your access patterns up front; ad-hoc queries are awkward",
+    "At steady high traffic, per-request pricing can cost more than a few always-on containers"
+  ],
+  "swaps": [
+    {
+      "text": "Prefer SQL? Put PostgreSQL behind the functions, with a connection pooler so bursts of Lambdas don’t exhaust its connections.",
+      "techs": [
+        "postgresql"
+      ]
+    },
+    {
+      "text": "For steady traffic or long requests, run the API as containers on Fargate behind a load balancer instead of Lambda.",
+      "techs": [
+        "fargate",
+        "alb"
+      ]
+    },
+    {
+      "text": "Off AWS, the same shape is Cloudflare in front of Workers and R2, or Cloud Run behind Google’s CDN.",
+      "techs": [
+        "cloudflare",
+        "cloudflare-workers",
+        "r2",
+        "cloud-run"
+      ]
+    }
+  ],
+  "sources": [
+    { "label": "AWS docs: Throttle requests to your REST APIs (429 Too Many Requests)", "url": "https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-request-throttling.html" }
+  ]
+}

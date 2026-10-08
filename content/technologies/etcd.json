@@ -1,0 +1,111 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "etcd",
+  "concepts": ["coordination", "key-value"],
+  "provider": "oss",
+  "vendor": "Cloud Native Computing Foundation",
+  "license": "Apache 2.0",
+  "website": "https://etcd.io/",
+  "repo": "https://github.com/etcd-io/etcd",
+  "summary": "The Raft-replicated key-value store that holds every Kubernetes cluster’s state, built for small, critical data that many machines must agree on.",
+  "intro": [
+    "etcd is a key-value store written in Go that runs as a cluster of usually three or five members. The members elect a leader with Raft. Every write goes to the leader, which replicates it to the others and applies it once a majority has it, so the cluster keeps working while any majority is up. Reads are linearizable by default: they too go through consensus and always return the latest committed value, unless a client opts into faster, possibly stale “serializable” reads. Keys live in one flat, sorted byte keyspace, so a prefix such as `/registry/pods/` is a cheap range query, and clients talk to it over gRPC.",
+    "etcd keeps history. Every change creates a new cluster-wide revision and the old value stays readable until the history is compacted. A client can read the store as it was at a past revision, and a watch streams every change from a given revision onward, so a client that was disconnected resumes where it left off without missing events. Leases tie keys to a client’s keep-alives: when the lease expires, its keys are deleted. Transactions compare a key’s revision, version or value and then apply a set of writes atomically, and built-in lock and election APIs package the usual patterns.",
+    "Its best-known job is storing every object of a Kubernetes cluster, and managed Kubernetes services such as Amazon EKS run it for you. It is built for metadata, not bulk data: requests are capped at 1.5 MiB by default, the store at 2 GiB by default, with 8 GiB as the suggested maximum. etcd joined the CNCF in 2018 and graduated in November 2020; the current line is 3.7, released in July 2026."
+  ],
+  "strengths": [
+    "Strong consistency by default, a simple model, and scrutiny to match: Jepsen tested it in 2020 and a Trail of Bits audit found no significant issues in its core",
+    "Watches that resume from a revision, so a client never silently misses a change",
+    "Leases, transactions and ready-made lock and election commands cover most coordination patterns",
+    "A gRPC API with clients in many languages; its Raft library also powers CockroachDB, TiDB and others"
+  ],
+  "limits": [
+    "Small data only: 1.5 MiB per request, a 2 GiB default quota and 8 GiB suggested at most",
+    "Needs housekeeping: compact old revisions and defragment, or a full store raises an alarm and the cluster accepts only reads and deletes",
+    "Very sensitive to disk write latency and network round trips; slow disks or starved CPUs cause missed heartbeats, leader elections and instability",
+    "Every write goes through one leader, so more members add fault tolerance, not write throughput; the docs advise no more than seven"
+  ],
+  "worksWith": [
+    { "id": "kubernetes", "how": "stores all cluster state for" },
+    { "id": "patroni", "how": "holds the leader key and settings for" },
+    { "id": "vitess", "how": "can hold the topology and locks of" },
+    { "id": "grpc", "how": "serves its client API over" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Revisions, watches from the past, compare-and-swap and cluster status",
+    "source": [
+      "etcdctl put /config/mode blue",
+      "etcdctl put /config/mode green",
+      "etcdctl get /config/mode --rev=2              # read the value as of revision 2",
+      "",
+      "# replay every change under /config/ since revision 2, then keep following",
+      "etcdctl watch /config/ --prefix --rev=2",
+      "",
+      "# switch to red only if nobody changed the key since revision 3",
+      "etcdctl txn <<'EOF'",
+      "mod(\"/config/mode\") = \"3\"",
+      "",
+      "put /config/mode red",
+      "",
+      "EOF",
+      "",
+      "etcdctl compaction 3                          # drop history older than revision 3",
+      "etcdctl -w table endpoint --cluster status    # leader, Raft term and database size per member"
+    ]
+  },
+  "history": {
+    "story": [
+      "In 2013 CoreOS was building a Linux distribution for clusters that updated itself automatically. That meant machines had to coordinate: share configuration, find each other’s services, and agree on who may reboot when, so a whole cluster never restarted at once. ZooKeeper solved similar problems, but CoreOS wanted something simpler to use. On July 23, 2013, Brandon Philips announced etcd: a key-value store written in Go, inspired by ZooKeeper and doozer, with an HTTP and JSON API you could use with `curl`, replicated with the then-new Raft consensus algorithm.",
+      "Kubernetes adopted etcd as the store for all of its cluster state, and that pushed etcd toward far larger loads than coordinating machine updates. Version 3.0, in June 2016, redesigned the API from that experience: gRPC instead of JSON, a flat keyspace with multiversion history and transactions, streaming watches, and leases in place of per-key expiry times. CoreOS said the goal was tens of thousands of active clients working on a million keys in one cluster.",
+      "etcd joined the Cloud Native Computing Foundation in December 2018 and graduated in November 2020, after Jepsen testing and a third-party security audit. With version 3.6 in May 2025, its first minor release in almost four years, the project also became a Kubernetes special interest group, sig-etcd."
+    ],
+    "choices": [
+      { "choice": "Raft and a `curl`-able API", "why": "CoreOS wanted a store that was simple to use and properly replicated. Raft gave a replicated log with a clear leader, and HTTP with JSON meant any script or language could talk to it without a special client." },
+      { "choice": "Keep old versions of every key", "why": "With multiversion history, snapshots are cheap and a watch can start from a past revision, so a client that disconnects for a while resumes from the last event it saw instead of rereading everything." },
+      { "choice": "Leases instead of a TTL on each key", "why": "In etcd2 every expiring key had to be refreshed through consensus, so an idle cluster still did a steady stream of writes. A lease is kept alive over one gRPC stream, handled by the leader without consensus, and many keys can share it." },
+      { "choice": "gRPC instead of JSON", "why": "gRPC multiplexes many calls and watches over one HTTP/2 connection, and CoreOS measured a 2x edge in message processing over etcd2’s optimised JSON. A gateway still serves JSON for simple clients." }
+    ],
+    "timeline": [
+      { "year": "2013", "text": "CoreOS announces etcd on July 23" },
+      { "year": "2015", "text": "etcd 2.0, the first major stable release, in January" },
+      { "year": "2016", "text": "etcd 3.0 brings the gRPC API, multiversion history and leases" },
+      { "year": "2018", "text": "Joins the CNCF as an incubating project in December" },
+      { "year": "2020", "text": "Graduates in the CNCF in November" },
+      { "year": "2025", "text": "etcd 3.6 in May; the project becomes Kubernetes’ sig-etcd" },
+      { "year": "2026", "text": "etcd 3.7 in July" }
+    ],
+    "sources": [
+      { "label": "CoreOS blog: Distributed configuration data with etcd (Brandon Philips, July 2013)", "url": "https://coreos.com/blog/distributed-configuration-with-etcd/", "archive": "https://web.archive.org/web/20140226172030/http://coreos.com/blog/distributed-configuration-with-etcd/" },
+      { "label": "etcd docs: Why etcd (Container Linux updates coordinated with locksmith)", "url": "https://etcd.io/docs/v3.7/learning/why/" },
+      { "label": "CoreOS blog: etcd3, a new etcd (Anthony Romano and Xiang Li, June 2016)", "url": "https://coreos.com/blog/etcd3-a-new-etcd.html", "archive": "https://web.archive.org/web/20161228103639/https://coreos.com/blog/etcd3-a-new-etcd.html" },
+      { "label": "GitHub: etcd v2.0.0 release (Jan 2015)", "url": "https://github.com/etcd-io/etcd/releases/tag/v2.0.0" },
+      { "label": "GitHub: etcd v3.0.0 release (June 2016)", "url": "https://github.com/etcd-io/etcd/releases/tag/v3.0.0" },
+      { "label": "CNCF: Cloud Native Computing Foundation announces etcd graduation (Nov 2020)", "url": "https://www.cncf.io/announcements/2020/11/24/cloud-native-computing-foundation-announces-etcd-graduation/" },
+      { "label": "etcd blog: Announcing etcd v3.6.0 (May 2025)", "url": "https://etcd.io/blog/2025/announcing-etcd-3.6/" },
+      { "label": "GitHub: etcd v3.7.0 release (July 2026)", "url": "https://github.com/etcd-io/etcd/releases/tag/v3.7.0" }
+    ]
+  },
+  "sources": [
+    { "label": "etcd docs: API (KV, Watch and Lease services, revisions, transactions)", "url": "https://etcd.io/docs/v3.7/learning/api/" },
+    { "label": "etcd docs: KV API guarantees (linearizable by default, serializable reads)", "url": "https://etcd.io/docs/v3.7/learning/api_guarantees/" },
+    { "label": "etcd docs: Data model (revisions, compaction, flat sorted keyspace)", "url": "https://etcd.io/docs/v3.7/learning/data_model/" },
+    { "label": "etcd docs: System limits (1.5 MiB requests, 2 GiB default quota, 8 GiB suggested maximum)", "url": "https://etcd.io/docs/v3.7/dev-guide/limit/" },
+    { "label": "etcd docs: Maintenance (compaction, defragmentation, space quota alarm)", "url": "https://etcd.io/docs/v3.7/op-guide/maintenance/" },
+    { "label": "etcd docs: Hardware recommendations (disk latency, memory)", "url": "https://etcd.io/docs/v3.7/op-guide/hardware/" },
+    { "label": "etcd docs: FAQ (odd cluster sizes, no more than seven members, write performance)", "url": "https://etcd.io/docs/v3.7/faq/" },
+    { "label": "etcd docs: Why etcd (locks, elections, gRPC clients)", "url": "https://etcd.io/docs/v3.7/learning/why/" },
+    { "label": "etcdctl README: get --rev, watch --rev, txn, compaction, lock, elect, endpoint status", "url": "https://github.com/etcd-io/etcd/blob/main/etcdctl/README.md" },
+    { "label": "etcd-io/raft README: used by etcd, Kubernetes, CockroachDB, TiDB and more", "url": "https://github.com/etcd-io/raft" },
+    { "label": "CNCF: etcd graduation (Nov 2020): Jepsen testing and Trail of Bits audit", "url": "https://www.cncf.io/announcements/2020/11/24/cloud-native-computing-foundation-announces-etcd-graduation/" },
+    { "label": "GitHub: etcd v3.7.0 release (July 2026)", "url": "https://github.com/etcd-io/etcd/releases/tag/v3.7.0" },
+    { "label": "Kubernetes docs: Operating etcd clusters for Kubernetes (odd members, heartbeats, resource starvation)", "url": "https://kubernetes.io/docs/tasks/administer-cluster/configure-upgrade-etcd/" },
+    { "label": "Kubernetes docs: Cluster components (etcd holds all API server data)", "url": "https://kubernetes.io/docs/concepts/overview/components/" },
+    { "label": "Amazon EKS User Guide: Architecture (etcd in the managed control plane)", "url": "https://docs.aws.amazon.com/eks/latest/userguide/eks-architecture.html" },
+    { "label": "Patroni on GitHub: a template for PostgreSQL HA with ZooKeeper, etcd or Consul", "url": "https://github.com/patroni/patroni" },
+    { "label": "Patroni docs: Dynamic configuration (stored in the DCS)", "url": "https://patroni.readthedocs.io/en/latest/dynamic_configuration.html" },
+    { "label": "Vitess docs: Topology service (etcd, ZooKeeper or Consul)", "url": "https://vitess.io/docs/24.0/reference/features/topology-service/" },
+    { "label": "GitHub: etcd LICENSE (Apache 2.0)", "url": "https://github.com/etcd-io/etcd/blob/main/LICENSE" }
+  ],
+  "checked": "2026-10-06"
+}

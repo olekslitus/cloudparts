@@ -1,0 +1,145 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Polars",
+  "concepts": ["query-engines"],
+  "provider": "oss",
+  "vendor": "Polars (the company), started by Ritchie Vink",
+  "license": "MIT (Polars Cloud, the company’s managed platform, is a separate commercial service)",
+  "website": "https://pola.rs/",
+  "repo": "https://github.com/pola-rs/polars",
+  "summary": "A DataFrame library with a Rust query engine underneath: you write Python (or Rust, SQL, Node.js, R) and it plans, optimises and runs the query on every core, streaming data bigger than memory.",
+  "intro": [
+    "Polars looks like pandas: you load a table and chain operations on it. Underneath it treats each chain as a query. With the lazy API (`scan_parquet`, `scan_csv` and friends) nothing runs until you call `collect()`. Polars first builds a plan, then its optimiser pushes filters and column selection down into the file scan, reads only the slice it needs, caches repeated subplans and picks a join order. The engine is written in Rust, runs vectorised and multi-threaded, and holds data in the Apache Arrow columnar format, so it can hand tables to PyArrow, DuckDB and other Arrow tools without copying. SQL works too: Polars translates it into the same expressions instead of running a separate SQL engine.",
+    "Since Polars 2.0 (6 October 2026) `collect()` uses the streaming engine by default. It processes the data in batches rather than all at once, so datasets larger than RAM fit, and operations it can’t stream fall back to the in-memory engine. Spilling to disk is on by default too, starting at about 80% of RAM, though in 2.0 only some operations (sorts, window functions, many expressions) can spill yet. An optional GPU engine built with NVIDIA’s cuDF runs the same queries on a GPU. The library stays on one machine; Polars Cloud, a commercial platform from the company behind Polars, runs the same queries across a cluster on AWS or your own Kubernetes."
+  ],
+  "strengths": [
+    "Uses every core, an optimiser and columnar Arrow memory, where older DataFrame libraries ran single-threaded and step by step",
+    "The streaming engine handles data larger than RAM on a laptop or a single server, with no cluster to run",
+    "Zero-copy Arrow interchange with PyArrow, DuckDB and other Arrow tools, plus readers for Parquet, CSV, JSON, Delta Lake, Iceberg and cloud storage",
+    "A strict, consistent API that catches schema and type errors early instead of silently coercing data",
+    "MIT licensed, with a funded company paying for core development"
+  ],
+  "limits": [
+    "Not a drop-in pandas replacement: there’s no row index and the API is different, so existing code has to be rewritten",
+    "The open-source library runs on one machine; distributed execution comes through Polars Cloud, the company’s commercial platform",
+    "2.0 just changed defaults: the streaming engine doesn’t keep row order for joins and group-bys unless you ask (`maintain_order`), and joins and group-bys can’t spill to disk yet",
+    "The headline TPC-H and TPC-DS comparisons with DuckDB and DataFusion were run and published by the Polars team"
+  ],
+  "worksWith": [
+    { "id": "arrow", "how": "holds data in the memory format of" },
+    { "id": "parquet", "how": "reads and writes" },
+    { "id": "duckdb", "how": "shares DataFrames, via Arrow, with" },
+    { "id": "delta-lake", "how": "reads and writes tables in" },
+    { "id": "iceberg", "how": "reads and writes tables in" },
+    { "id": "lance", "how": "reads tables in" },
+    { "id": "s3", "how": "reads and writes files in" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "A lazy query: planned first, then streamed",
+    "source": [
+      "import polars as pl",
+      "",
+      "q = (",
+      "    pl.scan_parquet(\"s3://acme-lake/orders/*.parquet\")",
+      "    .filter(pl.col(\"status\") == \"shipped\")",
+      "    .group_by(\"customer_id\")",
+      "    .agg(",
+      "        pl.col(\"amount\").sum().alias(\"total\"),",
+      "        pl.len().alias(\"n_orders\"),",
+      "    )",
+      "    .sort(\"total\", descending=True)",
+      ")",
+      "",
+      "print(q.explain())   # the optimised plan: filter and columns pushed into the scan",
+      "top = q.collect()    # 2.0: runs on the streaming engine by default"
+    ]
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "One query, several engines",
+      "intro": "The same LazyFrame can run on different engines. You pick with `collect(engine=...)`, or Polars picks for you.",
+      "items": [
+        { "name": "Streaming", "tag": "default since 2.0", "text": "Processes data in batches using morsel-driven parallelism, so it needs less memory and can handle data larger than RAM. Falls back to the in-memory engine for operations it can’t stream yet." },
+        { "name": "In-memory", "tag": "engine=\"in-memory\"", "text": "The original engine: processes the whole dataset in memory at once. Still used for operations the streaming engine doesn’t cover, and selectable as the default." },
+        { "name": "GPU", "tag": "open beta", "text": "Built with NVIDIA RAPIDS cuDF. Install `polars[gpu]` and call `collect(engine=\"gpu\")`; a query it can’t run falls back to the CPU. Python only." },
+        { "name": "Distributed", "tag": "Polars Cloud", "text": "The company’s platform splits a query across workers that each run the open-source streaming engine. Generally available on AWS since September 2025, and on your own Kubernetes since June 2026." }
+      ]
+    },
+    {
+      "type": "code",
+      "title": "SQL on DataFrames",
+      "intro": "SQL is translated into Polars expressions and runs on the same engine, so it can mix freely with DataFrame code.",
+      "lang": "python",
+      "source": [
+        "import polars as pl",
+        "",
+        "orders = pl.scan_parquet(\"orders.parquet\")",
+        "customers = pl.read_csv(\"customers.csv\")",
+        "",
+        "ctx = pl.SQLContext(orders=orders, customers=customers)",
+        "top = ctx.execute(\"\"\"",
+        "    SELECT c.country, sum(o.amount) AS revenue",
+        "    FROM orders o JOIN customers c USING (customer_id)",
+        "    GROUP BY c.country ORDER BY revenue DESC LIMIT 10",
+        "\"\"\").collect()"
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Ritchie Vink made the first commit on 23 June 2020, stuck at home in the first year of the pandemic. It began as a pet project to learn about query engines, Apache Arrow and Rust, because the Rust DataFrame tools of the time didn’t satisfy him. By February 2021 it was near the top of H2O.ai’s database-like benchmark, behind only R’s data.table among DataFrame libraries, and he introduced it with a post titled “I wrote one of the fastest DataFrame libraries”.",
+      "His view was that a DataFrame is a front end on a query engine. Single-machine DataFrame libraries were mostly single-threaded, kept everything in RAM and ignored decades of database research, while laptops kept getting more cores. Polars was written from scratch to use them, with a query optimiser so that idiomatic code still runs fast. In August 2023 Vink and Chiel Peters started a company around it with a seed round of about $4 million led by Bain Capital Ventures, promising that Polars would stay MIT licensed.",
+      "Python Polars 1.0 (July 2024) declared the in-memory engine production ready and announced a redesigned streaming engine. A GPU engine with NVIDIA followed in September 2024. In September 2025 the company launched Polars Cloud on AWS with a distributed engine in beta, then raised an €18 million Series A led by Accel. Polars 2.0, released on 6 October 2026, made the streaming engine the default."
+    ],
+    "choices": [
+      { "choice": "A query engine behind a DataFrame API", "why": "Eager DataFrames run each step as written. Making the lazy API central lets an optimiser see the whole query, push filters and column choices into the file scan, and skip work, so users can write readable code without hand-tuning it." },
+      { "choice": "Arrow’s memory format, in its own Rust implementation", "why": "Columnar Arrow memory suits vectorised execution and lets Polars swap data with other tools without copying. Polars keeps its own implementation, `polars-arrow`, forked from Jorge Leitão’s arrow2, so it controls its API, memory and execution end to end." },
+      { "choice": "Strict and fail fast", "why": "Vink wanted users to get “the hangover up front”: errors when a query is planned, not twenty minutes into a pipeline. Polars 2.0 went further, refusing lossy type coercions and mismatched concatenations that earlier versions allowed." },
+      { "choice": "A streaming engine built on morsels and Rust async", "why": "To process data larger than memory, the redesigned engine combines morsel-driven parallelism (small chunks of rows spread across cores) with Rust’s async state machines, giving a hybrid push and pull design." }
+    ],
+    "timeline": [
+      { "year": "2020", "text": "Ritchie Vink makes the first commit (23 June)" },
+      { "year": "2021", "text": "“I wrote one of the fastest DataFrame libraries” introduces Polars" },
+      { "year": "2023", "text": "Vink and Chiel Peters found the company with a ~$4M seed" },
+      { "year": "2024", "text": "Python Polars 1.0 (July); GPU engine beta with NVIDIA (September)" },
+      { "year": "2025", "text": "Polars Cloud generally available on AWS; €18M Series A" },
+      { "year": "2026", "text": "Distributed engine on Kubernetes (June); Polars 2.0 makes streaming the default (October)" }
+    ],
+    "sources": [
+      { "label": "Ritchie Vink: I wrote one of the fastest DataFrame libraries (Feb 2021)", "url": "https://pola.rs/posts/i-wrote-one-of-the-fastest-dataframe-libraries" },
+      { "label": "Ritchie Vink and Chiel Peters: Company announcement (Aug 2023)", "url": "https://pola.rs/posts/company-announcement" },
+      { "label": "Ritchie Vink: Announcing Polars 1.0 (July 2024)", "url": "https://pola.rs/posts/announcing-polars-1" },
+      { "label": "Polars: GPU acceleration with Polars and NVIDIA RAPIDS (Sept 2024)", "url": "https://pola.rs/posts/gpu-engine-release" },
+      { "label": "Ritchie Vink: Launch of Polars Cloud and Distributed Polars (Sept 2025)", "url": "https://pola.rs/posts/polars-cloud-launch" },
+      { "label": "Ritchie Vink: Polars raises €18M Series A (Sept 2025)", "url": "https://pola.rs/posts/series_a" },
+      { "label": "Chiel Peters: Launching Polars Distributed on Kubernetes (June 2026)", "url": "https://pola.rs/posts/polars-distributed-available-on-kubernetes" },
+      { "label": "Polars: Announcing Polars 2.0 (strictness and the streaming default)", "url": "https://pola.rs/posts/announcing-polars-2" },
+      { "label": "Ritchie Vink: Release of Polars 2.0 (Oct 2026)", "url": "https://pola.rs/posts/release-polars-2" },
+      { "label": "docs.rs: polars-arrow, “forked from arrow2”", "url": "https://docs.rs/crate/polars-arrow/latest" },
+      { "label": "Polars homepage: written from the ground up, full control of API, memory and execution", "url": "https://pola.rs/" }
+    ]
+  },
+  "sources": [
+    { "label": "pola-rs/polars README: Rust engine, lazy and eager execution, bindings, Arrow format (MIT licence)", "url": "https://github.com/pola-rs/polars" },
+    { "label": "Polars user guide: Lazy API usage", "url": "https://docs.pola.rs/user-guide/lazy/using/" },
+    { "label": "Polars user guide: Lazy API optimizations (predicate, projection and slice pushdown, join ordering)", "url": "https://docs.pola.rs/user-guide/lazy/optimizations/" },
+    { "label": "Polars user guide: Streaming", "url": "https://docs.pola.rs/user-guide/concepts/streaming/" },
+    { "label": "Polars user guide: Arrow producer/consumer (zero-copy)", "url": "https://docs.pola.rs/user-guide/misc/arrow/" },
+    { "label": "Polars user guide: SQL introduction (SQL translated into expressions)", "url": "https://docs.pola.rs/user-guide/sql/intro/" },
+    { "label": "Polars user guide: Coming from pandas (no index, Arrow instead of NumPy)", "url": "https://docs.pola.rs/user-guide/migration/pandas/" },
+    { "label": "Polars user guide: GPU support", "url": "https://docs.pola.rs/user-guide/lazy/gpu/" },
+    { "label": "Polars: GPU acceleration with Polars and NVIDIA RAPIDS, with CPU fallback (Sept 2024)", "url": "https://pola.rs/posts/gpu-engine-release" },
+    { "label": "Polars user guide: Cloud storage", "url": "https://docs.pola.rs/user-guide/io/cloud-storage/" },
+    { "label": "Polars API reference: Input/output (Delta Lake, Iceberg, Lance scans and sinks)", "url": "https://docs.pola.rs/api/python/stable/reference/io.html" },
+    { "label": "Polars API reference: scan_lance (marked unstable)", "url": "https://docs.pola.rs/api/python/stable/reference/api/polars.scan_lance.html" },
+    { "label": "Ritchie Vink: Release of Polars 2.0, with benchmarks and out-of-core defaults (Oct 2026)", "url": "https://pola.rs/posts/release-polars-2" },
+    { "label": "Polars: Announcing Polars 2.0 (row order and engine affinity)", "url": "https://pola.rs/posts/announcing-polars-2" },
+    { "label": "Polars py-2.0.0 release notes on GitHub (Oct 2026)", "url": "https://github.com/pola-rs/polars/releases/tag/py-2.0.0" },
+    { "label": "Ritchie Vink: Launch of Polars Cloud and Distributed Polars (Sept 2025)", "url": "https://pola.rs/posts/polars-cloud-launch" },
+    { "label": "Chiel Peters: Launching Polars Distributed on Kubernetes (June 2026)", "url": "https://pola.rs/posts/polars-distributed-available-on-kubernetes" },
+    { "label": "DuckDB docs: Integration with Polars", "url": "https://duckdb.org/docs/current/guides/python/polars" }
+  ],
+  "checked": "2026-10-06"
+}

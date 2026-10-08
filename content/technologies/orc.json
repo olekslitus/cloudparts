@@ -1,0 +1,349 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Apache ORC",
+  "concepts": [
+    "file-formats"
+  ],
+  "kinds": ["columnar-files"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://orc.apache.org/",
+  "repo": "https://github.com/apache/orc",
+  "summary": "A columnar file format born in Hive: typed columns in large stripes, built-in indexes every 10,000 rows, and the storage behind Hive’s ACID tables.",
+  "intro": [
+    "An ORC file starts with the bytes `ORC`, then a body of stripes, then a tail. Each stripe holds whole rows, about 64 MB of them by default in the Java writer, and is self-contained: an index section, the row data with every column stored separately, and a stripe footer. Writers pick encodings by type (dictionary, run-length, bit packing, delta) and then compress with ZLIB, Snappy, LZ4 or ZSTD, which the Java writer now uses by default. The tail holds the schema, the list of stripes and statistics for every column, in Protocol Buffers so new fields don’t break old readers, plus a small uncompressed postscript that says how to read the rest. A reader fetches the last 16 KB of the file first and works backwards.",
+    "Indexes sit at three levels: the whole file, each stripe, and each group of 10,000 rows inside a stripe. They record counts, nulls, minimum and maximum, and sums for numbers, and columns can add bloom filters. An engine turns a filter such as `age > 100` into a search argument and skips files, stripes and row groups that can’t match. Hive builds ACID tables on ORC: updates and deletes go into delta directories of ORC files with extra columns (operation, original transaction, bucket, row id), and compactions merge them into new base files. ORC started in Hive in 2013 and became a top-level Apache project in 2015; it’s free under Apache 2.0, with Java and C++ libraries, and 2.3.1 (July 2026) is the current release."
+  ],
+  "strengths": [
+    "Indexes per file, stripe and 10,000-row group, plus optional bloom filters, let engines skip most of a file on selective queries",
+    "A full set of typed columns, including decimal, `union` and two timestamp types, with the schema stored in the file",
+    "The format behind Hive’s full ACID tables (`UPDATE`, `DELETE`, `MERGE`) and streaming ingest",
+    "Column-level encryption in the format, supported by Spark since 3.2",
+    "The default format for new tables in the Hive connectors of Trino and Presto"
+  ],
+  "limits": [
+    "A smaller ecosystem than Parquet: Iceberg and Spark default to Parquet, and Delta Lake stores only Parquet",
+    "Files are written once; Hive’s updates pile up delta files that need compaction, and ACID is built for millions of rows per transaction, not millions of transactions an hour",
+    "ACID tables are a Hive feature, not part of the format, so other engines have to implement Hive’s transaction rules to read them correctly",
+    "Some engines only read it: Impala can query ORC tables but can’t write them",
+    "Two timestamp types: plain `timestamp` has no time zone and shows the same wall-clock time everywhere, so ORC’s docs recommend `timestamp with local time zone` unless everything is in UTC"
+  ],
+  "worksWith": [
+    {
+      "id": "spark",
+      "how": "is read and written natively by"
+    },
+    {
+      "id": "trino",
+      "how": "is the default Hive-connector format in"
+    },
+    {
+      "id": "presto",
+      "how": "is the default Hive-connector format in"
+    },
+    {
+      "id": "iceberg",
+      "how": "can be the data file format of"
+    },
+    {
+      "id": "pig",
+      "how": "is read and written via OrcStorage by"
+    }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "A Hive ACID table on ORC, with ZSTD and a bloom filter",
+    "source": [
+      "-- Hive: transactions need the DbTxnManager and concurrency support",
+      "SET hive.support.concurrency=true;",
+      "SET hive.txn.manager=org.apache.hadoop.hive.ql.lockmgr.DbTxnManager;",
+      "",
+      "CREATE TABLE orders (",
+      "  order_id    BIGINT,",
+      "  customer_id BIGINT,",
+      "  status      STRING,",
+      "  amount      DECIMAL(10,2)",
+      ")",
+      "STORED AS ORC",
+      "TBLPROPERTIES (",
+      "  'transactional'            = 'true',",
+      "  'orc.compress'             = 'ZSTD',",
+      "  'orc.bloom.filter.columns' = 'customer_id'",
+      ");",
+      "",
+      "INSERT INTO orders VALUES (1, 42, 'new', 19.99), (2, 7, 'new', 5.00);",
+      "",
+      "-- written as a delta directory; compaction later folds it into the base",
+      "UPDATE orders SET status = 'shipped' WHERE order_id = 1;",
+      "",
+      "-- stripes and 10,000-row groups whose stats or bloom filter rule out 42 are skipped",
+      "SELECT order_id, status FROM orders WHERE customer_id = 42;"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "ORC or Parquet?",
+      "intro": "Both are open columnar formats from early 2013 with similar ideas: columns stored apart, statistics in a footer, files written once. The differences are in the details and, above all, in who supports them.",
+      "corner": "",
+      "columns": [
+        "ORC",
+        "Parquet"
+      ],
+      "rows": [
+        {
+          "label": "Started by",
+          "values": [
+            "Hortonworks with Facebook, to speed up Hive (January 2013)",
+            "Twitter and Cloudera, for any Hadoop engine (March 2013)"
+          ]
+        },
+        {
+          "label": "Unit of work",
+          "values": [
+            "Stripes; 64 MB by default in the Java writer",
+            "Row groups; the docs suggest 512 MB to 1 GB"
+          ]
+        },
+        {
+          "label": "Built-in skipping",
+          "values": [
+            "Count, nulls, min, max (and sum for numbers) per file, stripe and 10,000 rows; optional bloom filters",
+            "Min and max per column chunk; optional page index and bloom filters"
+          ]
+        },
+        {
+          "label": "Nested data",
+          "values": [
+            "A child column per struct field, list element and map key and value; also a `union` type",
+            "Repetition and definition levels from Google’s Dremel paper"
+          ]
+        },
+        {
+          "label": "Footer encoding",
+          "values": [
+            "Protocol Buffers",
+            "Thrift"
+          ]
+        },
+        {
+          "label": "Row updates",
+          "values": [
+            "Hive’s full ACID tables (base and delta files); Hive implements them only for ORC",
+            "None in the format; use a table format such as Iceberg or Delta Lake"
+          ]
+        },
+        {
+          "label": "Table formats",
+          "values": [
+            "Supported by Iceberg; not by Delta Lake",
+            "Iceberg’s default; Delta Lake’s only data file format"
+          ]
+        },
+        {
+          "label": "Default for new tables in",
+          "values": [
+            "Hive connectors of Trino and Presto",
+            "Spark SQL"
+          ]
+        }
+      ],
+      "notes": [
+        "From each project’s own docs and specs, checked 2026-10-06. Spark’s default comes from `spark.sql.sources.default`; Trino’s from `hive.storage-format`."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "For several years RCFile, a hybrid columnar format developed at Facebook, had been the standard way to store Hive tables on Hadoop. It kept each column value as an untyped binary blob. That meant whole values had to be read and decoded, filters couldn’t be pushed down to the file, and the file didn’t even know its row types. In January, Hortonworks co-founder Owen O’Malley opened HIVE-3874 to create an Optimized Row Columnar format, working with Facebook as part of Hortonworks’ Stinger initiative to make Hive up to 100 times faster.",
+      "ORC shipped in Hive 0.11 in May 2013, and the v1 file format still in use arrived with Hive 0.12 that October. Facebook ran its own ORC writer and reported in 2014 that switching tens of petabytes from RCFile raised compression from 5x to 8x. Hive 0.14 added ACID updates, implemented only for ORC. In April 2015 ORC became its own top-level Apache project. ORC 1.0 followed in January 2016, and from 1.1 Hadoop jobs could use ORC without pulling in Hive’s execution jar."
+    ],
+    "choices": [
+      {
+        "choice": "Keep the column types in the file",
+        "why": "RCFile stored blobs, so it couldn’t use type-specific compression or evaluate filters. ORC writes with type-aware encoders (dictionary, bit packing, delta, run-length) and stores the schema."
+      },
+      {
+        "choice": "Light indexes every 10,000 rows",
+        "why": "Minimum and maximum values for each column in each group of rows let Hive’s pushed-down filters skip whole groups without reading them."
+      },
+      {
+        "choice": "Tail at the end, metadata in Protocol Buffers",
+        "why": "HDFS files can’t be changed after they’re written, so the top-level index goes last. Protocol Buffers let later versions add fields without breaking older readers."
+      },
+      {
+        "choice": "Large, self-contained stripes",
+        "why": "Each stripe can be read with only its own bytes plus the file tail, which makes stripes the natural unit of work for distributed tasks."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "2013",
+        "text": "HIVE-3874 opened in January; ORC ships in Hive 0.11 in May"
+      },
+      {
+        "year": "2014",
+        "text": "Facebook reports tens of PB moved to ORC; Hive 0.14 adds ACID on ORC"
+      },
+      {
+        "year": "2015",
+        "text": "Becomes a top-level Apache project in April"
+      },
+      {
+        "year": "2016",
+        "text": "ORC 1.0 released as a standalone library (January)"
+      },
+      {
+        "year": "2024",
+        "text": "ORC 2.0.0 released (March)"
+      },
+      {
+        "year": "2026",
+        "text": "ORC 2.3.1, the current release (July)"
+      }
+    ],
+    "sources": [
+      {
+        "label": "HIVE-3874: Create a new Optimized Row Columnar file format for Hive (Owen O’Malley, January 2013)",
+        "url": "https://issues.apache.org/jira/browse/HIVE-3874"
+      },
+      {
+        "label": "Hortonworks blog: The Stinger Initiative, ORCFile built with Facebook (February 2013)",
+        "url": "http://hortonworks.com/blog/100x-faster-hive",
+        "archive": "https://web.archive.org/web/20130328050712/http://hortonworks.com/blog/100x-faster-hive"
+      },
+      {
+        "label": "Facebook Engineering: Scaling the Facebook data warehouse to 300 PB (April 2014)",
+        "url": "https://engineering.fb.com/2014/04/10/core-infra/scaling-the-facebook-data-warehouse-to-300-pb/"
+      },
+      {
+        "label": "Apache Hive downloads: 0.11.0 (15 May 2013), 0.12.0 (15 October 2013), 0.14.0 (12 November 2014)",
+        "url": "https://hive.apache.org/general/downloads/"
+      },
+      {
+        "label": "ASF board minutes, 22 April 2015: Establish the Apache ORC Project",
+        "url": "https://www.apache.org/foundation/records/minutes/2015/board_minutes_2015_04_22.txt"
+      },
+      {
+        "label": "Apache ORC releases (1.0.0 January 2016, 2.0.0 March 2024, 2.3.1 July 2026)",
+        "url": "https://orc.apache.org/releases/"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "Apache ORC docs: Background (stripes of about 64 MB, 10,000-row index groups)",
+      "url": "https://orc.apache.org/docs/"
+    },
+    {
+      "label": "Apache ORC specification v1 (file tail, postscript, Protocol Buffers, stripes, compression kinds)",
+      "url": "https://orc.apache.org/specification/ORCv1/"
+    },
+    {
+      "label": "Apache ORC specification versions (v0 in Hive 0.11, v1 in Hive 0.12)",
+      "url": "https://orc.apache.org/specification/"
+    },
+    {
+      "label": "Apache ORC docs: Indexes (file, stripe and row-level statistics, bloom filters)",
+      "url": "https://orc.apache.org/docs/indexes.html"
+    },
+    {
+      "label": "Apache ORC docs: Types (including union and two timestamp types)",
+      "url": "https://orc.apache.org/docs/types.html"
+    },
+    {
+      "label": "Apache ORC docs: ACID support (base and delta files, not designed for OLTP)",
+      "url": "https://orc.apache.org/docs/acid.html"
+    },
+    {
+      "label": "Apache ORC docs: Hive configuration (orc.compress defaults to ZSTD, orc.stripe.size, orc.row.index.stride)",
+      "url": "https://orc.apache.org/docs/hive-config.html"
+    },
+    {
+      "label": "Apache ORC docs: Hive DDL (STORED AS ORC, CONCATENATE)",
+      "url": "https://orc.apache.org/docs/hive-ddl.html"
+    },
+    {
+      "label": "Apache ORC docs: Adopters (Hive, Spark, Impala, Pig, Trino, Iceberg and more)",
+      "url": "https://orc.apache.org/docs/adopters.html"
+    },
+    {
+      "label": "Apache ORC releases (2.3.1, 16 July 2026)",
+      "url": "https://orc.apache.org/releases/"
+    },
+    {
+      "label": "apache/orc LICENSE (Apache 2.0)",
+      "url": "https://github.com/apache/orc/blob/main/LICENSE"
+    },
+    {
+      "label": "Apache Hive docs: ACID Transactions (only ORC is supported; required settings)",
+      "url": "https://hive.apache.org/docs/latest/user/hive-transactions/"
+    },
+    {
+      "label": "Spark docs: ORC files (native reader, ZSTD, bloom filters, columnar encryption since 3.2)",
+      "url": "https://spark.apache.org/docs/latest/sql-data-sources-orc.html"
+    },
+    {
+      "label": "Spark docs: Generic load/save functions (default data source is parquet)",
+      "url": "https://spark.apache.org/docs/latest/sql-data-sources-load-save-functions.html"
+    },
+    {
+      "label": "Trino docs: Hive connector (hive.storage-format defaults to ORC)",
+      "url": "https://trino.io/docs/current/connector/hive.html"
+    },
+    {
+      "label": "Presto docs source: Hive connector (supported file types; hive.storage-format defaults to ORC)",
+      "url": "https://github.com/prestodb/presto/blob/master/presto-docs/src/main/sphinx/connector/hive.rst"
+    },
+    {
+      "label": "Impala docs: Using the ORC file format (query yes, INSERT no)",
+      "url": "https://impala.apache.org/docs/build/html/topics/impala_orc.html"
+    },
+    {
+      "label": "Apache Pig docs: Built-in functions (OrcStorage)",
+      "url": "https://pig.apache.org/docs/latest/func.html"
+    },
+    {
+      "label": "Iceberg table spec (data files in Avro, ORC or Parquet)",
+      "url": "https://iceberg.apache.org/spec/"
+    },
+    {
+      "label": "Iceberg docs: Configuration (write.format.default is parquet)",
+      "url": "https://iceberg.apache.org/docs/latest/configuration/"
+    },
+    {
+      "label": "Delta transaction log protocol (Parquet data files)",
+      "url": "https://github.com/delta-io/delta/blob/master/PROTOCOL.md"
+    },
+    {
+      "label": "Apache Parquet docs: File format (Thrift metadata)",
+      "url": "https://parquet.apache.org/docs/file-format/"
+    },
+    {
+      "label": "Apache Parquet docs: Configurations (row groups of 512 MB to 1 GB)",
+      "url": "https://parquet.apache.org/docs/file-format/configurations/"
+    },
+    {
+      "label": "Apache Parquet docs: Motivation (record shredding from the Dremel paper)",
+      "url": "https://parquet.apache.org/docs/overview/motivation/"
+    },
+    {
+      "label": "Apache Parquet docs: Nested encoding (definition and repetition levels)",
+      "url": "https://parquet.apache.org/docs/file-format/nestedencoding/"
+    },
+    {
+      "label": "Apache Parquet docs: Page index",
+      "url": "https://parquet.apache.org/docs/file-format/pageindex/"
+    },
+    {
+      "label": "Apache Parquet docs: Bloom filter",
+      "url": "https://parquet.apache.org/docs/file-format/bloomfilter/"
+    },
+    {
+      "label": "Introducing Parquet: Twitter and Cloudera announcement (hdfs-user list, 12 March 2013)",
+      "url": "https://lists.apache.org/thread/5orcmnsq7rsy90nmg8lt8s5yvw9k9qnv"
+    }
+  ],
+  "checked": "2026-10-06"
+}

@@ -1,0 +1,105 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Apache Iceberg",
+  "concepts": ["table-formats", "lakehouse"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://iceberg.apache.org/",
+  "repo": "https://github.com/apache/iceberg",
+  "summary": "The most widely supported open table format: snapshots of data files, tracked by a tree of metadata and swapped in atomically through a catalog.",
+  "intro": [
+    "An Iceberg table is a tree of files. At the top, a table metadata file records the schema, the partition spec and the list of snapshots. Each snapshot points to a manifest list, which points to manifests, which list the data files (usually Parquet) with column statistics for each file. A catalog, such as a REST catalog, AWS Glue or a JDBC database, stores where the current metadata file is, and a commit swaps that pointer atomically.",
+    "Because there are statistics at every level, an engine can rule out whole manifests without listing any directories. Partitioning is hidden: you partition by `days(ts)`, queries just filter on `ts`, and you can change the scheme later without rewriting old data. Netflix built Iceberg and contributed it to the Apache Software Foundation in 2018. Spec versions 1, 2 and 3 are complete; v3 adds deletion vectors, row lineage, column default values and new types such as `variant`, geometry and nanosecond timestamps. Version 4 is still in development."
+  ],
+  "strengths": [
+    "Wide engine support: Spark, Flink, Trino, DuckDB, ClickHouse, Snowflake, BigQuery, Athena and Redshift all work with it",
+    "The REST catalog protocol is an open standard, so one catalog can serve every engine",
+    "Hidden partitioning and partition evolution avoid accidental full scans and painful re-partitioning",
+    "Managed offerings on the big clouds, such as Amazon S3 Tables and Google’s Apache Iceberg managed tables in BigQuery"
+  ],
+  "limits": [
+    "You need a catalog, and choosing one (Glue, Polaris, Nessie, a JDBC database and others) is a real decision",
+    "Frequent small commits pile up snapshots, manifests and small files, so compaction and snapshot expiry must run on a schedule",
+    "Engines adopt new spec versions unevenly: Athena works only with v2 tables, and Trino’s v3 support is experimental",
+    "Many concurrent writers to one table cause commit conflicts and retries"
+  ],
+  "worksWith": [
+    { "id": "parquet", "how": "usually stores data as" },
+    { "id": "avro", "how": "writes its manifest files as" },
+    { "id": "s3", "how": "is commonly stored in" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "Table maintenance in Spark SQL: evolve partitioning, list snapshots, compact, expire",
+    "source": [
+      "-- \"lake\" is an Iceberg catalog; the table was partitioned by days(ts)",
+      "ALTER TABLE lake.sales.orders REPLACE PARTITION FIELD ts_day WITH hours(ts);",
+      "",
+      "SELECT snapshot_id, committed_at, operation",
+      "FROM lake.sales.orders.snapshots",
+      "ORDER BY committed_at DESC;",
+      "",
+      "CALL lake.system.rewrite_data_files(table => 'sales.orders');",
+      "CALL lake.system.expire_snapshots(",
+      "  table => 'sales.orders',",
+      "  older_than => TIMESTAMP '2026-09-01 00:00:00');"
+    ]
+  },
+  "history": {
+    "story": [
+      "Netflix ran its analytics on Hive tables, the de facto standard layout that Hive, Presto and Spark all used. A Hive table tracks its partitions in a central metastore and finds the files inside by listing directories. On S3 that listing is slow, and while S3 listings were eventually consistent it could return wrong results. Changes to a table couldn’t be atomic, object stores have no real rename, and the metastore became a bottleneck when planning jobs.",
+      "Ryan Blue and Dan Weeks started Iceberg at Netflix in 2017 as “a new table format for storing large, slow-moving tabular data”, one that tracks every data file instead of directories. Netflix donated it to the Apache Software Foundation, where it entered the incubator in November 2018 and graduated in May 2020. Blue, Weeks and Jason Reid later founded Tabular, a data management company built on Iceberg.",
+      "Iceberg became the format most engines agreed on. In June 2024 Databricks, the company behind rival Delta Lake, agreed to acquire Tabular with the aim of making the two formats compatible, and in December 2024 AWS launched S3 Tables, which builds Iceberg support into S3 itself."
+    ],
+    "choices": [
+      { "choice": "Track individual files, not directories", "why": "Listing partition paths was slow on S3 and gave no atomicity. Iceberg’s metadata names every data file, so writers create files where they like and commit them explicitly, and planning a scan needs no listing." },
+      { "choice": "Commit by swapping one pointer", "why": "Each change writes new metadata, then atomically replaces the pointer to the current metadata file. Readers never take locks and never see a partial write: the spec’s goal is serializable isolation." },
+      { "choice": "A written spec, independent of any engine", "why": "Hive’s layout was a convention built into each engine. Iceberg wrote the table format down as a specification, so Spark, Trino, Flink and others could each implement it and read the same tables." },
+      { "choice": "Schema and partition changes are metadata-only", "why": "The spec requires safe add, drop, rename and reorder of columns, including nested ones, and partition spec evolution, so changing a table’s design never means rewriting old data." }
+    ],
+    "timeline": [
+      { "year": "2017", "text": "Ryan Blue and Dan Weeks start Iceberg at Netflix" },
+      { "year": "2018", "text": "Donated to the Apache Software Foundation; enters the incubator in November" },
+      { "year": "2020", "text": "Graduates to a top-level Apache project in May" },
+      { "year": "2021", "text": "Format v2 tables, with row-level deletes, arrive in Iceberg 0.12" },
+      { "year": "2022", "text": "Iceberg 1.0 released in November" },
+      { "year": "2024", "text": "Databricks agrees to buy Tabular (June); AWS launches S3 Tables (December)" },
+      { "year": "2025", "text": "Iceberg 1.8 adds format v3 features: deletion vectors, `variant`, row lineage" }
+    ],
+    "sources": [
+      { "label": "Netflix/iceberg: README (“a new table format for storing large, slow-moving tabular data”)", "url": "https://github.com/Netflix/iceberg" },
+      { "label": "Netflix/iceberg: Ryan Blue’s “Initial public release” commit (December 2017)", "url": "https://github.com/Netflix/iceberg/commit/a5eb3f6ba171ecfc517a4f09ae9654e7d8ae0291" },
+      { "label": "Apache Incubator: Iceberg proposal (2018)", "url": "https://cwiki.apache.org/confluence/display/INCUBATOR/IcebergProposal" },
+      { "label": "Iceberg docs: Reliability (problems with Hive tables)", "url": "https://iceberg.apache.org/docs/latest/reliability/" },
+      { "label": "Apache Incubator: Iceberg incubation status (entered November 2018, graduated May 2020)", "url": "https://incubator.apache.org/projects/iceberg.html" },
+      { "label": "Iceberg table spec: goals, optimistic concurrency and format versions", "url": "https://iceberg.apache.org/spec/" },
+      { "label": "Iceberg releases: 0.12.0 adds v2 tables (August 2021), 1.8.0 (February 2025)", "url": "https://iceberg.apache.org/releases/" },
+      { "label": "GitHub: Apache Iceberg 1.0.0 release (November 2022)", "url": "https://github.com/apache/iceberg/releases/tag/apache-iceberg-1.0.0" },
+      { "label": "GitHub: Apache Iceberg 1.8.0 release notes (deletion vectors, variant, row lineage)", "url": "https://github.com/apache/iceberg/releases/tag/apache-iceberg-1.8.0" },
+      { "label": "Databricks agrees to acquire Tabular (June 2024)", "url": "https://www.databricks.com/company/newsroom/press-releases/databricks-agrees-acquire-tabular-company-founded-original-creators" },
+      { "label": "AWS What’s New: Amazon S3 Tables (December 2024)", "url": "https://aws.amazon.com/about-aws/whats-new/2024/12/amazon-s3-tables-apache-iceberg-tables-analytics-workloads/" }
+    ]
+  },
+  "sources": [
+    { "label": "Iceberg table spec: metadata tree, atomic swap, format versions 1 to 4", "url": "https://iceberg.apache.org/spec/" },
+    { "label": "Iceberg docs: Partitioning (hidden partitioning)", "url": "https://iceberg.apache.org/docs/latest/partitioning/" },
+    { "label": "Iceberg docs: Evolution (schema and partition evolution)", "url": "https://iceberg.apache.org/docs/latest/evolution/" },
+    { "label": "Iceberg REST catalog spec", "url": "https://iceberg.apache.org/rest-catalog-spec/" },
+    { "label": "Iceberg docs: AWS integrations (Glue catalog)", "url": "https://iceberg.apache.org/docs/latest/aws/" },
+    { "label": "Iceberg docs: JDBC catalog", "url": "https://iceberg.apache.org/docs/latest/jdbc/" },
+    { "label": "Iceberg docs: Nessie catalog", "url": "https://iceberg.apache.org/docs/latest/nessie/" },
+    { "label": "Apache Polaris: an open-source catalog for Apache Iceberg", "url": "https://polaris.apache.org/" },
+    { "label": "Iceberg docs: Vendors and third-party integrations (Athena, Redshift, ClickHouse, DuckDB, BigQuery, Snowflake, Trino)", "url": "https://iceberg.apache.org/vendors/" },
+    { "label": "Iceberg docs: Maintenance (expire snapshots, compact data files)", "url": "https://iceberg.apache.org/docs/latest/maintenance/" },
+    { "label": "Iceberg docs: Spark DDL (REPLACE PARTITION FIELD)", "url": "https://iceberg.apache.org/docs/latest/spark-ddl/" },
+    { "label": "Iceberg docs: Spark procedures (rewrite_data_files, expire_snapshots)", "url": "https://iceberg.apache.org/docs/latest/spark-procedures/" },
+    { "label": "Iceberg releases", "url": "https://iceberg.apache.org/releases/" },
+    { "label": "ASF Project Spotlight: Apache Iceberg (donated by Netflix in 2018)", "url": "https://news.apache.org/foundation/entry/asf-project-spotlight-apache-iceberg" },
+    { "label": "Amazon S3 docs: Working with S3 Tables and table buckets", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html" },
+    { "label": "BigQuery docs: Apache Iceberg managed tables", "url": "https://docs.cloud.google.com/bigquery/docs/biglake-iceberg-tables-in-bigquery" },
+    { "label": "Trino docs: Iceberg connector (format version 3 is experimental)", "url": "https://trino.io/docs/current/connector/iceberg.html" },
+    { "label": "Athena docs: Query Apache Iceberg tables (v2 tables only)", "url": "https://docs.aws.amazon.com/athena/latest/ug/querying-iceberg.html" }
+  ],
+  "checked": "2026-10-05"
+}

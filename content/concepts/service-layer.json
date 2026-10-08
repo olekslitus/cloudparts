@@ -1,0 +1,258 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Service layer",
+  "category": "code",
+  "order": 30,
+  "summary": "Put business logic in stateless services, like `OrderService.placeOrder`, that load plain data objects, apply the rules, and save the result.",
+  "howItWorks": "Code is split by role into layers. A controller handles HTTP: it parses the request and calls a service. A service is a class or module with no state of its own, and each public method is one use case, such as `placeOrder(customerId, lines)`. It loads data through repositories, applies the rules (stock, prices, discounts), runs the database transaction, and calls other services for payments or email. The data objects it works on are mostly plain fields. Services get their collaborators through dependency injection: they list them as constructor parameters, and a container (Spring, NestJS, ASP.NET Core) creates and hands them in, so a test can pass fakes instead. Because every entry point (web, API, queue consumer, nightly job) calls the same methods, the rules and transaction boundaries live in one place. The open question is how much logic belongs in the service. In one style the service holds every rule and the entities are bags of getters and setters; Martin Fowler calls that an anemic domain model and says it is procedural code in disguise. In the other, entities enforce their own rules (`order.addLine` refuses a 51st line) and the service stays thin, only loading, delegating and saving.",
+  "analogy": "A restaurant kitchen with a recipe binder. Cooks follow a recipe for each dish using raw ingredients from the fridge; the ingredients don’t cook themselves, and any cook can make any dish, because the know-how is in the recipes.",
+  "useWhen": [
+    "Business backends where most operations are “load, check, save, notify”",
+    "Several entry points (web, API, queue consumers, scheduled jobs) that must run exactly the same operations",
+    "Teams on Spring, NestJS, ASP.NET Core or Rails, whose tools and docs already assume services and injection",
+    "You want one obvious place per use case for the transaction and its checks"
+  ],
+  "avoidWhen": [
+    "Rules with many invariants (pricing, insurance, scheduling): put them on domain objects and keep services thin",
+    "Tiny apps, where a function per endpoint is enough and the injection ceremony is overhead",
+    "Services that call each other in circles (`OrderService` and `InventoryService` each needing the other): a sign the boundaries are wrong"
+  ],
+  "example": "A shop’s `OrderService.placeOrder(customerId, lines)` reserves stock for each line, computes the total, charges the customer through `Payments`, and saves an `Order` through `OrderRepo`. The web checkout, the mobile API and a CSV bulk-import job all call this one method, so a pricing fix lands everywhere at once. In tests, the repository, inventory and payment gateway are fakes passed to the constructor, so 30 test cases run in milliseconds without a database or a card network.",
+  "snippet": {
+    "lang": "ts",
+    "source": [
+      "// Plain data: fields, no behaviour",
+      "interface OrderLine { sku: string; qty: number; cents: number }",
+      "interface Order { id: string; customerId: string; lines: OrderLine[]; totalCents: number }",
+      "",
+      "// Collaborators are interfaces, handed in through the constructor",
+      "interface OrderRepo { save(order: Order): Promise<void> }",
+      "interface Inventory { reserve(sku: string, qty: number): Promise<boolean> }",
+      "interface Payments { charge(customerId: string, cents: number): Promise<void> }",
+      "",
+      "export class OrderService { // no state of its own, so one instance can serve every request",
+      "  constructor(private orders: OrderRepo, private stock: Inventory, private payments: Payments) {}",
+      "",
+      "  async placeOrder(customerId: string, lines: OrderLine[]): Promise<Order> {",
+      "    for (const l of lines) {",
+      "      if (!(await this.stock.reserve(l.sku, l.qty))) throw new Error(`out of stock: ${l.sku}`);",
+      "    }",
+      "    const totalCents = lines.reduce((sum, l) => sum + l.cents * l.qty, 0);",
+      "    await this.payments.charge(customerId, totalCents);",
+      "    const order: Order = { id: crypto.randomUUID(), customerId, lines, totalCents };",
+      "    await this.orders.save(order);",
+      "    return order;",
+      "  }",
+      "}",
+      "",
+      "// NestJS marks this class @Injectable() and Spring @Service; a unit test just writes",
+      "// new OrderService(fakeRepo, fakeStock, fakePayments)"
+    ]
+  },
+  "related": [
+    "oop",
+    "functional",
+    "monolith",
+    "microservices",
+    "web-api"
+  ],
+  "sections": [
+    {
+      "type": "cards",
+      "title": "Three places to put the rules",
+      "intro": "Fowler’s Patterns of Enterprise Application Architecture describes the options; most codebases sit somewhere between them.",
+      "items": [
+        {
+          "name": "Transaction script",
+          "tag": "one procedure per request",
+          "text": "Each request is handled by one procedure that validates, calculates and calls the database directly. Simple and quick for small apps; duplication creeps in as rules are shared."
+        },
+        {
+          "name": "Services with plain data",
+          "tag": "the common default",
+          "text": "Stateless services hold the rules and work on entities that are mostly fields. Easy to read, inject and test. When the services hold all the logic, Fowler calls the entities an anemic domain model."
+        },
+        {
+          "name": "Thin services over a domain model",
+          "tag": "Evans, Fowler",
+          "text": "Entities and value objects enforce their own rules; the service (Evans’s application layer) only coordinates, loading objects, calling them and saving. More design work, which pays off when the rules are complex."
+        }
+      ]
+    },
+    {
+      "type": "code",
+      "title": "The same idea with a rich domain model",
+      "intro": "Here the rule lives on the entity, so no service, script or future endpoint can forget it. The service shrinks to load, delegate, save.",
+      "lang": "ts",
+      "source": [
+        "interface OrderLine { sku: string; qty: number; cents: number }",
+        "interface OrderRepo { get(id: string): Promise<Order>; save(order: Order): Promise<void> }",
+        "",
+        "class Order {",
+        "  #lines: OrderLine[] = [];",
+        "  constructor(readonly id: string, readonly customerId: string) {}",
+        "",
+        "  addLine(sku: string, qty: number, cents: number) {",
+        "    if (qty <= 0) throw new Error(\"qty must be positive\");",
+        "    if (this.#lines.length >= 50) throw new Error(\"an order holds at most 50 lines\");",
+        "    this.#lines.push({ sku, qty, cents });",
+        "  }",
+        "",
+        "  get totalCents() {",
+        "    return this.#lines.reduce((sum, l) => sum + l.cents * l.qty, 0);",
+        "  }",
+        "}",
+        "",
+        "// The service only coordinates: load, ask the domain object, save",
+        "class OrderService {",
+        "  constructor(private orders: OrderRepo) {}",
+        "",
+        "  async addItem(orderId: string, sku: string, qty: number, cents: number) {",
+        "    const order = await this.orders.get(orderId);",
+        "    order.addLine(sku, qty, cents); // the rule lives on Order, so no caller can skip it",
+        "    await this.orders.save(order);",
+        "  }",
+        "}"
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Around 2000, many large business systems were being built on Java’s J2EE platform, and where the business logic should live was a constant argument. Martin Fowler’s Patterns of Enterprise Application Architecture (2002), which grew out of talks he and Dave Rice gave on J2EE architecture and was written with Randy Stafford and others, named the options. Transaction Script organised logic as one procedure per request. Domain Model wove behaviour and data together in objects. And Stafford’s Service Layer “defines an application’s boundary with a layer of services that establishes a set of available operations”, so that user interfaces, data loaders and integration gateways stop duplicating the same logic, with the service controlling transactions and coordinating the response.",
+      "Eric Evans’s Domain-Driven Design (2003) drew the lines more sharply. His application layer was to be thin, coordinating tasks and delegating to domain objects, with no business rules of its own; a domain service was for a significant process that is not the natural job of any entity (“Sometimes, it just isn’t a thing,” as his later summary puts it). In November 2003 Fowler warned that teams were turning this upside down. He described the anemic domain model, where “there are a set of service objects which capture all the domain logic” and the entities are “little more than bags of getters and setters”, and concluded: “If all your logic is in services, you’ve robbed yourself blind.”",
+      "Frameworks made the service shape the default anyway. Fowler named dependency injection in 2004, and containers that wire services together became standard. Spring’s `@Service` annotation quotes Evans’s definition, “an operation offered as an interface that stands alone in the model, with no encapsulated state”. NestJS teaches controllers that delegate to injectable services, ASP.NET Core ships its own container, and Rails developers fighting “fat models” were urged to extract service objects for actions that span several models or call outside systems. The result is the controller, service and repository layering of countless business backends, and a long-running argument about how thin the service should be."
+    ],
+    "choices": [
+      {
+        "choice": "One boundary that every client goes through",
+        "why": "Stafford’s motivation was duplication: web pages, data loaders and integration gateways each re-encoding the same interactions. One set of operations, each owning its transaction, removes that."
+      },
+      {
+        "choice": "Services hold no state",
+        "why": "Evans defined a service as an operation with no encapsulated state. Any instance can then serve any request, so a container can create one per app or one per request, as ASP.NET Core’s singleton and scoped lifetimes do."
+      },
+      {
+        "choice": "Collaborators injected, not constructed",
+        "why": "If a service builds its own repository and payment client, it is welded to them. Injecting them through the constructor lets configuration choose the implementation, and the reason most people give is that tests can swap in stubs."
+      },
+      {
+        "choice": "Plain data objects",
+        "why": "Entities that are only fields map straight onto database rows and JSON. Fowler’s objection is that you then pay for object-relational mapping while getting none of the benefits of objects."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "2002",
+        "text": "Fowler’s Patterns of Enterprise Application Architecture names Service Layer, Transaction Script and Domain Model"
+      },
+      {
+        "year": "2003",
+        "text": "Evans’s Domain-Driven Design separates application, domain and infrastructure layers"
+      },
+      {
+        "year": "2003",
+        "text": "Fowler’s “Anemic Domain Model” calls logic-only services an anti-pattern"
+      },
+      {
+        "year": "2004",
+        "text": "Fowler names the Dependency Injection pattern"
+      },
+      {
+        "year": "2012",
+        "text": "Code Climate’s “7 Patterns to Refactor Fat ActiveRecord Models” popularises service objects in Rails"
+      }
+    ],
+    "sources": [
+      {
+        "label": "Martin Fowler: Patterns of Enterprise Application Architecture (2002), book page",
+        "url": "https://martinfowler.com/books/eaa.html"
+      },
+      {
+        "label": "Martin Fowler’s P of EAA catalog: Service Layer (pattern by Randy Stafford)",
+        "url": "https://martinfowler.com/eaaCatalog/serviceLayer.html"
+      },
+      {
+        "label": "Martin Fowler’s P of EAA catalog: Transaction Script",
+        "url": "https://martinfowler.com/eaaCatalog/transactionScript.html"
+      },
+      {
+        "label": "Martin Fowler’s P of EAA catalog: Domain Model",
+        "url": "https://martinfowler.com/eaaCatalog/domainModel.html"
+      },
+      {
+        "label": "Martin Fowler: Anemic Domain Model (Nov 2003)",
+        "url": "https://martinfowler.com/bliki/AnemicDomainModel.html"
+      },
+      {
+        "label": "Eric Evans: Domain-Driven Design Reference (2015), Services and Layered Architecture",
+        "url": "https://www.domainlanguage.com/wp-content/uploads/2016/05/DDD_Reference_2015-03.pdf"
+      },
+      {
+        "label": "Spring Framework API: @Service (citing Evans’s definition of a service)",
+        "url": "https://docs.spring.io/spring-framework/docs/current/javadoc-api/org/springframework/stereotype/Service.html"
+      },
+      {
+        "label": "Martin Fowler: Inversion of Control Containers and the Dependency Injection pattern (Jan 2004)",
+        "url": "https://martinfowler.com/articles/injection.html"
+      },
+      {
+        "label": "NestJS docs: Providers (services, @Injectable, constructor injection)",
+        "url": "https://docs.nestjs.com/providers"
+      },
+      {
+        "label": "Microsoft Learn: Dependency injection in ASP.NET Core (service lifetimes)",
+        "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/dependency-injection"
+      },
+      {
+        "label": "Bryan Helmkamp, Code Climate: 7 Patterns to Refactor Fat ActiveRecord Models (Oct 2012), Extract Service Objects",
+        "url": "https://codeclimate.com/blog/7-ways-to-decompose-fat-activerecord-models"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "Martin Fowler’s P of EAA catalog: Service Layer (pattern by Randy Stafford)",
+      "url": "https://martinfowler.com/eaaCatalog/serviceLayer.html"
+    },
+    {
+      "label": "Martin Fowler’s P of EAA catalog: Transaction Script",
+      "url": "https://martinfowler.com/eaaCatalog/transactionScript.html"
+    },
+    {
+      "label": "Martin Fowler’s P of EAA catalog: Domain Model",
+      "url": "https://martinfowler.com/eaaCatalog/domainModel.html"
+    },
+    {
+      "label": "Martin Fowler: Anemic Domain Model (Nov 2003)",
+      "url": "https://martinfowler.com/bliki/AnemicDomainModel.html"
+    },
+    {
+      "label": "Eric Evans: Domain-Driven Design Reference (2015), Services and Layered Architecture",
+      "url": "https://www.domainlanguage.com/wp-content/uploads/2016/05/DDD_Reference_2015-03.pdf"
+    },
+    {
+      "label": "Martin Fowler: Inversion of Control Containers and the Dependency Injection pattern (Jan 2004)",
+      "url": "https://martinfowler.com/articles/injection.html"
+    },
+    {
+      "label": "Spring Framework API: @Service (citing Evans’s definition of a service)",
+      "url": "https://docs.spring.io/spring-framework/docs/current/javadoc-api/org/springframework/stereotype/Service.html"
+    },
+    {
+      "label": "Spring Framework docs: Dependency Injection (constructor-based and setter-based)",
+      "url": "https://docs.spring.io/spring-framework/reference/core/beans/dependencies/factory-collaborators.html"
+    },
+    {
+      "label": "NestJS docs: Providers (services, @Injectable, constructor injection)",
+      "url": "https://docs.nestjs.com/providers"
+    },
+    {
+      "label": "Microsoft Learn: Dependency injection in ASP.NET Core (service lifetimes)",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/dependency-injection"
+    },
+    {
+      "label": "Bryan Helmkamp, Code Climate: 7 Patterns to Refactor Fat ActiveRecord Models (Oct 2012), Extract Service Objects",
+      "url": "https://codeclimate.com/blog/7-ways-to-decompose-fat-activerecord-models"
+    }
+  ]
+}

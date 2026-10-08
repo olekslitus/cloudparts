@@ -1,0 +1,132 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Correlation IDs",
+  "category": "observe",
+  "order": 45,
+  "summary": "One ID per request, created at the edge and carried through every service, message and log line, so you can find everything that request did.",
+  "howItWorks": "The first component to see a request, usually a load balancer, proxy or API gateway, gives it an ID. NGINX has a `$request_id` variable (32 hex characters), Heroku’s router sets an `X-Request-ID` header, and AWS Application Load Balancers add `X-Amzn-Trace-Id`. Every service reads the ID from the incoming request and keeps it in request-scoped context (thread-local storage in Java, `context.Context` in Go, `AsyncLocalStorage` in Node.js). It writes the ID as a field on every log line, sends it on in the headers of every outgoing call, and copies it into the attributes of every message it puts on a queue, so the consumer can pick it up too. A search for that one value then returns every line the request produced, across services, and hours later from a queue worker. A trace ID is the same idea with more structure: the W3C `traceparent` header carries the trace ID plus the caller’s span ID, so a tracing backend can rebuild the call tree, not just the set of lines. If you run tracing, log the trace ID and skip a second home-made ID. Treat any ID that arrives from outside as untrusted input. Accept it only if it matches a strict format and length (Heroku accepts 20 to 200 characters from a small alphabet and replaces anything else), because a client can reuse an ID, send a huge one, or embed a line break to forge extra log lines.",
+  "analogy": "A hospital wristband. It goes on at admission, and every lab sample, scan and prescription is labelled with the same number, so anyone can pull together everything that happened to one patient.",
+  "useWhen": [
+    "Any system where one user action touches more than one service, worker or queue",
+    "Queue and batch work that finishes long after the HTTP request that started it",
+    "Support: return the ID in error pages and API responses so users can quote it",
+    "Systems that tracing doesn’t reach yet, where a shared log field is the only thread"
+  ],
+  "avoidWhen": [
+    "Inventing a second ID when you already propagate W3C trace context; log the trace ID",
+    "Trusting the client’s value as is; check its format and length, or replace it",
+    "Using it as an idempotency key or for access decisions; it’s for finding things, nothing more"
+  ],
+  "example": "A customer reports that an order shows as paid but never shipped, and her error page showed `7f3c9a0e2b8d41c6a5e0f1d2c3b4a596`. Searching the logs for that ID returns nine lines: the gateway accepted the POST, checkout wrote the order and published an `OrderPaid` message with the ID in its attributes, and 40 minutes later the shipping worker logged a validation error for the same ID that no alert covered. Without the ID, the worker’s line would have been one of 60,000 that hour.",
+  "providers": {
+    "aws": "ALB adds `X-Amzn-Trace-Id`; API Gateway has `$context.requestId` (clients can override it) and `$context.extendedRequestId`; X-Ray trace IDs",
+    "gcp": "W3C `traceparent`, or the legacy `X-Cloud-Trace-Context` header, for Cloud Trace",
+    "azure": "Application Insights `operation_Id`, shared by every telemetry item in one operation",
+    "oss": "NGINX `$request_id`; the `X-Request-ID` convention; W3C `traceparent` through OpenTelemetry"
+  },
+  "snippet": {
+    "lang": "ts",
+    "source": [
+      "import { AsyncLocalStorage } from \"node:async_hooks\";",
+      "import { randomUUID } from \"node:crypto\";",
+      "import express from \"express\";",
+      "",
+      "const ctx = new AsyncLocalStorage<{ requestId: string }>();",
+      "const SAFE_ID = /^[A-Za-z0-9-]{16,64}$/;   // don’t trust what the client sends",
+      "",
+      "export function log(level: string, msg: string, fields: object = {}) {",
+      "  console.log(JSON.stringify({ time: new Date().toISOString(), level, msg,",
+      "    request_id: ctx.getStore()?.requestId, ...fields }));",
+      "}",
+      "",
+      "const app = express();",
+      "app.use((req, res, next) => {",
+      "  const incoming = req.get(\"x-request-id\");",
+      "  const requestId = incoming && SAFE_ID.test(incoming) ? incoming : randomUUID();",
+      "  res.set(\"x-request-id\", requestId);              // users can quote it",
+      "  ctx.run({ requestId }, next);                      // visible to everything this request runs",
+      "});",
+      "",
+      "app.post(\"/orders\", async (req, res) => {",
+      "  log(\"info\", \"order received\");                   // request_id added automatically",
+      "  await fetch(\"http://billing/charge\", {            // pass it on to the next service",
+      "    method: \"POST\", headers: { \"x-request-id\": ctx.getStore()!.requestId } });",
+      "  res.sendStatus(202);",
+      "});"
+    ]
+  },
+  "related": ["traces", "structured-logging", "logs"],
+  "diagram": {
+    "caption": "The edge proxy gives each request an ID, shown as its colour. The API logs it and puts it in the message it queues; the worker logs the same ID minutes later. In the log store, lines of one colour are everything one request did.",
+    "h": 270,
+    "nodes": [
+      {
+        "id": "users",
+        "x": 70,
+        "y": 95,
+        "label": "Users",
+        "emit": { "every": 900, "jitter": 0.4, "colorByKey": 4 },
+        "out": ["edge"]
+      },
+      { "id": "edge", "x": 210, "y": 95, "label": "Edge proxy", "sub": "sets X-Request-ID", "out": ["api"] },
+      { "id": "api", "x": 360, "y": 95, "label": "API", "sub": "logs request_id", "route": "fanout", "out": ["q", "logs"] },
+      { "id": "q", "x": 520, "y": 95, "label": "Queue", "sub": "ID in message attributes", "kind": "queue", "cap": 6, "gap": 700, "out": ["wk"] },
+      { "id": "wk", "x": 680, "y": 95, "label": "Worker", "sub": "logs the same ID", "out": ["logs"] },
+      { "id": "logs", "x": 520, "y": 215, "label": "Log store", "sub": "search request_id", "mode": "sink" }
+    ]
+  },
+  "history": {
+    "story": [
+      "The idea is older than web services. In Enterprise Integration Patterns (2003), Gregor Hohpe and Bobby Woolf named the Correlation Identifier: in request-reply messaging, each reply carries a unique identifier that says which request it answers. An ID that travels with the work turned out to be the simplest way to stitch scattered records together.",
+      "Web platforms made it routine. Heroku’s router generates an `X-Request-ID` for every incoming request and passes it to the app, and Rails picks it up as the request’s ID in its logs. NGINX added a `$request_id` variable in version 1.11.0 in May 2016, and that November AWS Application Load Balancers began adding an `X-Amzn-Trace-Id` header to every request and writing it to their access logs. OWASP’s logging guidance asks for the same thing under the name interaction identifier: record that events belong to one interaction, rather than force someone to reconstruct it later.",
+      "Distributed tracing gave the single ID a structure. Dapper (2010) propagated a trace ID plus span IDs, and the W3C Trace Context standard (2020) gave every vendor one header for them, so in many systems today the correlation ID is simply the trace ID."
+    ],
+    "choices": [
+      {
+        "choice": "Create the ID once, at the edge",
+        "why": "Every request passes the load balancer or gateway, so that one component can create the ID and everything behind it only has to copy it. A service that receives no ID creates one, so nothing goes untagged."
+      },
+      {
+        "choice": "Keep it in context, not in every function signature",
+        "why": "Dapper attached its trace context to thread-local storage; Node’s `AsyncLocalStorage` keeps a store coherent through asynchronous callbacks. Either way the logger finds the ID by itself, so developers can’t forget to pass it."
+      },
+      {
+        "choice": "Accept a client’s ID only if it’s well formed",
+        "why": "Passing a caller’s ID through lets a mobile app or partner join its own logs to yours. But the value is untrusted input: Heroku ignores IDs outside 20 to 200 safe characters, API Gateway warns that clients can override `$context.requestId`, and OWASP lists carriage returns and line feeds in logged data as a log injection risk."
+      },
+      {
+        "choice": "Put it in the message, not only the HTTP call",
+        "why": "Work that goes through a queue loses the HTTP headers. OpenTelemetry’s messaging conventions say a producer should attach the context to each message so consumers can be correlated with producers; SQS carries the X-Ray trace header in a system attribute, `AWSTraceHeader`."
+      }
+    ],
+    "timeline": [
+      { "year": "2003", "text": "Enterprise Integration Patterns names the Correlation Identifier" },
+      { "year": "2010", "text": "Google’s Dapper paper propagates trace and span IDs" },
+      { "year": "2016", "text": "NGINX 1.11.0 adds `$request_id` in May; ALBs add `X-Amzn-Trace-Id` in November" },
+      { "year": "2020", "text": "W3C Trace Context becomes a Recommendation" }
+    ],
+    "sources": [
+      { "label": "Enterprise Integration Patterns: Correlation Identifier", "url": "https://www.enterpriseintegrationpatterns.com/patterns/messaging/CorrelationIdentifier.html" },
+      { "label": "Enterprise Integration Patterns: books (Hohpe and Woolf, Addison-Wesley, 2003)", "url": "https://www.enterpriseintegrationpatterns.com/books1.html" },
+      { "label": "Heroku Dev Center: HTTP request IDs", "url": "https://devcenter.heroku.com/articles/http-request-id" },
+      { "label": "NGINX changelog: 1.11.0 adds the $request_id variable (May 2016)", "url": "https://nginx.org/en/CHANGES" },
+      { "label": "AWS News Blog: Application performance percentiles and request tracing for ALB (Nov 2016)", "url": "https://aws.amazon.com/blogs/aws/application-performance-percentiles-and-request-tracing-for-aws-application-load-balancer/" },
+      { "label": "OWASP Logging Cheat Sheet (interaction identifier, log injection)", "url": "https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html" },
+      { "label": "Dapper, a large-scale distributed systems tracing infrastructure (Google, 2010)", "url": "https://research.google/pubs/dapper-a-large-scale-distributed-systems-tracing-infrastructure/" },
+      { "label": "W3C: Trace Context, Recommendation (Feb 2020, revised Nov 2021)", "url": "https://www.w3.org/TR/trace-context/" }
+    ]
+  },
+  "sources": [
+    { "label": "NGINX docs: ngx_http_core_module, $request_id", "url": "https://nginx.org/en/docs/http/ngx_http_core_module.html" },
+    { "label": "Heroku Dev Center: HTTP request IDs (format rules)", "url": "https://devcenter.heroku.com/articles/http-request-id" },
+    { "label": "AWS docs: Request tracing for your Application Load Balancer", "url": "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-request-tracing.html" },
+    { "label": "AWS docs: API Gateway $context variables ($context.requestId, extendedRequestId)", "url": "https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-mapping-template-reference.html" },
+    { "label": "AWS docs: Amazon SQS message metadata (AWSTraceHeader)", "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-message-metadata.html" },
+    { "label": "Google Cloud docs: Trace context (traceparent and X-Cloud-Trace-Context)", "url": "https://cloud.google.com/trace/docs/trace-context" },
+    { "label": "Microsoft Learn: Application Insights distributed tracing and telemetry correlation (operation_Id)", "url": "https://learn.microsoft.com/en-us/azure/azure-monitor/app/distributed-trace-data" },
+    { "label": "Node.js docs: Asynchronous context tracking (AsyncLocalStorage)", "url": "https://nodejs.org/api/async_context.html" },
+    { "label": "W3C: Trace Context", "url": "https://www.w3.org/TR/trace-context/" },
+    { "label": "OpenTelemetry semantic conventions: Messaging spans (context propagation through messages)", "url": "https://opentelemetry.io/docs/specs/semconv/messaging/messaging-spans/" },
+    { "label": "OWASP Logging Cheat Sheet", "url": "https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html" }
+  ]
+}

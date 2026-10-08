@@ -1,0 +1,171 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Object storage",
+  "category": "storage",
+  "order": 10,
+  "summary": "Practically unlimited storage for files of any size, addressed by key.",
+  "howItWorks": "Object storage keeps blobs (files) in buckets, each under a key like `photos/2026/09/a.jpg`, with metadata attached. You read and write whole objects through an HTTP API instead of mounting a disk. It scales without capacity planning, replicates across facilities for extreme durability, and offers cheaper tiers for data you rarely touch. A bucket isn’t a disk and has no file system: the folders you see are just keys that contain slashes, and there’s no editing, appending, renaming or locking in place. Tools can mount a bucket as a folder by translating file operations into API calls, with limits. It’s the default home for backups, media, logs and data lakes.",
+  "analogy": "A coat check. Hand over your coat, get a ticket, and use the ticket to get that exact coat back. You can’t alter a sleeve while it’s hanging there.",
+  "useWhen": [
+    "Images, video, backups, exports and logs",
+    "Data lakes: Parquet or Iceberg files queried by warehouse engines",
+    "Static website assets served through a CDN"
+  ],
+  "avoidWhen": [
+    "Databases, or anything that rewrites small parts of a file in place",
+    "Low-latency random reads and writes; that’s block storage",
+    "Software that needs a real file system (renames, locks, edits in place), unless you mount the bucket with a tool built for it"
+  ],
+  "example": "A mobile app uploads profile photos straight to a bucket with pre-signed URLs. A lifecycle rule moves photos older than 90 days to an archive tier that costs a fraction as much.",
+  "providers": {
+    "aws": "S3",
+    "gcp": "Cloud Storage",
+    "azure": "Blob Storage",
+    "oss": "Ceph (RGW), SeaweedFS, Garage, RustFS, Silo (a MinIO fork), Apache Ozone; MinIO (archived); other clouds: Cloudflare R2, Wasabi, Backblaze B2, Tigris"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "import boto3",
+      "s3 = boto3.client(\"s3\")",
+      "",
+      "s3.upload_file(\"a.jpg\", \"media\", \"photos/2026/09/a.jpg\")",
+      "",
+      "url = s3.generate_presigned_url(          # temporary download link",
+      "    \"get_object\",",
+      "    Params={\"Bucket\": \"media\", \"Key\": \"photos/2026/09/a.jpg\"},",
+      "    ExpiresIn=3600,",
+      ")"
+    ]
+  },
+  "related": [
+    "block",
+    "file",
+    "cdn",
+    "warehouse","backup"],
+  "diagram": {
+    "caption": "Uploads are written as whole objects and viewers read them back by key. Every so often a lifecycle rule moves old objects to the cheap archive tier.",
+    "h": 260,
+    "nodes": [
+      {
+        "id": "up",
+        "x": 110,
+        "y": 70,
+        "label": "Uploader",
+        "sub": "PUT photos/…/a.jpg",
+        "emit": {
+          "every": 1500,
+          "jitter": 0.3,
+          "color": 1
+        },
+        "out": [
+          "bucket"
+        ]
+      },
+      {
+        "id": "view",
+        "x": 110,
+        "y": 190,
+        "label": "Viewers",
+        "sub": "GET photos/…/a.jpg",
+        "emit": {
+          "every": 750,
+          "jitter": 0.4,
+          "req": true,
+          "color": 0
+        },
+        "out": [
+          "bucket"
+        ]
+      },
+      {
+        "id": "bucket",
+        "x": 385,
+        "y": 130,
+        "label": "Bucket: media",
+        "sub": "11 nines durability",
+        "mode": "reply",
+        "delay": 120,
+        "emit": {
+          "every": 4200,
+          "to": [
+            "arch"
+          ],
+          "color": 2
+        }
+      },
+      {
+        "id": "arch",
+        "x": 630,
+        "y": 130,
+        "label": "Archive tier",
+        "sub": "after 90 days",
+        "mode": "sink"
+      }
+    ]
+  },
+  "history": {
+    "story": [
+      "For decades storage came in two shapes: disks of numbered blocks, and file systems that arranged those blocks into directories on a server. As data grew, a file server that every lookup and every byte passed through could become the bottleneck. In 1996 Garth Gibson’s group at Carnegie Mellon proposed Network-Attached Secure Disks (NASD): drives that offered objects instead of bare blocks and let clients read and write them directly, with the file server overseeing access instead of passing every byte through.",
+      "The first commercial hit was archival. EMC’s Centera (2002), built on technology from the start-up FilePool, addressed each stored item by a hash of its content and couldn’t modify it afterwards, which suited records that laws such as Sarbanes-Oxley required companies to keep unchanged. Then, in March 2006, Amazon S3 turned the idea into a public web service: buckets of objects under keys, written and read whole over HTTP, billed per GB. Microsoft’s Windows Azure Storage went into production in November 2008, Google previewed its own storage service in May 2010, and that July Rackspace open-sourced the object store behind its Cloud Files as OpenStack Swift.",
+      "S3’s API became the de facto standard: MinIO, Cloudflare R2 and Ceph’s object gateway all speak it. Since then the gap with file systems has been narrowing: S3 became strongly consistent in 2020, Azure and Google added optional directory trees, and in 2026 AWS began mounting buckets as NFS file systems."
+    ],
+    "choices": [
+      { "choice": "A flat namespace of keys instead of a directory tree", "why": "Without directories to keep consistent, data can be spread across many machines and read in parallel. The trade-off shows up in analytics: renaming a “folder” of 5,000 objects means 10,000 separate copy and delete calls." },
+      { "choice": "Whole objects, never edited in place", "why": "Data that is only ever written whole is far easier to replicate, cache and protect. Azure’s engineers wrote that never overwriting committed data “greatly simplified the replication protocol”." },
+      { "choice": "HTTP instead of a mounted device", "why": "Any program on any network can reach an object with a URL and credentials, with no driver or mount, which made it natural for the web, mobile apps and data shared between clouds." }
+    ],
+    "timeline": [
+      { "year": "1996", "text": "Carnegie Mellon’s NASD project proposes object-based network disks" },
+      { "year": "1999", "text": "Seagate submits an object storage device command set to the T10 committee" },
+      { "year": "2002", "text": "EMC Centera ships content-addressed archive storage" },
+      { "year": "2006", "text": "Amazon S3 launches: buckets, keys and an HTTP API, billed per GB" },
+      { "year": "2008", "text": "Windows Azure Storage, with blobs, tables and queues, enters production (November)" },
+      { "year": "2010", "text": "Google previews its storage service (May); Rackspace open-sources OpenStack Swift (July)" },
+      { "year": "2020", "text": "S3 becomes strongly consistent for every read and list (December)" },
+      { "year": "2026", "text": "S3 Files mounts buckets as NFS file systems (April)" }
+    ],
+    "sources": [
+      { "label": "Carnegie Mellon Parallel Data Lab: NASD, Network Attached Secure Disks", "url": "https://www.pdl.cmu.edu/NASD/index.shtml" },
+      { "label": "Gibson et al.: A Case for Network-Attached Secure Disks (CMU-CS-96-142, September 1996)", "url": "https://www.pdl.cmu.edu/PDL-FTP/NASD/TR96-142abs.shtml" },
+      { "label": "Seagate: Object Based Storage Devices command set proposal to T10 (T10/99-315r0, October 1999)", "url": "https://www.t10.org/ftp/t10/document.99/99-315r0.pdf" },
+      { "label": "Network World via Computerworld: Fixed content storage grabs users’ attention (May 2003, on EMC Centera)", "url": "https://www.computerworld.com/article/2570282/fixed-content-storage-grabs-users--attention.html" },
+      { "label": "Wikipedia: Content-addressable storage (FilePool and Centera)", "url": "https://en.wikipedia.org/wiki/Content-addressable_storage" },
+      { "label": "Amazon press release: Amazon Web Services Launches (March 2006)", "url": "https://press.aboutamazon.com/2006/3/amazon-web-services-launches" },
+      { "label": "Windows Azure Storage: A Highly Available Cloud Storage Service with Strong Consistency (SOSP 2011)", "url": "https://sigops.org/s/conferences/sosp/2011/current/2011-Cascais/printable/11-calder.pdf" },
+      { "label": "Google Developers Blog: Google Storage for Developers, a preview (May 2010)", "url": "https://developers.googleblog.com/en/google-storage-for-developers-a-preview/" },
+      { "label": "OpenStack Swift: README in the initial release commit (July 2010)", "url": "https://github.com/openstack/swift/blob/2ee9b837b5a1e13681ca9359138451719f8641dd/README" },
+      { "label": "MinIO README: S3-compatible object storage", "url": "https://github.com/minio/minio" },
+      { "label": "Cloudflare R2 docs: S3 API compatibility", "url": "https://developers.cloudflare.com/r2/api/s3/api/" },
+      { "label": "Ceph docs: Ceph Object Gateway S3 API", "url": "https://docs.ceph.com/en/latest/radosgw/s3/" },
+      { "label": "AWS What’s New: Amazon S3 now delivers strong read-after-write consistency (December 2020)", "url": "https://aws.amazon.com/about-aws/whats-new/2020/12/amazon-s3-now-delivers-strong-read-after-write-consistency-automatically-for-all-applications/" },
+      { "label": "Azure blog: A closer look at Azure Data Lake Storage Gen2 (2018)", "url": "https://azure.microsoft.com/en-us/blog/a-closer-look-at-azure-data-lake-storage-gen2/" },
+      { "label": "Cloud Storage docs: Hierarchical namespace", "url": "https://cloud.google.com/storage/docs/hns-overview" },
+      { "label": "AWS News Blog: Launching S3 Files, making S3 buckets accessible as file systems (April 2026)", "url": "https://aws.amazon.com/blogs/aws/launching-s3-files-making-s3-buckets-accessible-as-file-systems" }
+    ]
+  },
+  "sources": [
+    { "label": "S3 User Guide: What is Amazon S3?", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html" },
+    { "label": "S3 User Guide: Organizing objects in the console by using folders", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-folders.html" },
+    { "label": "S3 User Guide: Data protection (99.999999999% durability)", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/DataDurability.html" },
+    { "label": "S3 User Guide: Managing the lifecycle of objects", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html" },
+    { "label": "S3 User Guide: Sharing objects with presigned URLs", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/ShareObjectPreSignedURL.html" },
+    { "label": "S3 User Guide: Hosting a static website", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/WebsiteHosting.html" },
+    { "label": "S3 User Guide: Working with S3 Tables and table buckets (Apache Iceberg)", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html" },
+    { "label": "Mountpoint for Amazon S3: file system behaviour", "url": "https://github.com/awslabs/mountpoint-s3/blob/main/doc/SEMANTICS.md" },
+    { "label": "S3 User Guide: Working with Amazon S3 Files", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-files.html" },
+    { "label": "Cloud Storage docs: Product overview", "url": "https://docs.cloud.google.com/storage/docs/introduction" },
+    { "label": "Azure docs: Introduction to Azure Blob Storage", "url": "https://learn.microsoft.com/en-us/azure/storage/blobs/storage-blobs-introduction" },
+    { "label": "Boto3 docs: S3.Client.upload_file", "url": "https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/s3/client/upload_file.html" },
+    { "label": "Boto3 docs: S3.Client.generate_presigned_url", "url": "https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/s3/client/generate_presigned_url.html" },
+    { "label": "SeaweedFS on GitHub", "url": "https://github.com/seaweedfs/seaweedfs" },
+    { "label": "Garage: S3-compatible object store (Deuxfleurs)", "url": "https://garagehq.deuxfleurs.fr/" },
+    { "label": "RustFS on GitHub", "url": "https://github.com/rustfs/rustfs" },
+    { "label": "PGSTY Silo: a MinIO fork", "url": "https://github.com/pgsty/silo" },
+    { "label": "Apache Ozone: S3 protocol", "url": "https://ozone.apache.org/docs/user-guide/client-interfaces/s3/s3-api/" },
+    { "label": "minio/minio on GitHub (archived)", "url": "https://github.com/minio/minio" },
+    { "label": "Wasabi: Pricing FAQ", "url": "https://wasabi.com/pricing/faq" },
+    { "label": "Backblaze: B2 Cloud Storage pricing", "url": "https://www.backblaze.com/cloud-storage/pricing" },
+    { "label": "Tigris docs: Architecture", "url": "https://www.tigrisdata.com/docs/concepts/architecture/" }
+  ]
+}
