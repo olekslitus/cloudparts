@@ -97,6 +97,9 @@ export function navData(c: Catalog): NavData {
   };
 }
 
+/** The GitHub repository, for "Improve this page" links. PUBLIC_REPO_URL overrides it, e.g. in a fork. */
+export const REPO_URL: string = import.meta.env.PUBLIC_REPO_URL || 'https://github.com/olekslitus/cloudparts';
+
 /** Builds a link that respects the site's base path. */
 export function href(path = ''): string {
   const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');

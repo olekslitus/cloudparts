@@ -61,10 +61,9 @@ Links from the earlier single-file version (`#queue`, `#vs-messaging`) redirect 
 
 ## Deploy
 
-Pushing to `main` runs [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml), which
-checks and builds the site and publishes it to GitHub Pages. To turn it on once:
-**Settings → Pages → Build and deployment → Source: GitHub Actions**.
+The site is live at <https://cloudparts.vercel.app/>. Vercel builds and publishes every push to
+`main`, and gives other branches and pull requests their own preview URL. Pushes and pull requests
+also run [`ci.yml`](.github/workflows/ci.yml), which validates the content, type-checks and builds.
 
-The workflow sets the base path automatically, so the same build works at
-`https://<user>.github.io/<repo>/` or on a custom domain. Pull requests run
-[`ci.yml`](.github/workflows/ci.yml), which validates, type-checks and builds.
+To host it under a sub-path instead, such as GitHub Pages, set `BASE_PATH` (e.g. `/cloudparts`)
+and `SITE` when building.

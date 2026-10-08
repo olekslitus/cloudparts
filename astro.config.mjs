@@ -3,10 +3,10 @@ import { defineConfig } from 'astro/config';
 import react from '@astrojs/react';
 import tailwindcss from '@tailwindcss/vite';
 
-// SITE and BASE_PATH are set by the GitHub Pages workflow, so the same build works
-// on a project page (https://user.github.io/cloudparts/) or a custom domain (base "/").
+// Deployed on Vercel at the domain root. Set SITE and BASE_PATH to host it elsewhere,
+// e.g. under a sub-path like https://user.github.io/cloudparts/.
 export default defineConfig({
-  site: process.env.SITE,
+  site: process.env.SITE || 'https://cloudparts.vercel.app',
   base: process.env.BASE_PATH || '/',
   trailingSlash: 'always',
   integrations: [react()],
