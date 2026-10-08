@@ -1,0 +1,111 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Apache Pulsar",
+  "concepts": ["stream", "pubsub", "queue"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://pulsar.apache.org/",
+  "repo": "https://github.com/apache/pulsar",
+  "summary": "A multi-tenant messaging and streaming platform from Yahoo that keeps brokers stateless and stores messages in Apache BookKeeper, so one topic can serve as a log, a pub-sub feed or a work queue.",
+  "intro": [
+    "Pulsar splits serving from storage. Brokers are stateless: each topic is owned by one broker, which takes writes from producers, dispatches messages to consumers and serves most reads from a cache. The messages themselves live in Apache BookKeeper, a separate cluster of storage nodes called bookies. A topic is stored as a managed ledger made of many BookKeeper ledgers, append-only logs with a single writer whose entries are copied to several bookies; consumer positions (cursors) are stored there too. Because brokers hold no data, a topic can move to another broker in seconds, and storage grows by adding bookies. A metadata store keeps cluster state: Oxia (recommended for new clusters) or Apache ZooKeeper, and RocksDB in standalone mode. Old data can be offloaded with tiered storage to Amazon S3, Google Cloud Storage, Azure Blob Storage or a file system, and clients still read it as if nothing changed.",
+    "Topics are named `persistent://tenant/namespace/topic`. Tenants and namespaces are built in, with their own authentication, quotas, retention and isolation policies, so one cluster can serve many teams. How a topic behaves depends on the subscription: exclusive (one consumer, the default), failover (one active consumer with standbys), shared (round-robin across consumers, each message acknowledged individually, no ordering) and key_shared (spread across consumers but each key always goes to the same one). A unique subscription per consumer gives pub-sub fan-out; a shared subscription turns the same topic into a queue, with delayed delivery, negative acks, retry and dead-letter topics. Geo-replication copies topic data between clusters in different regions. Pulsar Functions run small Java, Python or Go functions on each message inside the cluster, and Pulsar IO connectors move data to and from systems such as Kafka and Cassandra. Pulsar 5.0 (October 2026), the newest long-term-support release, adds scalable topics that split and merge key ranges as load changes, instead of a fixed partition count."
+  ],
+  "strengths": [
+    "Brokers and storage scale separately: stateless brokers take over topics in seconds, and adding bookies adds storage capacity right away",
+    "One system for streaming and queuing, chosen per subscription (exclusive, failover, shared, key_shared), with delayed delivery and dead-letter topics built in",
+    "Multi-tenancy and geo-replication are part of the core, from Yahoo’s need to run messaging as a hosted service across 10+ data centres",
+    "Tiered storage offloads old backlog to S3, GCS or Azure Blob, so long retention doesn’t need large bookie disks"
+  ],
+  "limits": [
+    "More to run than a single-binary broker: brokers, a BookKeeper cluster and a metadata store, plus a configuration store for multi-cluster setups",
+    "Each topic is served by one broker, so a hot topic needs partitions (or 5.0’s scalable topics) to spread load",
+    "Shared subscriptions give up ordering, and key_shared needs producers to disable batching or batch by key",
+    "No Kafka protocol in the core, and the Kafka-on-Pulsar protocol handler is archived (last updated January 2024), so moving data between Kafka and Pulsar goes through Pulsar IO connectors"
+  ],
+  "worksWith": [
+    { "id": "zookeeper", "how": "keeps cluster metadata in" },
+    { "id": "kafka", "how": "copies topics via Pulsar IO to and from" },
+    { "id": "flink", "how": "is read and written with a connector by" },
+    { "id": "s3", "how": "offloads old topic data to" },
+    { "id": "gcs", "how": "offloads old topic data to" },
+    { "id": "azure-blob", "how": "offloads old topic data to" },
+    { "id": "kubernetes", "how": "is deployed with a Helm chart on" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "A tenant, a namespace, and one topic read as a log and as a keyed queue",
+    "source": [
+      "bin/pulsar standalone &          # broker, bookie and metadata store in one JVM",
+      "",
+      "bin/pulsar-admin tenants create acme",
+      "bin/pulsar-admin namespaces create acme/orders",
+      "bin/pulsar-admin topics create-partitioned-topic \\",
+      "  persistent://acme/orders/created --partitions 4",
+      "",
+      "# an exclusive subscription: one consumer reads everything, in order",
+      "bin/pulsar-client consume persistent://acme/orders/created \\",
+      "  -s audit -t Exclusive -p Earliest -n 0 &",
+      "",
+      "# a key_shared subscription: run it twice and the two consumers split",
+      "# the keys between them, each key always going to the same consumer",
+      "bin/pulsar-client consume persistent://acme/orders/created \\",
+      "  -s billing -t Key_Shared -n 0 &",
+      "",
+      "# key_shared needs batching off (or key-based batching) on the producer",
+      "bin/pulsar-client produce persistent://acme/orders/created \\",
+      "  -k customer-42 -db -m 'order 1,order 2,order 3'"
+    ]
+  },
+  "history": {
+    "story": [
+      "Yahoo needed one messaging service for many of its products, run centrally with applications onboarded as tenants. It wanted publish latencies around 5 ms on average and under 15 ms at the 99th percentile, durability with every message on several disks, replication between data centres, and support for a million topics. Finding no open-source system that met all of that, its team built Pulsar and deployed the first instance in the second quarter of 2015.",
+      "Pulsar was built on Apache BookKeeper, a distributed write-ahead log that Yahoo had open-sourced in 2011, with ZooKeeper for coordination. By September 2016, when Yahoo open-sourced Pulsar under Apache 2.0, it ran in more than 10 data centres with full-mesh replication and over 1.4 million topics, behind Yahoo Mail, Finance, Sports and Gemini Ads. The project entered the Apache Incubator on 1 June 2017 and graduated to a top-level project in September 2018, by which time it had added Pulsar Functions and the Pulsar IO connector framework.",
+      "The project now numbers releases as LTS.feature.patch: 4.0 (October 2024) and 5.0 (October 2026) are long-term-support lines, and 5.0 has active support until October 2028."
+    ],
+    "choices": [
+      { "choice": "Separate stateless brokers from BookKeeper storage", "why": "Brokers that hold no data can hand topics to each other within seconds, and BookKeeper’s separate journal and storage disks keep consumers draining a backlog from slowing down publishers. The ASF called this two-layer design a key strength at graduation." },
+      { "choice": "Multi-tenant from the start", "why": "Yahoo ran Pulsar as a hosted service for many teams, so tenants, namespaces, quotas and access control are core concepts rather than conventions." },
+      { "choice": "Subscription modes instead of separate products", "why": "An exclusive subscription behaves like a JMS topic and a shared one like a JMS queue, so the same stored topic serves both patterns." },
+      { "choice": "Replication between data centres in the core", "why": "Yahoo had users in many regions who created global topics; brokers asynchronously push messages published locally to remote clusters." }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "First Pulsar instance in production at Yahoo, second quarter" },
+      { "year": "2016", "text": "Open-sourced by Yahoo under Apache 2.0 in September" },
+      { "year": "2017", "text": "Enters the Apache Incubator on 1 June" },
+      { "year": "2018", "text": "Graduates to an Apache top-level project in September" },
+      { "year": "2024", "text": "Pulsar 4.0, a long-term-support release, in October" },
+      { "year": "2026", "text": "Pulsar 5.0 LTS adds scalable topics, 5 October" }
+    ],
+    "sources": [
+      { "label": "Yahoo Engineering: Open-sourcing Pulsar, pub-sub messaging at scale (7 September 2016)", "url": "https://yahooeng.tumblr.com/post/150078336821/open-sourcing-pulsar-pub-sub-messaging-at-scale" },
+      { "label": "ASF: The Apache Software Foundation announces Apache Pulsar as a top-level project (25 September 2018)", "url": "https://news.apache.org/foundation/entry/the-apache-software-foundation-announces39" },
+      { "label": "Apache Incubator: Pulsar project status (entered 2017-06-01, graduated 2018-09-19)", "url": "https://incubator.apache.org/projects/pulsar.html" },
+      { "label": "Pulsar: Release policy (LTS.feature.patch; 5.0 support dates)", "url": "https://pulsar.apache.org/contribute/release-policy/" },
+      { "label": "GitHub: Apache Pulsar 4.0.0 release (October 2024)", "url": "https://github.com/apache/pulsar/releases/tag/v4.0.0" },
+      { "label": "GitHub: Apache Pulsar 5.0.0 release (5 October 2026)", "url": "https://github.com/apache/pulsar/releases/tag/v5.0.0" }
+    ]
+  },
+  "sources": [
+    { "label": "Pulsar docs: Architecture overview (brokers, BookKeeper, ledgers, metadata store, configuration store)", "url": "https://pulsar.apache.org/docs/next/concepts-architecture-overview/" },
+    { "label": "Pulsar docs: Messaging (topics, subscription types, acknowledgment, retry and dead-letter topics, delayed delivery)", "url": "https://pulsar.apache.org/docs/next/concepts-messaging/" },
+    { "label": "Pulsar docs: Multi-tenancy (tenants and namespaces)", "url": "https://pulsar.apache.org/docs/next/concepts-multi-tenancy/" },
+    { "label": "Pulsar docs: Geo-replication", "url": "https://pulsar.apache.org/docs/next/concepts-replication/" },
+    { "label": "Pulsar docs: Tiered storage overview (S3, GCS, Azure, Aliyun OSS, filesystem)", "url": "https://pulsar.apache.org/docs/next/tiered-storage-overview/" },
+    { "label": "Pulsar docs: Pulsar Functions overview (Java, Python, Go)", "url": "https://pulsar.apache.org/docs/next/functions-overview/" },
+    { "label": "Pulsar docs: Pulsar IO overview (connectors)", "url": "https://pulsar.apache.org/docs/next/io-overview/" },
+    { "label": "Pulsar docs: Kafka source connector", "url": "https://pulsar.apache.org/docs/next/io-kafka-source/" },
+    { "label": "Pulsar docs: Kafka sink connector", "url": "https://pulsar.apache.org/docs/next/io-kafka-sink/" },
+    { "label": "Pulsar docs: Scalable topics (5.0)", "url": "https://pulsar.apache.org/docs/next/concepts-scalable-topics/" },
+    { "label": "Pulsar docs: Run a standalone Pulsar cluster locally (pulsar-admin, pulsar-client, RocksDB metadata)", "url": "https://pulsar.apache.org/docs/next/getting-started-standalone/" },
+    { "label": "Pulsar docs: Run Pulsar in Kubernetes with Helm", "url": "https://pulsar.apache.org/docs/next/getting-started-helm/" },
+    { "label": "Pulsar source: pulsar-client consume options (-t subscription type, -p position)", "url": "https://github.com/apache/pulsar/blob/master/pulsar-client-tools/src/main/java/org/apache/pulsar/client/cli/CmdConsume.java" },
+    { "label": "Pulsar source: pulsar-client produce options (-k key, -db disable batching)", "url": "https://github.com/apache/pulsar/blob/master/pulsar-client-tools/src/main/java/org/apache/pulsar/client/cli/CmdProduce.java" },
+    { "label": "Apache Flink docs: Pulsar connector (exactly-once source and sink)", "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/connectors/datastream/pulsar/" },
+    { "label": "GitHub: streamnative/kop, Kafka-on-Pulsar protocol handler (archived)", "url": "https://github.com/streamnative/kop" },
+    { "label": "Yahoo Engineering: Open-sourcing Pulsar (requirements, deployment scale, JMS-style subscriptions)", "url": "https://yahooeng.tumblr.com/post/150078336821/open-sourcing-pulsar-pub-sub-messaging-at-scale" },
+    { "label": "GitHub: Apache Pulsar 5.0.0 release notes", "url": "https://github.com/apache/pulsar/releases/tag/v5.0.0" }
+  ],
+  "checked": "2026-10-08"
+}

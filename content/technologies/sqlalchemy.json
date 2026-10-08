@@ -1,0 +1,110 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "SQLAlchemy",
+  "concepts": ["orm"],
+  "kinds": ["full-orms"],
+  "provider": "oss",
+  "vendor": "SQLAlchemy authors and contributors (led by Mike Bayer)",
+  "license": "MIT",
+  "website": "https://www.sqlalchemy.org/",
+  "repo": "https://github.com/sqlalchemy/sqlalchemy",
+  "summary": "A Python database toolkit in two layers: a SQL expression layer (Core) that builds and runs SQL, and an ORM on top of it that maps classes to tables with an identity map and a unit of work.",
+  "intro": [
+    "SQLAlchemy comes in two layers, and both are public. Core talks to databases through Python’s DB-API drivers and provides the SQL Expression Language: tables, columns and statements as composable Python objects (`select(users.c.plan).group_by(...)`) that render to each database’s dialect. The ORM builds on Core. You declare mapped classes, and a `Session` loads them, keeps one object per row in its identity map, and on flush turns the changes it tracked into `INSERT`, `UPDATE` and `DELETE` statements: the unit of work pattern, with flushes usually automatic. Because ORM queries are Core statements, an application can move down a level for a report or bulk operation without leaving the library.",
+    "Relationships load lazily by default, and the docs name the N+1 problem as the result. You pick a loader per query instead: `selectinload` for a second `SELECT ... IN`, `joinedload` for a join, or `raiseload` to make any unplanned lazy load an error. Dialects for PostgreSQL, MySQL and MariaDB, SQLite, Oracle and SQL Server are included and others are external. Schema migrations come from Alembic, a separate tool by the same author. Version 2.0 (January 2023) unified Core and ORM querying around `select()`; 2.1.0, released on 24 September 2026, made psycopg 3 the default PostgreSQL driver and stopped installing the asyncio dependency by default."
+  ],
+  "strengths": [
+    "Both a full ORM and a SQL toolkit in one library, so you can mix object mapping with hand-tuned SQL expressions",
+    "Data Mapper design: mapped classes stay plain Python, and the session handles identity, change tracking and flush order",
+    "Explicit control over relationship loading per query, including `raiseload` to catch N+1 queries in tests",
+    "Many dialects, async support and Alembic for migrations; a mature project developed since 2005"
+  ],
+  "limits": [
+    "A large API with two layers and several loading strategies takes time to learn well",
+    "Lazy loading is the default, so N+1 queries appear unless each query states what to load",
+    "Major versions changed the API substantially: 1.x code needed a migration pass for 2.0",
+    "The extra layers cost Python function calls; its author notes the Core/ORM split adds overhead that C extensions and inlining work around"
+  ],
+  "worksWith": [
+    { "id": "python", "how": "maps classes to tables for" },
+    { "id": "postgresql", "how": "generates SQL through a dialect for" },
+    { "id": "mysql", "how": "generates SQL through a dialect for" },
+    { "id": "sqlite", "how": "generates SQL through a dialect for" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "The ORM’s unit of work and identity map, then the same table through Core",
+    "source": [
+      "# pip install sqlalchemy  (runs against an in-memory SQLite database)",
+      "from sqlalchemy import create_engine, func, select",
+      "from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column",
+      "",
+      "",
+      "class Base(DeclarativeBase):",
+      "    pass",
+      "",
+      "",
+      "class User(Base):",
+      "    __tablename__ = \"users\"",
+      "    id: Mapped[int] = mapped_column(primary_key=True)",
+      "    name: Mapped[str]",
+      "    plan: Mapped[str] = mapped_column(default=\"free\")",
+      "",
+      "",
+      "engine = create_engine(\"sqlite://\")",
+      "Base.metadata.create_all(engine)",
+      "",
+      "# ORM: change objects, the unit of work writes the SQL at commit",
+      "with Session(engine) as session:",
+      "    session.add_all([User(name=\"ada\"), User(name=\"linus\")])",
+      "    session.commit()                                   # 2 INSERTs",
+      "    ada = session.scalars(select(User).where(User.name == \"ada\")).one()",
+      "    assert ada is session.get(User, ada.id)           # identity map: same object",
+      "    ada.plan = \"pro\"",
+      "    session.commit()                                   # 1 UPDATE, only for the changed row",
+      "",
+      "# Core: the same table as a SQL expression, rows instead of objects",
+      "users = User.__table__",
+      "with engine.connect() as conn:",
+      "    stmt = select(users.c.plan, func.count()).group_by(users.c.plan).order_by(users.c.plan)",
+      "    print(conn.execute(stmt).all())                    # [('free', 1), ('pro', 1)]"
+    ]
+  },
+  "history": {
+    "story": [
+      "Michael Bayer introduced SQLAlchemy in 2005, and version 0.1.0 reached the Python Package Index in February 2006. He wanted an end-to-end system for relational databases in Python that did not do what he saw as the root of most ORM complaints: hide the database. In his account, relational structures and SQL are central to an application’s design, so a tool that conceals them throws away the reason to use a relational database at all. SQLAlchemy called itself a toolkit, embraced the “leaky abstraction”, and aimed to automate the repetitive work without taking control away.",
+      "Its ORM followed Martin Fowler’s patterns closely, Data Mapper, Identity Map and Unit of Work, and drew on Hibernate in Java and Ian Bicking’s SQLObject in Python. The API went through several reworkings as users arrived and settled by 0.5 in January 2009. Version 1.0 came in April 2015.",
+      "Work on 2.0 began in August 2018 with ideas for unifying how Core and the ORM query. Version 1.4 (March 2021) shipped the new unified querying next to the old API as a bridge, and 2.0.0 shipped on 26 January 2023 with significant API changes. SQLAlchemy 2.1 followed in September 2026."
+    ],
+    "choices": [
+      { "choice": "Core and ORM as separate public layers", "why": "Exposing every layer let early users get real work done with Core while the ORM was still being built, and lets ORM applications move down a level when they need finer control. The price is longer call chains, which cost performance in CPython." },
+      { "choice": "Data Mapper, not Active Record", "why": "Bayer followed Fowler’s Data Mapper so that classes and tables could be designed separately, with the developer deciding how they relate rather than the library dictating the schema." },
+      { "choice": "A session with an identity map and unit of work", "why": "One object per row avoids the problems of duplicate identities, and the unit of work can persist all changes in the right order with little code. The flush started as a mostly hidden step and became automatic." },
+      { "choice": "One query system for Core and ORM, in two phases", "why": "The changes were large enough that 1.4 shipped the new unified querying alongside the legacy `Query` API, with a migration path modelled on lessons from Python 2 to 3. 2.0 then removed most deprecated pieces and moved to Python 3 only, leaving `Query` as legacy." }
+    ],
+    "timeline": [
+      { "year": "2005", "text": "Michael Bayer introduces SQLAlchemy" },
+      { "year": "2006", "text": "Version 0.1.0 on PyPI in February" },
+      { "year": "2009", "text": "Version 0.5 brings a stable form in January" },
+      { "year": "2015", "text": "SQLAlchemy 1.0 in April" },
+      { "year": "2023", "text": "SQLAlchemy 2.0 unifies Core and ORM querying in January" },
+      { "year": "2026", "text": "SQLAlchemy 2.1 in September" }
+    ],
+    "sources": [
+      { "label": "Michael Bayer: SQLAlchemy, in The Architecture of Open Source Applications, Volume 2", "url": "https://aosabook.org/en/v2/sqlalchemy.html" },
+      { "label": "PyPI: SQLAlchemy release history (0.1.0 February 2006, 1.0.0 April 2015, 1.4.0 March 2021)", "url": "https://pypi.org/project/SQLAlchemy/#history" },
+      { "label": "SQLAlchemy blog: SQLAlchemy 2.0.0 Released (26 January 2023)", "url": "https://www.sqlalchemy.org/blog/2023/01/26/sqlalchemy-2.0.0-released/" },
+      { "label": "SQLAlchemy blog: SQLAlchemy 2.1.0 Released (24 September 2026)", "url": "https://www.sqlalchemy.org/blog/2026/09/24/sqlalchemy-2.1.0-released/" }
+    ]
+  },
+  "sources": [
+    { "label": "SQLAlchemy 2.1 docs: Overview (Core, SQL Expression Language, ORM and unit of work)", "url": "https://docs.sqlalchemy.org/en/21/intro.html" },
+    { "label": "SQLAlchemy 2.1 docs: Relationship Loading Techniques (lazy loading, N plus one, selectinload, joinedload, raiseload)", "url": "https://docs.sqlalchemy.org/en/21/orm/queryguide/relationships.html" },
+    { "label": "SQLAlchemy 2.1 docs: Dialects (PostgreSQL, MySQL and MariaDB, SQLite, Oracle, SQL Server)", "url": "https://docs.sqlalchemy.org/en/21/dialects/index.html" },
+    { "label": "Alembic documentation (migration tool for SQLAlchemy)", "url": "https://alembic.sqlalchemy.org/en/latest/" },
+    { "label": "SQLAlchemy blog: SQLAlchemy 2.1.0 Released (psycopg default driver, greenlet no longer installed by default)", "url": "https://www.sqlalchemy.org/blog/2026/09/24/sqlalchemy-2.1.0-released/" },
+    { "label": "Michael Bayer: SQLAlchemy, in The Architecture of Open Source Applications, Volume 2 (Core/ORM split and its performance cost)", "url": "https://aosabook.org/en/v2/sqlalchemy.html" },
+    { "label": "GitHub: sqlalchemy/sqlalchemy LICENSE (MIT)", "url": "https://github.com/sqlalchemy/sqlalchemy/blob/main/LICENSE" }
+  ],
+  "checked": "2026-10-08"
+}

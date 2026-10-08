@@ -1,0 +1,91 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "BEAM (Erlang virtual machine)",
+  "concepts": ["runtime-vms"],
+  "provider": "oss",
+  "vendor": "Ericsson (Erlang/OTP team)",
+  "license": "Apache 2.0",
+  "website": "https://www.erlang.org/",
+  "repo": "https://github.com/erlang/otp",
+  "summary": "The virtual machine in Erlang/OTP that runs Erlang and Elixir: millions of lightweight processes, each with its own heap and garbage collection, preemptively scheduled across all cores, with code that can be replaced while the system runs.",
+  "intro": [
+    "The Erlang and Elixir compilers produce `.beam` files of BEAM instructions, and the runtime system loads them module by module. Since Erlang/OTP 24, a JIT called BeamAsm translates each instruction to native code as a module loads, on x86-64 and AArch64; elsewhere an interpreter runs them. The unit of work is the process: not an operating system process or thread but a lightweight one owned by the runtime. A newly spawned process uses 327 words of memory (about 2.6 KB on a 64-bit machine), including a 233-word heap that grows as needed, so a system can hold hundreds of thousands or millions of them.",
+    "By default the runtime starts one scheduler thread per logical processor. Each process runs until it has used its budget of reductions, roughly one per function call; after 4,000 the scheduler switches it out, so a busy process can’t starve the others. Processes share no memory: data in a message is copied from the sender’s heap to the receiver’s (large reference-counted binaries are the exception). In exchange, every process has its own heap and its own generational copying garbage collector, so collection works on one small heap at a time.",
+    "Code can be replaced in a running system, one module at a time. The runtime keeps two versions of a module, current and old; processes move to the new code when they next make a fully qualified call, and loading a third version purges the oldest and terminates any processes still running it."
+  ],
+  "strengths": [
+    "Processes are cheap (327 words when spawned), so one per connection, request or device is normal",
+    "Preemptive scheduling by reductions keeps latency fair: no process can hold a scheduler for long running Erlang code",
+    "Per-process heaps and garbage collection: each collection touches only one process’s memory",
+    "Hot code loading upgrades modules without stopping the system, the property Erlang was built for in telephone switches"
+  ],
+  "limits": [
+    "Messages are copied between heaps, so passing large data structures between processes costs time and memory",
+    "Native code called through NIFs isn’t preempted, and a slow NIF can block a whole scheduler",
+    "BeamAsm does hardly any optimisation across instructions, so tight CPU-bound code gains less from it than from an optimising JIT",
+    "Only two versions of a module can be loaded at once; a third load kills processes still running the oldest"
+  ],
+  "snippet": {
+    "lang": "erlang",
+    "title": "Measure a fresh process in the Erlang shell (64-bit; OTP 27 and 28 print the same)",
+    "source": [
+      "1> Fun = fun() -> receive after infinity -> ok end end.  % a process that just waits",
+      "2> {_, Bytes} = process_info(spawn(Fun), memory).",
+      "{memory,2616}",
+      "3> Bytes div erlang:system_info(wordsize).",
+      "327"
+    ]
+  },
+  "history": {
+    "story": [
+      "Erlang was designed at the Ericsson Computer Science Laboratory from 1986 for telephone switches: highly concurrent programs that had to run for years and be upgraded while running. The first version was an interpreter written in Prolog, far too slow for real products. In 1989 Joe Armstrong designed JAM (Joe’s Abstract Machine), a compact byte-coded machine inspired by the Warren Abstract Machine for Prolog; Mike Williams wrote its runtime in C, Armstrong the compiler and Robert Virding the libraries, and it ran about 70 times faster than the Prolog interpreter.",
+      "Bogumil Hausman then built TEAM, which compiled Erlang to C, and after it BEAM (Bogdan’s Erlang Abstract Machine), a hybrid that could run compiled C code or threaded code in an interpreter. Björn Gustavsson, who joined the Erlang/OTP team at the end of 1996, later took over BEAM and argued that the compile-to-C path “had to die”: it came in three flavours and caused bugs even in the threaded interpreter. BEAM became the machine that runs Erlang/OTP.",
+      "1998 was a turning point. Ericsson announced the AXD301 switch in March, possibly the largest program ever written in a functional language, but Ericsson Radio had banned Erlang for new products in February. The ban led indirectly to Open Source Erlang, released in December. Elixir 1.0 (2014) brought a second large language to the VM, and BEAM gained a JIT compiler, BeamAsm, in Erlang/OTP 24 on 12 May 2021."
+    ],
+    "choices": [
+      {
+        "choice": "Processes belong to the language, not the operating system",
+        "why": "A telephone switch handles tens or hundreds of thousands of simultaneous calls. Lightweight processes with no shared memory, created and scheduled by the runtime, made one process per activity affordable."
+      },
+      {
+        "choice": "A separate heap per process",
+        "why": "JAM and BEAM gave every process its own heap. Virding’s experimental VEE used one shared heap, which made message passing much faster, but overall it was no quicker, probably because the shared heap lowered the cache hit rate."
+      },
+      {
+        "choice": "Preempt by counting reductions",
+        "why": "A process can only be suspended at safe points such as function calls and receives. Because Erlang has no loops except recursion, counting calls gives every process a bounded time slice: preemptive scheduling built on cooperative switch points."
+      },
+      {
+        "choice": "Two versions of each module in memory",
+        "why": "Systems that run forever must change code without stopping. Keeping old and current code side by side lets running processes finish in the old version and move to the new one on their next fully qualified call."
+      }
+    ],
+    "timeline": [
+      { "year": "1986", "text": "Erlang work begins at Ericsson’s Computer Science Laboratory" },
+      { "year": "1989", "text": "JAM, the first Erlang virtual machine, replaces the Prolog interpreter" },
+      { "year": "1996", "text": "First Erlang/OTP release, R1B" },
+      { "year": "1998", "text": "Erlang released as open source in December" },
+      { "year": "2021", "text": "Erlang/OTP 24 adds the BeamAsm JIT on 12 May" }
+    ],
+    "sources": [
+      { "label": "Joe Armstrong: A History of Erlang (HOPL III, 2007)", "url": "https://www.labouseur.com/courses/erlang/history-of-erlang-armstrong.pdf" },
+      { "label": "Erlang/OTP blog: A Brief History of the BEAM Compiler (JAM, TEAM, BEAM, VEE; OTP R1B in 1996)", "url": "https://www.erlang.org/blog/beam-compiler-history/" },
+      { "label": "Erik Stenman: The BEAM Book, chapter 10 Scheduling (reductions, preemption at function calls)", "url": "https://blog.stenmans.org/theBeamBook/" },
+      { "label": "Erlang/OTP blog: Erlang/OTP 24 Highlights (12 May 2021; BeamAsm)", "url": "https://www.erlang.org/blog/my-otp-24-highlights/" },
+      { "label": "Elixir blog: Elixir v1.0 released (18 September 2014)", "url": "https://elixir-lang.org/blog/2014/09/18/elixir-v1-0-0-released/" }
+    ]
+  },
+  "sources": [
+    { "label": "Erlang/OTP docs: Compilation and Code Loading (BEAM, .beam files, current and old code, purging)", "url": "https://www.erlang.org/doc/system/code_loading.html" },
+    { "label": "Erlang/OTP docs: BeamAsm, the Erlang JIT (x86-64 and aarch64; hardly any cross-instruction optimisation)", "url": "https://www.erlang.org/doc/apps/erts/beamasm.html" },
+    { "label": "Erlang/OTP docs: Processes reference (lightweight processes)", "url": "https://www.erlang.org/doc/system/ref_man_processes.html" },
+    { "label": "Erlang/OTP docs: Efficiency Guide, Processes (327 words, 233-word heap, millions of processes, copied messages)", "url": "https://www.erlang.org/doc/system/eff_guide_processes.html" },
+    { "label": "Erlang/OTP docs: Erlang Garbage Collector (per-process generational semi-space copying collector)", "url": "https://www.erlang.org/doc/apps/erts/garbagecollection.html" },
+    { "label": "Erlang/OTP docs: erlang:bump_reductions/1 (one reduction per call; switch after 4,000)", "url": "https://www.erlang.org/doc/apps/erts/erlang.html" },
+    { "label": "Erlang/OTP docs: erl, the +S flag (scheduler threads default to logical processors)", "url": "https://www.erlang.org/doc/apps/erts/erl_cmd.html" },
+    { "label": "Erik Stenman: The BEAM Book (scheduling, reductions, NIFs that block a scheduler)", "url": "https://blog.stenmans.org/theBeamBook/" },
+    { "label": "Elixir docs: Code (modules compiled to bytecode in .beam files)", "url": "https://hexdocs.pm/elixir/Code.html" },
+    { "label": "erlang/otp README (Apache License 2.0; copyright Ericsson AB)", "url": "https://github.com/erlang/otp/blob/master/README.md" }
+  ],
+  "checked": "2026-10-08"
+}

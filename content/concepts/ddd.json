@@ -1,0 +1,316 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Domain-driven design",
+  "category": "design",
+  "order": 40,
+  "summary": "Shape the software around the business it serves: one shared language with the domain experts, explicit boundaries where words change meaning, and building blocks such as aggregates that guard the rules.",
+  "howItWorks": "Domain-driven design (DDD) comes from Eric Evans’s 2003 book of the same name. It works at two levels. Strategic design deals with the big picture. Developers and domain experts build a ubiquitous language: the same terms in conversation, diagrams and code, so a `Shipment` in a meeting is a `Shipment` class, not a `TransportRecord`. A large business can’t share one model (“customer” means one thing to sales and another to support), so the system is split into bounded contexts, each with its own model and language, usually owned by one team. A context map records how the contexts relate: who is upstream, what is shared, and where a translation layer protects one model from another. Tactical design gives building blocks for the model inside one context. Entities have an identity that lasts while their attributes change (an order, a patient). Value objects are defined only by their attributes and are immutable (an amount of money, a date range). Aggregates cluster entities and values behind one root that enforces the rules; outside code holds references only to the root, and a transaction changes one aggregate. Repositories make aggregates look like an in-memory collection and hide the database. Domain events record something that happened that the experts care about, such as `OrderPlaced`. Domain services hold operations that don’t belong to any one object. All of this lives in a domain layer kept free of user interface and database code.",
+  "analogy": "A hospital where “patient” means a bed to the ward, an invoice to accounts and a case history to the doctors. Each department keeps its own forms in its own words, and agreed handover sheets translate between them, instead of one master form that nobody can fill in.",
+  "useWhen": [
+    "The business rules are the hard part: pricing, insurance, logistics, trading",
+    "Several teams share one large system and keep tripping over words like “customer” or “product”",
+    "Splitting a monolith or planning microservices: bounded contexts suggest where the seams are",
+    "Domain experts are available to talk to regularly, because the language is tested in those conversations"
+  ],
+  "avoidWhen": [
+    "Forms over tables with few rules to protect; a simple CRUD service is enough",
+    "Nobody who knows the business is available to build the language with",
+    "Copying the building blocks (repositories, factories) as folder names without the modeling work; Evans notes many projects model without getting much real benefit"
+  ],
+  "example": "An online shop has a Sales context and a Shipping context. In Sales, `Order` is an aggregate: its root refuses new lines once the order is placed, and prices are `Money` value objects that can’t be added across currencies. Placing the order records an `OrderPlaced` domain event. Shipping, a separate context with its own team and schema, hears the event and creates a `Shipment` with parcels and a carrier; it never sees prices. When Sales renames “basket discount” to “promotion”, Shipping’s code doesn’t change, because the two contexts only share the event’s published fields.",
+  "snippet": {
+    "lang": "ts",
+    "source": [
+      "// Value object: equal by value, immutable",
+      "class Money {",
+      "  constructor(readonly cents: number, readonly currency: string) {",
+      "    if (!Number.isInteger(cents) || cents < 0) throw new Error(\"bad amount\");",
+      "  }",
+      "  add(other: Money): Money {",
+      "    if (other.currency !== this.currency) throw new Error(\"currency mismatch\");",
+      "    return new Money(this.cents + other.cents, this.currency);",
+      "  }",
+      "  equals(other: Money) { return this.cents === other.cents && this.currency === other.currency; }",
+      "}",
+      "",
+      "// Domain event: something that happened, named in the past tense",
+      "type OrderPlaced = { type: \"OrderPlaced\"; orderId: string; total: Money; at: Date };",
+      "",
+      "// Entity and aggregate root: identity makes it this order; outside code changes it only through methods",
+      "class Order {",
+      "  #lines: { sku: string; qty: number; price: Money }[] = [];",
+      "  #placed = false;",
+      "  readonly events: OrderPlaced[] = [];",
+      "  constructor(readonly id: string) {}",
+      "",
+      "  addLine(sku: string, qty: number, price: Money) {",
+      "    if (this.#placed) throw new Error(\"order already placed\");",
+      "    if (qty <= 0) throw new Error(\"qty must be positive\");",
+      "    this.#lines.push({ sku, qty, price });",
+      "  }",
+      "  total(): Money {",
+      "    return this.#lines.reduce((sum, l) => sum.add(new Money(l.price.cents * l.qty, l.price.currency)), new Money(0, \"EUR\"));",
+      "  }",
+      "  place() {",
+      "    if (this.#lines.length === 0) throw new Error(\"empty order\");",
+      "    this.#placed = true;",
+      "    this.events.push({ type: \"OrderPlaced\", orderId: this.id, total: this.total(), at: new Date() });",
+      "  }",
+      "}",
+      "",
+      "// Repository: looks like a collection of aggregates and hides the database",
+      "interface OrderRepository { get(id: string): Promise<Order | undefined>; save(order: Order): Promise<void> }",
+      "class InMemoryOrders implements OrderRepository {",
+      "  #rows = new Map<string, Order>();",
+      "  async get(id: string) { return this.#rows.get(id); }",
+      "  async save(order: Order) { this.#rows.set(order.id, order); }",
+      "}",
+      "",
+      "const orders: OrderRepository = new InMemoryOrders();",
+      "const order = new Order(\"o-42\");",
+      "order.addLine(\"tea\", 2, new Money(450, \"EUR\"));",
+      "order.place();",
+      "await orders.save(order);",
+      "console.log(order.total().cents);                               // 900",
+      "console.log(order.events[0].type);                              // OrderPlaced",
+      "console.log(new Money(5, \"EUR\").equals(new Money(5, \"EUR\")));   // true",
+      "try { order.addLine(\"cake\", 1, new Money(300, \"EUR\")); }",
+      "catch (e) { console.log((e as Error).message); }                // order already placed"
+    ]
+  },
+  "related": [
+    "microservices",
+    "monolith",
+    "cqrs",
+    "service-layer",
+    "dto"
+  ],
+  "sections": [
+    {
+      "type": "cards",
+      "title": "The tactical building blocks",
+      "intro": "Evans’s patterns for the model inside one bounded context. They cast familiar object-oriented practice in DDD terms; the reference added domain events after the book.",
+      "items": [
+        {
+          "name": "Entity",
+          "tag": "identity",
+          "text": "An object defined by a thread of identity through time, not by its attributes: a customer is still the same customer after moving house. The model must say what makes two of them “the same thing”, often with a generated id."
+        },
+        {
+          "name": "Value object",
+          "tag": "no identity",
+          "text": "An object you care about only for its attributes: an amount of money, a date range, an address. Treat it as immutable and make its operations side-effect free; two equal values are interchangeable."
+        },
+        {
+          "name": "Aggregate",
+          "tag": "consistency boundary",
+          "text": "A cluster of entities and values, such as an order and its lines, with one root. Outside objects reference only the root, which enforces the invariants. Rules hold synchronously inside one aggregate; changes across aggregates happen asynchronously, and a transaction shouldn’t cross the boundary."
+        },
+        {
+          "name": "Repository",
+          "tag": "storage behind a collection",
+          "text": "For each aggregate that needs global access, an object that looks like an in-memory collection: add, remove, and find by criteria the domain experts would recognise. It returns whole aggregates and hides the query technology."
+        },
+        {
+          "name": "Domain event",
+          "tag": "added after the book",
+          "text": "A record that something the domain experts care about happened, such as `PaymentReceived`. Usually immutable, with when it happened and which entities were involved. Other aggregates and other contexts react to it."
+        },
+        {
+          "name": "Domain service",
+          "tag": "not a thing",
+          "text": "An operation that is a real domain concept but isn’t the natural job of any entity or value, such as transferring money between two accounts. It is declared as a standalone interface whose name becomes part of the ubiquitous language."
+        },
+        {
+          "name": "Factory",
+          "tag": "complex creation",
+          "text": "Builds a whole aggregate or a large value object in one step, enforcing its invariants, so client code doesn’t need to know its internal structure."
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Context map: how bounded contexts relate",
+      "intro": "Strategic design names the relationships between contexts, because they constrain each team as much as the code does. Evans’s reference lists these patterns.",
+      "corner": "Relationship",
+      "columns": [
+        "What it means",
+        "Fits when"
+      ],
+      "rows": [
+        {
+          "label": "Partnership",
+          "values": [
+            "Two teams plan together and evolve their interfaces jointly",
+            "Either team failing means both fail to deliver"
+          ]
+        },
+        {
+          "label": "Shared kernel",
+          "values": [
+            "A small, explicitly bounded part of the model and its code is shared and changed only by agreement",
+            "Two closely related teams want one language for a few core concepts"
+          ]
+        },
+        {
+          "label": "Customer/supplier",
+          "values": [
+            "The downstream team’s needs are planned into the upstream team’s work, checked by shared acceptance tests",
+            "The upstream team can succeed alone but is willing to serve the downstream"
+          ]
+        },
+        {
+          "label": "Conformist",
+          "values": [
+            "The downstream team adopts the upstream model as is",
+            "The upstream has no reason to adapt, and translation isn’t worth it"
+          ]
+        },
+        {
+          "label": "Anticorruption layer",
+          "values": [
+            "The downstream builds a translating layer so the upstream model never leaks into its own",
+            "Integrating with a legacy system or any model that doesn’t fit"
+          ]
+        },
+        {
+          "label": "Open-host service and published language",
+          "values": [
+            "The upstream offers one documented protocol and data format for all clients",
+            "Many contexts integrate with the same one"
+          ]
+        },
+        {
+          "label": "Separate ways",
+          "values": [
+            "No integration at all",
+            "Two areas have no significant relationship, so integration costs more than it brings"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Bounded contexts and microservices",
+      "body": [
+        "In their 2014 article on microservices, James Lewis and Martin Fowler point to the bounded context as a useful way to think about decentralised data, noting a natural correlation between service boundaries and context boundaries. Microsoft’s microservices guidance follows the same order: define the bounded contexts first, apply the tactical patterns inside each, then use the result to identify services.",
+        "A bounded context is a boundary of meaning, not a deployment unit. One context can be one service, or a module inside a monolith with its own schema; the same strategic thinking helps either way. Microsoft’s guidance adds a test: if two services need to talk to each other constantly, they probably belong in one. It also says to keep DDD patterns for services with significant business rules and to build simple CRUD services the simple way."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Modeling the business in software was not new. Representing the domain was central to database and object-oriented work in the 1980s and 1990s, but the models were often drawn on paper, up front, in notations developers then left behind. Eric Evans’s 2003 book, Domain-Driven Design: Tackling Complexity in the Heart of Software, gave the practice a vocabulary. Its core was the ubiquitous language: domain terms used the same way by experts and developers, in speech and in code, and evolved with the software rather than fixed before it.",
+      "The book sorted objects into entities, value objects and services, and introduced aggregates. Its strategic part tackled a problem Martin Fowler says he hadn’t seen handled compellingly before: large organisations where words like “customer” or “meter” mean different things to different groups. Instead of the old advice to build one unified model of the whole business, which Evans judged not “feasible or cost-effective”, it split systems into bounded contexts and mapped how they relate.",
+      "The ideas kept spreading after the book. Evans and Fowler, with their publisher’s agreement, put short pattern summaries into the Creative Commons in 2006. Greg Young and Udi Dahan built CQRS and event sourcing on DDD, which Evans later called the first successful big departure from the architecture inherited from the turn of the century. Vaughn Vernon’s 2013 book focused on strategic design, the 2014 microservices article tied service boundaries to bounded contexts, and Evans’s 2015 DDD Reference added domain events, partnership and big ball of mud as new terms."
+    ],
+    "choices": [
+      {
+        "choice": "One language for conversation and code",
+        "why": "Experts spoke in jargon, developers in design terms, and the code in a third dialect. Evans argued that translation blunts communication, so a change in the language should be treated as a change to the model and refactored into the code."
+      },
+      {
+        "choice": "Many explicit models instead of one enterprise model",
+        "why": "Different groups use subtly different meanings for central terms. Code that mixes models becomes buggy and confusing, so each model gets a boundary inside which it is kept strictly consistent."
+      },
+      {
+        "choice": "Aggregates as the unit of consistency",
+        "why": "With complex associations it was hard to keep changes consistent, and cautious database locking made users block each other. Drawing a boundary, enforcing rules inside it and updating across boundaries asynchronously also tells you how to split transactions and servers."
+      },
+      {
+        "choice": "Isolate the domain in its own layer",
+        "why": "When business rules leak into user interface widgets and database scripts, a cosmetic screen change can alter a rule, and testing gets awkward. Keeping domain code free of those concerns lets the model grow rich enough to capture the business."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "2003",
+        "text": "Eric Evans publishes Domain-Driven Design"
+      },
+      {
+        "year": "2006",
+        "text": "Evans and Fowler place pattern summaries in the Creative Commons"
+      },
+      {
+        "year": "2010",
+        "text": "Greg Young’s CQRS Documents build a DDD architecture on separate commands and queries"
+      },
+      {
+        "year": "2013",
+        "text": "Vaughn Vernon’s Implementing Domain-Driven Design focuses on strategic design"
+      },
+      {
+        "year": "2014",
+        "text": "Lewis and Fowler’s microservices article links service boundaries to bounded contexts"
+      },
+      {
+        "year": "2015",
+        "text": "Evans’s DDD Reference adds domain events, partnership and big ball of mud"
+      }
+    ],
+    "sources": [
+      {
+        "label": "Martin Fowler: DomainDrivenDesign (bliki, Apr 2020)",
+        "url": "https://martinfowler.com/bliki/DomainDrivenDesign.html"
+      },
+      {
+        "label": "Martin Fowler: BoundedContext (bliki, Jan 2014)",
+        "url": "https://martinfowler.com/bliki/BoundedContext.html"
+      },
+      {
+        "label": "Eric Evans: Domain-Driven Design Reference, definitions and pattern summaries (2015)",
+        "url": "https://www.domainlanguage.com/wp-content/uploads/2016/05/DDD_Reference_2015-03.pdf"
+      },
+      {
+        "label": "Domain Language: DDD Reference (summaries placed in the Creative Commons in 2006)",
+        "url": "https://www.domainlanguage.com/ddd/reference/"
+      },
+      {
+        "label": "James Lewis and Martin Fowler: Microservices (Mar 2014)",
+        "url": "https://martinfowler.com/articles/microservices.html"
+      },
+      {
+        "label": "Greg Young: CQRS Documents (2010)",
+        "url": "https://cqrs.files.wordpress.com/2010/11/cqrs_documents.pdf"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "Eric Evans: Domain-Driven Design Reference, definitions and pattern summaries (2015)",
+      "url": "https://www.domainlanguage.com/wp-content/uploads/2016/05/DDD_Reference_2015-03.pdf"
+    },
+    {
+      "label": "Martin Fowler: DomainDrivenDesign (bliki, Apr 2020)",
+      "url": "https://martinfowler.com/bliki/DomainDrivenDesign.html"
+    },
+    {
+      "label": "Martin Fowler: BoundedContext (bliki, Jan 2014)",
+      "url": "https://martinfowler.com/bliki/BoundedContext.html"
+    },
+    {
+      "label": "Martin Fowler: UbiquitousLanguage (bliki, Oct 2006)",
+      "url": "https://martinfowler.com/bliki/UbiquitousLanguage.html"
+    },
+    {
+      "label": "Martin Fowler: DDD_Aggregate (bliki, Apr 2013)",
+      "url": "https://martinfowler.com/bliki/DDD_Aggregate.html"
+    },
+    {
+      "label": "Martin Fowler: ValueObject (bliki, Nov 2016)",
+      "url": "https://martinfowler.com/bliki/ValueObject.html"
+    },
+    {
+      "label": "James Lewis and Martin Fowler: Microservices (Mar 2014)",
+      "url": "https://martinfowler.com/articles/microservices.html"
+    },
+    {
+      "label": "Azure Architecture Center: Use domain analysis to model microservices",
+      "url": "https://learn.microsoft.com/en-us/azure/architecture/microservices/model/domain-analysis"
+    },
+    {
+      "label": "Microsoft Learn: Design a DDD-oriented microservice (.NET Microservices eBook)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/architecture/microservices/microservice-ddd-cqrs-patterns/ddd-oriented-microservice"
+    }
+  ]
+}

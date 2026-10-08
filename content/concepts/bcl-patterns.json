@@ -1,0 +1,418 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Base Class Library patterns",
+  "category": "code",
+  "order": 48,
+  "summary": "The few recurring shapes the .NET Base Class Library uses everywhere (`IDisposable` and `using`, `TryParse`, `Task`-returning `Async` methods, `EventHandler<T>` events, `yield` iterators), so every .NET type behaves the way callers already expect.",
+  "howItWorks": "The Base Class Library (BCL) is the set of `System.*` namespaces: the general-purpose, lower-level framework that ASP.NET Core and other application frameworks build on. Its designers wrote their conventions down, and Krzysztof Cwalina and Brad Abrams published them as the Framework Design Guidelines, which Microsoft Learn reprints. A handful of patterns each solve one recurring problem. Resources the garbage collector doesn’t manage, such as file handles and sockets, are released at a known moment through `IDisposable.Dispose`, which the `using` statement calls even when an exception is thrown. Failures that happen often in normal use, like unparsable input, get a `TryX` method that returns `false` instead of throwing, beside the throwing `X`. Asynchronous work is one method with an `Async` suffix that returns a `Task` and accepts an optional `CancellationToken` (the Task-based Asynchronous Pattern, or TAP), which replaced the older `BeginX`/`EndX` pairs and `XAsync` plus `XCompleted` events. Notifications are events typed `EventHandler<TEventArgs>`, whose handlers receive the sender and an `EventArgs` object. Sequences are `IEnumerable<T>`, often written as iterators with `yield return`, which run lazily one item at a time. Learn the shapes once and any .NET API reads the same way.",
+  "analogy": "Standard plugs and sockets. Any lamp works in any socket in the country, not because each lamp maker talked to each builder, but because everyone follows the same shape. A .NET type that follows these patterns plugs into `using`, `await` and `foreach` the same way.",
+  "useWhen": [
+    "Writing a .NET library that others will call: follow the shapes so `using`, `await`, `foreach` and `TryX` work as callers expect",
+    "A type that owns a file, socket, database connection or other disposable: implement `IDisposable`",
+    "An operation that fails often in normal use, such as parsing user input: offer `TryX` beside the throwing `X`"
+  ],
+  "avoidWhen": [
+    "Writing a finalizer by hand: wrap the raw handle in a `SafeHandle`, which already has one",
+    "New asynchronous APIs in the `BeginX`/`EndX` or `XCompleted` event styles: both are legacy; return a `Task`",
+    "Using `TryX` to swallow every failure: it covers one well-defined case, and anything else must still throw"
+  ],
+  "example": "A service imports an uploaded CSV in which some rows have a non-numeric quantity. Calling `int.Parse` throws a `FormatException` for each bad row, and the design guidelines warn that a member that throws can be orders of magnitude slower. `int.TryParse(text, out int qty)` returns `false` instead, so the loop counts the good rows and raises a `RowRejected` event for each bad one. The method is `SumAsync`, returns a `Task<int>` and takes a `CancellationToken`, and the file is opened in a `using` declaration, so it is closed when the method exits, whether it finishes or throws.",
+  "snippet": {
+    "lang": "csharp",
+    "source": [
+      "using System;",
+      "using System.IO;",
+      "using System.Threading;",
+      "using System.Threading.Tasks;",
+      "",
+      "File.WriteAllLines(\"orders.csv\", [\"3\", \"x\", \"5\"]);",
+      "",
+      "var importer = new Importer();",
+      "importer.RowRejected += (sender, e) => Console.WriteLine($\"rejected line {e.Line}\");",
+      "",
+      "int total = await importer.SumAsync(\"orders.csv\", CancellationToken.None);",
+      "Console.WriteLine($\"total {total}\");",
+      "// rejected line 2",
+      "// total 8",
+      "",
+      "public class RowRejectedEventArgs(int line) : EventArgs",
+      "{",
+      "    public int Line { get; } = line;",
+      "}",
+      "",
+      "public class Importer",
+      "{",
+      "    // event pattern: EventHandler<TEventArgs>, raised from a protected virtual OnX method",
+      "    public event EventHandler<RowRejectedEventArgs>? RowRejected;",
+      "    protected virtual void OnRowRejected(RowRejectedEventArgs e) => RowRejected?.Invoke(this, e);",
+      "",
+      "    // Task-based Asynchronous Pattern: one method, Async suffix, returns Task<T>, takes a token",
+      "    public async Task<int> SumAsync(string path, CancellationToken cancellationToken)",
+      "    {",
+      "        int sum = 0, line = 0;",
+      "        // Dispose pattern: the reader is closed when the method exits, even on an exception",
+      "        using var reader = new StreamReader(path);",
+      "        while (await reader.ReadLineAsync(cancellationToken) is string text)",
+      "        {",
+      "            line++;",
+      "            // Try pattern: returns false instead of throwing FormatException",
+      "            if (int.TryParse(text, out int qty)) sum += qty;",
+      "            else OnRowRejected(new RowRejectedEventArgs(line));",
+      "        }",
+      "        return sum;",
+      "    }",
+      "}"
+    ]
+  },
+  "related": [
+    "errors",
+    "async-execution",
+    "oop"
+  ],
+  "sections": [
+    {
+      "type": "cards",
+      "title": "The patterns and the problem each solves",
+      "intro": "The first five are BCL conventions. The last one is common in .NET apps but comes from a separate package.",
+      "items": [
+        {
+          "name": "Dispose pattern",
+          "tag": "IDisposable, using",
+          "text": "Problem: the garbage collector frees memory, not file handles or sockets, and finalizers run at some undetermined time after the object is unused. Fix: `Dispose()` releases them on demand, `using` calls it on every exit path, and `GC.SuppressFinalize` tells the collector the finalizer is no longer needed. `Dispose` should be safe to call more than once; members used afterwards throw `ObjectDisposedException`."
+        },
+        {
+          "name": "Try-Parse and Tester-Doer",
+          "tag": "TryParse, IsReadOnly",
+          "text": "Problem: exceptions are slow when failure is common, but the guidelines forbid error codes. Fix: a `TryX` method returns a `bool` and the result in an `out` parameter (`int.TryParse`, `DateTime.TryParse`), always beside a throwing `X`. Or split the call into a tester and a doer: check `collection.IsReadOnly` before calling `Add`."
+        },
+        {
+          "name": "Task-based Asynchronous Pattern",
+          "tag": "Task, async, await",
+          "text": "Problem: waiting for I/O without blocking a thread. Fix: one method, named with an `Async` suffix, that returns a `Task` or `Task<T>` representing both start and completion. Cancellation is an optional `CancellationToken` parameter named `cancellationToken`. C#’s `async` and `await` are the language support for it."
+        },
+        {
+          "name": "Event pattern",
+          "tag": "EventHandler<TEventArgs>",
+          "text": "Problem: letting any number of subscribers react to something without the sender knowing them (the observer pattern). Fix: an `event` of type `EventHandler<TEventArgs>`, whose handlers take the sender and an `EventArgs` subclass, raised from a `protected virtual` `OnX` method. A subclass of `EventArgs`, even an empty one, leaves room to add data later without breaking callers."
+        },
+        {
+          "name": "Iterators",
+          "tag": "IEnumerable<T>, yield",
+          "text": "Problem: producing a sequence without building it all in memory first. Fix: return `IEnumerable<T>` and write the method with `yield return`; the compiler turns it into an object that runs the body one step per item. Nothing runs until the caller starts iterating, and `yield break` ends early. Returning `IAsyncEnumerable<T>` makes it an async stream for `await foreach`."
+        },
+        {
+          "name": "Options pattern",
+          "tag": "Microsoft.Extensions, not BCL",
+          "text": "Problem: settings read as loose strings all over an app. Fix: bind a configuration section to a class and inject `IOptions<TOptions>`, so each component sees only the typed settings it uses. `IOptionsSnapshot` and `IOptionsMonitor` pick up changes after startup. It lives in the `Microsoft.Extensions.Options` namespace, part of the Microsoft.Extensions libraries rather than the BCL’s `System.*`."
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Three generations of async in .NET",
+      "intro": "The same `Read` operation in each pattern. Only TAP is recommended for new code.",
+      "corner": "Pattern",
+      "columns": [
+        "Shape",
+        "Arrived",
+        "Status"
+      ],
+      "rows": [
+        {
+          "label": "APM (Asynchronous Programming Model, or IAsyncResult pattern)",
+          "values": [
+            "`BeginRead(...)` returns an `IAsyncResult`; `EndRead(result)` returns the bytes read",
+            ".NET Framework 1.0",
+            "Legacy, not recommended for new development"
+          ]
+        },
+        {
+          "label": "EAP (Event-based Asynchronous Pattern)",
+          "values": [
+            "`void ReadAsync(...)` plus a `ReadCompleted` event; used by `WebClient` and `BackgroundWorker`",
+            ".NET Framework 2.0, mainly for client apps",
+            "Legacy, not recommended for new development"
+          ]
+        },
+        {
+          "label": "TAP (Task-based Asynchronous Pattern)",
+          "values": [
+            "`Task<int> ReadAsync(...)`",
+            "`Task` in .NET Framework 4; `async`/`await` in C# 5.0 (2012)",
+            "Recommended"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "code",
+      "title": "Implementing IDisposable",
+      "intro": "The basic Dispose pattern for a class that owns a disposable field. The public `Dispose()` is not virtual; subclasses override `Dispose(bool)`. `disposing` is `false` only when a finalizer calls it, and then other managed objects must not be touched. Classes that wrap a raw OS handle should hold it in a `SafeHandle` rather than write a finalizer.",
+      "lang": "csharp",
+      "source": [
+        "using System;",
+        "using System.IO;",
+        "",
+        "using (var log = new AuditLog(\"audit.txt\"))",
+        "{",
+        "    log.Write(\"started\");",
+        "}   // Dispose runs here, even if Write throws",
+        "Console.WriteLine(File.ReadAllText(\"audit.txt\").Trim());  // started",
+        "",
+        "public class AuditLog : IDisposable",
+        "{",
+        "    private readonly StreamWriter writer;  // owns a disposable, so it is disposable too",
+        "    private bool disposed;",
+        "",
+        "    public AuditLog(string path) => writer = new StreamWriter(path);",
+        "",
+        "    public void Write(string line)",
+        "    {",
+        "        ObjectDisposedException.ThrowIf(disposed, this);",
+        "        writer.WriteLine(line);",
+        "    }",
+        "",
+        "    public void Dispose()",
+        "    {",
+        "        Dispose(true);",
+        "        GC.SuppressFinalize(this);",
+        "    }",
+        "",
+        "    // subclasses override this one, never Dispose()",
+        "    protected virtual void Dispose(bool disposing)",
+        "    {",
+        "        if (disposed) return;              // calling Dispose twice is harmless",
+        "        if (disposing) writer.Dispose();   // false only when called from a finalizer",
+        "        disposed = true;",
+        "    }",
+        "}"
+      ]
+    },
+    {
+      "type": "code",
+      "title": "Iterators run lazily",
+      "intro": "Calling an iterator method returns at once; its body runs only as the caller asks for items.",
+      "lang": "csharp",
+      "source": [
+        "using System;",
+        "using System.Collections.Generic;",
+        "",
+        "IEnumerable<int> Evens(int upTo)",
+        "{",
+        "    Console.WriteLine(\"iterator: start\");",
+        "    for (int i = 0; i <= upTo; i += 2)",
+        "        yield return i;  // pauses here until the caller asks for the next item",
+        "}",
+        "",
+        "var evens = Evens(4);",
+        "Console.WriteLine(\"caller: nothing has run yet\");",
+        "foreach (var n in evens) Console.WriteLine($\"caller: {n}\");",
+        "// caller: nothing has run yet",
+        "// iterator: start",
+        "// caller: 0",
+        "// caller: 2",
+        "// caller: 4"
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Deterministic cleanup in other standard libraries",
+      "intro": "Java and Python solved the same problem with the same shape: an interface for “close me”, and a statement that calls it on every exit path.",
+      "corner": "Aspect",
+      "columns": [
+        ".NET",
+        "Java",
+        "Python"
+      ],
+      "rows": [
+        {
+          "label": "Interface",
+          "values": [
+            "`IDisposable.Dispose()` (`IAsyncDisposable` for async)",
+            "`AutoCloseable.close()`, which every `Closeable` implements",
+            "A context manager’s `__enter__()` and `__exit__()`"
+          ]
+        },
+        {
+          "label": "Statement",
+          "values": [
+            "`using (var r = ...) { }`, `using var r = ...;`, `await using`",
+            "`try (var r = ...) { }` (try-with-resources)",
+            "`with open(...) as f:`"
+          ]
+        },
+        {
+          "label": "Added in",
+          "values": [
+            "`using` declarations without braces: C# 8.0 (2019)",
+            "Java SE 7",
+            "Python 2.5 (PEP 343)"
+          ]
+        },
+        {
+          "label": "If the body throws",
+          "values": [
+            "`Dispose` still runs",
+            "`close` still runs; if it throws too, the body’s exception wins and the other is attached as suppressed",
+            "`__exit__` receives the exception and can swallow it by returning true"
+          ]
+        }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "The .NET Framework 1.0 and C# 1.0 shipped with Visual Studio .NET in January 2002. Its class library already had events and the `BeginX`/`EndX` asynchronous pairs, and C# 1.2 (2003) made `foreach` call `Dispose` on enumerators that implement `IDisposable`. But as Microsoft’s Stephen Toub later put it, the async pattern was “just that, a pattern”: the runtime, libraries and compiler gave no help in writing or consuming it. Krzysztof Cwalina and Brad Abrams collected the conventions and patterns used in designing the .NET Framework APIs into Framework Design Guidelines; the second edition (2008) is the one Microsoft Learn reprints, and a fully revised third edition followed.",
+      "Each later release turned a pattern into language or library support. C# 2.0 and .NET Framework 2.0 (2005) added iterators, letting the compiler write `IEnumerable<T>` implementations from `yield return`, and the Event-based Asynchronous Pattern for client apps. .NET Framework 4 (2010) introduced `Task`, a value for an operation that completes later, and C# 5.0 (2012) added `async` and `await`, borrowing the iterator idea of a compiler-built state machine. C# 8.0 (2019) added `using` declarations and async streams.",
+      "Microsoft now calls APM and EAP legacy and recommends TAP for all new asynchronous code, while the Dispose, Try and event patterns remain much as the guidelines first described them."
+    ],
+    "choices": [
+      {
+        "choice": "Exceptions, plus `Try` variants for the hot path",
+        "why": "The guidelines forbid falling back to error codes for performance. Instead, Tester-Doer and Try-Parse give a fast path for the one expected failure while every other failure still throws."
+      },
+      {
+        "choice": "Deterministic `Dispose` alongside the garbage collector",
+        "why": "Finalizers run at an undetermined time and keep an object’s memory alive for another collection. `IDisposable` lets code release scarce resources as soon as it is done, and `GC.SuppressFinalize` skips the finalizer cost."
+      },
+      {
+        "choice": "One `Task`-returning method instead of Begin/End pairs or events",
+        "why": "APM needed two methods and an `IAsyncResult`, EAP an event and its argument types. A single method returning a `Task` represents both start and completion, and the task is a value that can be awaited and combined."
+      },
+      {
+        "choice": "Let the compiler write the state machine",
+        "why": "Iterators in C# 2.0 showed that the compiler could turn straight-line code into a resumable object. The same technique later made `async` methods possible."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "2002",
+        "text": ".NET Framework 1.0 and C# 1.0, with events and Begin/End async"
+      },
+      {
+        "year": "2005",
+        "text": "C# 2.0 iterators; .NET Framework 2.0 brings the Event-based Asynchronous Pattern"
+      },
+      {
+        "year": "2008",
+        "text": "Framework Design Guidelines, 2nd edition"
+      },
+      {
+        "year": "2010",
+        "text": ".NET Framework 4 introduces `Task`"
+      },
+      {
+        "year": "2012",
+        "text": "C# 5.0 adds `async` and `await`"
+      },
+      {
+        "year": "2019",
+        "text": "C# 8.0 adds `using` declarations and async streams"
+      }
+    ],
+    "sources": [
+      {
+        "label": "Microsoft Learn: The history of C# (release dates and features per version)",
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/whats-new/csharp-version-history"
+      },
+      {
+        "label": "Microsoft Learn: .NET Framework versions and dependencies",
+        "url": "https://learn.microsoft.com/en-us/dotnet/framework/install/versions-and-dependencies"
+      },
+      {
+        "label": "Stephen Toub, .NET Blog: How Async/Await Really Works in C# (Mar 2023)",
+        "url": "https://devblogs.microsoft.com/dotnet/how-async-await-really-works/"
+      },
+      {
+        "label": "Microsoft Learn: Framework design guidelines (excerpted from the 2nd edition, 2008)",
+        "url": "https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/"
+      },
+      {
+        "label": "Microsoft Learn: Asynchronous programming patterns (TAP, EAP, APM)",
+        "url": "https://learn.microsoft.com/en-us/dotnet/standard/asynchronous-programming-patterns/"
+      },
+      {
+        "label": "Microsoft Learn: Dispose Pattern (Framework Design Guidelines)",
+        "url": "https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/dispose-pattern"
+      },
+      {
+        "label": "Microsoft Learn: Exceptions and Performance (Framework Design Guidelines)",
+        "url": "https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/exceptions-and-performance"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "Microsoft Learn: .NET glossary (BCL)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/glossary"
+    },
+    {
+      "label": "Microsoft Learn: Common Design Patterns (Framework Design Guidelines)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/common-design-patterns"
+    },
+    {
+      "label": "Microsoft Learn: Dispose Pattern (Framework Design Guidelines)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/dispose-pattern"
+    },
+    {
+      "label": "Microsoft Learn: Implement a Dispose method",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/implementing-dispose"
+    },
+    {
+      "label": "Microsoft Learn: using statement (C# reference)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/using"
+    },
+    {
+      "label": "Microsoft Learn: Exceptions and Performance (Tester-Doer and Try-Parse patterns)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/exceptions-and-performance"
+    },
+    {
+      "label": "Microsoft Learn: Int32.TryParse",
+      "url": "https://learn.microsoft.com/en-us/dotnet/api/system.int32.tryparse"
+    },
+    {
+      "label": "Microsoft Learn: Task-based asynchronous pattern (TAP)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/asynchronous-programming-patterns/task-based-asynchronous-pattern-tap"
+    },
+    {
+      "label": "Microsoft Learn: Asynchronous programming patterns (TAP, EAP, APM)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/asynchronous-programming-patterns/"
+    },
+    {
+      "label": "Microsoft Learn: Event-based Asynchronous Pattern overview",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/asynchronous-programming-patterns/event-based-asynchronous-pattern-overview"
+    },
+    {
+      "label": "Microsoft Learn: Asynchronous Programming Model (APM)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/asynchronous-programming-patterns/asynchronous-programming-model-apm"
+    },
+    {
+      "label": "Microsoft Learn: Handle and raise events",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/events/"
+    },
+    {
+      "label": "Microsoft Learn: Event Design (Framework Design Guidelines)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/event"
+    },
+    {
+      "label": "Microsoft Learn: yield statement (C# reference)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/yield"
+    },
+    {
+      "label": "Microsoft Learn: Options pattern in .NET",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/extensions/options"
+    },
+    {
+      "label": "Stephen Toub, .NET Blog: How Async/Await Really Works in C# (Mar 2023)",
+      "url": "https://devblogs.microsoft.com/dotnet/how-async-await-really-works/"
+    },
+    {
+      "label": "Oracle Java Tutorials: The try-with-resources Statement",
+      "url": "https://docs.oracle.com/javase/tutorial/essential/exceptions/tryResourceClose.html"
+    },
+    {
+      "label": "PEP 343: The “with” Statement",
+      "url": "https://peps.python.org/pep-0343/"
+    }
+  ]
+}

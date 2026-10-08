@@ -1,0 +1,90 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Dapper",
+  "concepts": ["orm"],
+  "kinds": ["micro-orms"],
+  "provider": "oss",
+  "vendor": "DapperLib (originally Stack Overflow)",
+  "license": "Apache 2.0",
+  "website": "https://github.com/DapperLib/Dapper",
+  "repo": "https://github.com/DapperLib/Dapper",
+  "summary": "A micro-ORM for .NET from Stack Overflow: you write the SQL, and Dapper runs it on any ADO.NET connection and fills your objects from the result by matching column names to properties.",
+  "intro": [
+    "Dapper is a NuGet package that adds extension methods to `DbConnection`: `Execute` for inserts, updates and deletes, `Query<T>` for many rows, and `QuerySingle`, `QueryFirstOrDefault` and friends for one. You pass SQL and an anonymous object of parameters (`new { Id = 1 }`); Dapper binds them as real parameters, expands a list into an `IN` clause, runs the command and maps each row to a `T` by column name. Multi-mapping splits one joined row into several objects (a `Post` and its `User`) so you can load related data in a single query, and `QueryMultiple` reads several result sets from one command. Queries can be buffered (the default) or streamed row by row, synchronous or async.",
+    "To be fast, Dapper caches what it learns about every query, so the second call maps without reflection; its README warns that building SQL strings on the fly without parameters can therefore grow memory. It has no database-specific code and works with any ADO.NET provider, including SQL Server, PostgreSQL, MySQL, MariaDB, Oracle, SQLite and Firebird. It deliberately leaves out what full ORMs ship with: no change tracking, identity map, lazy loading or migrations. In the README’s own benchmark on .NET 8, fetching one row into a `Post` took about 136 µs with `Query<T>`, against 120 µs hand-coded with `SqlCommand` and 265 µs for a compiled EF Core query."
+  ],
+  "strengths": [
+    "Close to hand-written ADO.NET speed with none of the column-copying code",
+    "A tiny API on top of the `DbConnection` you already have, so it sits next to existing ADO.NET code or a full ORM",
+    "You control every SQL statement, which makes performance tuning and database-specific features straightforward",
+    "Works with any ADO.NET provider, and has run Stack Overflow in production since 2011"
+  ],
+  "limits": [
+    "SQL lives in strings: no compile-time checking of table or column names, and renames are found by tests or at runtime",
+    "No change tracking, unit of work, lazy loading or migrations; writes, related data and schema changes are your job",
+    "Mapping relies on column names matching properties, and multi-mapping needs `splitOn` when keys aren’t called `Id`",
+    "Building SQL without parameters defeats its query cache and can grow memory"
+  ],
+  "worksWith": [
+    { "id": "csharp", "how": "maps query results to objects for" },
+    { "id": "postgresql", "how": "runs hand-written SQL against" },
+    { "id": "mysql", "how": "runs hand-written SQL against" },
+    { "id": "sqlite", "how": "runs hand-written SQL against" }
+  ],
+  "snippet": {
+    "lang": "csharp",
+    "title": "Query, multi-map and execute with your own SQL",
+    "source": [
+      "using Dapper;                       // extension methods on any DbConnection",
+      "using Microsoft.Data.Sqlite;",
+      "",
+      "using var conn = new SqliteConnection(\"Data Source=blog.db\");",
+      "",
+      "// columns are matched to properties by name; the array expands into IN (@Ids1, @Ids2, @Ids3)",
+      "var posts = conn.Query<Post>(",
+      "    \"select Id, Title from Posts where Id in @Ids\",",
+      "    new { Ids = new[] { 1, 2, 3 } });",
+      "",
+      "// multi-mapping: one joined row becomes a Post with its Owner, in a single query",
+      "var withOwners = conn.Query<Post, User, Post>(",
+      "    \"select p.Id, p.Title, u.Id, u.Name from Posts p left join Users u on u.Id = p.OwnerId\",",
+      "    (post, user) => { post.Owner = user; return post; });",
+      "",
+      "int changed = conn.Execute(\"update Posts set Title = @Title where Id = @Id\",",
+      "    new { Id = 1, Title = \"Renamed\" });   // rows affected",
+      "",
+      "class Post { public int Id { get; set; } public string Title { get; set; } = \"\"; public User? Owner { get; set; } }",
+      "class User { public int Id { get; set; } public string Name { get; set; } = \"\"; }"
+    ]
+  },
+  "history": {
+    "story": [
+      "In early 2011 Stack Overflow’s web servers were running hot, often at 100% CPU. Profiling the question page, which does many primary-key lookups for questions, answers, comments and users, Sam Saffron kept finding LINQ to SQL generating the same materialisation code again and again, hundreds of times a second. Much of the site’s SQL was already hand-written; the slow part was turning rows into objects.",
+      "Saffron wrote a small mapper that cached the generated code per query. Pulling 100 random posts took 174 ms with it, against 335 ms for LINQ to SQL, 550 ms for Entity Framework 4.1 and 164 ms for painful hand-written code. He published the story on 30 March 2011, and Stack Overflow open-sourced the library as Dapper; version 1.0.0 reached NuGet on 14 April 2011.",
+      "Dapper has stayed small. Version 2.0 arrived in August 2019, the project now lives in the DapperLib organisation on GitHub under the Apache 2.0 licence, and the README still describes it as covering the 95% scenario rather than every problem."
+    ],
+    "choices": [
+      { "choice": "Keep the SQL, automate only the mapping", "why": "Stack Overflow’s developers were comfortable writing SQL and already fell back to it for performance. What cost CPU was materialising objects, so that was the only part Dapper took over." },
+      { "choice": "Cache generated mapping code per query", "why": "LINQ to SQL rebuilt the same dynamic methods over and over. Caching them made mapping nearly as fast as hand-coded readers, with no per-call reflection." },
+      { "choice": "Extension methods on the existing connection", "why": "Adding `Query` and `Execute` to `DbConnection` meant no new context object to manage and no lock-in to one provider: any ADO.NET connection gets the same API." },
+      { "choice": "Leave ORM features out on purpose", "why": "Change tracking, lazy loading and query generation were where the overhead lived. Dapper aims at the common case and gives you tools, not a framework." }
+    ],
+    "timeline": [
+      { "year": "2011", "text": "Sam Saffron writes up the mapper behind Stack Overflow’s speed-up (30 March)" },
+      { "year": "2011", "text": "Dapper 1.0.0 published on NuGet (14 April)" },
+      { "year": "2019", "text": "Dapper 2.0 released (August)" },
+      { "year": "2026", "text": "Dapper 2.1.89 released (September)" }
+    ],
+    "sources": [
+      { "label": "Sam Saffron: How I learned to stop worrying and write my own ORM (30 March 2011)", "url": "https://samsaffron.com/archive/2011/03/30/How+I+learned+to+stop+worrying+and+write+my+own+ORM" },
+      { "label": "NuGet: Dapper version history (1.0.0 on 14 April 2011, 2.0.4 August 2019, 2.1.89 September 2026)", "url": "https://www.nuget.org/packages/Dapper#versions-body-tab" },
+      { "label": "Dapper README (originally developed for and by Stack Overflow; the 95% scenario)", "url": "https://github.com/DapperLib/Dapper" }
+    ]
+  },
+  "sources": [
+    { "label": "Dapper README (features, list support, multi mapping, multiple results, buffered vs unbuffered, performance benchmark, limitations, supported providers)", "url": "https://github.com/DapperLib/Dapper" },
+    { "label": "Dapper License (Apache 2.0)", "url": "https://github.com/DapperLib/Dapper/blob/main/License.txt" },
+    { "label": "NuGet: Dapper package", "url": "https://www.nuget.org/packages/Dapper" }
+  ],
+  "checked": "2026-10-08"
+}

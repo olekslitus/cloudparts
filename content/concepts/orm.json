@@ -1,0 +1,212 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Object-relational mapping",
+  "category": "code",
+  "order": 37,
+  "summary": "A library that turns rows in relational tables into objects in your program and back, so ordinary code can read and save data without hand-writing every SQL statement.",
+  "howItWorks": "Programs hold data as objects that point at each other; a relational database holds it as rows in tables joined by keys. Moving data between the two by hand means writing the same `SELECT`, the same loop that copies columns into fields, and the same `INSERT` or `UPDATE` for every class. An object-relational mapper (ORM) does that work from a mapping: each class maps to a table, each field to a column, each reference to a foreign key. A full ORM adds several patterns that Martin Fowler named in 2002. An identity map keeps one object per row in a session, so loading order 42 twice returns the same object. Change tracking remembers what each loaded object looked like, and a unit of work turns every change made during the session into the right `INSERT`, `UPDATE` and `DELETE` statements when you save or commit. Lazy loading leaves related objects as placeholders and fetches them the first time code touches them. Most full ORMs also come with migrations: scripts that change the database schema to match the classes. Two styles exist. In Active Record each object loads and saves itself (`book.save()`); in Data Mapper plain objects know nothing about the database and a separate mapper or session moves them. The best-known trap is the N+1 query problem: load N rows with one query, touch a lazy relation on each, and the ORM runs N more queries. The fix is to say up front what to load, with a join or a second batched query. Every ORM also lets you drop down to plain SQL for reports, bulk updates and queries the mapping can’t express.",
+  "analogy": "A translator who sits between you and a records office that only accepts filled-in forms. You say “change Ada’s address”; the translator remembers which form she is on, fills in only the changed box, and files all your changes in one batch at the end of the day. It saves a lot of paperwork, but if you ask about 50 people one at a time, the translator walks to the office 50 times unless you hand over the whole list at once.",
+  "useWhen": [
+    "Business applications with many tables and lots of create, read, update and delete screens, where hand-written mapping code would be repetitive",
+    "A domain model with real behaviour, where changes to several related objects should be saved together in one transaction",
+    "Teams that want schema changes versioned as migrations next to the code that depends on them",
+    "Code that must run on more than one database, where the ORM generates each dialect’s SQL"
+  ],
+  "avoidWhen": [
+    "Reporting, analytics and bulk updates: set-based SQL over millions of rows beats loading objects one by one",
+    "Read-mostly services that just return query results: a query builder or micro-ORM is simpler and faster",
+    "The team doesn’t know SQL: the ORM hides queries until production traffic shows the N+1 loops and missing indexes",
+    "Data that isn’t relational in shape, such as documents or graphs, where a matching database avoids the mapping altogether"
+  ],
+  "example": "A bookshop page lists 10 books with each author’s name. With the `author` relation lazy-loaded, the ORM runs 1 query for the books and then 1 per book for its author: 11 queries. Asking for the authors up front (`includes(:author)` in Rails, `selectinload` in SQLAlchemy, `Include` in EF Core) makes it 2 queries: one for the books, one `SELECT ... FROM authors WHERE id IN (1, 2, ..., 10)`. On a list of 500 books the lazy version sends 501 queries and the fixed one still sends 2.",
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "# pip install sqlalchemy  (2.x; runs against an in-memory SQLite database)",
+      "from sqlalchemy import ForeignKey, create_engine, event, select",
+      "from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, selectinload",
+      "",
+      "",
+      "class Base(DeclarativeBase):",
+      "    pass",
+      "",
+      "",
+      "class Author(Base):",
+      "    __tablename__ = \"authors\"",
+      "    id: Mapped[int] = mapped_column(primary_key=True)",
+      "    name: Mapped[str]",
+      "",
+      "",
+      "class Book(Base):",
+      "    __tablename__ = \"books\"",
+      "    id: Mapped[int] = mapped_column(primary_key=True)",
+      "    title: Mapped[str]",
+      "    author_id: Mapped[int] = mapped_column(ForeignKey(\"authors.id\"))",
+      "    author: Mapped[Author] = relationship()  # lazy-loaded by default",
+      "",
+      "",
+      "engine = create_engine(\"sqlite://\")",
+      "Base.metadata.create_all(engine)",
+      "queries = []",
+      "event.listen(engine, \"before_cursor_execute\", lambda *args: queries.append(args[2]))",
+      "",
+      "with Session(engine) as s:",
+      "    s.add_all([Book(title=f\"Book {i}\", author=Author(name=f\"Author {i}\")) for i in range(10)])",
+      "    s.commit()",
+      "",
+      "with Session(engine) as s:  # N+1: one SELECT for books, then one per author",
+      "    queries.clear()",
+      "    for book in s.scalars(select(Book)):",
+      "        book.author.name",
+      "    print(len(queries))  # 11",
+      "",
+      "with Session(engine) as s:  # fix: load all authors in one extra SELECT ... WHERE id IN (...)",
+      "    queries.clear()",
+      "    for book in s.scalars(select(Book).options(selectinload(Book.author))):",
+      "        book.author.name",
+      "    print(len(queries))  # 2"
+    ]
+  },
+  "related": ["relational", "dto", "crud", "oop", "service-layer", "cqrs"],
+  "sections": [
+    {
+      "type": "text",
+      "title": "Active Record or Data Mapper",
+      "body": [
+        "Fowler’s Patterns of Enterprise Application Architecture describes both. An Active Record is “an object that wraps a row in a database table or view, encapsulates the database access, and adds domain logic on that data”: the class is the table, and `book.save()` writes it. Ruby on Rails is built on this pattern and adds conventions on top, so a class named `Book` maps to a table named `books` with no configuration. It is quick to write and easy to read, and it fits applications whose objects look like their tables.",
+        "A Data Mapper is “a layer of mappers that moves data between objects and a database while keeping them independent of each other”. The objects are plain classes with no SQL and no knowledge of the schema; a session or context loads them, tracks their changes and writes them back. Hibernate, Entity Framework Core and the SQLAlchemy ORM work this way, and Prisma describes itself as a Data Mapper too, though it returns plain objects without a session. The extra layer pays off when the object model and the schema differ, for example with inheritance or value objects, and it lets you test domain code without a database."
+      ]
+    },
+    {
+      "type": "table",
+      "title": "What each kind does for you",
+      "intro": "The line between the kinds is how much state the library keeps between your code and the database.",
+      "corner": "",
+      "columns": ["Full ORM", "Query builder", "Micro-ORM", "Plain SQL driver"],
+      "rows": [
+        { "label": "You write", "values": ["Classes and a mapping; queries in an object query language or method chains", "Queries in a typed API that mirrors SQL", "SQL strings", "SQL strings"] },
+        { "label": "Maps rows to objects", "values": ["Yes, including related objects", "Yes, to typed rows or records", "Yes, by matching column names to properties", "No: you copy each column yourself"] },
+        { "label": "Identity map and change tracking", "values": ["Yes: changes are saved by a unit of work", "No: every write is an explicit statement", "No", "No"] },
+        { "label": "Lazy loading", "values": ["Usually, the source of N+1 queries", "No: you join or batch explicitly", "No", "No"] },
+        { "label": "Migrations", "values": ["Usually built in or a companion tool", "Often a companion tool", "No", "No"] },
+        { "label": "Examples", "values": ["Hibernate, EF Core, SQLAlchemy ORM, Active Record, Prisma", "jOOQ, Drizzle, SQLAlchemy Core, Kysely", "Dapper", "JDBC, ADO.NET, Python DB-API drivers"] }
+      ]
+    }
+  ],
+  "kinds": [
+    {
+      "id": "full-orms",
+      "name": "Full ORMs",
+      "summary": "Map classes to tables and manage the objects for you: one object per row in a session, change tracking, saving a whole unit of work at once, lazy loading and migrations.",
+      "body": [
+        "A full ORM keeps state between your code and the database. A Hibernate session (its persistence context) and an EF Core `DbContext` (its change tracker) both track every entity loaded through them, and when the session flushes or `SaveChanges` runs, the ORM works out the `INSERT`, `UPDATE` and `DELETE` statements for whatever changed. SQLAlchemy’s ORM does the same with a unit of work built on its Core layer, and Rails’ Active Record puts load and save methods on each model object instead.",
+        "That buys a lot of saved code for applications with rich domain models and many forms, and the price is magic you have to understand: lazy relations that fire extra queries, automatic flushes before queries, and sessions that must not live too long. Prisma sits at the light end of this kind. It generates a typed client from a schema file and handles relations and migrations, but returns plain objects with no session or change tracking."
+      ],
+      "sources": [
+        { "label": "Hibernate ORM 7.4: A Short Guide to Hibernate 7 (persistence context, dirty checking, flush)", "url": "https://docs.hibernate.org/orm/7.4/introduction/html_single/" },
+        { "label": "Microsoft Learn: Change Tracking in EF Core", "url": "https://learn.microsoft.com/en-us/ef/core/change-tracking/" },
+        { "label": "SQLAlchemy 2.1 docs: Overview (Core and ORM; the unit of work pattern)", "url": "https://docs.sqlalchemy.org/en/21/intro.html" },
+        { "label": "Rails Guides: Active Record Basics", "url": "https://guides.rubyonrails.org/active_record_basics.html" },
+        { "label": "Prisma docs: Is Prisma ORM an ORM? (Data Mapper, plain JavaScript objects)", "url": "https://www.prisma.io/docs/orm/overview/prisma-in-your-stack/is-prisma-an-orm" }
+      ]
+    },
+    {
+      "id": "query-builders",
+      "name": "Query builders",
+      "summary": "Let you write SQL through a typed API in your own language, checked by the compiler, and map results to typed rows without tracking objects afterwards.",
+      "body": [
+        "A query builder models SQL itself rather than objects. In jOOQ you write `select(...).from(AUTHOR).join(BOOK)...` in Java, against classes generated from the live database schema, so a renamed column breaks the build instead of production. Drizzle does the same in TypeScript from tables declared in code (“If you know SQL, you know Drizzle”), Kysely is a type-safe TypeScript query builder inspired by Knex, and SQLAlchemy Core is the expression language underneath the SQLAlchemy ORM.",
+        "There is no session and no lazy loading: every query and every write is explicit, so what runs is what you wrote. Related data comes back through joins, or through nested collections built in one statement, such as jOOQ’s `MULTISET` or Drizzle’s relational queries, which always produce one SQL statement. Pick this kind when the team thinks in SQL and wants type safety without an object model to keep in sync."
+      ],
+      "sources": [
+        { "label": "jOOQ README: an internal DSL and source code generator modelling SQL as a type-safe Java API", "url": "https://github.com/jOOQ/jOOQ" },
+        { "label": "jOOQ manual: MULTISET value constructor", "url": "https://www.jooq.org/doc/latest/manual/sql-building/column-expressions/multiset-value-constructor/" },
+        { "label": "Drizzle ORM docs: Why Drizzle? (SQL-like and relational query APIs)", "url": "https://orm.drizzle.team/docs/overview" },
+        { "label": "Kysely docs: Introduction (type-safe TypeScript SQL query builder)", "url": "https://kysely.dev/docs/intro" },
+        { "label": "SQLAlchemy 2.1 docs: Overview (the SQL Expression Language is a toolkit on its own)", "url": "https://docs.sqlalchemy.org/en/21/intro.html" }
+      ]
+    },
+    {
+      "id": "micro-orms",
+      "name": "Micro-ORMs",
+      "summary": "Run the SQL you write and copy each result row into an object by matching column names to properties, and do little else.",
+      "body": [
+        "A micro-ORM keeps only the tedious part of mapping: turning a result set into objects. Dapper adds extension methods such as `Query<T>` and `Execute` to an ADO.NET connection; you pass SQL and parameters, and it fills objects by column name, caching what it learns about each query so the next one maps faster. It can split one joined row into several objects, but it has no identity map, change tracking, lazy loading or migrations. Its README says plainly that “many features that ORMs ship with are stripped out”.",
+        "Stack Overflow built Dapper in 2011 because LINQ to SQL was spending CPU generating mapping code on every request. The kind suits hot paths, read models and teams that already write their SQL by hand and only want to stop copying columns into fields."
+      ],
+      "sources": [
+        { "label": "Dapper README: features, multi mapping, limitations and caveats", "url": "https://github.com/DapperLib/Dapper" },
+        { "label": "Sam Saffron: How I learned to stop worrying and write my own ORM (March 2011)", "url": "https://samsaffron.com/archive/2011/03/30/How+I+learned+to+stop+worrying+and+write+my+own+ORM" }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Object-oriented programs and relational databases grew up separately. Objects form graphs that point at each other and use inheritance; relational tables hold rows linked by keys and are queried as sets. The friction between the two became known as the object-relational impedance mismatch, borrowing a term from electrical engineering. Through the 1990s, Martin Fowler recalls, project after project wrote its own mapping framework and found it much harder than expected. Commercial products appeared: TopLink, built in Smalltalk by The Object People, was ported to Java between 1996 and 1998 and bought by Oracle in 2002.",
+      "Two things in the early 2000s gave the field its shape. Gavin King started Hibernate in 2001 out of frustration with EJB 2 entity beans; by its developers’ account it became the most popular persistence tool for Java, and it was the model for the Java Persistence API, finalised in May 2006. In 2002 Fowler’s Patterns of Enterprise Application Architecture named the building blocks: Active Record, Data Mapper, Identity Map, Unit of Work and Lazy Load. Ruby on Rails, released in 2004, built its model layer on Active Record. Microsoft shipped the Entity Framework with .NET 3.5 SP1 in August 2008; the first version drew a “vote of no confidence” signed by at least a thousand developers.",
+      "The backlash came early. Ted Neward called object-relational mapping “the Vietnam of Computer Science”: early success draws a project in, and the painful trade-offs show up much later. In 2011 Stack Overflow wrote Dapper because its ORM was burning CPU, and jOOQ (2009) went the other way, making SQL itself a typed Java API. Fowler answered the critics in 2012: an ORM handles 80 to 90% of the mapping, and the rest needs someone who understands relational databases. Newer TypeScript tools lean the same way: Prisma returns plain objects instead of tracked ones, and Drizzle models its API on SQL."
+    ],
+    "choices": [
+      {
+        "choice": "Two patterns: objects that save themselves, or a separate mapper",
+        "why": "Active Record is the most obvious approach and works when objects look like rows. When the object model diverges, with collections and inheritance that tables lack, changes on one side ripple into the other, so Data Mapper puts a layer between them that neither side knows about."
+      },
+      {
+        "choice": "Track changes and write them at the end",
+        "why": "Writing every change as it happens means many small, slow database calls and a transaction held open for the whole interaction. A unit of work records what changed during a business transaction and works out the writes once, at commit."
+      },
+      {
+        "choice": "Load related objects only when touched",
+        "why": "Loading an object together with everything it refers to can pull in a huge graph when only a few objects are needed. Lazy loading leaves a placeholder and fetches on first use, at the price of N+1 queries when code walks a list."
+      },
+      {
+        "choice": "Leave a way down to SQL",
+        "why": "No mapping covers every query. David Heinemeier Hansson held that developers on a relational database should know how it works, so, in Fowler’s words, Active Record “takes care of boring stuff, but provides manholes” down to SQL. SQLAlchemy built its ORM on a public SQL layer so applications can “move down” a level when they need to."
+      }
+    ],
+    "timeline": [
+      { "year": "2001", "text": "Gavin King starts Hibernate as an alternative to EJB 2 entity beans" },
+      { "year": "2002", "text": "Fowler’s Patterns of Enterprise Application Architecture names Active Record, Data Mapper and Unit of Work" },
+      { "year": "2004", "text": "Ruby on Rails is released with Active Record" },
+      { "year": "2006", "text": "Java Persistence API 1.0 is finalised, modelled on Hibernate" },
+      { "year": "2008", "text": "Microsoft ships the Entity Framework in .NET 3.5 SP1" },
+      { "year": "2011", "text": "Stack Overflow builds and open-sources Dapper, a micro-ORM" },
+      { "year": "2012", "text": "Fowler’s “OrmHate” defends ORMs as an 80% solution to a hard problem" }
+    ],
+    "sources": [
+      { "label": "Martin Fowler: Patterns of Enterprise Application Architecture (2002)", "url": "https://martinfowler.com/books/eaa.html" },
+      { "label": "Martin Fowler: OrmHate (May 2012)", "url": "https://martinfowler.com/bliki/OrmHate.html" },
+      { "label": "Jeff Atwood: Object-Relational Mapping is the Vietnam of Computer Science (June 2006, on Ted Neward’s essay)", "url": "https://blog.codinghorror.com/object-relational-mapping-is-the-vietnam-of-computer-science/" },
+      { "label": "Wikipedia: Object–relational impedance mismatch", "url": "https://en.wikipedia.org/wiki/Object%E2%80%93relational_impedance_mismatch" },
+      { "label": "Wikipedia: Oracle TopLink (history)", "url": "https://en.wikipedia.org/wiki/TopLink" },
+      { "label": "Hibernate ORM 7.4: A Short Guide to Hibernate 7, section 1.1 Hibernate and JPA (early history)", "url": "https://docs.hibernate.org/orm/7.4/introduction/html_single/" },
+      { "label": "Wikipedia: Jakarta Persistence (JPA 1.0 final release 11 May 2006, JSR 220)", "url": "https://en.wikipedia.org/wiki/Jakarta_Persistence" },
+      { "label": "Wikipedia: Ruby on Rails (first released July 2004)", "url": "https://en.wikipedia.org/wiki/Ruby_on_Rails" },
+      { "label": "Wikipedia: Entity Framework (history, EFv1 on 11 August 2008)", "url": "https://en.wikipedia.org/wiki/Entity_Framework" },
+      { "label": "ADO .NET Entity Framework Vote of No Confidence (2008)", "url": "http://efvote.wufoo.com/forms/ado-net-entity-framework-vote-of-no-confidence/", "archive": "https://web.archive.org/web/20090123111258/http://efvote.wufoo.com/forms/ado-net-entity-framework-vote-of-no-confidence" },
+      { "label": "Sam Saffron: How I learned to stop worrying and write my own ORM (March 2011)", "url": "https://samsaffron.com/archive/2011/03/30/How+I+learned+to+stop+worrying+and+write+my+own+ORM" },
+      { "label": "Lukas Eder: jOOQ 3.2 Offering Commercial Licensing and Support (October 2013; jOOQ started four years earlier)", "url": "https://blog.jooq.org/jooq-3-2-offering-commercial-licensing-and-support/" },
+      { "label": "SQLAlchemy in The Architecture of Open Source Applications, Volume 2 (Michael Bayer)", "url": "https://aosabook.org/en/v2/sqlalchemy.html" },
+      { "label": "Martin Fowler: Data Mapper (PoEAA catalog)", "url": "https://martinfowler.com/eaaCatalog/dataMapper.html" },
+      { "label": "Martin Fowler: Unit of Work (PoEAA catalog)", "url": "https://martinfowler.com/eaaCatalog/unitOfWork.html" },
+      { "label": "Martin Fowler: Lazy Load (PoEAA catalog)", "url": "https://martinfowler.com/eaaCatalog/lazyLoad.html" }
+    ]
+  },
+  "sources": [
+    { "label": "Martin Fowler: Active Record (PoEAA catalog)", "url": "https://martinfowler.com/eaaCatalog/activeRecord.html" },
+    { "label": "Martin Fowler: Data Mapper (PoEAA catalog)", "url": "https://martinfowler.com/eaaCatalog/dataMapper.html" },
+    { "label": "Martin Fowler: Identity Map (PoEAA catalog)", "url": "https://martinfowler.com/eaaCatalog/identityMap.html" },
+    { "label": "Martin Fowler: Unit of Work (PoEAA catalog)", "url": "https://martinfowler.com/eaaCatalog/unitOfWork.html" },
+    { "label": "Martin Fowler: Lazy Load (PoEAA catalog)", "url": "https://martinfowler.com/eaaCatalog/lazyLoad.html" },
+    { "label": "Martin Fowler: OrmHate (May 2012; read-only access and CQRS, NoSQL as a way to avoid mapping)", "url": "https://martinfowler.com/bliki/OrmHate.html" },
+    { "label": "Rails Guides: Active Record Query Interface, N + 1 Queries Problem (11 queries become 2 with includes)", "url": "https://guides.rubyonrails.org/active_record_querying.html" },
+    { "label": "Rails Guides: Active Record Basics (the pattern, convention over configuration, migrations)", "url": "https://guides.rubyonrails.org/active_record_basics.html" },
+    { "label": "SQLAlchemy 2.1 docs: Relationship Loading Techniques (lazy loading, the N plus one problem, selectinload, raiseload)", "url": "https://docs.sqlalchemy.org/en/21/orm/queryguide/relationships.html" },
+    { "label": "Microsoft Learn: Efficient Querying in EF Core (the N+1 problem; avoid lazy loading)", "url": "https://learn.microsoft.com/en-us/ef/core/performance/efficient-querying" },
+    { "label": "Hibernate ORM 7.4: A Short Guide to Hibernate 7 (N+1 selects, join fetching, StatelessSession)", "url": "https://docs.hibernate.org/orm/7.4/introduction/html_single/" },
+    { "label": "Prisma docs: Is Prisma ORM an ORM? (Active Record and Data Mapper)", "url": "https://www.prisma.io/docs/orm/overview/prisma-in-your-stack/is-prisma-an-orm" },
+    { "label": "Drizzle ORM docs: Why Drizzle? (relational queries output exactly one SQL query)", "url": "https://orm.drizzle.team/docs/overview" },
+    { "label": "Dapper README: limitations and caveats", "url": "https://github.com/DapperLib/Dapper" },
+    { "label": "SQLAlchemy in The Architecture of Open Source Applications, Volume 2 (Core/ORM split, identity map and unit of work)", "url": "https://aosabook.org/en/v2/sqlalchemy.html" }
+  ]
+}

@@ -1,0 +1,276 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Network protocols",
+  "category": "network",
+  "order": 5,
+  "summary": "The agreed rules that move bytes between machines, stacked in layers: IP finds the host, a transport such as TCP or UDP finds the program, TLS keeps it private, and HTTP or FTP says what the bytes mean.",
+  "howItWorks": "Every message travels in layers. IP carries a datagram from one address to another, router by router, with no promise that it arrives, arrives once or arrives in order. A transport protocol on top adds port numbers, 16-bit values that pick the program on that host: a web server listens on TCP port 443, a DNS server on UDP port 53. TCP is connection-oriented: a three-way handshake (SYN, SYN-ACK, ACK) agrees on sequence numbers, then it delivers a reliable, in-order byte stream, resending lost segments and slowing down when the path is congested. UDP is a datagram service: each message goes out on its own behind an 8-byte header, and nothing is resent, deduplicated or reordered. QUIC builds reliable, encrypted streams on top of UDP. A security layer, TLS, proves the server’s identity with a certificate and encrypts everything above it. The application protocol defines the conversation itself: HTTP’s methods, paths and status codes, or FTP’s `USER`, `RETR` and `STOR` commands. Fetching `https://shop.example/cart` means a DNS lookup for the address, a TCP connection to port 443, a TLS handshake, then an HTTP request and response inside the encrypted stream.",
+  "analogy": "A letter in nested envelopes. The outer one has the street address (IP), the next names the person in the building (the port), a sealed, tamper-evident one keeps the letter private (TLS), and the letter inside is written in a language both sides agreed on (HTTP). TCP is registered mail with a receipt for every page; UDP is a postcard.",
+  "useWhen": [
+    "HTTPS for anything that crosses a network you don’t control, including calls between your own services",
+    "TCP, or QUIC, when every byte must arrive in order: web pages, APIs, database sessions, file transfers",
+    "UDP when late data is worthless or the application handles loss itself: DNS lookups, voice, video, game state, metrics",
+    "SFTP or FTPS when a partner or an older system exchanges files by logging in to a server"
+  ],
+  "avoidWhen": [
+    "Plain HTTP or FTP outside a lab: passwords, cookies and files cross the network readable by anyone on the path",
+    "Raw UDP for data that must not be lost, unless you build acknowledgements, retries and congestion control yourself (or use QUIC)",
+    "A home-made protocol over raw TCP when HTTP or an RPC framework already handles message framing, errors and timeouts",
+    "Plain FTP through NAT and firewalls: its separate data connection on a negotiated port breaks easily, so prefer SFTP or HTTPS"
+  ],
+  "example": "A phone app loads `https://api.shop.example/orders`. DNS returns `203.0.113.10`. The phone opens a TCP connection to port 443 (one round trip for SYN, SYN-ACK, ACK), runs a TLS 1.3 handshake (one more round trip), and only then sends `GET /orders`. On a mobile link with a 50 ms round trip, that’s 100 ms before the request leaves the phone. Over HTTP/3, QUIC sets up the transport and TLS in one combined round trip, and a returning client can send its request in the very first flight (0-RTT). Meanwhile the app reports telemetry as UDP datagrams; if one in a hundred is lost, the dashboard barely changes and nothing is resent.",
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "import socket",
+      "import ssl",
+      "",
+      "REQUEST = b\"HEAD / HTTP/1.1\\r\\nHost: example.com\\r\\nConnection: close\\r\\n\\r\\n\"",
+      "",
+      "# TCP: create_connection runs the three-way handshake, then bytes flow in order",
+      "with socket.create_connection((\"example.com\", 80), timeout=5) as tcp:",
+      "    tcp.sendall(REQUEST)",
+      "    print(tcp.recv(1024).split(b\"\\r\\n\")[0])  # b'HTTP/1.1 200 OK'",
+      "",
+      "# HTTPS: the same request inside TLS, on port 443",
+      "ctx = ssl.create_default_context()  # verifies the certificate and host name",
+      "with socket.create_connection((\"example.com\", 443), timeout=5) as raw:",
+      "    with ctx.wrap_socket(raw, server_hostname=\"example.com\") as tls:",
+      "        print(tls.version())  # TLSv1.3",
+      "        tls.sendall(REQUEST)",
+      "        print(tls.recv(1024).split(b\"\\r\\n\")[0])  # b'HTTP/1.1 200 OK'",
+      "",
+      "# UDP: no connection; each sendto is one datagram that may or may not arrive",
+      "rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)",
+      "rx.bind((\"127.0.0.1\", 0))  # the OS picks a free port",
+      "tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)",
+      "tx.sendto(b\"temp=21.5\", rx.getsockname())",
+      "print(rx.recvfrom(1500)[0])  # b'temp=21.5'"
+    ]
+  },
+  "related": ["rpc", "web-api", "dns", "lb", "cdn", "apigw", "remote-access", "service-mesh"],
+  "diagram": {
+    "caption": "Top: requests travel over one TCP connection and every one gets its reply, because TCP resends whatever the network drops. Bottom: a sensor fires UDP datagrams with no connection and no acknowledgements; the ones the network drops are simply gone.",
+    "h": 280,
+    "zones": [
+      { "x": 14, "y": 12, "w": 732, "h": 120, "label": "TCP · a connection, then a reliable byte stream" },
+      { "x": 14, "y": 148, "w": 732, "h": 120, "label": "UDP · independent datagrams" }
+    ],
+    "nodes": [
+      {
+        "id": "client",
+        "x": 110,
+        "y": 78,
+        "label": "Client",
+        "sub": "HTTP request",
+        "emit": { "every": 1500, "jitter": 0.3, "req": true, "color": 0 },
+        "out": ["conn"]
+      },
+      {
+        "id": "conn",
+        "x": 370,
+        "y": 78,
+        "label": "TCP connection",
+        "sub": "SYN · SYN-ACK · ACK, resends losses",
+        "out": ["server"]
+      },
+      {
+        "id": "server",
+        "x": 630,
+        "y": 78,
+        "label": "Web server",
+        "sub": "port 443",
+        "mode": "reply",
+        "delay": 250
+      },
+      {
+        "id": "sensor",
+        "x": 110,
+        "y": 214,
+        "label": "Sensor",
+        "sub": "sendto()",
+        "emit": { "every": 420, "jitter": 0.4, "color": 2 },
+        "out": ["net"]
+      },
+      {
+        "id": "net",
+        "x": 370,
+        "y": 214,
+        "label": "Network",
+        "sub": "best effort, nothing resent",
+        "mode": "gate",
+        "p": 0.8,
+        "allowText": "delivered",
+        "denyText": "lost",
+        "out": ["collector"]
+      },
+      {
+        "id": "collector",
+        "x": 630,
+        "y": 214,
+        "label": "Collector",
+        "sub": "recvfrom()",
+        "mode": "sink"
+      }
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "The common protocols at a glance",
+      "intro": "Each row stacks on the layers below it. Ports are the defaults a client uses when none is given.",
+      "corner": "Protocol",
+      "columns": ["Layer", "Default port", "Runs over", "Encryption", "Specification"],
+      "rows": [
+        { "label": "TCP", "values": ["Transport", "Carries the port numbers", "IP", "None", "RFC 9293 (2022), first RFC 793 (1981)"] },
+        { "label": "UDP", "values": ["Transport", "Carries the port numbers", "IP", "None", "RFC 768 (1980)"] },
+        { "label": "QUIC", "values": ["Transport", "Any UDP port; UDP 443 for HTTP/3", "UDP", "TLS 1.3, always on", "RFC 9000 (2021)"] },
+        { "label": "TLS", "values": ["Security", "Set by the protocol it protects", "TCP; inside QUIC’s handshake", "Is the encryption", "RFC 9846 (2026), first TLS 1.3 as RFC 8446 (2018)"] },
+        { "label": "HTTP", "values": ["Application", "TCP 80", "TCP", "None", "RFC 9110 (semantics), RFC 9112 (HTTP/1.1), RFC 9113 (HTTP/2)"] },
+        { "label": "HTTPS", "values": ["Application", "TCP 443; UDP 443 for HTTP/3", "TLS over TCP, or QUIC", "TLS", "RFC 9110, RFC 9114 (HTTP/3)"] },
+        { "label": "FTP", "values": ["Application", "TCP 21 (control); data on a second, negotiated port", "TCP", "None", "RFC 959 (1985)"] },
+        { "label": "FTPS", "values": ["Application", "TCP 21 with `AUTH TLS` (explicit), or TCP 990 (implicit)", "TLS over TCP", "TLS", "RFC 4217 (2005)"] },
+        { "label": "SFTP", "values": ["Application", "TCP 22 (SSH)", "SSH over TCP", "SSH", "Internet-Drafts only, never an RFC"] }
+      ],
+      "notes": [
+        "Ports from the IANA service name and port number registry. IANA assigns 0–1023 and 1024–49151 to services; 49152–65535 are never assigned and are used for temporary client ports.",
+        "TCP port 115 is registered as “sftp” for the unrelated Simple File Transfer Protocol. SSH File Transfer Protocol runs on SSH’s port 22."
+      ]
+    }
+  ],
+  "kinds": [
+    {
+      "id": "transport-protocols",
+      "name": "Transport protocols",
+      "summary": "The layer above IP that picks the program by port number and decides what delivery means: a reliable stream (TCP), single datagrams (UDP) or encrypted, multiplexed streams (QUIC).",
+      "body": [
+        "IP gets a datagram to a host; a transport protocol gets it to the right program and decides what happens when packets are lost. TCP opens a connection with a three-way handshake, then delivers a reliable, in-order byte stream, resending lost segments and backing off when the network is congested. UDP adds only ports, a length and a checksum in an 8-byte header: a datagram may arrive once, twice or not at all, in any order, and the application deals with it.",
+        "QUIC, standardised in 2021, runs over UDP but gives applications what TCP does and more: many independent streams on one connection, so a lost packet stalls only the streams it carried; a handshake that sets up TLS 1.3 encryption at the same time; and connection IDs that let a client keep its connection when its network path changes.",
+        "Pick TCP for request and response traffic and anything that must arrive complete; UDP for small queries and real-time media, where a resent packet would arrive too late; QUIC when you speak HTTP/3 or control both ends. Keep a TCP fallback for QUIC: measurements cited by the IETF found 3% to 5% of networks block UDP entirely."
+      ],
+      "sources": [
+        { "label": "RFC 9293: Transmission Control Protocol (Aug 2022)", "url": "https://www.rfc-editor.org/rfc/rfc9293" },
+        { "label": "RFC 768: User Datagram Protocol (Aug 1980)", "url": "https://www.rfc-editor.org/rfc/rfc768" },
+        { "label": "RFC 8085: UDP usage guidelines (Mar 2017)", "url": "https://www.rfc-editor.org/rfc/rfc8085" },
+        { "label": "RFC 9000: QUIC, a UDP-based multiplexed and secure transport (May 2021)", "url": "https://www.rfc-editor.org/rfc/rfc9000" },
+        { "label": "RFC 9308: Applicability of the QUIC transport protocol (fallback, UDP blocking)", "url": "https://www.rfc-editor.org/rfc/rfc9308" }
+      ]
+    },
+    {
+      "id": "web-protocols",
+      "name": "Web protocols",
+      "summary": "HTTP and HTTPS: stateless request and response messages (a method, a target, header fields, a status code) that browsers, APIs, proxies and CDNs all understand.",
+      "body": [
+        "HTTP defines one set of semantics (RFC 9110) and three ways to put it on the wire. HTTP/1.1 sends text messages over TCP, one at a time per connection. HTTP/2 frames them in binary and interleaves many on one TCP connection. HTTP/3 does the same over QUIC, so one lost packet no longer stalls every request. A request looks the same in all three: a method such as `GET` or `POST`, a target, header fields and an optional body, answered with a status code such as `200` or `404`.",
+        "HTTPS is HTTP inside TLS. An `https` URL defaults to TCP port 443 instead of 80, the client checks that the server’s certificate is valid for the host name before sending anything, and everything after the handshake is encrypted and protected against tampering. A site can also send `Strict-Transport-Security`, after which browsers refuse to talk to it over plain HTTP.",
+        "Because each HTTP message can be understood on its own, intermediaries can reuse connections and spread requests across servers, which is why load balancers, caches, CDNs and API gateways are built around it. Use HTTPS for anything that leaves one machine; keep plain HTTP for local testing and for redirecting to HTTPS."
+      ],
+      "sources": [
+        { "label": "RFC 9110: HTTP semantics (Jun 2022)", "url": "https://www.rfc-editor.org/rfc/rfc9110" },
+        { "label": "RFC 9112: HTTP/1.1 (Jun 2022)", "url": "https://www.rfc-editor.org/rfc/rfc9112" },
+        { "label": "RFC 9113: HTTP/2 (Jun 2022)", "url": "https://www.rfc-editor.org/rfc/rfc9113" },
+        { "label": "RFC 9114: HTTP/3 (Jun 2022)", "url": "https://www.rfc-editor.org/rfc/rfc9114" },
+        { "label": "RFC 6797: HTTP Strict Transport Security (Nov 2012)", "url": "https://www.rfc-editor.org/rfc/rfc6797" }
+      ]
+    },
+    {
+      "id": "file-transfer-protocols",
+      "name": "File transfer protocols",
+      "summary": "Protocols for logging in to a remote file system and moving whole files: FTP from the early ARPANET, FTPS (FTP over TLS) and SFTP (a subsystem of SSH).",
+      "body": [
+        "FTP (RFC 959) holds a text conversation on a control connection to port 21 (`USER`, `PASS`, `LIST`, `RETR`, `STOR`) and moves listings and files over a separate data connection. In active mode the server connects back to the client; in passive mode (`PASV`) the client connects to a port the server names, which gets through firewalls more easily. Everything, the password included, crosses the network as plain text.",
+        "FTPS keeps FTP and adds TLS, either after an `AUTH TLS` command on port 21 (explicit) or from the first byte on port 990 (implicit). SFTP, despite the name, isn’t FTP at all: it’s a binary request and response protocol that runs as the `sftp` subsystem inside an SSH session, usually on port 22, with commands and data on the same connection.",
+        "SFTP is usually the easier choice: one port, SSH keys for login, and no second connection to open in a firewall. FTPS suits partners whose tools expect FTP with certificates. Plain FTP belongs only on networks where nobody else can listen."
+      ],
+      "sources": [
+        { "label": "RFC 959: File Transfer Protocol (Oct 1985)", "url": "https://www.rfc-editor.org/rfc/rfc959" },
+        { "label": "RFC 1579: Firewall-friendly FTP (Feb 1994)", "url": "https://www.rfc-editor.org/rfc/rfc1579" },
+        { "label": "RFC 4217: Securing FTP with TLS (Oct 2005)", "url": "https://www.rfc-editor.org/rfc/rfc4217" },
+        { "label": "Everything curl: FTPS, implicit and explicit", "url": "https://everything.curl.dev/ftp/ftps.html" },
+        { "label": "IETF draft-ietf-secsh-filexfer-02: SSH File Transfer Protocol (Oct 2001)", "url": "https://www.ietf.org/archive/id/draft-ietf-secsh-filexfer-02.txt" },
+        { "label": "IANA: Service name and transport protocol port number registry", "url": "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml" }
+      ]
+    },
+    {
+      "id": "security-protocols",
+      "name": "Security protocols",
+      "summary": "TLS: the layer that proves the server’s identity with a certificate, agrees on fresh keys and then encrypts and integrity-checks every byte for the protocol above it.",
+      "body": [
+        "TLS sits between a reliable transport and the application. In TLS 1.3 the client’s first message already carries its key share; the server answers with its own, and everything after that, the server’s certificate included, is encrypted. The client checks that the certificate is valid for the host it asked for, and both sides derive keys that protect every record against reading and tampering. A full handshake costs one round trip; a returning client can send early (0-RTT) data, which an attacker could replay.",
+        "The same TLS protects HTTPS, FTPS and mail, and QUIC builds it into its own handshake. Versions matter: SSL 3.0 must not be used (RFC 7568), TLS 1.0 and 1.1 were deprecated in 2021 (RFC 8996), and TLS 1.3 removed static RSA key exchange, so every public-key key exchange now has forward secrecy.",
+        "SSH, which carries SFTP, solves the same problem with its own transport protocol rather than TLS: it authenticates the server, encrypts and checks integrity, then runs user login and channels on top."
+      ],
+      "sources": [
+        { "label": "RFC 9846: TLS 1.3 (Jul 2026, obsoletes RFC 8446)", "url": "https://www.rfc-editor.org/rfc/rfc9846" },
+        { "label": "RFC 8446: TLS 1.3 (Aug 2018)", "url": "https://www.rfc-editor.org/rfc/rfc8446" },
+        { "label": "RFC 9110, section 4.3.4: https certificate verification", "url": "https://www.rfc-editor.org/rfc/rfc9110#section-4.3.4" },
+        { "label": "RFC 7568: Deprecating SSL 3.0 (Jun 2015)", "url": "https://www.rfc-editor.org/rfc/rfc7568" },
+        { "label": "RFC 8996: Deprecating TLS 1.0 and TLS 1.1 (Mar 2021)", "url": "https://www.rfc-editor.org/rfc/rfc8996" },
+        { "label": "RFC 4217: Securing FTP with TLS (modelled on TLS for SMTP and HTTP)", "url": "https://www.rfc-editor.org/rfc/rfc4217" },
+        { "label": "RFC 9001: Using TLS to secure QUIC (May 2021)", "url": "https://www.rfc-editor.org/rfc/rfc9001" },
+        { "label": "RFC 4251: The SSH protocol architecture (Jan 2006)", "url": "https://www.rfc-editor.org/rfc/rfc4251" }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "File transfer is one of the oldest jobs on the network. In April 1971 Abhay Bhushan at MIT published a File Transfer Protocol as RFC 114, for moving files between the Multics and ITS machines over the ARPANET’s host-to-host protocol, NCP. As ARPA funded packet radio and satellite networks, it became clear that NCP couldn’t span them, and in 1973 work began on a protocol that could. The result was split into layers: IP (RFC 791, September 1981) moves datagrams between hosts with no promise of delivery, TCP (RFC 793, the same month) adds reliable connections at the two ends, and UDP (RFC 768, August 1980) gives programs such as name servers a bare datagram. The ARPANET planned to switch from NCP to TCP/IP completely by 1 January 1983, and FTP was rewritten for TCP, ending up as RFC 959 in 1985.",
+      "Tim Berners-Lee’s HTTP of 1991 was one line over a TCP connection to port 80: `GET` and a document address, answered with HTML, after which the server closed the connection. HTTP/1.0 (RFC 1945, 1996) and HTTP/1.1 (RFC 2068, 1997) added headers, media types, caching and persistent connections. Security arrived as a separate layer underneath. Netscape’s SSL, whose version 3.0 of November 1996 became the basis of the IETF’s TLS 1.0 in 1999, ran under HTTP on its own port, 443, which RFC 2818 documented in 2000.",
+      "The newest layers came from the web’s need for speed. Google’s SPDY (2009) multiplexed many requests over one connection and became the foundation of HTTP/2 (RFC 7540, 2015). TCP still delivered bytes strictly in order, though, so one lost packet stalled every stream. Google’s QUIC experiment (2013) moved streams, loss recovery and encryption into a new protocol over UDP. The IETF standardised QUIC as RFC 9000 in May 2021, with TLS 1.3 built in, and HTTP/3 on top of it in June 2022. Meanwhile browsers dropped FTP: Chrome 88 disabled it entirely, noting that its FTP client had no support for encrypted connections."
+    ],
+    "choices": [
+      { "choice": "Layers that each do one job", "why": "IP only moves datagrams between hosts and has “no mechanisms to augment end-to-end data reliability, flow control, sequencing” (RFC 791). Reliability lives in the two end hosts, in TCP, so new transports such as UDP and later QUIC could be added without changing the routers in between." },
+      { "choice": "Port numbers to address programs", "why": "One host runs many services. A 16-bit port in every TCP and UDP header picks the program, and well-known ports (21 for FTP, 80 for HTTP, 443 for HTTPS) let a client reach a service without asking first." },
+      { "choice": "A connection for streams, a datagram for messages", "why": "TCP pays for a handshake and keeps state so it can resend, reorder and pace data. UDP skips all of that: “delivery and duplicate protection are not guaranteed” (RFC 768), which suits a one-packet name lookup or live audio, where a late packet is useless." },
+      { "choice": "Encryption as a layer of its own, later built in", "why": "SSL and TLS slid under existing protocols unchanged, which is why HTTPS and FTPS are the old protocols plus TLS on another port or after one command. QUIC instead makes TLS 1.3 part of the transport handshake and authenticates every packet, so nothing it carries is ever sent unprotected." }
+    ],
+    "timeline": [
+      { "year": "1971", "text": "RFC 114 proposes a File Transfer Protocol for the ARPANET" },
+      { "year": "1980", "text": "UDP published as RFC 768" },
+      { "year": "1981", "text": "IP and TCP published as RFC 791 and RFC 793" },
+      { "year": "1991", "text": "Tim Berners-Lee’s first HTTP: one `GET` line over TCP port 80" },
+      { "year": "1999", "text": "TLS 1.0 (RFC 2246), based on Netscape’s SSL 3.0" },
+      { "year": "2015", "text": "HTTP/2 (RFC 7540), built from Google’s SPDY" },
+      { "year": "2021", "text": "QUIC standardised as RFC 9000; HTTP/3 follows in 2022" }
+    ],
+    "sources": [
+      { "label": "RFC 114: A File Transfer Protocol (Abhay Bhushan, Apr 1971)", "url": "https://www.rfc-editor.org/rfc/rfc114" },
+      { "label": "RFC 768: User Datagram Protocol (Aug 1980)", "url": "https://www.rfc-editor.org/rfc/rfc768" },
+      { "label": "RFC 791: Internet Protocol (Sep 1981)", "url": "https://www.rfc-editor.org/rfc/rfc791" },
+      { "label": "RFC 793: Transmission Control Protocol (Sep 1981)", "url": "https://www.rfc-editor.org/rfc/rfc793" },
+      { "label": "RFC 801: NCP/TCP transition plan (Nov 1981)", "url": "https://www.rfc-editor.org/rfc/rfc801" },
+      { "label": "RFC 959: File Transfer Protocol, section 2.1 History (Oct 1985)", "url": "https://www.rfc-editor.org/rfc/rfc959" },
+      { "label": "W3C: The original HTTP as defined in 1991 (Tim Berners-Lee)", "url": "https://www.w3.org/Protocols/HTTP/AsImplemented.html" },
+      { "label": "RFC 1945: HTTP/1.0 (May 1996)", "url": "https://www.rfc-editor.org/rfc/rfc1945" },
+      { "label": "RFC 2068: HTTP/1.1 (Jan 1997)", "url": "https://www.rfc-editor.org/rfc/rfc2068" },
+      { "label": "RFC 6101: The SSL protocol version 3.0 (historic record of the Nov 1996 version)", "url": "https://www.rfc-editor.org/rfc/rfc6101" },
+      { "label": "RFC 2246: TLS 1.0 (Jan 1999)", "url": "https://www.rfc-editor.org/rfc/rfc2246" },
+      { "label": "RFC 2818: HTTP over TLS (May 2000)", "url": "https://www.rfc-editor.org/rfc/rfc2818" },
+      { "label": "Chromium Blog: A 2x faster web, introducing SPDY (Nov 2009)", "url": "https://blog.chromium.org/2009/11/2x-faster-web.html" },
+      { "label": "RFC 7540: HTTP/2 (May 2015)", "url": "https://www.rfc-editor.org/rfc/rfc7540" },
+      { "label": "Chromium Blog: Experimenting with QUIC (Jim Roskind, Jun 2013)", "url": "https://blog.chromium.org/2013/06/experimenting-with-quic.html" },
+      { "label": "RFC 9000: QUIC (May 2021)", "url": "https://www.rfc-editor.org/rfc/rfc9000" },
+      { "label": "RFC 9114: HTTP/3 (Jun 2022)", "url": "https://www.rfc-editor.org/rfc/rfc9114" },
+      { "label": "Chrome for Developers: Deprecations and removals in Chrome 88 (FTP support removed)", "url": "https://developer.chrome.com/blog/chrome-88-deps-rems" }
+    ]
+  },
+  "sources": [
+    { "label": "RFC 791: Internet Protocol (no reliability, sequencing or flow control)", "url": "https://www.rfc-editor.org/rfc/rfc791" },
+    { "label": "RFC 9293: Transmission Control Protocol (three-way handshake, byte stream, ports)", "url": "https://www.rfc-editor.org/rfc/rfc9293" },
+    { "label": "RFC 768: User Datagram Protocol (8-byte header)", "url": "https://www.rfc-editor.org/rfc/rfc768" },
+    { "label": "RFC 8085: UDP usage guidelines (no reliability, ordering or congestion control)", "url": "https://www.rfc-editor.org/rfc/rfc8085" },
+    { "label": "RFC 9000: QUIC (combined handshake, streams, connection migration)", "url": "https://www.rfc-editor.org/rfc/rfc9000" },
+    { "label": "RFC 9001: Using TLS to secure QUIC (1-RTT and 0-RTT handshakes)", "url": "https://www.rfc-editor.org/rfc/rfc9001" },
+    { "label": "RFC 9846: TLS 1.3 (full handshake, 0-RTT)", "url": "https://www.rfc-editor.org/rfc/rfc9846" },
+    { "label": "RFC 9110: HTTP semantics (http and https schemes, ports 80 and 443)", "url": "https://www.rfc-editor.org/rfc/rfc9110" },
+    { "label": "RFC 9113: HTTP/2", "url": "https://www.rfc-editor.org/rfc/rfc9113" },
+    { "label": "RFC 9114: HTTP/3 (UDP port 443, Alt-Svc, fallback to TCP)", "url": "https://www.rfc-editor.org/rfc/rfc9114" },
+    { "label": "RFC 959: File Transfer Protocol (control connection, PASV, port 21)", "url": "https://www.rfc-editor.org/rfc/rfc959" },
+    { "label": "RFC 4217: Securing FTP with TLS", "url": "https://www.rfc-editor.org/rfc/rfc4217" },
+    { "label": "IETF draft-ietf-secsh-filexfer-02: SSH File Transfer Protocol", "url": "https://www.ietf.org/archive/id/draft-ietf-secsh-filexfer-02.txt" },
+    { "label": "RFC 6335: IANA procedures for port numbers (0–1023, 1024–49151, 49152–65535)", "url": "https://www.rfc-editor.org/rfc/rfc6335" },
+    { "label": "IANA: Service name and transport protocol port number registry", "url": "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml" },
+    { "label": "OpenSSH: PROTOCOL (sftp-server implements filexfer revision 3)", "url": "https://github.com/openssh/openssh-portable/blob/master/PROTOCOL" },
+    { "label": "Everything curl: Protocols curl supports, with their ports", "url": "https://everything.curl.dev/protocols/curl.html" }
+  ]
+}

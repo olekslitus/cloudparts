@@ -1,0 +1,307 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "CQRS",
+  "category": "design",
+  "order": 50,
+  "summary": "Command Query Responsibility Segregation: one model handles changes and enforces the rules, separate read models answer queries, and the read side catches up from the changes.",
+  "howItWorks": "It starts from Bertrand Meyer’s command-query separation: a method either changes state and returns nothing (a command) or returns a result without side effects (a query). CQRS, credited to Greg Young and Udi Dahan, applies that split to whole models. A `CustomerService` with both `MakeCustomerPreferred` and `GetCustomer` becomes a write service and a read service. On the write side, commands are named for business tasks (“book room”, not “set status to reserved”); the write model validates them, enforces the rules, usually on DDD aggregates, and may reject them. On the read side there is no business logic: queries return data transfer objects from views shaped for each screen, often denormalised so a page needs no joins. In the simplest form both models share one database. In the fuller form the read side has its own store, and the write side publishes an event whenever it changes something; a projector consumes the events and updates the views. That makes the read side eventually consistent: for a moment after a change, a query can return stale data. A transactional outbox saves the change and the event atomically, and an idempotent projector tolerates duplicates. CQRS is often paired with event sourcing, where the stored events are the write model, but neither needs the other.",
+  "analogy": "A library’s returns desk and its catalogue. You hand books in at the desk, where staff check them against the rules. A clerk updates the public catalogue afterwards, laid out for searching rather than for checking in. For a few minutes after a return, the catalogue may still say “on loan”.",
+  "useWhen": [
+    "Reads and writes need very different shapes, or reads outnumber writes by orders of magnitude and must scale on their own",
+    "Collaborative domains where many users change the same data and commands should capture intent",
+    "A complex domain already modeled with DDD aggregates and a task-based user interface",
+    "One bounded context that needs it, not the whole system"
+  ],
+  "avoidWhen": [
+    "The domain or business rules are simple and a CRUD interface does the job",
+    "Users must always see their own change immediately and you can’t design around stale views",
+    "Only a few slow reports hurt; a separate reporting database is a smaller step"
+  ],
+  "example": "A hotel site handles 2,000 searches and 20 bookings a minute. A `BookRoom` command goes to the write model, which checks that the room is free that night and saves the booking in a normalised schema. It publishes `RoomBooked`, and a projector removes the room from a denormalised `free_rooms_by_city_and_date` table that search reads with one indexed lookup. For about a second after a booking, search can still show the room as free. If a second guest tries to book it in that window, the write model rejects the command, so the stale view costs a retry, not a double booking.",
+  "snippet": {
+    "lang": "ts",
+    "source": [
+      "type RoomBooked = { type: \"RoomBooked\"; roomId: string; date: string; guest: string };",
+      "",
+      "// Write side: enforces the rule and records what happened",
+      "const bookings = new Map<string, string>();   // \"room|date\" -> guest",
+      "const outbox: RoomBooked[] = [];              // stands in for an outbox table or a broker",
+      "",
+      "function bookRoom(cmd: { roomId: string; date: string; guest: string }): void {",
+      "  const key = `${cmd.roomId}|${cmd.date}`;",
+      "  if (bookings.has(key)) throw new Error(`room ${cmd.roomId} is taken on ${cmd.date}`);",
+      "  bookings.set(key, cmd.guest);",
+      "  outbox.push({ type: \"RoomBooked\", ...cmd });",
+      "}",
+      "",
+      "// Read side: a view shaped for the search screen, updated only from events",
+      "const freeRooms = new Map([[\"2026-11-03\", new Set([\"101\", \"102\"])]]);",
+      "",
+      "function project(e: RoomBooked): void {",
+      "  freeRooms.get(e.date)?.delete(e.roomId);",
+      "}",
+      "function searchFree(date: string): string[] {   // a query: no rules, no writes",
+      "  return [...(freeRooms.get(date) ?? [])];",
+      "}",
+      "",
+      "bookRoom({ roomId: \"101\", date: \"2026-11-03\", guest: \"Ada\" });",
+      "console.log(searchFree(\"2026-11-03\"));   // [\"101\", \"102\"]: stale until the projector runs",
+      "outbox.splice(0).forEach(project);",
+      "console.log(searchFree(\"2026-11-03\"));   // [\"102\"]",
+      "try { bookRoom({ roomId: \"101\", date: \"2026-11-03\", guest: \"Bob\" }); }",
+      "catch (e) { console.log((e as Error).message); }   // room 101 is taken on 2026-11-03"
+    ]
+  },
+  "related": [
+    "ddd",
+    "crud",
+    "persistence",
+    "dto",
+    "eventbus"
+  ],
+  "diagram": {
+    "caption": "Commands go to the write model, which rejects a few that break the rules and records an event for each change. The projector reads the events at its own pace and updates the read model, which answers the much busier stream of queries, sometimes with data a moment old.",
+    "h": 280,
+    "nodes": [
+      {
+        "id": "cmds",
+        "x": 95,
+        "y": 70,
+        "label": "Users",
+        "sub": "commands · BookRoom",
+        "emit": { "every": 1400, "jitter": 0.4, "color": 0 },
+        "out": ["write"]
+      },
+      {
+        "id": "write",
+        "x": 310,
+        "y": 70,
+        "label": "Write model",
+        "sub": "rules · normalised",
+        "mode": "gate",
+        "p": 0.85,
+        "denyText": "rejected",
+        "out": ["events"],
+        "concept": "ddd"
+      },
+      {
+        "id": "events",
+        "x": 560,
+        "y": 70,
+        "kind": "log",
+        "cells": 6,
+        "retain": 40,
+        "label": "Events",
+        "sub": "RoomBooked …",
+        "readers": [{ "to": "proj", "every": 1700, "batch": 2, "name": "projector" }]
+      },
+      {
+        "id": "proj",
+        "x": 560,
+        "y": 210,
+        "label": "Projector",
+        "sub": "updates views",
+        "out": ["read"]
+      },
+      {
+        "id": "read",
+        "x": 310,
+        "y": 210,
+        "label": "Read model",
+        "sub": "denormalised views",
+        "mode": "reply",
+        "delay": 60
+      },
+      {
+        "id": "queries",
+        "x": 95,
+        "y": 210,
+        "label": "Users",
+        "sub": "queries · search",
+        "emit": { "every": 380, "jitter": 0.4, "req": true, "color": 1 },
+        "out": ["read"]
+      }
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "CQS, CQRS and event sourcing",
+      "intro": "Three ideas that often appear together and are easy to blur. Each works without the others.",
+      "corner": "Idea",
+      "columns": [
+        "Applies to",
+        "The split",
+        "Origin"
+      ],
+      "rows": [
+        {
+          "label": "Command-query separation (CQS)",
+          "values": [
+            "Methods of one object",
+            "A method changes state or returns a value, not both",
+            "Coined by Bertrand Meyer in Object-Oriented Software Construction"
+          ]
+        },
+        {
+          "label": "CQRS",
+          "values": [
+            "Models and services",
+            "One model for commands, separate models for queries",
+            "Described by Greg Young and Udi Dahan in the late 2000s"
+          ]
+        },
+        {
+          "label": "Event sourcing",
+          "values": [
+            "Storage",
+            "Store the sequence of changes and rebuild state by replaying it, instead of storing only the current state",
+            "Credited, with CQRS, to Young, Dahan and those they inspired; when paired, the event store is the write model"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Keeping the read side up to date",
+      "intro": "The split is simple; most of the work is in how changes reach the read models.",
+      "items": [
+        {
+          "name": "One database, two models",
+          "tag": "simplest",
+          "text": "Write and read models are separate code over the same store; the database itself carries changes from one to the other. No lag, but reads and writes can’t scale or change storage independently."
+        },
+        {
+          "name": "Separate read store",
+          "tag": "eventually consistent",
+          "text": "The write side publishes an event per change and a projector updates a store built for queries, which can even be a different kind of database, such as a document store beside a relational write store. Reads scale out with replicas; views lag behind writes."
+        },
+        {
+          "name": "Outbox and idempotent projectors",
+          "tag": "no lost events",
+          "text": "A database write and a message publish can’t usually share one transaction, so save the event in an outbox table in the same transaction as the change, and make the projector safe to run twice on the same event."
+        },
+        {
+          "name": "Rebuild by replay",
+          "tag": "with event sourcing",
+          "text": "When the events are the source of truth, a new or broken read model can be rebuilt by replaying the history from the start."
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Why most systems don’t need it",
+      "body": [
+        "Martin Fowler’s 2011 note is the standard caution. Many systems fit a CRUD mental model and should be built that way. CQRS is “a significant mental leap for all concerned”, and he reports that most cases he had run into had not gone well, with CQRS a significant drag on productivity and a source of risk, even in capable teams. He advises using it only in specific bounded contexts, not across a whole system.",
+        "Its benefits come in two forms: a few complex domains get easier to model, and systems with very different read and write loads can scale and optimise each side separately. If only some demanding queries hurt, Fowler suggests a reporting database instead: the main system still serves most reads, and only the heavy ones move."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "The idea starts with Bertrand Meyer, who coined command-query separation in Object-Oriented Software Construction, first published in 1988, as part of his work on the Eiffel language. Methods fall into two sharply separated kinds: queries that return a result and change nothing observable, and commands that change state and return nothing. The payoff is confidence: queries can be called anywhere, in any order, without surprises.",
+      "In the late 2000s, people in the domain-driven design community began applying the same split to architecture. Udi Dahan published a training course applying CQRS with service-oriented design in 2008 and wrote “Clarified CQRS” in December 2009, arguing from collaboration and staleness: data shown to a user may already have been changed by someone else, so reads might as well come from a separate store kept roughly in sync. Greg Young’s CQRS Documents (2010) explained that it was long discussed as “CQS at a higher level” before being recognised as a different pattern, and set out task-based commands, events and denormalised read models.",
+      "Martin Fowler’s bliki entry of July 2011 brought the name to a wider audience along with a warning that most systems don’t need it. By 2014 Eric Evans described CQRS and event sourcing as “quite mainstream options” for the architecture of a DDD system, and cloud architecture guides, such as Microsoft’s, now document it as a standard pattern with the same caveats."
+    ],
+    "choices": [
+      {
+        "choice": "Split the model, not just the methods",
+        "why": "Using one conceptual model for both updates and display tends to produce a model that does neither well, especially in complex domains."
+      },
+      {
+        "choice": "Commands named for tasks, not field edits",
+        "why": "A data-oriented interface has only four verbs (create, read, update, delete), and conversations with domain experts rarely do. Commands like “deactivate inventory item” capture what the user meant."
+      },
+      {
+        "choice": "Accept stale reads",
+        "why": "In a collaborative system the data on a user’s screen can be out of date the moment it is shown. Most systems can tolerate eventual consistency on the query side, while the command side checks the rules against current data."
+      },
+      {
+        "choice": "Normalised writes, denormalised reads",
+        "why": "The command side wants data near third normal form for safe transactions; the query side wants it flattened to avoid joins, and handles a far larger share of the traffic."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "1988",
+        "text": "Bertrand Meyer’s Object-Oriented Software Construction introduces command-query separation"
+      },
+      {
+        "year": "2008",
+        "text": "Udi Dahan’s training course applies CQRS with service-oriented design"
+      },
+      {
+        "year": "2009",
+        "text": "Dahan’s “Clarified CQRS” separates the pattern from event sourcing"
+      },
+      {
+        "year": "2010",
+        "text": "Greg Young’s CQRS Documents set out the architecture"
+      },
+      {
+        "year": "2011",
+        "text": "Martin Fowler’s bliki entry warns that most systems don’t need it"
+      },
+      {
+        "year": "2014",
+        "text": "Eric Evans calls CQRS and event sourcing mainstream options for DDD systems"
+      }
+    ],
+    "sources": [
+      {
+        "label": "Martin Fowler: CommandQuerySeparation (bliki, Dec 2005)",
+        "url": "https://martinfowler.com/bliki/CommandQuerySeparation.html"
+      },
+      {
+        "label": "Wikipedia: Command-query separation (Meyer, Eiffel; OOSC first edition 1988)",
+        "url": "https://en.wikipedia.org/wiki/Command%E2%80%93query_separation"
+      },
+      {
+        "label": "Wikipedia: Command Query Responsibility Segregation (Dahan’s 2008 course, Young 2010)",
+        "url": "https://en.wikipedia.org/wiki/Command_Query_Responsibility_Segregation"
+      },
+      {
+        "label": "Udi Dahan: Clarified CQRS (Dec 2009)",
+        "url": "https://udidahan.com/2009/12/09/clarified-cqrs/"
+      },
+      {
+        "label": "Greg Young: CQRS Documents (2010)",
+        "url": "https://cqrs.files.wordpress.com/2010/11/cqrs_documents.pdf"
+      },
+      {
+        "label": "Martin Fowler: CQRS (bliki, Jul 2011)",
+        "url": "https://martinfowler.com/bliki/CQRS.html"
+      },
+      {
+        "label": "Eric Evans: Domain-Driven Design Reference, acknowledgements (June 2014)",
+        "url": "https://www.domainlanguage.com/wp-content/uploads/2016/05/DDD_Reference_2015-03.pdf"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "Martin Fowler: CQRS (bliki, Jul 2011)",
+      "url": "https://martinfowler.com/bliki/CQRS.html"
+    },
+    {
+      "label": "Martin Fowler: CommandQuerySeparation (bliki, Dec 2005)",
+      "url": "https://martinfowler.com/bliki/CommandQuerySeparation.html"
+    },
+    {
+      "label": "Greg Young: CQRS Documents (2010)",
+      "url": "https://cqrs.files.wordpress.com/2010/11/cqrs_documents.pdf"
+    },
+    {
+      "label": "Udi Dahan: Clarified CQRS (Dec 2009)",
+      "url": "https://udidahan.com/2009/12/09/clarified-cqrs/"
+    },
+    {
+      "label": "Azure Architecture Center: CQRS pattern",
+      "url": "https://learn.microsoft.com/en-us/azure/architecture/patterns/cqrs"
+    },
+    {
+      "label": "Azure Architecture Center: Event Sourcing pattern",
+      "url": "https://learn.microsoft.com/en-us/azure/architecture/patterns/event-sourcing"
+    }
+  ]
+}

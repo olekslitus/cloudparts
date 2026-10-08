@@ -1,0 +1,168 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Runtime virtual machines",
+  "category": "code",
+  "order": 80,
+  "summary": "A program that runs other programs: compilers emit portable bytecode, and the runtime loads it, compiles the busy parts to machine code, collects garbage and schedules work on whatever machine it lands on.",
+  "howItWorks": "A compiler such as `javac`, the C# compiler or the Erlang compiler doesn’t emit machine code for one CPU. It emits instructions for an abstract machine: JVM bytecode in `.class` files, Common Intermediate Language (CIL) plus metadata in .NET assemblies, BEAM instructions in `.beam` files. The runtime is an ordinary process on the host operating system. It loads code while the program runs (the JVM loads, links and initialises classes dynamically), checks it (the JVM enforces structural constraints on class files; the CLR verifies that CIL is type safe), and turns it into machine code. HotSpot, the main JVM, starts by interpreting bytecode, then compiles methods that run often: first with a quick compiler whose code records a profile, then with an optimising compiler that uses that profile. .NET’s JIT compiler, RyuJIT, compiles each method on its first call, quickly and without optimisations, and recompiles hot methods with full optimisation in the background. BEAM’s JIT, BeamAsm, translates every instruction into native code as a module loads. The runtime also owns memory: objects live on heaps that a garbage collector reclaims, so programs never free memory themselves. Because the instruction set and libraries are the same everywhere, one compiled file runs on any operating system and CPU the runtime supports, and any language whose compiler emits that format can share its libraries: Java, Scala and Clojure on the JVM; C#, F# and Visual Basic on .NET; Erlang and Elixir on BEAM.",
+  "analogy": "Sheet music. A composer writes one score instead of one recording per concert hall, and every orchestra plays it on its own instruments. A good orchestra notices which passages keep coming back and drills those until they’re fast, so the music speeds up as the evening goes on.",
+  "useWhen": [
+    "One build has to run on several operating systems and CPU types without recompiling",
+    "Long-running servers, where the warm-up cost is paid once and profile-guided compilation pays off for days",
+    "You want a big ecosystem’s libraries from another language: Scala or Clojure calling Java code, F# calling C#",
+    "Many concurrent, isolated tasks, which BEAM’s lightweight processes or the JVM’s virtual threads handle well"
+  ],
+  "avoidWhen": [
+    "Short-lived processes such as command-line tools or scale-to-zero functions, where start-up and warm-up dominate; compile ahead of time instead",
+    "Kernels, firmware and small embedded devices with no room for a runtime and a garbage collector",
+    "Code that must never pause unpredictably: even concurrent collectors pause briefly, and the JIT compiles in the middle of a run"
+  ],
+  "example": "A Spring PetClinic 3.2.0 service on the JVM loads and links about 21,000 classes every time it starts, and its busy methods run interpreted until the JIT has compiled them. OpenJDK measured a start of 4.486 seconds on JDK 23. JDK 24 can record the loaded and linked classes from a training run in an ahead-of-time cache (130 MB for this app), and the same service then starts in 2.604 seconds, 42% faster. Compiling the whole app to a native executable with GraalVM Native Image goes further: it starts in milliseconds with no warm-up, but only code that the build-time analysis can see is included, so reflection and dynamically loaded classes need extra configuration.",
+  "snippet": {
+    "lang": "bash",
+    "source": [
+      "# Add.java",
+      "#   public class Add {",
+      "#       static int add(int a, int b) { return a + b; }",
+      "#       public static void main(String[] args) {",
+      "#           long sum = 0;",
+      "#           for (int i = 0; i < 1_000_000; i++) sum += add(i, 1);",
+      "#           System.out.println(sum);",
+      "#       }",
+      "#   }",
+      "",
+      "javac Add.java      # writes Add.class: bytecode for the JVM, not for your CPU",
+      "javap -c Add        # disassemble it; add() is four stack-machine instructions",
+      "#   static int add(int, int);",
+      "#     Code:",
+      "#        0: iload_0       // push argument a onto the operand stack",
+      "#        1: iload_1       // push argument b",
+      "#        2: iadd          // pop both, push a + b",
+      "#        3: ireturn       // return the value on top of the stack",
+      "",
+      "java Add            # prints 500000500000",
+      "",
+      "# watch HotSpot compile add() while main() runs (JDK 21; times and ids vary)",
+      "java -XX:+PrintCompilation Add | grep 'Add::add'",
+      "#   30    6       3       Add::add (4 bytes)                      <- level 3: client compiler, code that records a profile",
+      "#   30    7       4       Add::add (4 bytes)                      <- level 4: server compiler, optimised with that profile",
+      "#   30    6       3       Add::add (4 bytes)   made not entrant   <- the level-3 version is retired"
+    ]
+  },
+  "related": ["vm", "containers", "programming-languages", "multithreading", "actors"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "JVM, CLR and BEAM side by side",
+      "intro": "The three runtimes most server code runs on, as of October 2026.",
+      "corner": "",
+      "columns": ["JVM (HotSpot)", ".NET CLR", "BEAM (Erlang/OTP)"],
+      "rows": [
+        { "label": "Compiled code", "values": ["`.class` files: bytecode plus a symbol table", "CIL plus metadata in portable executable (PE) files", "`.beam` object files"] },
+        { "label": "Specified by", "values": ["The Java Virtual Machine Specification", "ECMA-335, the Common Language Infrastructure (6th edition, 2012; also ISO/IEC 23271)", "The Erlang/OTP implementation and its documentation"] },
+        { "label": "How code runs", "values": ["Interpreter first; tiered JIT: client compiler, then server compiler for hot methods", "Tiered JIT (RyuJIT): quick JIT or precompiled ReadyToRun code first, optimised recompile for hot methods", "Interpreter, or the BeamAsm JIT, which translates each instruction to native code at load time (x86-64 and AArch64, since OTP 24)"] },
+        { "label": "Ahead-of-time option", "values": ["GraalVM Native Image; since JDK 24, an AOT cache of loaded and linked classes", "Native AOT: no JIT at run time, no dynamic assembly loading", "Not at build time: BeamAsm compiles each module as it loads"] },
+        { "label": "Unit of concurrency", "values": ["OS threads, plus virtual threads since Java 21", "Threads, plus `async`/`await` over Tasks", "Lightweight processes: 327 words when spawned, switched out after 4,000 reductions, one scheduler thread per logical CPU by default"] },
+        { "label": "Memory", "values": ["One heap shared by all threads; G1 collector by default, ZGC for sub-millisecond pauses", "Shared heap in generations 0, 1 and 2, plus a large object heap for objects of 85,000 bytes or more", "A private heap per process, collected separately by a generational copying collector; messages are copied between heaps"] },
+        { "label": "Languages", "values": ["Java, Scala, Clojure and others", "C#, F#, Visual Basic", "Erlang, Elixir"] }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Process VMs, system VMs and containers",
+      "body": [
+        "“Virtual machine” names two different things. A system virtual machine, such as a cloud server instance, emulates a whole computer and runs a complete operating system with its own kernel and drivers. A process virtual machine runs as one ordinary process inside an operating system, starts when that process starts and goes away when it exits. It doesn’t imitate hardware; it gives programs an instruction set and services (memory management, threads, class loading) that are the same on every platform.",
+        "A container is neither. It’s an isolated process (or group of processes) running on the host’s kernel, packaged with its files. The code inside is whatever it was before: native machine code, or a runtime VM. In practice they stack: a JVM is a process, inside a container, often inside a system VM in a cloud."
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Where the line blurs",
+      "body": [
+        "A runtime VM isn’t necessarily an interpreter. The JVM specification says the JVM “is not inherently interpreted, but can just as well be implemented by compiling its instruction set to that of a silicon CPU”, and in practice HotSpot, RyuJIT and BeamAsm all run most of a long-lived program as machine code.",
+        "Ahead-of-time compilers go further and remove the JIT altogether. GraalVM Native Image and .NET Native AOT produce one native executable per operating system and CPU. The runtime doesn’t vanish: the executable still contains the language runtime, garbage collector included. What goes is the dynamic part. Native Image works under a closed-world assumption, so all code that can run must be known at build time, and Native AOT apps can’t load assemblies at run time or generate code with `System.Reflection.Emit`."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Compiling to an abstract machine is older than Java: the JVM specification itself names UCSD Pascal’s P-code machine as the best-known example. Java made the idea mainstream. Sun designed the platform for networked consumer devices, where “compiled code had to survive transport across networks, operate on any client, and assure the client that it was safe to run.” JDK 1.0 shipped on 23 January 1996 with the promise that programmers “can write a program once, and it will run on any machine supplying a Java run-time environment.”",
+      "Early JVMs were slow, and the fix came from Smalltalk research. In 1997 Sun bought Animorphic, whose Strongtalk virtual machine descended from the Self project, and on 27 April 1999 released the HotSpot performance engine, which compiled only the methods that ran often; Sun claimed it doubled the speed of Java 2. Java SE 7 added tiered compilation, and Sun released HotSpot under the GPL on 13 November 2006. JSR 292 (final in July 2011) added an `invokedynamic` instruction so that dynamically typed languages could run efficiently on the JVM too.",
+      "Microsoft licensed Java in 1996, was sued for extending it, and built its own runtime. Code-named Lightning and later called .NET, it had a bytecode, garbage collection and JIT compilation, and was meant from the start to host many languages: “Project 7” set out to bring seven commercial and seven academic languages to it at launch. Ecma published its Common Language Infrastructure as ECMA-335 in December 2001, C# 1.0 shipped in January 2002, and in November 2014 Microsoft announced that .NET Core, runtime included, would be open source.",
+      "Ericsson took a different path for telephone switches. Erlang began in 1986 as a Prolog interpreter; in 1989 Joe Armstrong’s JAM (Joe’s Abstract Machine) ran it about 70 times faster, and Bogumil Hausman’s BEAM, which could also compile to C, became the machine Erlang runs on today. Both gave each process its own heap. Erlang became open source in December 1998, and BEAM got a JIT compiler, BeamAsm, in Erlang/OTP 24 in May 2021."
+    ],
+    "choices": [
+      {
+        "choice": "Ship an abstract instruction set, not machine code",
+        "why": "Java’s code had to be downloaded and run safely on any client. A portable format with strict structural constraints let the receiving machine check the code before running it, whatever its CPU."
+      },
+      {
+        "choice": "Interpret first, compile what’s hot",
+        "why": "Compiling everything up front delays start-up, and compiling without knowing the workload optimises the wrong things. HotSpot interprets, profiles, and spends compiler time only on methods that run often; tiered compilation then made start-up faster while keeping peak speed."
+      },
+      {
+        "choice": "One runtime for many languages",
+        "why": "Microsoft wanted .NET to be a multi-language platform rather than a fixed set of its own languages, so the CLR defines a common type system that every compiler targets. A class written in one language can be subclassed and called from another."
+      },
+      {
+        "choice": "A separate heap for every process (BEAM)",
+        "why": "JAM and BEAM gave each Erlang process its own heap, so one process can be collected without stopping the others. An experimental single shared heap (VEE) made message passing much faster but gave no overall gain, probably because it lowered the cache hit rate."
+      }
+    ],
+    "timeline": [
+      { "year": "1986", "text": "Erlang work begins at the Ericsson Computer Science Laboratory" },
+      { "year": "1996", "text": "JDK 1.0 ships on 23 January" },
+      { "year": "1999", "text": "Sun releases the HotSpot JIT engine in April" },
+      { "year": "2002", "text": "C# 1.0 and the .NET Framework’s CLR ship in January" },
+      { "year": "2006", "text": "Sun releases HotSpot under the GPL on 13 November" },
+      { "year": "2014", "text": "Microsoft announces open-source .NET Core in November" },
+      { "year": "2021", "text": "Erlang/OTP 24 adds the BeamAsm JIT in May" }
+    ],
+    "sources": [
+      { "label": "The Java Virtual Machine Specification, Java SE 21: Chapter 1, Introduction (history, P-code, write once)", "url": "https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-1.html" },
+      { "label": "Wikipedia: Java version history (JDK 1.0 released 23 January 1996)", "url": "https://en.wikipedia.org/wiki/Java_version_history" },
+      { "label": "Wikipedia: HotSpot (Strongtalk, Animorphic bought in 1997, released 27 April 1999)", "url": "https://en.wikipedia.org/wiki/HotSpot_(virtual_machine)" },
+      { "label": "InfoWorld: Sun fires up HotSpot Java performance software (May 1999)", "url": "https://www.infoworld.com/article/2163360/sun-fires-up-hotspot-java-performance-software.html" },
+      { "label": "Oracle: Java HotSpot VM performance enhancements (tiered compilation, introduced in Java SE 7)", "url": "https://docs.oracle.com/en/java/javase/21/vm/java-hotspot-virtual-machine-performance-enhancements.html" },
+      { "label": "Wikipedia: OpenJDK (HotSpot released under the GPL on 13 November 2006)", "url": "https://en.wikipedia.org/wiki/OpenJDK" },
+      { "label": "JCP: JSR 292, Supporting Dynamically Typed Languages on the Java Platform (final release July 2011)", "url": "https://jcp.org/en/jsr/detail?id=292" },
+      { "label": "Don Syme: The Early History of F# (HOPL IV, 2020), section 3 on Lightning, .NET and Project 7", "url": "https://fsharp.org/history/hopl-final/hopl-fsharp.pdf" },
+      { "label": "Ecma International: ECMA-335 Common Language Infrastructure (1st edition December 2001)", "url": "https://ecma-international.org/publications-and-standards/standards/ecma-335/" },
+      { "label": "Microsoft Learn: The history of C# (C# 1.0 released January 2002)", "url": "https://learn.microsoft.com/en-us/dotnet/csharp/whats-new/csharp-version-history" },
+      { "label": ".NET Blog: .NET Core is Open Source (12 November 2014)", "url": "https://devblogs.microsoft.com/dotnet/net-core-is-open-source/" },
+      { "label": "Joe Armstrong: A History of Erlang (HOPL III, 2007)", "url": "https://www.labouseur.com/courses/erlang/history-of-erlang-armstrong.pdf" },
+      { "label": "Erlang/OTP blog: A Brief History of the BEAM Compiler (JAM, TEAM, BEAM, VEE)", "url": "https://www.erlang.org/blog/beam-compiler-history/" },
+      { "label": "Erlang/OTP blog: Erlang/OTP 24 Highlights (12 May 2021; BeamAsm)", "url": "https://www.erlang.org/blog/my-otp-24-highlights/" }
+    ]
+  },
+  "sources": [
+    { "label": "The Java Virtual Machine Specification, Java SE 21: Chapter 1, Introduction (class files, bytecode, any language can be hosted)", "url": "https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-1.html" },
+    { "label": "The Java Virtual Machine Specification, Java SE 21: Chapter 2, Structure (heap reclaimed by a garbage collector)", "url": "https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-2.html" },
+    { "label": "The Java Virtual Machine Specification, Java SE 21: Chapter 5, Loading, Linking, and Initializing", "url": "https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-5.html" },
+    { "label": "Oracle: Java HotSpot VM performance enhancements (tiered compilation)", "url": "https://docs.oracle.com/en/java/javase/21/vm/java-hotspot-virtual-machine-performance-enhancements.html" },
+    { "label": "Oracle: HotSpot GC tuning guide, Available collectors (G1 default, ZGC)", "url": "https://docs.oracle.com/en/java/javase/21/gctuning/available-collectors.html" },
+    { "label": "OpenJDK: JEP 444, Virtual Threads (Java 21)", "url": "https://openjdk.org/jeps/444" },
+    { "label": "OpenJDK: JEP 483, Ahead-of-Time Class Loading & Linking (JDK 24; PetClinic numbers)", "url": "https://openjdk.org/jeps/483" },
+    { "label": "GraalVM docs: Native Image (closed-world assumption, starts in milliseconds)", "url": "https://www.graalvm.org/latest/reference-manual/native-image/" },
+    { "label": "GraalVM docs: Memory management in Native Image (Serial GC by default, G1 optional)", "url": "https://www.graalvm.org/latest/reference-manual/native-image/optimizations-and-performance/MemoryManagement/" },
+    { "label": "Microsoft Learn: Managed execution process (CIL, metadata, JIT, verification)", "url": "https://learn.microsoft.com/en-us/dotnet/standard/managed-execution-process" },
+    { "label": "Microsoft Learn: Common Language Runtime overview (cross-language integration, common type system)", "url": "https://learn.microsoft.com/en-us/dotnet/standard/clr" },
+    { "label": "Microsoft Learn: Runtime configuration options for compilation (tiered compilation, quick JIT)", "url": "https://learn.microsoft.com/en-us/dotnet/core/runtime-config/compilation" },
+    { "label": "dotnet/runtime docs: JIT compiler structure (RyuJIT)", "url": "https://github.com/dotnet/runtime/blob/main/docs/design/coreclr/jit/ryujit-overview.md" },
+    { "label": "Microsoft Learn: Native AOT deployment (no JIT, limitations)", "url": "https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/" },
+    { "label": "Microsoft Learn: Fundamentals of garbage collection (generations, large object heap)", "url": "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/fundamentals" },
+    { "label": "Microsoft Learn: .NET language strategy (C#, F# and Visual Basic)", "url": "https://learn.microsoft.com/en-us/dotnet/fundamentals/languages" },
+    { "label": "Ecma International: ECMA-335 Common Language Infrastructure (6th edition, June 2012; ISO/IEC 23271)", "url": "https://ecma-international.org/publications-and-standards/standards/ecma-335/" },
+    { "label": "Erlang/OTP docs: Compilation and Code Loading (BEAM, .beam files, current and old code)", "url": "https://www.erlang.org/doc/system/code_loading.html" },
+    { "label": "Erlang/OTP docs: BeamAsm, the Erlang JIT (load-time translation on x86-64 and aarch64)", "url": "https://www.erlang.org/doc/apps/erts/beamasm.html" },
+    { "label": "Erlang/OTP docs: Efficiency Guide, Processes (327 words per new process; messages are copied)", "url": "https://www.erlang.org/doc/system/eff_guide_processes.html" },
+    { "label": "Erlang/OTP docs: Erlang Garbage Collector (per-process generational copying collector)", "url": "https://www.erlang.org/doc/apps/erts/garbagecollection.html" },
+    { "label": "Erlang/OTP docs: erlang:bump_reductions/1 (context switch after 4,000 reductions)", "url": "https://www.erlang.org/doc/apps/erts/erlang.html" },
+    { "label": "Erlang/OTP docs: erl, the +S flag (one scheduler thread per logical processor by default)", "url": "https://www.erlang.org/doc/apps/erts/erl_cmd.html" },
+    { "label": "Scala docs: Scala for Java Programmers (scalac produces standard Java class files)", "url": "https://docs.scala-lang.org/tutorials/scala-for-java-programmers.html" },
+    { "label": "Clojure: Hosted on the JVM (compiles all functions to JVM bytecode)", "url": "https://clojure.org/about/jvm_hosted" },
+    { "label": "Elixir docs: Code (modules compiled to bytecode in .beam files)", "url": "https://hexdocs.pm/elixir/Code.html" },
+    { "label": "Wikipedia: Virtual machine, Process virtual machines", "url": "https://en.wikipedia.org/wiki/Virtual_machine" },
+    { "label": "Docker docs: What is a container? (containers versus VMs)", "url": "https://docs.docker.com/get-started/docker-concepts/the-basics/what-is-a-container/" }
+  ]
+}

@@ -1,0 +1,266 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "CRUD",
+  "category": "modeling",
+  "order": 5,
+  "summary": "Create, read, update, delete: the four basic things you do to stored records, mapped to SQL’s `INSERT`, `SELECT`, `UPDATE` and `DELETE` and to HTTP’s `POST`, `GET`, `PUT` or `PATCH`, and `DELETE`.",
+  "howItWorks": "CRUD treats data as records you manage directly. Create adds a record, read fetches one or many, update changes fields in place, and delete removes it. In SQL each letter is one statement: `INSERT`, `SELECT`, `UPDATE`, `DELETE`. In an HTTP API each maps to a method on a resource, and RFC 9110 gives the methods rules that matter for retries. `GET` is safe: it asks for no change on the server. `PUT` (replace the whole resource, or create it at a URI the client chooses) and `DELETE` are idempotent: sending the same request twice has the same intended effect as sending it once, so a client can retry automatically when a connection drops before the response arrives. `POST` (create a resource the server will name, answered with `201 Created` and a `Location` header) is neither, so a retried `POST` can create a duplicate. `PATCH`, added by RFC 5789, applies a set of changes to part of a resource and is neither safe nor idempotent unless designed to be. The same four words also describe a style of user interface: forms and lists for adding, viewing, searching, editing and removing records.",
+  "analogy": "A box of index cards. You can write a new card, look one up, cross out a line and write a new value, or throw a card away. Every change is one of those four moves, which keeps things simple, and none of them records why the card changed.",
+  "useWhen": [
+    "Users really are editing records: settings, reference data, catalogues, admin screens",
+    "Simple services whose model, logic and API fit in one project, such as a product catalogue",
+    "Resource-style HTTP APIs where idempotent `PUT` and `DELETE` let clients retry safely"
+  ],
+  "avoidWhen": [
+    "The operations are business actions, not field edits: “discontinue product”, “relocate customer”, “book room”",
+    "You need to know why and when a value changed, not just its latest state",
+    "Many people edit the same record and nothing checks for conflicting changes"
+  ],
+  "example": "A product catalogue API: `POST /products` creates product 17 and returns `201 Created` with `Location: /products/17`; `GET /products/17` reads it; `PATCH /products/17` changes the price from 4.50 to 5.00; `DELETE /products/17` removes it. Two admins open product 17 at the same time and both save a new price. Without a check, the second save silently overwrites the first. With an `ETag` and `If-Match` on the update, the second request fails with `412 Precondition Failed`, and the admin reloads before trying again.",
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "CREATE TABLE products (",
+      "  id      INTEGER PRIMARY KEY,",
+      "  name    TEXT    NOT NULL,",
+      "  cents   INTEGER NOT NULL,",
+      "  version INTEGER NOT NULL DEFAULT 1",
+      ");",
+      "",
+      "-- Create",
+      "INSERT INTO products (id, name, cents) VALUES (17, 'Tea', 450);",
+      "",
+      "-- Read",
+      "SELECT id, name, cents, version FROM products WHERE id = 17;   -- 17 | Tea | 450 | 1",
+      "",
+      "-- Update, but only if nobody changed the row since we read version 1",
+      "UPDATE products SET cents = 500, version = version + 1 WHERE id = 17 AND version = 1;  -- 1 row",
+      "UPDATE products SET cents = 480, version = version + 1 WHERE id = 17 AND version = 1;  -- 0 rows: stale, reload",
+      "",
+      "-- Delete",
+      "DELETE FROM products WHERE id = 17;"
+    ]
+  },
+  "related": [
+    "cqrs",
+    "persistence",
+    "relational",
+    "web-api"
+  ],
+  "sections": [
+    {
+      "type": "table",
+      "title": "The four operations in SQL and HTTP",
+      "intro": "The SQL statements are the same in every relational database. The HTTP column follows RFC 9110 and, for `PATCH`, RFC 5789.",
+      "corner": "Operation",
+      "columns": [
+        "SQL",
+        "HTTP",
+        "Safe",
+        "Idempotent",
+        "Notes"
+      ],
+      "rows": [
+        {
+          "label": "Create",
+          "values": [
+            "`INSERT`",
+            "`POST` to a collection, or `PUT` to a new URI",
+            "No",
+            "`POST` no, `PUT` yes",
+            "`201 Created` with a `Location` header naming the new resource"
+          ]
+        },
+        {
+          "label": "Read",
+          "values": [
+            "`SELECT`",
+            "`GET`",
+            "Yes",
+            "Yes",
+            "Caches and crawlers may repeat it freely"
+          ]
+        },
+        {
+          "label": "Update",
+          "values": [
+            "`UPDATE`",
+            "`PUT` replaces the whole resource, `PATCH` changes part of it",
+            "No",
+            "`PUT` yes, `PATCH` only if designed to be",
+            "Add `If-Match` to refuse the change if someone else changed it first"
+          ]
+        },
+        {
+          "label": "Delete",
+          "values": [
+            "`DELETE`",
+            "`DELETE`",
+            "No",
+            "Yes",
+            "Removes the URI mapping; the stored data might or might not be destroyed"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Where CRUD thinking breaks down",
+      "intro": "CRUD fits data that people edit. It strains when the data stands for a business with its own verbs, history and concurrency.",
+      "items": [
+        {
+          "name": "Business actions aren’t updates",
+          "tag": "lost intent",
+          "text": "“Set status to reserved” hides what happened; “book hotel room” says it. With only four verbs, rules end up in the client or in people’s heads, and one task can mean editing several screens. Task-based commands, as in CQRS, name the action."
+        },
+        {
+          "name": "Lost updates",
+          "tag": "concurrency",
+          "text": "Two people read the same record, both edit it, and the last save wins without either knowing. Optimistic checks catch it: a `version` column in the `WHERE` clause, or an `ETag` with `If-Match` over HTTP, which returns `412 Precondition Failed` when the record has moved on."
+        },
+        {
+          "name": "History disappears",
+          "tag": "audit",
+          "text": "`UPDATE` overwrites the old value and the reason for the change. Audit tables or change logs can keep previous states, but they still record what changed, not what happened. Recording events, as an accounting ledger does, keeps both."
+        },
+        {
+          "name": "Soft deletes",
+          "tag": "delete rarely means delete",
+          "text": "Deleting a catalogue item shouldn’t make past orders and invoices vanish, so teams add an `is_deleted` flag. Often the user meant something else: orders are cancelled, products discontinued, employees leave. Each of those is a business action with its own rules (a late cancellation fee, stock still to sell off) that a flag can’t carry."
+        },
+        {
+          "name": "Reads and writes drift apart",
+          "tag": "one model for both",
+          "text": "Screens want joined, reshaped views; updates want validation and rules. As those needs grow, a single record model serves neither well, which is the problem CQRS splits apart."
+        }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "The four operations are as old as stored data: whatever holds data must let you create it, read it, change it and eventually remove it. The acronym came later. Wikipedia credits James Martin’s 1983 book Managing the Data-base Environment with likely first popularising the term. In relational databases each letter matches one SQL statement, and form-based applications built screens around the same four actions.",
+      "The web added a second mapping. HTTP methods such as `PUT` and `DELETE` manipulate resources directly, so REST-style APIs came to be read as CRUD over URIs. Roy Fielding, who defined REST, wrote in 2009 that his dissertation never mentions CRUD or `POST`, and that using `POST` for operations that don’t fit the other methods is fine. In 2010 RFC 5789 added `PATCH`, because `PUT` only allows complete replacement. RFC 9110, in 2022, restated which methods are safe and which are idempotent.",
+      "CRUD also became the thing other designs define themselves against. In 2009 Udi Dahan argued that users had learned to phrase requirements in CRUD terms, saying “delete” when they meant “discontinue”. Greg Young’s 2010 CQRS documents made the same point about the four verbs, and Martin Fowler’s 2011 note on CQRS started from the CRUD mental model, adding that many systems fit it and should be built that way."
+    ],
+    "choices": [
+      {
+        "choice": "Four generic verbs for every kind of record",
+        "why": "The same operations work for any table or resource, so tools, frameworks and APIs can be built once and reused. The cost is that the verbs say nothing about the business meaning of a change."
+      },
+      {
+        "choice": "Update in place",
+        "why": "Storage holds the current state, so `UPDATE` replaces the old value. That is cheap and simple, but earlier states survive only if something else, such as an audit trail or an event log, records them."
+      },
+      {
+        "choice": "Idempotent `PUT` and `DELETE` in HTTP",
+        "why": "If a connection closes before the response arrives, the client can resend an idempotent request and know the intended effect is the same. `POST` gets no such promise."
+      },
+      {
+        "choice": "A separate `PATCH` method",
+        "why": "`PUT` is defined to overwrite a resource with a complete new body, so reusing it for partial changes would confuse proxies, caches, clients and servers. RFC 5789 added a method that sends only a set of changes, applied atomically."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "1983",
+        "text": "James Martin’s Managing the Data-base Environment likely popularises the term"
+      },
+      {
+        "year": "2009",
+        "text": "Roy Fielding: “It is okay to use POST”; Udi Dahan: “Don’t Delete: Just Don’t”"
+      },
+      {
+        "year": "2010",
+        "text": "RFC 5789 adds the HTTP `PATCH` method"
+      },
+      {
+        "year": "2011",
+        "text": "Martin Fowler’s CQRS note contrasts it with the CRUD mental model"
+      },
+      {
+        "year": "2022",
+        "text": "RFC 9110 restates HTTP method semantics, including idempotency"
+      }
+    ],
+    "sources": [
+      {
+        "label": "Wikipedia: Create, read, update and delete (James Martin, 1983)",
+        "url": "https://en.wikipedia.org/wiki/Create,_read,_update_and_delete"
+      },
+      {
+        "label": "Roy T. Fielding: It is okay to use POST (Mar 2009)",
+        "url": "https://roy.gbiv.com/untangled/2009/it-is-okay-to-use-post"
+      },
+      {
+        "label": "RFC 5789: PATCH Method for HTTP (Mar 2010)",
+        "url": "https://www.rfc-editor.org/rfc/rfc5789"
+      },
+      {
+        "label": "RFC 9110: HTTP Semantics (June 2022)",
+        "url": "https://www.rfc-editor.org/rfc/rfc9110"
+      },
+      {
+        "label": "Udi Dahan: Don’t Delete: Just Don’t (Sep 2009)",
+        "url": "https://udidahan.com/2009/09/01/dont-delete-just-dont/"
+      },
+      {
+        "label": "Greg Young: CQRS Documents (2010)",
+        "url": "https://cqrs.files.wordpress.com/2010/11/cqrs_documents.pdf"
+      },
+      {
+        "label": "Martin Fowler: CQRS (bliki, Jul 2011)",
+        "url": "https://martinfowler.com/bliki/CQRS.html"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "RFC 9110: HTTP Semantics, section 9 (methods: safe, idempotent, GET, POST, PUT, DELETE)",
+      "url": "https://www.rfc-editor.org/rfc/rfc9110#section-9"
+    },
+    {
+      "label": "RFC 9110: HTTP Semantics, section 13.1.1 (If-Match and the lost update problem)",
+      "url": "https://www.rfc-editor.org/rfc/rfc9110#section-13.1.1"
+    },
+    {
+      "label": "RFC 5789: PATCH Method for HTTP (Mar 2010)",
+      "url": "https://www.rfc-editor.org/rfc/rfc5789"
+    },
+    {
+      "label": "PostgreSQL docs: Chapter 6, Data Manipulation (insert, update, delete)",
+      "url": "https://www.postgresql.org/docs/current/dml.html"
+    },
+    {
+      "label": "Wikipedia: Create, read, update and delete",
+      "url": "https://en.wikipedia.org/wiki/Create,_read,_update_and_delete"
+    },
+    {
+      "label": "Martin Fowler: Optimistic Offline Lock (Patterns of Enterprise Application Architecture)",
+      "url": "https://martinfowler.com/eaaCatalog/optimisticOfflineLock.html"
+    },
+    {
+      "label": "Udi Dahan: Don’t Delete: Just Don’t (Sep 2009)",
+      "url": "https://udidahan.com/2009/09/01/dont-delete-just-dont/"
+    },
+    {
+      "label": "Greg Young: CQRS Documents (2010)",
+      "url": "https://cqrs.files.wordpress.com/2010/11/cqrs_documents.pdf"
+    },
+    {
+      "label": "Eric Evans: Domain-Driven Design Reference, Domain Events (audit trails and change histories)",
+      "url": "https://www.domainlanguage.com/wp-content/uploads/2016/05/DDD_Reference_2015-03.pdf"
+    },
+    {
+      "label": "Azure Architecture Center: CQRS pattern (commands as business tasks)",
+      "url": "https://learn.microsoft.com/en-us/azure/architecture/patterns/cqrs"
+    },
+    {
+      "label": "Microsoft Learn: Creating a simple data-driven CRUD microservice",
+      "url": "https://learn.microsoft.com/en-us/dotnet/architecture/microservices/multi-container-microservice-net-applications/data-driven-crud-microservice"
+    },
+    {
+      "label": "Martin Fowler: CQRS (bliki, Jul 2011)",
+      "url": "https://martinfowler.com/bliki/CQRS.html"
+    }
+  ]
+}

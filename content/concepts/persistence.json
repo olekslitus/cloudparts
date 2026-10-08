@@ -1,0 +1,291 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Persistence: state, events and replay",
+  "category": "modeling",
+  "order": 60,
+  "summary": "Three ways to make data and work survive a restart: store the current state, store every change as an event, or store a program’s progress and replay it.",
+  "howItWorks": "The common way is to keep the current state: one row per thing, overwritten on every change, so a read is a lookup but the old values are gone. Event sourcing keeps the changes instead: every change is an immutable event appended to a log, and the current state is computed by replaying an entity’s events in order, from a snapshot when the stream is long. Durable execution applies the same idea to a running program: an engine appends each step the code takes, and its result, to an event history. After a crash, the code runs again from the top, and every step already in the history returns its recorded result instead of running twice, until the program is back where it stopped.",
+  "analogy": "A bank balance, a bank statement and a recipe with ticked steps. The balance tells you only what you have now. The statement lists every transaction, so you can add it up to any date. The ticked recipe lets a new cook take over and start at the first unticked step.",
+  "useWhen": [
+    "State persistence: most applications, where only the current value matters and reads must see the latest write",
+    "Event sourcing: you need a full audit trail, the state as of any past moment, or several read models built from the same facts",
+    "Durable execution: multi-step processes that must finish despite crashes and restarts, such as payments, orders or anything that waits days for a reply"
+  ],
+  "avoidWhen": [
+    "Event sourcing for plain CRUD, prototypes or reference data: event design, versioning and projections cost more than they return",
+    "Event sourcing when every view must be up to date at once: projections are eventually consistent",
+    "Durable execution for workflow code you can’t keep deterministic, since every replay must make the same calls in the same order",
+    "Any append-only store for personal data you must be able to erase, unless you plan for it up front (for example by encrypting it with a key per person and deleting the key)"
+  ],
+  "example": "An account receives a deposit of 100, a withdrawal of 30 and a deposit of 5. With state persistence the database holds one row: balance 75. With event sourcing it holds three events; adding them up gives 75, and stopping after the second gives 70, the balance at that moment. A durable transfer workflow first debits one account, then credits another. If its worker dies between the two, another worker re-runs the code: the debit’s result is already in the history, so it is returned rather than repeated, and only the credit runs.",
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "from functools import reduce",
+      "",
+      "events = [",
+      "    {\"type\": \"Deposited\", \"amount\": 100},",
+      "    {\"type\": \"Withdrawn\", \"amount\": 30},",
+      "    {\"type\": \"Deposited\", \"amount\": 5},",
+      "]",
+      "",
+      "def apply(balance, event):",
+      "    if event[\"type\"] == \"Deposited\":",
+      "        return balance + event[\"amount\"]",
+      "    if event[\"type\"] == \"Withdrawn\":",
+      "        return balance - event[\"amount\"]",
+      "    return balance",
+      "",
+      "print(reduce(apply, events, 0))      # 75: the current state is a fold over all events",
+      "print(reduce(apply, events[:2], 0))  # 70: the state as it was after the second event"
+    ]
+  },
+  "related": ["crud", "cqrs", "bitemporal", "workflow", "stream", "ddd"],
+  "diagram": {
+    "caption": "Three lanes, three ways to persist. In the first, each change overwrites the one row. In the second, each change is appended to the event store, and two readers move through the same events: one rebuilds the entity’s state, the other updates a read model. In the third, every finished step goes into the workflow’s history; when worker 1 crashes, the next steps go to worker 2, which replays that history to pick up where worker 1 stopped.",
+    "w": 800,
+    "h": 390,
+    "zones": [
+      { "x": 14, "y": 10, "w": 772, "h": 104, "label": "State persistence" },
+      { "x": 14, "y": 124, "w": 772, "h": 134, "label": "Event sourcing" },
+      { "x": 14, "y": 268, "w": 772, "h": 114, "label": "Durable execution" }
+    ],
+    "nodes": [
+      {
+        "id": "app1",
+        "x": 110,
+        "y": 66,
+        "label": "App",
+        "sub": "change balance",
+        "emit": { "every": 1300, "jitter": 0.3, "color": 0 },
+        "out": ["row"]
+      },
+      {
+        "id": "row",
+        "x": 420,
+        "y": 66,
+        "label": "accounts row",
+        "sub": "UPDATE · latest value only",
+        "mode": "sink",
+        "concept": "crud"
+      },
+      {
+        "id": "app2",
+        "x": 110,
+        "y": 194,
+        "label": "App",
+        "sub": "Deposited, Withdrawn…",
+        "emit": { "every": 1300, "jitter": 0.3, "color": 1 },
+        "out": ["store"]
+      },
+      {
+        "id": "store",
+        "x": 390,
+        "y": 194,
+        "kind": "log",
+        "cells": 8,
+        "retain": 40,
+        "label": "Event store",
+        "sub": "stream account-42 · append-only",
+        "readers": [
+          { "to": "entity", "every": 2600, "batch": 3, "name": "rebuild" },
+          { "to": "view", "every": 1500, "name": "projector" }
+        ]
+      },
+      {
+        "id": "entity",
+        "x": 680,
+        "y": 164,
+        "label": "Account state",
+        "sub": "replayed events",
+        "mode": "sink"
+      },
+      {
+        "id": "view",
+        "x": 680,
+        "y": 226,
+        "label": "Read model",
+        "sub": "projection",
+        "mode": "sink",
+        "concept": "cqrs"
+      },
+      {
+        "id": "wf",
+        "x": 110,
+        "y": 326,
+        "label": "Transfer workflow",
+        "sub": "debit, then credit",
+        "emit": { "every": 1300, "jitter": 0.3, "color": 2 },
+        "out": ["w1", "w2"]
+      },
+      {
+        "id": "w1",
+        "x": 360,
+        "y": 300,
+        "label": "Worker 1",
+        "sub": "runs the code",
+        "out": ["hist"]
+      },
+      {
+        "id": "w2",
+        "x": 360,
+        "y": 354,
+        "label": "Worker 2",
+        "sub": "replays, then continues",
+        "out": ["hist"]
+      },
+      {
+        "id": "hist",
+        "x": 640,
+        "y": 326,
+        "label": "Event history",
+        "sub": "one entry per finished step",
+        "mode": "sink",
+        "concept": "workflow"
+      }
+    ],
+    "events": [
+      { "node": "w1", "at": 3500, "every": 10000, "dur": 4000, "text": "crashed", "back": "back" }
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "The three approaches side by side",
+      "columns": ["State persistence", "Event sourcing", "Durable execution"],
+      "rows": [
+        { "label": "What is stored", "values": ["The current value of each record", "Every change, as an immutable event", "Each step a running program takes, with its result"] },
+        { "label": "How you get the current state", "values": ["Read the row", "Replay the entity’s events, from a snapshot if there is one", "Re-run the code against its history"] },
+        { "label": "History", "values": ["Lost on each update, unless you add audit tables", "Complete: rebuild the state as of any event", "Complete for each execution, within the engine’s limits (Temporal: 51,200 events or 50 MB)"] },
+        { "label": "How a write happens", "values": ["Update in place, usually inside a transaction that locks the row", "Append, checking the stream is still at the version you read", "The engine appends as your code calls its SDK"] },
+        { "label": "The main rule you live with", "values": ["None beyond the schema", "Events are never edited: correct mistakes with new events, version their schema and accept eventually consistent read models", "Workflow code must be deterministic; side effects go in activities"] },
+        { "label": "Examples", "values": ["A table in PostgreSQL, MySQL or SQLite", "KurrentDB, Axon Framework, or an append-only table", "Temporal, Azure Durable Functions, Restate"] }
+      ]
+    },
+    {
+      "type": "code",
+      "title": "State and events in plain SQL",
+      "intro": "The same account kept both ways, runnable in SQLite or PostgreSQL. The primary key on `(account_id, version)` acts as the optimistic concurrency check: of two writers that read version 1, only the first can append version 2.",
+      "lang": "sql",
+      "source": [
+        "-- State persistence: one row, overwritten",
+        "CREATE TABLE accounts (id INT PRIMARY KEY, balance INT NOT NULL);",
+        "INSERT INTO accounts VALUES (42, 100);",
+        "UPDATE accounts SET balance = balance - 30 WHERE id = 42;",
+        "SELECT balance FROM accounts WHERE id = 42;  -- 70, and the old 100 is gone",
+        "",
+        "-- Event sourcing: append only, one version number per event",
+        "CREATE TABLE account_events (",
+        "  account_id INT NOT NULL,",
+        "  version    INT NOT NULL,",
+        "  type       TEXT NOT NULL,",
+        "  amount     INT NOT NULL,",
+        "  PRIMARY KEY (account_id, version)",
+        ");",
+        "INSERT INTO account_events VALUES (42, 1, 'Deposited', 100), (42, 2, 'Withdrawn', 30);",
+        "SELECT sum(CASE type WHEN 'Deposited' THEN amount ELSE -amount END)",
+        "  FROM account_events WHERE account_id = 42;  -- 70, rebuilt from the events",
+        "SELECT sum(CASE type WHEN 'Deposited' THEN amount ELSE -amount END)",
+        "  FROM account_events WHERE account_id = 42 AND version <= 1;  -- 100, the balance as of version 1",
+        "",
+        "-- A second writer that also read version 1 tries to append version 2: rejected",
+        "INSERT INTO account_events VALUES (42, 2, 'Withdrawn', 50);  -- error: duplicate primary key"
+      ]
+    }
+  ],
+  "kinds": [
+    {
+      "id": "state-persistence",
+      "name": "State persistence",
+      "summary": "Keep only the current value of each record, and overwrite it in place whenever it changes.",
+      "body": [
+        "Most applications store the latest state of their data in a database and insert or update rows as things change: the create, read, update and delete (CRUD) model. An `UPDATE` replaces the old value, so the row always answers “what is true now?” with a single lookup. It is simple and fast for most workloads, and every read sees the latest committed write.",
+        "What it drops is history. The database holds only the latest state, so unless you add an audit mechanism you can’t say what a value was last week or why it changed. A common fix is a trigger that copies every insert, update and delete into an audit table, stamped with the time and user; PostgreSQL’s documentation shows one. Updating rows in place also takes row locks, which can contend under heavy write load. When the past matters as much as the present, look at bitemporal tables or event sourcing."
+      ],
+      "sources": [
+        { "label": "Azure Architecture Center: Event Sourcing pattern (the CRUD model and what it loses)", "url": "https://learn.microsoft.com/en-us/azure/architecture/patterns/event-sourcing" },
+        { "label": "PostgreSQL docs: Trigger functions (Example 41.4, an audit trigger)", "url": "https://www.postgresql.org/docs/current/plpgsql-trigger.html" }
+      ]
+    },
+    {
+      "id": "event-sourcing",
+      "name": "Event sourcing",
+      "summary": "Store every change as an immutable event in an append-only log, and compute the current state by replaying the events.",
+      "body": [
+        "Each entity, such as an order or an account, gets its own stream: the ordered events that record every change to it. To handle a command, the application reads the stream, replays the events to rebuild the current state (“rehydration”), checks its rules and appends new events. Events are never edited: a mistake is undone by appending a compensating event, such as `ReservationCanceled` after `SeatsReserved`. When streams grow long, a snapshot of the state every N events lets the application replay only what came after it; the snapshot is a cache, and the events stay the source of truth.",
+        "Reads usually come from projections: handlers follow the events and keep query-friendly read models up to date, which is why event sourcing pairs naturally with CQRS. Those views lag the log slightly, and since delivery is typically at least once, handlers must be idempotent. Because every event is kept, you can rebuild the state as of any point, or build a new read model from the whole history.",
+        "The store can be a purpose-built event store such as KurrentDB, with per-stream reads and an expected-version check on every append for optimistic concurrency, or an append-only table in a general-purpose database. A message broker such as Apache Kafka is not a substitute: it typically lacks per-entity stream reads and optimistic concurrency, though it works well for fanning events out to consumers."
+      ],
+      "sources": [
+        { "label": "Martin Fowler: Event Sourcing (Dec 2005)", "url": "https://martinfowler.com/eaaDev/EventSourcing.html" },
+        { "label": "Azure Architecture Center: Event Sourcing pattern", "url": "https://learn.microsoft.com/en-us/azure/architecture/patterns/event-sourcing" },
+        { "label": "Greg Young: CQRS Documents (2010), event sourcing and rolling snapshots", "url": "https://cqrs.files.wordpress.com/2010/11/cqrs_documents.pdf" },
+        { "label": "Kurrent docs: Concepts (event log, streams, optimistic concurrency)", "url": "https://docs.kurrent.io/getting-started/concepts" }
+      ]
+    },
+    {
+      "id": "durable-execution",
+      "name": "Durable execution",
+      "summary": "Persist a running program’s progress as an event history, so after a crash the code is replayed against that history and carries on from where it stopped.",
+      "body": [
+        "The engine records every step the code takes: each call to an activity, each timer, each message received, together with its result, appended to the execution’s history. When the program has to continue, after a crash or simply after waking up from a wait, the engine re-runs the code from the start. Whenever the code reaches a step that is already in the history, the engine hands back the recorded result instead of doing the work again, so the local variables are rebuilt and the code continues with the first new step. Microsoft describes its Durable Task Framework as event sourcing applied this way; Restate calls the history a journal.",
+        "Replay only works if the code makes the same calls in the same order every time. So workflow code must be deterministic: no reading the clock, generating random numbers or calling the network directly, only through the engine’s own APIs, with side effects moved into activities that run outside the replay path. Temporal compares the commands a replay produces with the stored history and fails the execution with a non-determinism error if they differ, so changing code while old executions are still running needs explicit versioning.",
+        "Temporal, Azure Durable Functions (built on the Durable Task Framework) and Restate all work this way. The engine still keeps its own state somewhere, for example Temporal in PostgreSQL, MySQL or Cassandra, but your code no longer saves its progress by hand."
+      ],
+      "sources": [
+        { "label": "Microsoft Learn: Durable orchestrations (event sourcing, replay, orchestration history)", "url": "https://learn.microsoft.com/en-us/azure/azure-functions/durable/durable-functions-orchestrations" },
+        { "label": "Microsoft Learn: Orchestrator function code constraints (determinism)", "url": "https://learn.microsoft.com/en-us/azure/azure-functions/durable/durable-functions-code-constraints" },
+        { "label": "Temporal docs: Events and Event History", "url": "https://docs.temporal.io/workflow-execution/event" },
+        { "label": "Temporal docs: Workflow Definition (determinism and non-deterministic errors)", "url": "https://docs.temporal.io/workflow-definition" },
+        { "label": "Temporal docs: Persistence (supported databases)", "url": "https://docs.temporal.io/temporal-service/persistence" },
+        { "label": "Restate docs: Key concepts (durable execution and the journal)", "url": "https://docs.restate.dev/foundations/key-concepts" }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Keeping every change is older than computers. As Pat Helland puts it, “accountants don’t use erasers”: a ledger keeps every entry, and a correction is a new entry. Databases work the same way inside. Their transaction logs record every change, and in Helland’s words “the truth is the log. The database is a cache of a subset of the log.” Applications, though, mostly kept only that cache: the latest value of each row.",
+      "In December 2005 Martin Fowler described Event Sourcing: capture every change to an application’s state as an event, so you can throw the state away and rebuild it, ask what it was at any past time, or replay corrected events. He also noted the catch that still matters: a replay mustn’t send messages to external systems a second time. Greg Young’s CQRS Documents (2010) tied the pattern to domain-driven design and CQRS, using an accounting ledger as the model and “rolling snapshots” to keep replays short, and in September 2012 Young released Event Store, an open-source database built for it, which became today’s KurrentDB.",
+      "Durable execution took the idea from data to running code. Samar Abbas built the open-source Durable Task Framework at Microsoft, whose orchestrations record their actions in an append-only history and replay the code against it; Azure Durable Functions, built on it, became generally available in May 2018. Abbas and Maxim Fateev went on to build Cadence at Uber and then Temporal, which reached 1.0 in September 2020."
+    ],
+    "choices": [
+      { "choice": "Store the facts, derive the state", "why": "If every change is kept, the current state can always be recomputed, and so can any past state. Young points to the ledger: the running balance can be trusted because the transactions can be re-run from the beginning to check it." },
+      { "choice": "Never edit or delete an event", "why": "The log is the audit trail, so a mistake is corrected by a new event that reverses the old one (Young’s “reversal transaction”). That keeps history honest, but it collides with laws that require personal data to be erased, which has to be designed for from the start." },
+      { "choice": "Snapshots as a cache, not the truth", "why": "Replaying a long stream is slow. A snapshot of the state at some point lets you replay only the newer events, and because it can always be regenerated from the events, it never becomes a second source of truth." },
+      { "choice": "Replay code against recorded results", "why": "Durable execution engines don’t serialise a program’s memory. They re-run the code and feed it the recorded results, which makes crash recovery possible but requires the code to be deterministic." }
+    ],
+    "timeline": [
+      { "year": "2005", "text": "Martin Fowler describes Event Sourcing" },
+      { "year": "2010", "text": "Greg Young’s CQRS Documents link event sourcing, DDD and CQRS" },
+      { "year": "2012", "text": "Event Store, an open-source event database, is first released" },
+      { "year": "2015", "text": "Pat Helland’s “Immutability Changes Everything”: the truth is the log" },
+      { "year": "2018", "text": "Azure Durable Functions, built on the Durable Task Framework, become generally available" },
+      { "year": "2020", "text": "Temporal 1.0 ships" }
+    ],
+    "sources": [
+      { "label": "Pat Helland: Immutability Changes Everything (CIDR 2015)", "url": "https://www.cidrdb.org/cidr2015/Papers/CIDR15_Paper16.pdf" },
+      { "label": "Martin Fowler: Event Sourcing (Dec 2005)", "url": "https://martinfowler.com/eaaDev/EventSourcing.html" },
+      { "label": "Greg Young: CQRS Documents (2010)", "url": "https://cqrs.files.wordpress.com/2010/11/cqrs_documents.pdf" },
+      { "label": "InfoQ: Greg Young on using complex event processing (Jan 2014), Event Store first released September 2012", "url": "https://www.infoq.com/news/2014/01/complex-event-processing" },
+      { "label": "Azure Architecture Center: Event Sourcing pattern (compensating events, personal data)", "url": "https://learn.microsoft.com/en-us/azure/architecture/patterns/event-sourcing" },
+      { "label": "Microsoft Learn: Durable orchestrations (event sourcing in the Durable Task Framework)", "url": "https://learn.microsoft.com/en-us/azure/azure-functions/durable/durable-functions-orchestrations" },
+      { "label": "Azure blog: Break through the serverless barriers with Azure Functions (May 2018), Durable Functions GA", "url": "https://azure.microsoft.com/en-us/blog/break-through-the-serverless-barriers-with-azure-functions/" },
+      { "label": "Temporal blog: Building resilient workflows, from Azure to Cadence to Temporal (Apr 2025)", "url": "https://temporal.io/blog/building-resilient-workflows-from-azure-to-cadence-to-temporal" },
+      { "label": "Temporal blog: Temporal V1 announcement (Sep 2020)", "url": "https://temporal.io/blog/temporal-v1-announcement" },
+      { "label": "Kurrent docs: Upgrade guide for KurrentDB 25.0 (EventStoreDB renamed KurrentDB)", "url": "https://docs.kurrent.io/server/v25.0/quick-start/upgrade-guide" }
+    ]
+  },
+  "sources": [
+    { "label": "Azure Architecture Center: Event Sourcing pattern", "url": "https://learn.microsoft.com/en-us/azure/architecture/patterns/event-sourcing" },
+    { "label": "Martin Fowler: Event Sourcing (Dec 2005)", "url": "https://martinfowler.com/eaaDev/EventSourcing.html" },
+    { "label": "Greg Young: CQRS Documents (2010)", "url": "https://cqrs.files.wordpress.com/2010/11/cqrs_documents.pdf" },
+    { "label": "PostgreSQL docs: Trigger functions (audit trigger example)", "url": "https://www.postgresql.org/docs/current/plpgsql-trigger.html" },
+    { "label": "Microsoft Learn: Durable orchestrations (replay and orchestration history)", "url": "https://learn.microsoft.com/en-us/azure/azure-functions/durable/durable-functions-orchestrations" },
+    { "label": "Microsoft Learn: Orchestrator function code constraints", "url": "https://learn.microsoft.com/en-us/azure/azure-functions/durable/durable-functions-code-constraints" },
+    { "label": "Temporal docs: Events and Event History", "url": "https://docs.temporal.io/workflow-execution/event" },
+    { "label": "Temporal docs: Workflow Definition (determinism)", "url": "https://docs.temporal.io/workflow-definition" },
+    { "label": "Temporal docs: Workflow Execution limits (51,200 events or 50 MB)", "url": "https://docs.temporal.io/workflow-execution/limits" },
+    { "label": "Restate docs: Key concepts (durable execution)", "url": "https://docs.restate.dev/foundations/key-concepts" },
+    { "label": "Kurrent docs: Concepts (event log and streams)", "url": "https://docs.kurrent.io/getting-started/concepts" }
+  ]
+}

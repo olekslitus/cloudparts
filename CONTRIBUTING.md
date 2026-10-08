@@ -100,7 +100,7 @@ Concepts are the vendor-neutral ideas, so new ones are rarer.
    | `useWhen`, `avoidWhen` | Two to four short bullets each. |
    | `example` | A concrete scenario with real numbers where you can. |
    | `providers` | What `aws`, `gcp`, `azure` and `oss` (open source and others) call it. Search matches these, so list the product names people actually type. Leave it out for ideas no provider sells, such as a coding style or a team practice; the concept then stays out of the playground. |
-   | `snippet` | Optional. `lang` (`bash`, `c`, `cpp`, `dockerfile`, `go`, `haskell`, `hcl`, `http`, `java`, `js`, `json`, `nginx`, `python`, `rust`, `sql`, `text`, `ts` or `yaml`) and `source`, one string per line. |
+   | `snippet` | Optional. `lang` (`bash`, `c`, `clojure`, `cpp`, `csharp`, `dockerfile`, `elixir`, `erlang`, `fsharp`, `go`, `haskell`, `hcl`, `http`, `java`, `js`, `json`, `nginx`, `python`, `racket`, `rust`, `scala`, `sql`, `text`, `ts`, `yaml` or `zig`) and `source`, one string per line. |
    | `related` | Ids of concepts people confuse with this one. |
    | `diagram` | The live model. See below. Optional: leave it out when moving packets can’t show the idea. |
    | `sections` | Optional deep-dive sections (`text`, `table`, `cards`, `model`, `code`), as on technologies, shown after the example. |

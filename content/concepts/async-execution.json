@@ -1,0 +1,634 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Synchronous and asynchronous execution",
+  "category": "code",
+  "order": 62,
+  "summary": "Whether a call makes its caller wait for the result (synchronous) or hands control back at once and delivers the result later (asynchronous), and the ways languages let code wait without holding a thread.",
+  "howItWorks": "A synchronous call finishes before the caller’s next line runs. If it reads from a socket and no data has arrived, the thread sleeps in the kernel until it does: the call blocks. A non-blocking call returns at once, with the data or with “not ready yet”, and something has to tell the program later that the data is there. Asynchronous code is built on that: the caller starts an operation, gets control back, and the result arrives later through a callback, a future, a resumed `await`, a channel or a message. What it buys is waiting without holding a thread. By Little’s law, a service with 50 ms of latency serving 200 requests per second has 10 requests in flight; if each holds an operating-system thread for its whole life, the thread count, not the CPU, becomes the limit, because OS threads are costly. What it costs: in the asynchronous style each request hops between threads, so stack traces lose their context and debuggers can’t step through a request, and with `async`/`await` functions split into two “colours”, because an `async` function returns a promise or task that only another `async` function can `await`. There are two families of answers. One makes waiting explicit in the code: callbacks, futures and promises, `async`/`await`. The other makes threads so cheap that blocking is fine again: goroutines, Java virtual threads and Erlang processes, which pass results over channels or into mailboxes. None of this is parallelism. Concurrency is dealing with many things at once; parallelism is doing many things at once. A Node.js process handles many connections concurrently on one thread, but it runs one callback at a time, and CPU-bound work gets no faster from being asynchronous.",
+  "analogy": "Ordering coffee. Synchronous: you stand at the counter until your drink is made, and the queue behind you waits too. Asynchronous: you’re handed a buzzer (a future), you sit down, the barista takes the next order, and the buzzer goes off when your drink is ready. Parallelism is hiring a second barista.",
+  "useWhen": [
+    "Work that mostly waits on the network, disks or other services: API gateways, proxies, crawlers, chat servers",
+    "Starting several independent calls and waiting for all of them (`Promise.all`, `Task.WhenAll`, `asyncio.gather`, a goroutine each)",
+    "Keeping a UI thread responsive while data downloads",
+    "Thousands of concurrent connections, where a platform thread per connection would run out of memory or threads"
+  ],
+  "avoidWhen": [
+    "CPU-bound work such as image processing or number crunching; asynchrony adds no cores, so use threads or processes for parallelism",
+    "Small scripts and low concurrency, where plain blocking code is easier to read and debug",
+    "Calling blocking libraries from async code on an event loop: one blocking call stalls every task on that thread",
+    "Wrapping everything in futures in Go, Erlang or Java 21+, where cheap threads already let blocking code scale"
+  ],
+  "example": "A product page needs the user, their orders and recommendations from three services, each taking about 100 ms. Called one after another, the page takes 300 ms and holds a thread the whole time. Started together and awaited with `Promise.all` (or three goroutines), it takes about 100 ms: as long as the slowest call. With a pool of 200 platform threads that each block for 300 ms, the server tops out near 667 requests per second (200 ÷ 0.3 s) however idle its CPUs are. Written asynchronously, or run on virtual threads, a waiting request costs a small object on the heap instead of a thread.",
+  "snippet": {
+    "lang": "js",
+    "source": [
+      "const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));",
+      "",
+      "async function fetchUser(id) {",
+      "  await sleep(100); // stands in for a 100 ms network call",
+      "  return { id, name: \"Ada\" };",
+      "}",
+      "async function fetchOrders(id) {",
+      "  await sleep(100);",
+      "  return [{ id: 1, total: 42 }];",
+      "}",
+      "",
+      "async function main() {",
+      "  let t = Date.now();",
+      "  const user = await fetchUser(7);      // wait 100 ms...",
+      "  const orders = await fetchOrders(7);  // ...then another 100 ms",
+      "  console.log(\"one after the other:\", Date.now() - t, \"ms\"); // about 200 ms",
+      "",
+      "  t = Date.now();",
+      "  const [u, o] = await Promise.all([fetchUser(7), fetchOrders(7)]); // both start now",
+      "  console.log(\"together:\", Date.now() - t, \"ms\"); // about 100 ms",
+      "  console.log(u.name, o.length); // Ada 1",
+      "}",
+      "",
+      "main();"
+    ]
+  },
+  "related": [
+    "event-loop",
+    "multithreading",
+    "actors",
+    "monads"
+  ],
+  "sections": [
+    {
+      "type": "text",
+      "title": "Blocking, non-blocking, asynchronous, parallel",
+      "body": [
+        "These four words describe different things. Blocking and non-blocking describe one call: does the thread stop until the operation completes, or does the call return at once? Synchronous and asynchronous describe how the result reaches the caller: as the return value, or later, through a callback, a future, an `await`, a channel or a message. Parallel describes the hardware: two pieces of work running at the same instant on different cores.",
+        "Microsoft’s C# guide uses breakfast to separate them. One cook can make eggs, bacon and toast asynchronously: start the eggs, and while they cook, put the bread in the toaster. Nothing runs in parallel, because there is one cook, yet breakfast is ready far sooner than if the cook stared at each pan until it finished. Parallel cooking needs a second cook. Rob Pike puts the same split in one line: concurrency is about dealing with lots of things at once, parallelism is about doing lots of things at once.",
+        "That is why asynchrony helps I/O-bound services and not CPU-bound ones. JEP 444 makes the point about Java’s virtual threads: they are not faster threads and run code no faster than platform threads; they exist for scale, so many more tasks can wait at once. If each task sorts a huge array instead of waiting, more threads than cores doesn’t help."
+      ]
+    },
+    {
+      "type": "table",
+      "title": "The six models side by side",
+      "intro": "Each model is a different answer to “what happens to the caller while it waits?”",
+      "corner": "Model",
+      "columns": [
+        "How the caller waits",
+        "Holds an OS thread while waiting?",
+        "Coloured functions?",
+        "Where you meet it"
+      ],
+      "rows": [
+        {
+          "label": "Callbacks",
+          "values": [
+            "It doesn’t: it passes a function that the runtime calls later with the result",
+            "No",
+            "Yes: anything that needs the result must itself take a callback",
+            "Node.js error-first callbacks, browser event handlers"
+          ]
+        },
+        {
+          "label": "Futures and promises",
+          "values": [
+            "Gets an object that will hold the value; chains steps onto it or blocks on `get()`",
+            "No when chained; yes if it blocks on `get()`",
+            "Yes: the result type is `Promise<T>`, `Task<T>`, `Future<T>`",
+            "JavaScript `Promise`, Java `CompletableFuture`, C# `Task`"
+          ]
+        },
+        {
+          "label": "async/await",
+          "values": [
+            "Writes `await`; the function is suspended and its thread is freed",
+            "No",
+            "Yes: only an `async` function can `await`",
+            "C#, JavaScript, Python, Rust"
+          ]
+        },
+        {
+          "label": "Green threads",
+          "values": [
+            "Makes an ordinary blocking call; the runtime parks the lightweight thread",
+            "No: the runtime frees the OS thread underneath",
+            "No: every function is ordinary",
+            "Go goroutines, Java 21 virtual threads, Erlang processes"
+          ]
+        },
+        {
+          "label": "CSP channels",
+          "values": [
+            "Blocks on a receive from a channel until a sender delivers",
+            "Only if the channel is used from a real OS thread",
+            "No in Go; in Clojure, channel operations park only inside `go` blocks",
+            "Go channels, Clojure `core.async`, occam"
+          ]
+        },
+        {
+          "label": "Actor messages",
+          "values": [
+            "Doesn’t wait: sends a message and later handles a reply message from its mailbox",
+            "No",
+            "No, but results come back as messages, not return values",
+            "Erlang processes, Akka actors"
+          ]
+        }
+      ],
+      "notes": [
+        "“Coloured functions” is Bob Nystrom’s name for the split between functions that return a value and functions that return a wrapper for one; he names Go, Lua and Ruby as languages without it, because they can switch between independent call stacks."
+      ]
+    },
+    {
+      "type": "code",
+      "title": "The same two calls in Go",
+      "intro": "The snippet above does it with promises. Go needs no `async` keyword: `fetchUser` and `fetchOrders` are ordinary blocking functions. Each runs in its own goroutine and sends its result down a channel; receiving from the channel blocks only the receiving goroutine, so both waits overlap.",
+      "lang": "go",
+      "source": [
+        "package main",
+        "",
+        "import (",
+        "\t\"fmt\"",
+        "\t\"time\"",
+        ")",
+        "",
+        "type User struct{ Name string }",
+        "type Order struct{ Total int }",
+        "",
+        "// Plain blocking functions: no async keyword, no promise type.",
+        "func fetchUser(id int) User {",
+        "\ttime.Sleep(100 * time.Millisecond) // stands in for a 100 ms network call",
+        "\treturn User{Name: \"Ada\"}",
+        "}",
+        "",
+        "func fetchOrders(id int) []Order {",
+        "\ttime.Sleep(100 * time.Millisecond)",
+        "\treturn []Order{{Total: 42}}",
+        "}",
+        "",
+        "func main() {",
+        "\tstart := time.Now()",
+        "\tusers := make(chan User)",
+        "\torders := make(chan []Order)",
+        "",
+        "\tgo func() { users <- fetchUser(7) }() // each call runs in its own goroutine",
+        "\tgo func() { orders <- fetchOrders(7) }()",
+        "",
+        "\tu, o := <-users, <-orders // receiving blocks this goroutine, not an OS thread",
+        "\tfmt.Println(u.Name, len(o), time.Since(start).Round(10*time.Millisecond))",
+        "\t// Ada 1 100ms",
+        "}"
+      ]
+    },
+    {
+      "type": "text",
+      "title": "What asynchrony costs",
+      "body": [
+        "Colour. Bob Nystrom’s 2015 essay describes the split: synchronous functions return values, async ones return a `Task<T>` or `Future<T>` wrapper, and you can only unwrap it by making your own function async too. `async`/`await` makes red functions much easier to call but leaves the two colours, and the colour spreads up through every caller and into higher-order functions such as `map`.",
+        "Lost context. JEP 444 lists what Java developers gave up by moving to the asynchronous style: each stage of a request may run on a different thread, so stack traces provide no usable context, debuggers can’t step through request-handling logic, and profilers can’t tie an operation’s cost to its caller. Virtual threads keep a real stack per request, so debuggers and thread dumps work as they do for platform threads.",
+        "Blocking the loop. On a single-threaded event loop, one callback that computes for a long time, or calls a blocking API, stalls every other task. See the event-loop concept for how Node.js and Python’s asyncio handle this."
+      ]
+    }
+  ],
+  "kinds": [
+    {
+      "id": "callbacks",
+      "name": "Callbacks",
+      "summary": "Pass a function to the operation; the runtime calls it with the result when the work is done.",
+      "body": [
+        "The oldest and simplest form. The caller hands the operation a function and moves on; when the data arrives, the runtime calls that function with it. Node.js adopted a convention for failures: the first parameter of every callback is the error object, `null` when there was none, so each callback starts by checking it.",
+        "The trouble starts when one step depends on another. Each dependent call nests inside the previous callback, and the Node.js docs show four levels of nesting as a mild case. Bob Nystrom points out what the closures are doing: because the caller’s stack is gone by the time the result arrives, every local variable the next step needs has to be captured and moved to the heap by hand. Rich Hickey’s critique is that callbacks tangle communication with flow of control, which is why handlers come with rules like “don’t do too much work in your handler”.",
+        "JavaScript answered with promises (ES2015) and `async`/`await` (ES2017). Callbacks still sit underneath almost every event loop and UI toolkit, and they’re fine for one-shot events such as a click handler."
+      ],
+      "sources": [
+        {
+          "label": "Node.js Learn: JavaScript asynchronous programming and callbacks (error-first callbacks, nesting, Promises in ES6, async/await in ES2017)",
+          "url": "https://nodejs.org/en/learn/asynchronous-work/javascript-asynchronous-programming-and-callbacks"
+        },
+        {
+          "label": "Bob Nystrom: What Color is Your Function? (Feb 2015)",
+          "url": "https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/"
+        },
+        {
+          "label": "Rich Hickey: Clojure core.async Channels (28 June 2013)",
+          "url": "https://clojure.org/news/2013/06/28/clojure-clore-async-channels"
+        }
+      ]
+    },
+    {
+      "id": "futures-promises",
+      "name": "Futures and promises",
+      "summary": "An object that stands for a value that doesn’t exist yet, which you can pass around, wait on or chain more work onto.",
+      "body": [
+        "Instead of taking a callback, the operation returns a placeholder at once: a future or promise that will later hold the value or the error. Daniel Friedman and David Wise proposed the term “promise” in 1976; Henry Baker and Carl Hewitt’s 1977 “call-by-future” bound each argument of a function to a separate process, a “future”, evaluating it in parallel. Barbara Liskov and Liuba Shrira’s 1988 promises were built for asynchronous remote calls: the caller keeps running and later claims the result, including any exception, in a type-safe way.",
+        "Because the placeholder is a value, futures compose. Java’s `Future` (Java 5) offers `get()`, which waits if necessary for the result, so it still blocks a thread; `CompletableFuture` (Java 8) chains callbacks instead. JavaScript’s `Promise.all` combines many promises into one that fulfils when all of them do, or rejects with the first rejection.",
+        "Chaining with `then` is cleaner than nesting callbacks but still splits one piece of logic into many small functions, which is what `async`/`await` was invented to hide. A JavaScript promise is close to a monad; see the monads concept."
+      ],
+      "sources": [
+        {
+          "label": "Wikipedia: Futures and promises (Friedman and Wise 1976; Java 5; F# asynchronous workflows)",
+          "url": "https://en.wikipedia.org/wiki/Futures_and_promises"
+        },
+        {
+          "label": "Baker and Hewitt: The Incremental Garbage Collection of Processes (MIT AI Lab Working Paper 149, June 1977), call-by-future",
+          "url": "https://dspace.mit.edu/handle/1721.1/41969"
+        },
+        {
+          "label": "Liskov and Shrira: Promises, linguistic support for efficient asynchronous procedure calls in distributed systems (PLDI 1988)",
+          "url": "https://www.heather.miller.am/teaching/cs7680/pdfs/liskov1988.pdf"
+        },
+        {
+          "label": "Java SE 21 API: Future (get waits for the result; since 1.5)",
+          "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/Future.html"
+        },
+        {
+          "label": "Java SE 21 API: CompletableFuture (since 1.8)",
+          "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/CompletableFuture.html"
+        },
+        {
+          "label": "MDN: Promise.all() (fulfills when all fulfill, rejects on the first rejection)",
+          "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/all"
+        }
+      ]
+    },
+    {
+      "id": "async-await",
+      "name": "async/await",
+      "summary": "Syntax that lets code built on futures read top to bottom: `await` suspends the function and frees its thread until the result arrives.",
+      "body": [
+        "An `async` function always returns a promise or task. Inside it, `await` suspends the function until the awaited promise settles and hands control back to the caller; when the value arrives, the function resumes on the next line with ordinary variables and `try`/`catch`. The compiler does the work callbacks did by hand: in C#, as in Clojure’s `go` blocks, it rewrites the function into a state machine that can be paused at each `await` and resumed later.",
+        "C# 5.0 brought the pattern to the mainstream in August 2012, following F#’s asynchronous workflows. Python 3.5 added `async def` and `await` (PEP 492, 2015), JavaScript added async functions in ECMAScript 2017, and Rust stabilised `async`/`.await` in Rust 1.39 (November 2019). Rust’s are lazy: an `async` block doesn’t run at all until it’s awaited.",
+        "It’s the most readable of the explicit models, but it keeps the two colours: an `async` function can only be awaited from another `async` function, and calling it from synchronous code means blocking on it or restructuring the caller."
+      ],
+      "sources": [
+        {
+          "label": "MDN: async function (always returns a promise; await suspends and yields control)",
+          "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/async_function"
+        },
+        {
+          "label": "Rich Hickey: Clojure core.async Channels (28 June 2013)",
+          "url": "https://clojure.org/news/2013/06/28/clojure-clore-async-channels"
+        },
+        {
+          "label": "Microsoft Learn: The history of C#, C# version 5.0 (released August 2012 with Visual Studio 2012; async and await)",
+          "url": "https://learn.microsoft.com/en-us/dotnet/csharp/whats-new/csharp-version-history"
+        },
+        {
+          "label": "Wikipedia: Futures and promises (Friedman and Wise 1976; Java 5; F# asynchronous workflows)",
+          "url": "https://en.wikipedia.org/wiki/Futures_and_promises"
+        },
+        {
+          "label": "PEP 492: Coroutines with async and await syntax (created April 2015, Python 3.5)",
+          "url": "https://peps.python.org/pep-0492/"
+        },
+        {
+          "label": "ECMA-262 8th edition, ECMAScript 2017 (June 2017): introduces async functions",
+          "url": "https://262.ecma-international.org/8.0/"
+        },
+        {
+          "label": "Rust Blog: Async-await on stable Rust! (November 2019, Rust 1.39)",
+          "url": "https://blog.rust-lang.org/2019/11/07/Async-await-stable/"
+        },
+        {
+          "label": "Rust std docs: the async keyword (returns a Future; not run until awaited)",
+          "url": "https://doc.rust-lang.org/std/keyword.async.html"
+        },
+        {
+          "label": "Bob Nystrom: What Color is Your Function? (Feb 2015)",
+          "url": "https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/"
+        }
+      ]
+    },
+    {
+      "id": "green-threads",
+      "name": "Green threads",
+      "summary": "Threads managed by the language runtime, cheap enough to have one per task, so ordinary blocking code scales like async code.",
+      "body": [
+        "Instead of changing how code is written, make threads cheap. The runtime multiplexes many lightweight threads onto a few OS threads; when one blocks on I/O, the runtime parks it and runs another on the same OS thread. Go’s goroutines start with a stack of a few kilobytes that grows and shrinks as needed, and the Go FAQ calls hundreds of thousands of them in one address space practical. Java 21’s virtual threads do the same for the JDK: a blocking call performs a non-blocking OS call underneath and suspends the virtual thread, which holds an OS thread only while it computes; JEP 444 runs a million of them. A new Erlang process (on the BEAM virtual machine) takes 327 words of memory.",
+        "The payoff is no colour and real stacks: every function is ordinary, and debuggers, profilers and stack traces see one request as one thread. Bob Nystrom names Go, Lua and Ruby as languages that avoid the colour problem because they can switch between independent call stacks.",
+        "The limits are those of any threads: CPU-bound work still needs cores, shared memory still needs locks (or channels and mailboxes), and a Java virtual thread that blocks inside a `synchronized` block or a native method stays pinned to its OS thread."
+      ],
+      "sources": [
+        {
+          "label": "Go FAQ: Why build concurrency on the ideas of CSP? and Why goroutines instead of threads?",
+          "url": "https://go.dev/doc/faq#goroutines"
+        },
+        {
+          "label": "OpenJDK: JEP 444, Virtual Threads (Little’s law, OS threads are costly, the asynchronous style loses stack traces and debuggers)",
+          "url": "https://openjdk.org/jeps/444"
+        },
+        {
+          "label": "Erlang/OTP docs: Efficiency guide, Processes (a new process uses 327 words)",
+          "url": "https://www.erlang.org/doc/system/eff_guide_processes.html"
+        },
+        {
+          "label": "Bob Nystrom: What Color is Your Function? (Feb 2015)",
+          "url": "https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/"
+        }
+      ]
+    },
+    {
+      "id": "csp-channels",
+      "name": "CSP channels",
+      "summary": "Independent sequential processes that wait on each other by sending and receiving values over channels, after Hoare’s Communicating Sequential Processes.",
+      "body": [
+        "Tony Hoare’s 1978 paper made input and output basic primitives of programming: a process that sends waits until the receiving process is ready, and the two commands then happen together, with no buffer between them. Hoare’s processes named each other directly; Go took a different branch of the family tree and made the channel itself a first-class value that any goroutine can hold. An unbuffered Go channel is still Hoare’s rendezvous: the sender blocks until the receiver has the value. Go’s slogan for the style is “Do not communicate by sharing memory; instead, share memory by communicating.”",
+        "Clojure’s `core.async` (2013) brought channels to the JVM and to JavaScript as a library. Its `go` macro rewrites a block into a state machine that is parked at each channel operation and releases its thread, like C#’s `async`. Rich Hickey recommends bounded buffers over unbounded ones, because a full channel that blocks the sender is a natural form of back pressure.",
+        "Channels decouple the two sides: neither knows who is on the other end, which is Hickey’s argument for them over actors. The cost is that nothing stops two processes waiting on each other forever, so deadlocks are possible and timeouts are up to you."
+      ],
+      "sources": [
+        {
+          "label": "C. A. R. Hoare: Communicating Sequential Processes (Communications of the ACM, August 1978)",
+          "url": "https://www.cs.cmu.edu/~crary/819-f09/Hoare78.pdf"
+        },
+        {
+          "label": "Go FAQ: Why build concurrency on the ideas of CSP? and Why goroutines instead of threads?",
+          "url": "https://go.dev/doc/faq#goroutines"
+        },
+        {
+          "label": "Effective Go: Concurrency (share by communicating; unbuffered channels)",
+          "url": "https://go.dev/doc/effective_go#concurrency"
+        },
+        {
+          "label": "Rich Hickey: Clojure core.async Channels (28 June 2013)",
+          "url": "https://clojure.org/news/2013/06/28/clojure-clore-async-channels"
+        }
+      ]
+    },
+    {
+      "id": "actor-messages",
+      "name": "Actor messages",
+      "summary": "Each actor has its own mailbox and handles one message at a time; it sends messages without waiting and gets results back as more messages.",
+      "body": [
+        "Carl Hewitt’s 1973 actor formalism built everything from one kind of behaviour: sending messages to actors. In Erlang every process has its own queue of incoming messages, and `receive` takes the first one that matches a pattern. Processes share no data, which is why Erlang calls them processes rather than threads.",
+        "Sending doesn’t hand over the caller’s thread, so the sender carries on, and a result comes back as a reply message rather than a return value. Because each actor handles at most one message at a time, its state needs no locks; the Akka docs describe millions of actors scheduled on a dozen threads.",
+        "With no shared call stack between sender and receiver, a failure can’t be thrown back to the caller. Actor systems handle it with supervision instead: in Erlang/OTP, supervisor processes monitor workers and restart them when something goes wrong. The actors concept covers placing actors across a cluster."
+      ],
+      "sources": [
+        {
+          "label": "Hewitt, Bishop and Steiger: A Universal Modular ACTOR Formalism for Artificial Intelligence (IJCAI 1973)",
+          "url": "https://www.ijcai.org/Proceedings/73/Papers/027B.pdf"
+        },
+        {
+          "label": "Erlang/OTP docs: Concurrent programming (processes share no data; each has its own message queue)",
+          "url": "https://www.erlang.org/doc/system/conc_prog.html"
+        },
+        {
+          "label": "Akka docs: How the actor model meets the needs of modern, distributed systems (mailboxes, one message at a time, no shared call stack)",
+          "url": "https://doc.akka.io/libraries/akka-core/current/typed/guide/actors-intro.html"
+        },
+        {
+          "label": "Erlang/OTP docs: Design principles (supervisors monitor and restart workers)",
+          "url": "https://www.erlang.org/doc/system/design_principles.html"
+        }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "The building blocks are older than most languages that use them. In 1973 Carl Hewitt and colleagues described a model in which every computation is actors sending messages. In 1976 Daniel Friedman and David Wise proposed the “promise”, and in 1977 Henry Baker and Carl Hewitt described call-by-future, where each argument is evaluated by its own process. In 1978 Tony Hoare’s “Communicating Sequential Processes” made sending and receiving primitive operations. Barbara Liskov and Liuba Shrira’s 1988 promises applied the idea to asynchronous calls between machines.",
+      "Mainstream servers meanwhile ran a thread per request, and OS threads proved too costly to have one per waiting connection. The way out was to stop holding a thread while waiting: event loops and callbacks, then futures (Java 5’s `Future`; JavaScript promises in ES2015) and finally `async`/`await`, which grew out of F#’s asynchronous workflows into C# 5.0 in 2012, Python 3.5 in 2015, ECMAScript 2017 and Rust 1.39 in 2019. In 2015 Bob Nystrom’s essay “What Color is Your Function?” named the price: every async function divides a codebase in two.",
+      "Another line of languages made threads cheap instead. Erlang, begun at Ericsson in 1986, runs every task as a tiny process with a mailbox. Go, open-sourced by Google in November 2009, put Hoare’s ideas into a procedural language with goroutines and channels, and Clojure’s `core.async` brought channels to the JVM and JavaScript in 2013. Java 21, released in September 2023, added virtual threads explicitly to give thread-per-request code the scalability of the asynchronous style without rewriting it."
+    ],
+    "choices": [
+      {
+        "choice": "Make the wait visible in the type: `Promise<T>`, `Task<T>`, `Future<T>`",
+        "why": "On an event loop the call stack is discarded while the OS does the I/O, so the program has to keep its place somewhere else. A future object, and later a compiler-generated state machine behind `await`, keeps that state on the heap instead of in closures written by hand."
+      },
+      {
+        "choice": "Make threads cheap instead of changing the code",
+        "why": "The asynchronous style scaled but lost stack traces, debuggers and profilers, and split every API in two. Goroutines and virtual threads keep blocking code and real stacks, and let the runtime free the OS thread underneath."
+      },
+      {
+        "choice": "Communicate over channels rather than shared memory",
+        "why": "Go’s designers found that low-level primitives such as mutexes and condition variables made concurrency hard, and that Hoare’s CSP fitted a procedural language well. Passing a value over a channel also passes its ownership, so data races can’t occur by design."
+      },
+      {
+        "choice": "One mailbox per actor, one message at a time",
+        "why": "If only messages can change an actor’s state and they’re processed one at a time, the actor’s invariants hold without locks, and senders never block."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "1973",
+        "text": "Hewitt, Bishop and Steiger describe the actor model"
+      },
+      {
+        "year": "1977",
+        "text": "Baker and Hewitt describe call-by-future"
+      },
+      {
+        "year": "1978",
+        "text": "Hoare publishes “Communicating Sequential Processes”"
+      },
+      {
+        "year": "1988",
+        "text": "Liskov and Shrira’s promises for asynchronous remote calls"
+      },
+      {
+        "year": "2009",
+        "text": "Google open-sources Go, with goroutines and channels"
+      },
+      {
+        "year": "2012",
+        "text": "C# 5.0 ships `async` and `await`"
+      },
+      {
+        "year": "2017",
+        "text": "ECMAScript 2017 adds async functions to JavaScript"
+      },
+      {
+        "year": "2023",
+        "text": "Java 21 ships virtual threads"
+      }
+    ],
+    "sources": [
+      {
+        "label": "Hewitt, Bishop and Steiger: A Universal Modular ACTOR Formalism for Artificial Intelligence (IJCAI 1973)",
+        "url": "https://www.ijcai.org/Proceedings/73/Papers/027B.pdf"
+      },
+      {
+        "label": "Wikipedia: Futures and promises (Friedman and Wise 1976; Java 5; F# asynchronous workflows)",
+        "url": "https://en.wikipedia.org/wiki/Futures_and_promises"
+      },
+      {
+        "label": "Baker and Hewitt: The Incremental Garbage Collection of Processes (MIT AI Lab Working Paper 149, June 1977), call-by-future",
+        "url": "https://dspace.mit.edu/handle/1721.1/41969"
+      },
+      {
+        "label": "C. A. R. Hoare: Communicating Sequential Processes (Communications of the ACM, August 1978)",
+        "url": "https://www.cs.cmu.edu/~crary/819-f09/Hoare78.pdf"
+      },
+      {
+        "label": "Liskov and Shrira: Promises, linguistic support for efficient asynchronous procedure calls in distributed systems (PLDI 1988)",
+        "url": "https://www.heather.miller.am/teaching/cs7680/pdfs/liskov1988.pdf"
+      },
+      {
+        "label": "OpenJDK: JEP 444, Virtual Threads (Little’s law, OS threads are costly, the asynchronous style loses stack traces and debuggers)",
+        "url": "https://openjdk.org/jeps/444"
+      },
+      {
+        "label": "Java SE 21 API: Future (get waits for the result; since 1.5)",
+        "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/Future.html"
+      },
+      {
+        "label": "Node.js Learn: JavaScript asynchronous programming and callbacks (error-first callbacks, nesting, Promises in ES6, async/await in ES2017)",
+        "url": "https://nodejs.org/en/learn/asynchronous-work/javascript-asynchronous-programming-and-callbacks"
+      },
+      {
+        "label": "Microsoft Learn: The history of C#, C# version 5.0 (released August 2012 with Visual Studio 2012; async and await)",
+        "url": "https://learn.microsoft.com/en-us/dotnet/csharp/whats-new/csharp-version-history"
+      },
+      {
+        "label": "PEP 492: Coroutines with async and await syntax (created April 2015, Python 3.5)",
+        "url": "https://peps.python.org/pep-0492/"
+      },
+      {
+        "label": "ECMA-262 8th edition, ECMAScript 2017 (June 2017): introduces async functions",
+        "url": "https://262.ecma-international.org/8.0/"
+      },
+      {
+        "label": "Rust Blog: Async-await on stable Rust! (November 2019, Rust 1.39)",
+        "url": "https://blog.rust-lang.org/2019/11/07/Async-await-stable/"
+      },
+      {
+        "label": "Bob Nystrom: What Color is Your Function? (Feb 2015)",
+        "url": "https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/"
+      },
+      {
+        "label": "Joe Armstrong: Making reliable distributed systems in the presence of software errors (PhD thesis, 2003), Erlang’s history from 1986",
+        "url": "https://erlang.org/download/armstrong_thesis_2003.pdf"
+      },
+      {
+        "label": "Google Open Source Blog: Hey! Ho! Let’s Go! (10 November 2009)",
+        "url": "https://opensource.googleblog.com/2009/11/hey-ho-lets-go.html"
+      },
+      {
+        "label": "Go FAQ: Why build concurrency on the ideas of CSP? and Why goroutines instead of threads?",
+        "url": "https://go.dev/doc/faq#goroutines"
+      },
+      {
+        "label": "Effective Go: Concurrency (share by communicating; unbuffered channels)",
+        "url": "https://go.dev/doc/effective_go#concurrency"
+      },
+      {
+        "label": "Rich Hickey: Clojure core.async Channels (28 June 2013)",
+        "url": "https://clojure.org/news/2013/06/28/clojure-clore-async-channels"
+      },
+      {
+        "label": "OpenJDK: JDK 21 (General Availability 19 September 2023)",
+        "url": "https://openjdk.org/projects/jdk/21/"
+      },
+      {
+        "label": "Akka docs: How the actor model meets the needs of modern, distributed systems (mailboxes, one message at a time, no shared call stack)",
+        "url": "https://doc.akka.io/libraries/akka-core/current/typed/guide/actors-intro.html"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "OpenJDK: JEP 444, Virtual Threads (Little’s law, OS threads are costly, the asynchronous style loses stack traces and debuggers)",
+      "url": "https://openjdk.org/jeps/444"
+    },
+    {
+      "label": "Bob Nystrom: What Color is Your Function? (Feb 2015)",
+      "url": "https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/"
+    },
+    {
+      "label": "The Go Blog: Concurrency is not parallelism (Rob Pike’s Waza talk, 16 January 2013)",
+      "url": "https://go.dev/blog/waza-talk"
+    },
+    {
+      "label": "Node.js: About Node.js (many connections handled concurrently, without threads)",
+      "url": "https://nodejs.org/en/about"
+    },
+    {
+      "label": "Microsoft Learn: Asynchronous programming with async and await (breakfast example, Task.WhenAll, don’t block)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/"
+    },
+    {
+      "label": "MDN: async function (always returns a promise; await suspends and yields control)",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/async_function"
+    },
+    {
+      "label": "MDN: Promise.all() (fulfills when all fulfill, rejects on the first rejection)",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/all"
+    },
+    {
+      "label": "Node.js Learn: JavaScript asynchronous programming and callbacks (error-first callbacks, nesting, Promises in ES6, async/await in ES2017)",
+      "url": "https://nodejs.org/en/learn/asynchronous-work/javascript-asynchronous-programming-and-callbacks"
+    },
+    {
+      "label": "Rich Hickey: Clojure core.async Channels (28 June 2013)",
+      "url": "https://clojure.org/news/2013/06/28/clojure-clore-async-channels"
+    },
+    {
+      "label": "Go FAQ: Why build concurrency on the ideas of CSP? and Why goroutines instead of threads?",
+      "url": "https://go.dev/doc/faq#goroutines"
+    },
+    {
+      "label": "Effective Go: Concurrency (share by communicating; unbuffered channels)",
+      "url": "https://go.dev/doc/effective_go#concurrency"
+    },
+    {
+      "label": "C. A. R. Hoare: Communicating Sequential Processes (Communications of the ACM, August 1978)",
+      "url": "https://www.cs.cmu.edu/~crary/819-f09/Hoare78.pdf"
+    },
+    {
+      "label": "Hewitt, Bishop and Steiger: A Universal Modular ACTOR Formalism for Artificial Intelligence (IJCAI 1973)",
+      "url": "https://www.ijcai.org/Proceedings/73/Papers/027B.pdf"
+    },
+    {
+      "label": "Akka docs: How the actor model meets the needs of modern, distributed systems (mailboxes, one message at a time, no shared call stack)",
+      "url": "https://doc.akka.io/libraries/akka-core/current/typed/guide/actors-intro.html"
+    },
+    {
+      "label": "Erlang/OTP docs: Concurrent programming (processes share no data; each has its own message queue)",
+      "url": "https://www.erlang.org/doc/system/conc_prog.html"
+    },
+    {
+      "label": "Erlang/OTP docs: Efficiency guide, Processes (a new process uses 327 words)",
+      "url": "https://www.erlang.org/doc/system/eff_guide_processes.html"
+    },
+    {
+      "label": "Erlang/OTP docs: Design principles (supervisors monitor and restart workers)",
+      "url": "https://www.erlang.org/doc/system/design_principles.html"
+    },
+    {
+      "label": "Baker and Hewitt: The Incremental Garbage Collection of Processes (MIT AI Lab Working Paper 149, June 1977), call-by-future",
+      "url": "https://dspace.mit.edu/handle/1721.1/41969"
+    },
+    {
+      "label": "Liskov and Shrira: Promises, linguistic support for efficient asynchronous procedure calls in distributed systems (PLDI 1988)",
+      "url": "https://www.heather.miller.am/teaching/cs7680/pdfs/liskov1988.pdf"
+    },
+    {
+      "label": "Wikipedia: Futures and promises (Friedman and Wise 1976; Java 5; F# asynchronous workflows)",
+      "url": "https://en.wikipedia.org/wiki/Futures_and_promises"
+    },
+    {
+      "label": "Java SE 21 API: Future (get waits for the result; since 1.5)",
+      "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/Future.html"
+    },
+    {
+      "label": "Java SE 21 API: CompletableFuture (since 1.8)",
+      "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/CompletableFuture.html"
+    },
+    {
+      "label": "Microsoft Learn: The history of C#, C# version 5.0 (released August 2012 with Visual Studio 2012; async and await)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/whats-new/csharp-version-history"
+    },
+    {
+      "label": "ECMA-262 8th edition, ECMAScript 2017 (June 2017): introduces async functions",
+      "url": "https://262.ecma-international.org/8.0/"
+    },
+    {
+      "label": "PEP 492: Coroutines with async and await syntax (created April 2015, Python 3.5)",
+      "url": "https://peps.python.org/pep-0492/"
+    },
+    {
+      "label": "Rust Blog: Async-await on stable Rust! (November 2019, Rust 1.39)",
+      "url": "https://blog.rust-lang.org/2019/11/07/Async-await-stable/"
+    },
+    {
+      "label": "Rust std docs: the async keyword (returns a Future; not run until awaited)",
+      "url": "https://doc.rust-lang.org/std/keyword.async.html"
+    }
+  ]
+}

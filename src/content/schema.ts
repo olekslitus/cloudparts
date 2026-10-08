@@ -145,7 +145,7 @@ export const diagram = z
 
 /* ------------------------------------------------------------- collections */
 
-export const LANGS = ['bash', 'c', 'cpp', 'dockerfile', 'go', 'haskell', 'hcl', 'http', 'java', 'js', 'json', 'nginx', 'python', 'rust', 'sql', 'text', 'ts', 'yaml'] as const;
+export const LANGS = ['bash', 'c', 'clojure', 'cpp', 'csharp', 'dockerfile', 'elixir', 'erlang', 'fsharp', 'go', 'haskell', 'hcl', 'http', 'java', 'js', 'json', 'nginx', 'python', 'racket', 'rust', 'scala', 'sql', 'text', 'ts', 'yaml', 'zig'] as const;
 
 const source = z
   .union([z.string(), z.array(z.string())])

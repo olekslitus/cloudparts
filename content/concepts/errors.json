@@ -1,0 +1,487 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Errors and exceptions",
+  "category": "code",
+  "order": 45,
+  "summary": "How a function reports that it couldn’t do its job, either as a value the caller has to check or as an exception that jumps up the call stack to whoever catches it, and why expected failures and bugs deserve different treatment.",
+  "howItWorks": "Every function that can fail needs a way to say so. The oldest is the return code: a C system call returns `-1` and sets `errno` to say what went wrong, and `errno` means something only if the caller checked the return value first. Nothing forces the check. Exceptions move failure off the normal path. `throw` stops the current function, and the runtime unwinds the call stack frame by frame, running `finally` blocks (destructors in C++) on the way, until it finds a `catch` for that type of exception. The functions in between contain no error-handling code at all; if nothing catches it, the program stops with a stack trace. Java added checked exceptions: the compiler insists that each one is either caught or declared in the method’s `throws` clause, while `RuntimeException`, `Error` and their subclasses are unchecked. Go and Rust went back to returning errors, with types to help. A Go function returns an `error` as its last value, `nil` meaning success. A Rust function returns `Result<T, E>`, and the caller can’t reach the `T` without dealing with the `E`; the `?` operator passes an error up in one character. A second line cuts across all of these mechanisms: expected failures, such as a missing file, bad input or a timeout, which a correct program must handle, versus bugs, such as an index out of range or a broken invariant, after which the program’s own state can’t be trusted. Rust uses `Result` for the first and `panic!` for the second, Go uses `error` and `panic`, and Java’s guideline maps them to checked and unchecked exceptions. Erlang goes furthest with bugs: let the process crash, and let a supervisor restart it.",
+  "analogy": "A kitchen where a step goes wrong. With return codes, each cook writes the result of their step on a slip, and the next cook is supposed to read it before carrying on. With exceptions, the cook rings a bell; everyone between them and the head chef turns off their burners (the `finally` blocks) and stops, and the first person whose job covers that kind of problem deals with it.",
+  "useWhen": [
+    "Error values (Go’s `error`, Rust’s `Result`) for failures callers are expected to handle: missing files, bad input, timeouts",
+    "Exceptions where the language and its libraries are built on them (Java, C#, Python, JavaScript), with handlers at a few boundaries such as one per request",
+    "Panics, assertions or a crash for bugs and broken invariants, where carrying on would work with corrupt state",
+    "Let it crash, with supervisors, in Erlang and Elixir systems made of small isolated processes"
+  ],
+  "avoidWhen": [
+    "Exceptions as ordinary control flow, such as a lookup that misses half the time",
+    "Catching every exception and carrying on (`catch (Exception e) {}`), which turns bugs into silent wrong answers",
+    "Panicking in a library on expected failures such as bad user input; return an error and let the caller decide",
+    "Return codes that callers can ignore, in code where nobody checks them"
+  ],
+  "example": "A service reads its port from `port.txt`. Three things can go wrong that a correct program must expect: the file is missing (fall back to 8080), it says `http` (reject it and name the file), or it says `70000` (reject it: the code accepts 1 to 65535). In Go, `parsePort` returns `(0, err)` for the last two, wrapped with `%w` so the caller can test `errors.Is(err, ErrOutOfRange)`. In Java, the missing file is a checked `IOException` the compiler makes `main` deal with, and the bad number is an unchecked `NumberFormatException`. A fourth thing is a bug, not a failure: reading `args[5]` when there are no arguments. Go panics, unwinds the stack and exits with a stack trace, which is the right outcome: the code is wrong and needs fixing, not handling.",
+  "snippet": {
+    "lang": "go",
+    "source": [
+      "package main",
+      "",
+      "import (",
+      "\t\"errors\"",
+      "\t\"fmt\"",
+      "\t\"os\"",
+      "\t\"strconv\"",
+      ")",
+      "",
+      "var ErrOutOfRange = errors.New(\"port out of range\")",
+      "",
+      "// An expected failure is an ordinary return value.",
+      "func parsePort(s string) (int, error) {",
+      "\tn, err := strconv.Atoi(s)",
+      "\tif err != nil {",
+      "\t\treturn 0, fmt.Errorf(\"parse port %q: %w\", s, err) // wrap, keep the cause",
+      "\t}",
+      "\tif n < 1 || n > 65535 {",
+      "\t\treturn 0, fmt.Errorf(\"parse port %d: %w\", n, ErrOutOfRange)",
+      "\t}",
+      "\treturn n, nil",
+      "}",
+      "",
+      "func main() {",
+      "\tfor _, s := range []string{\"8080\", \"http\", \"70000\"} {",
+      "\t\tport, err := parsePort(s)",
+      "\t\tswitch {",
+      "\t\tcase errors.Is(err, ErrOutOfRange):",
+      "\t\t\tfmt.Println(\"rejected:\", err)",
+      "\t\tcase err != nil:",
+      "\t\t\tfmt.Println(\"error:\", err)",
+      "\t\tdefault:",
+      "\t\t\tfmt.Println(\"ok:\", port)",
+      "\t\t}",
+      "\t}",
+      "\t// ok: 8080",
+      "\t// error: parse port \"http\": strconv.Atoi: parsing \"http\": invalid syntax",
+      "\t// rejected: parse port 70000: port out of range",
+      "",
+      "\t// A bug is different: indexing past the end panics, unwinds and exits.",
+      "\targs := os.Args[1:]",
+      "\tfmt.Println(args[5]) // panic: runtime error: index out of range [5] with length 0",
+      "}"
+    ]
+  },
+  "related": [
+    "monads",
+    "optional-values",
+    "error-tracking",
+    "actors"
+  ],
+  "sections": [
+    {
+      "type": "table",
+      "title": "How languages report failure",
+      "intro": "Most languages pick one main mechanism for expected failures and a second, blunter one for bugs.",
+      "corner": "Language",
+      "columns": [
+        "Expected failures",
+        "Bugs and unrecoverable errors",
+        "Does the compiler make you handle it?",
+        "Cleanup on the way out"
+      ],
+      "rows": [
+        {
+          "label": "C",
+          "values": [
+            "Return value (often `-1` or `NULL`) plus `errno`",
+            "No separate mechanism; C has no exceptions",
+            "No",
+            "By hand, on every path"
+          ]
+        },
+        {
+          "label": "C++",
+          "values": [
+            "Exceptions: `throw` any type, `catch` by type",
+            "Same exceptions",
+            "No: you can’t tell from a function which exceptions it may throw",
+            "Destructors run as the stack unwinds (RAII)"
+          ]
+        },
+        {
+          "label": "Java",
+          "values": [
+            "Checked exceptions such as `IOException`",
+            "Unchecked: `RuntimeException`, `Error` and subclasses",
+            "Yes for checked exceptions: catch them or declare them in `throws`",
+            "`finally`"
+          ]
+        },
+        {
+          "label": "C#",
+          "values": [
+            "Exceptions",
+            "Same exceptions",
+            "No: C# left checked exceptions out",
+            "`finally`, `using`"
+          ]
+        },
+        {
+          "label": "Kotlin",
+          "values": [
+            "Exceptions",
+            "Same exceptions",
+            "No: every exception is unchecked",
+            "`finally`"
+          ]
+        },
+        {
+          "label": "Python",
+          "values": [
+            "Exceptions, used freely (the “easier to ask forgiveness” style)",
+            "Same exceptions",
+            "No",
+            "`finally`"
+          ]
+        },
+        {
+          "label": "JavaScript",
+          "values": [
+            "Exceptions, and rejected promises in async code",
+            "Same exceptions",
+            "No",
+            "`finally`"
+          ]
+        },
+        {
+          "label": "Go",
+          "values": [
+            "An `error` as the last return value; `nil` means success",
+            "`panic`; `recover` in a deferred function",
+            "No: checking `err != nil` is a convention",
+            "`defer`"
+          ]
+        },
+        {
+          "label": "Rust",
+          "values": [
+            "`Result<T, E>`, passed up with `?`",
+            "`panic!`, which unwinds or aborts",
+            "Yes: the value is inside the `Result`, so you must deal with the error to use it",
+            "Values are cleaned up as a panic unwinds"
+          ]
+        },
+        {
+          "label": "Swift",
+          "values": [
+            "`throws` functions, called with `try`",
+            "`try!` turns a thrown error into a runtime error",
+            "Yes: every call that can throw is marked `try` and handled or propagated",
+            "`defer`"
+          ]
+        },
+        {
+          "label": "Erlang",
+          "values": [
+            "`{ok, Value}` or `{error, Reason}` tuples",
+            "Let the process crash; a supervisor restarts it",
+            "No",
+            "A failed process stops; linked processes get an exit signal"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Expected failures are not bugs",
+      "body": [
+        "Joe Duffy, describing the error model of Microsoft’s Midori operating system, put the line sharply. A recoverable error is a predictable, often planned situation: input that doesn’t parse, a transient network failure. The program must cope, by telling the user, retrying or giving up on that operation. A bug is an error the programmer didn’t expect: the logic is wrong, so every data structure the code could reach is suspect. Midori made no attempt to recover from bugs: they triggered “abandonment”, its name for failing fast, which tears down the surrounding context (in C# and C++ the process, in Go the goroutine, in Rust the thread).",
+        "The Rust book makes the same split: `Result` for failures that are an expected possibility the caller must decide how to handle, and `panic!` when a contract is broken, because that always means a bug in the calling code. The Java tutorial’s guideline is the same idea in exception form: if a client can reasonably be expected to recover, make it a checked exception; if not, make it unchecked.",
+        "Joe Armstrong’s thesis on Erlang draws it from the other side: an exception is something the run-time system doesn’t know what to do with, and an error is something the programmer doesn’t know what to do with. Opening a missing file can be handled. Code that meets a case its specification never covered can’t, so rather than invent a defensive answer, let it crash and let another process fix the error."
+      ]
+    },
+    {
+      "type": "code",
+      "title": "Checked and unchecked exceptions in Java",
+      "intro": "`load` declares the checked `IOException`; delete `throws IOException` and the compiler stops with “unreported exception IOException; must be caught or declared to be thrown”. `Integer.parseInt` throws an unchecked `NumberFormatException` that nothing in its signature announces. The `finally` block runs on every way out of the `try`.",
+      "lang": "java",
+      "source": [
+        "import java.io.IOException;",
+        "import java.nio.file.Files;",
+        "import java.nio.file.Path;",
+        "",
+        "public class Config {",
+        "    // Checked: the signature must say `throws IOException`, and every caller",
+        "    // must catch it or declare it too, or the program does not compile.",
+        "    static String load(Path path) throws IOException {",
+        "        return Files.readString(path);",
+        "    }",
+        "",
+        "    // Unchecked: NumberFormatException extends RuntimeException,",
+        "    // so nothing in the signature warns the caller.",
+        "    static int port(String text) {",
+        "        return Integer.parseInt(text.strip());",
+        "    }",
+        "",
+        "    public static void main(String[] args) {",
+        "        try {",
+        "            System.out.println(port(load(Path.of(\"port.txt\"))));",
+        "        } catch (IOException e) {             // expected: the file may be missing",
+        "            System.out.println(\"no config, using 8080\");",
+        "        } catch (NumberFormatException e) {   // bad data in the file",
+        "            System.out.println(\"bad port: \" + e.getMessage());",
+        "        } finally {",
+        "            System.out.println(\"done\");       // runs on every path out of the try",
+        "        }",
+        "    }",
+        "}",
+        "// With no port.txt it prints:",
+        "// no config, using 8080",
+        "// done"
+      ]
+    },
+    {
+      "type": "text",
+      "title": "What a throw costs",
+      "body": [
+        "C++ was designed so that exception handling can be implemented with no run-time overhead for a program that never throws; the price is paid when an exception is thrown, as the runtime finds the handler and unwinds the stack. That fits its design assumption that exceptions are rare compared with function calls, and it is why exceptions make a poor tool for ordinary control flow.",
+        "Swift chose differently: its errors don’t unwind the call stack, and the docs say a `throw` performs about like a `return`. Error values in Go and Rust are ordinary return values, so they cost the same whether the call succeeds or fails."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "PL/I introduced ON-units around 1964: a block of code registered to run when a condition was raised, after which execution could resume where it had stopped. John Goodenough’s 1975 papers were the first on structured exception handling. Barbara Liskov’s CLU, whose exception mechanism was a goal from early 1974 and finished in the fall of 1977, chose the termination model instead: a call ends either normally or in one of the exceptions its specification lists. CLU’s designers rejected the resumption model of PL/I and Mesa as complex and rarely what was wanted, and they turned any exception a caller didn’t handle into a single `failure` exception, so a procedure could never raise something its specification didn’t mention.",
+      "Bjarne Stroustrup designed C++ exceptions between 1984 and 1989 with Andrew Koenig, for programs assembled from separately written libraries. They let exceptions travel through many levels to a handler, used class hierarchies to group them, and leaned on destructors to release resources during unwinding. The fiercest argument was termination against resumption; after about a year of debate the ANSI committee voted for termination by an overwhelming majority, persuaded by experience reports that every use of resumption had been a failure to keep levels of abstraction apart. Java 1.0 (January 1996) made the compiler check declared exceptions. C# deliberately left that out: in 2003 Anders Hejlsberg argued that checked exceptions break when a method’s exception list must change between versions and pile up across large systems, so programmers end up writing `throws Exception`.",
+      "The next generation moved away from exceptions for expected failures. Joe Armstrong’s 2003 thesis set out Erlang’s “let it crash” approach, built at Ericsson from 1986. Go, released in 2009, left out exceptions because tying them to `try`/`catch`/`finally` gives convoluted code and tempts programmers to treat ordinary errors as exceptional; Rob Pike’s “Errors are values” (2015) argued that errors are ordinary values a program can manipulate. Rust 1.0 (2015) shipped with `Result` for recoverable errors and `panic!` for bugs, and the `?` operator arrived in Rust 1.13 in 2016."
+    ],
+    "choices": [
+      {
+        "choice": "Termination, not resumption",
+        "why": "CLU found resumption complex and rarely wanted, and C++ adopted termination after experience reports from DEC, Sun, Texas Instruments and IBM showed that every use of resumption had mixed up levels of abstraction. Nearly every language since ends the throwing function rather than resuming it."
+      },
+      {
+        "choice": "Let exceptions travel many levels up",
+        "why": "C++ wanted only a few major interfaces to deal with errors, not every function to act as a firewall. The cost, as Stroustrup notes, is that you can no longer tell from a function which exceptions it may throw."
+      },
+      {
+        "choice": "Put exceptions in the method signature",
+        "why": "Java requires handlers for checked exceptions to reduce the number that go unhandled. C# left it out over Hejlsberg’s objections, versioning and scale, and Kotlin treats every exception as unchecked. Gosling’s reply is that the `throws` clause is part of a method’s interface like any other."
+      },
+      {
+        "choice": "Return errors as ordinary values",
+        "why": "Go’s designers thought exceptions tangled control flow and made ordinary failures look exceptional. A returned `error` or `Result` keeps the failure visible in the code, and in Rust the type system won’t let the caller use the value without handling it."
+      },
+      {
+        "choice": "Crash the process and restart it",
+        "why": "In Erlang, code that meets a case its specification doesn’t cover can’t do anything sensible, so it stops. Erlang processes share no data, so one process failing can’t corrupt another’s state, and a supervisor can simply restart it."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "1964",
+        "text": "PL/I introduces ON-units (circa)"
+      },
+      {
+        "year": "1975",
+        "text": "Goodenough publishes the first papers on structured exception handling"
+      },
+      {
+        "year": "1977",
+        "text": "CLU’s termination-model exception design is complete"
+      },
+      {
+        "year": "1990",
+        "text": "Koenig and Stroustrup publish “Exception Handling for C++”"
+      },
+      {
+        "year": "1996",
+        "text": "Java 1.0 ships, with compiler-checked exceptions"
+      },
+      {
+        "year": "2003",
+        "text": "Armstrong’s thesis sets out “let it crash”; Hejlsberg explains why C# has no checked exceptions"
+      },
+      {
+        "year": "2009",
+        "text": "Go is released without exceptions"
+      },
+      {
+        "year": "2015",
+        "text": "Rust 1.0 ships with `Result` and `panic!`"
+      }
+    ],
+    "sources": [
+      {
+        "label": "Wikipedia: Exception handling (programming), History (PL/I ON-units circa 1964; Goodenough 1975)",
+        "url": "https://en.wikipedia.org/wiki/Exception_handling_(programming)"
+      },
+      {
+        "label": "Barbara Liskov: A History of CLU (MIT LCS, April 1992; HOPL II), section 3.9 Exception Handling",
+        "url": "https://www.cs.tufts.edu/~nr/cs257/archive/barbara-liskov/clu-history.pdf"
+      },
+      {
+        "label": "Bjarne Stroustrup: A History of C++, 1979–1991 (HOPL II), section 6.4 Exception Handling",
+        "url": "https://www.stroustrup.com/hopl2.pdf"
+      },
+      {
+        "label": "Gosling, Joy and Steele: The Java Language Specification, first edition (1996), chapter 11 (checked exceptions)",
+        "url": "http://titanium.cs.berkeley.edu/doc/java-langspec-1.0.pdf"
+      },
+      {
+        "label": "JavaSoft press release: JavaSoft ships Java 1.0 (23 January 1996), via the java-interest list",
+        "url": "https://diswww.mit.edu/charon.mit.edu/java-interest/5056"
+      },
+      {
+        "label": "Artima: The Trouble with Checked Exceptions, a conversation with Anders Hejlsberg (18 August 2003)",
+        "url": "https://www.artima.com/articles/the-trouble-with-checked-exceptions"
+      },
+      {
+        "label": "Artima: Failure and Exceptions, a conversation with James Gosling (22 September 2003)",
+        "url": "https://www.artima.com/articles/failure-and-exceptions"
+      },
+      {
+        "label": "Joe Armstrong: Making reliable distributed systems in the presence of software errors (PhD thesis, 2003), section 4.4 Let it crash",
+        "url": "https://erlang.org/download/armstrong_thesis_2003.pdf"
+      },
+      {
+        "label": "Go FAQ: Why does Go not have exceptions?",
+        "url": "https://go.dev/doc/faq#exceptions"
+      },
+      {
+        "label": "Google Open Source Blog: Hey! Ho! Let’s Go! (10 November 2009)",
+        "url": "https://opensource.googleblog.com/2009/11/hey-ho-lets-go.html"
+      },
+      {
+        "label": "The Go Blog: Errors are values (Rob Pike, 12 January 2015)",
+        "url": "https://go.dev/blog/errors-are-values"
+      },
+      {
+        "label": "Rust Blog: Announcing Rust 1.0 (15 May 2015)",
+        "url": "https://blog.rust-lang.org/2015/05/15/Rust-1.0/"
+      },
+      {
+        "label": "The Rust Programming Language: Error Handling (recoverable and unrecoverable errors; no exceptions)",
+        "url": "https://doc.rust-lang.org/book/ch09-00-error-handling.html"
+      },
+      {
+        "label": "Rust Blog: Announcing Rust 1.13 (10 November 2016): the ? operator",
+        "url": "https://blog.rust-lang.org/2016/11/10/Rust-1.13/"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "Linux man-pages: errno(3) (set on error; significant only when the return value indicated an error)",
+      "url": "https://man7.org/linux/man-pages/man3/errno.3.html"
+    },
+    {
+      "label": "cppreference: throw expression (stack unwinding runs destructors in reverse order)",
+      "url": "https://en.cppreference.com/w/cpp/language/throw"
+    },
+    {
+      "label": "Bjarne Stroustrup: A History of C++, 1979–1991 (HOPL II), section 6.4 Exception Handling",
+      "url": "https://www.stroustrup.com/hopl2.pdf"
+    },
+    {
+      "label": "Java Language Specification, Java SE 21: Chapter 11, Exceptions (checked and unchecked classes; compile-time checking)",
+      "url": "https://docs.oracle.com/javase/specs/jls/se21/html/jls-11.html"
+    },
+    {
+      "label": "The Java Tutorials: Unchecked Exceptions, The Controversy (the bottom-line guideline)",
+      "url": "https://docs.oracle.com/javase/tutorial/essential/exceptions/runtime.html"
+    },
+    {
+      "label": "Artima: The Trouble with Checked Exceptions, a conversation with Anders Hejlsberg (18 August 2003)",
+      "url": "https://www.artima.com/articles/the-trouble-with-checked-exceptions"
+    },
+    {
+      "label": "Artima: Failure and Exceptions, a conversation with James Gosling (22 September 2003)",
+      "url": "https://www.artima.com/articles/failure-and-exceptions"
+    },
+    {
+      "label": "Kotlin docs: Exceptions (all exceptions are unchecked)",
+      "url": "https://kotlinlang.org/docs/exceptions.html"
+    },
+    {
+      "label": "Python tutorial: Errors and exceptions (try, except, finally)",
+      "url": "https://docs.python.org/3/tutorial/errors.html"
+    },
+    {
+      "label": "Python glossary: EAFP, easier to ask for forgiveness than permission",
+      "url": "https://docs.python.org/3/glossary.html#term-EAFP"
+    },
+    {
+      "label": "MDN: try...catch (the finally block always executes)",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/try...catch"
+    },
+    {
+      "label": "Go FAQ: Why does Go not have exceptions?",
+      "url": "https://go.dev/doc/faq#exceptions"
+    },
+    {
+      "label": "The Go Programming Language Specification: Errors and Run-time panics",
+      "url": "https://go.dev/ref/spec#Errors"
+    },
+    {
+      "label": "The Go Blog: Defer, Panic, and Recover (Andrew Gerrand, 4 August 2010)",
+      "url": "https://go.dev/blog/defer-panic-and-recover"
+    },
+    {
+      "label": "The Go Blog: Errors are values (Rob Pike, 12 January 2015)",
+      "url": "https://go.dev/blog/errors-are-values"
+    },
+    {
+      "label": "The Go Blog: Working with Errors in Go 1.13 (17 October 2019): wrapping, errors.Is and errors.As",
+      "url": "https://go.dev/blog/go1.13-errors"
+    },
+    {
+      "label": "The Rust Programming Language: Error Handling (recoverable and unrecoverable errors; no exceptions)",
+      "url": "https://doc.rust-lang.org/book/ch09-00-error-handling.html"
+    },
+    {
+      "label": "The Rust Programming Language: Unrecoverable Errors with panic! (unwinding or aborting)",
+      "url": "https://doc.rust-lang.org/book/ch09-01-unrecoverable-errors-with-panic.html"
+    },
+    {
+      "label": "The Rust Programming Language: To panic! or Not to panic! (bad state, contracts, expected failure)",
+      "url": "https://doc.rust-lang.org/book/ch09-03-to-panic-or-not-to-panic.html"
+    },
+    {
+      "label": "Rust Blog: Announcing Rust 1.13 (10 November 2016): the ? operator",
+      "url": "https://blog.rust-lang.org/2016/11/10/Rust-1.13/"
+    },
+    {
+      "label": "The Swift Programming Language: Error Handling (try, try?, try!, defer; no stack unwinding)",
+      "url": "https://github.com/swiftlang/swift-book/blob/main/TSPL.docc/LanguageGuide/ErrorHandling.md"
+    },
+    {
+      "label": "Erlang/OTP docs: Errors and error handling (exception classes; a failing process stops)",
+      "url": "https://www.erlang.org/doc/system/errors.html"
+    },
+    {
+      "label": "Erlang/OTP docs: file:read_file/1 returns {ok, Binary} or {error, Reason}",
+      "url": "https://www.erlang.org/doc/apps/kernel/file.html"
+    },
+    {
+      "label": "Erlang/OTP docs: Processes (an exit signal is sent when a linked process terminates)",
+      "url": "https://www.erlang.org/doc/system/ref_man_processes.html"
+    },
+    {
+      "label": "Erlang/OTP docs: Design principles (supervisors monitor and restart workers)",
+      "url": "https://www.erlang.org/doc/system/design_principles.html"
+    },
+    {
+      "label": "Joe Armstrong: Making reliable distributed systems in the presence of software errors (PhD thesis, 2003), section 4.4 Let it crash",
+      "url": "https://erlang.org/download/armstrong_thesis_2003.pdf"
+    },
+    {
+      "label": "Joe Duffy: The Error Model (Feb 2016), on Midori: bugs aren’t recoverable errors",
+      "url": "https://joeduffyblog.com/2016/02/07/the-error-model/"
+    },
+    {
+      "label": "Wikipedia: Exception handling (programming), History (PL/I ON-units circa 1964; Goodenough 1975)",
+      "url": "https://en.wikipedia.org/wiki/Exception_handling_(programming)"
+    },
+    {
+      "label": "MDN: async function (await on a promise that is fulfilled or rejected)",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/async_function"
+    }
+  ]
+}
