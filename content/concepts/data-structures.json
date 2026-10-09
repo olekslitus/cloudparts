@@ -1,0 +1,411 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Data structures",
+  "category": "code",
+  "order": 7,
+  "summary": "Ways to lay data out in memory so the operations a program runs most are fast; you choose one by the operations you need and what each one costs.",
+  "howItWorks": "A data structure is a layout plus the algorithms that work on it. The same items can sit side by side in one array, in nodes joined by pointers, in a table indexed by a hash of the key, or in a tree kept in sorted order, and each layout makes different operations cheap. An array reads item `i` in O(1) but has to shift everything after a slot it inserts into. A linked list inserts at its head in O(1) but walks from the head to reach item `i`. A hash table finds a key in O(1) expected time but keeps no order. A balanced search tree pays O(log n) for every lookup and in return keeps keys sorted, so it can also answer “smallest”, “next after k” and ranges. Costs are written in Big-O: how the work grows with the number of items n. Three refinements matter in practice. Amortized costs spread a rare expensive step over many cheap ones: a dynamic array grows by a multiple of its size, so appending is O(1) amortized even though one append now and then copies everything. Expected costs assume a hash function that spreads keys evenly; bad luck or a crafted input pushes them to O(n). And Big-O ignores memory layout: following a pointer to a node elsewhere in memory can miss the CPU cache, which is why Rust’s docs say array-based containers are almost always better than its linked list, and why its sorted map is a B-tree with many keys per node rather than a binary tree.",
+  "analogy": "A kitchen. Plates stacked in a cupboard are a stack: you take the top one. A numbered spice rack is an array: go straight to slot 12. A recipe-card box sorted by name is a search tree: find “lasagne”, then flip forward to whatever comes next. A coat check is a hash table: your ticket number takes you straight to the hook, but the coats aren’t in any useful order.",
+  "useWhen": [
+    "Start from the dynamic array and the hash map; Rust’s collection docs say `Vec` and `HashMap` cover most use cases",
+    "A work queue that takes from the front: use a deque, because Python’s `list.pop(0)` shifts every remaining item",
+    "Keys you need in sorted order, by range, or “the next one after k”: a balanced tree or B-tree map",
+    "Always handling the most urgent item next: a binary heap"
+  ],
+  "avoidWhen": [
+    "Reaching for a linked list for speed: array-based containers are generally faster, smaller and kinder to the CPU cache",
+    "Choosing by Big-O alone: two O(1) structures can differ a lot (on ties, Rust’s docs rank `Vec` ahead of `VecDeque`, and `VecDeque` ahead of `LinkedList`)",
+    "Hashing untrusted keys with a fixed, predictable hash function: crafted collisions push lookups toward O(n), the HashDoS attack"
+  ],
+  "example": "A job runner keeps 100,000 pending jobs in a Python list and takes the oldest with `jobs.pop(0)`. Each pop shifts every remaining item one slot, so draining the queue moves about n²/2, or 5 billion, references. Switching to `collections.deque` and `popleft()` makes each removal O(1): in the snippet below the drain drops from 0.8 s to 0.002 s. The same runner checks `job_id in seen` to skip duplicates. Against a list that scans up to 100,000 items; against a `set` it is a single hash lookup.",
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "import bisect",
+      "import heapq",
+      "import timeit",
+      "from collections import deque",
+      "",
+      "n = 100_000",
+      "items = list(range(n))",
+      "",
+      "def drain_list():",
+      "    q = list(items)",
+      "    while q:",
+      "        q.pop(0)       # shifts every remaining item one slot left: O(n)",
+      "",
+      "def drain_deque():",
+      "    q = deque(items)",
+      "    while q:",
+      "        q.popleft()    # O(1) at either end",
+      "",
+      "# timings from one run on Python 3.14, Apple M1 Pro; yours will differ",
+      "print(f\"list.pop(0)     {timeit.timeit(drain_list, number=1):.3f} s\")   # 0.806 s",
+      "print(f\"deque.popleft() {timeit.timeit(drain_deque, number=1):.3f} s\")  # 0.002 s",
+      "",
+      "# membership: a list scans every item, a set hashes straight to a slot",
+      "as_set = set(items)",
+      "print(f\"x in list  {timeit.timeit(lambda: n - 1 in items, number=1000):.4f} s\")   # 0.9357 s",
+      "print(f\"x in set   {timeit.timeit(lambda: n - 1 in as_set, number=1000):.4f} s\")  # 0.0001 s",
+      "",
+      "# a sorted list: binary search finds the slot, but inserting still shifts",
+      "scores = [3, 8, 15, 42]",
+      "bisect.insort(scores, 10)",
+      "print(scores)                   # [3, 8, 10, 15, 42]",
+      "",
+      "# a binary heap: the smallest item is always at index 0",
+      "tasks = [(3, \"write docs\"), (1, \"page on-call\"), (2, \"review PR\")]",
+      "heapq.heapify(tasks)",
+      "print(heapq.heappop(tasks))     # (1, 'page on-call')"
+    ]
+  },
+  "related": ["functional-data-structures", "cache", "graph", "search"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "What each structure costs",
+      "intro": "Worst case unless marked; n is the number of items and L the length of a key. The figures come from MIT 6.006’s lecture notes and the Python, Java, C++, Rust and Go documentation listed under sources.",
+      "corner": "Structure",
+      "columns": ["Read item i", "Find a key or value", "Insert or delete", "Min, max, next in order"],
+      "rows": [
+        {
+          "label": "Dynamic array",
+          "values": ["O(1)", "O(n) scan", "O(1) amortized at the end; O(n) elsewhere, since later items shift", "O(n)"]
+        },
+        {
+          "label": "Sorted array",
+          "values": ["O(1)", "O(log n) by binary search", "O(n)", "O(1) for min and max; O(log n) for next"]
+        },
+        {
+          "label": "Linked list",
+          "values": ["O(n) walk (doubly linked: from the nearer end)", "O(n)", "O(1) at the head, or at a node you already hold; O(n) to reach position i", "O(n)"]
+        },
+        {
+          "label": "Deque (ring buffer or blocks)",
+          "values": ["O(1) in C++ and Rust; slow in the middle for Python’s", "O(n)", "O(1) at either end (amortized when it has to grow); O(n) in the middle", "O(n)"]
+        },
+        {
+          "label": "Hash table",
+          "values": ["n/a", "O(1) expected; O(n) worst", "O(1) expected, amortized; O(n) worst", "O(n): keys have no order"]
+        },
+        {
+          "label": "Balanced search tree (AVL, red-black, B-tree)",
+          "values": ["O(log n) if nodes store subtree sizes", "O(log n)", "O(log n)", "O(log n)"]
+        },
+        {
+          "label": "Binary heap",
+          "values": ["n/a", "O(n)", "push O(log n); pop the top O(log n); build from n items O(n)", "O(1), but only for the top"]
+        },
+        {
+          "label": "Trie",
+          "values": ["n/a", "About L character steps for a hit, however many keys there are", "About L steps", "Keys come out in order by walking the tree; prefix queries are cheap"]
+        }
+      ],
+      "notes": [
+        "Amortized: averaged over a long run of operations. One call can cost O(n) when the backing array is reallocated.",
+        "Expected: assumes the hash function spreads keys evenly over the table.",
+        "Rust’s `BinaryHeap::push` is O(1) expected for keys in random order, and O(log n) amortized when keys arrive in ascending order."
+      ]
+    },
+    {
+      "type": "table",
+      "title": "What people actually use",
+      "intro": "The standard library type for each structure, from each language’s own docs.",
+      "corner": "Structure",
+      "columns": ["Python", "Java", "C++", "Rust", "Go"],
+      "rows": [
+        {
+          "label": "Dynamic array",
+          "values": ["`list`", "`ArrayList`", "`std::vector`", "`Vec`", "slice and `append`"]
+        },
+        {
+          "label": "Stack",
+          "values": ["`list` with `append` and `pop`", "`ArrayDeque` (the `Stack` docs point to `Deque`)", "`std::stack`, over `std::deque` by default", "`Vec`", "slice"]
+        },
+        {
+          "label": "Queue or deque",
+          "values": ["`collections.deque`", "`ArrayDeque`", "`std::deque`", "`VecDeque`", "slice, or `container/list`"]
+        },
+        {
+          "label": "Linked list",
+          "values": ["`collections.deque` covers the queue uses", "`LinkedList`", "`std::list`, `std::forward_list`", "`LinkedList`", "`container/list`"]
+        },
+        {
+          "label": "Hash map and set",
+          "values": ["`dict`, `set`", "`HashMap`, `HashSet`", "`std::unordered_map`", "`HashMap`, `HashSet`", "built-in `map`"]
+        },
+        {
+          "label": "Sorted map",
+          "values": ["`bisect` over a sorted `list`", "`TreeMap` (red-black)", "`std::map` (usually red-black)", "`BTreeMap`", "sorted slice and `slices.BinarySearch`"]
+        },
+        {
+          "label": "Priority queue",
+          "values": ["`heapq` (min-heap on a `list`)", "`PriorityQueue`", "`std::priority_queue` (largest first by default)", "`BinaryHeap` (max-heap)", "`container/heap`"]
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Amortized, expected and worst case",
+      "body": [
+        "A dynamic array that is full allocates a larger block and copies everything across, which takes O(n). MIT’s 6.006 notes show why that is still cheap: if the array grows by Θ(n) extra slots each time, Θ(n) more items fit before the next copy, so any run of n appends costs Θ(n) in total and each append is O(1) amortized. Java’s `ArrayList` docs say the same thing in plain terms: “adding n elements requires O(n) time.” Rust marks such costs with a `*` in its tables and notes that its collections never shrink on their own, so removals aren’t amortized.",
+        "Hash tables add a second qualifier. Their O(1) is expected: it holds when the hash function spreads keys evenly, and Rust marks it with a `~`. Python’s complexity table lists the worst case for `dict` lookups, inserts and deletes as O(n). MIT’s notes point out that any fixed hash function has some set of keys that all collide, which is why they choose the function at random from a universal family. Rust’s `HashMap` seeds its default hash randomly for the same reason, to resist HashDoS attacks.",
+        "Worst-case bounds matter when one slow call is a problem, such as a latency budget or a real-time loop. Rust’s docs suggest `LinkedList` for exactly the case where you “can’t tolerate amortization”. Balanced trees give O(log n) per operation with no averaging at all: Java’s `TreeMap` promises “guaranteed log(n) time cost” for `get`, `put` and `remove`."
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Memory layout and the CPU cache",
+      "body": [
+        "Big-O counts steps, not where the data lives. Rust’s `LinkedList` docs say it is almost always better to use `Vec` or `VecDeque`, because array-based containers are generally faster, more memory efficient, and make better use of CPU cache. CPython’s `list` is a contiguous array of references, and its `deque` is described as a doubly linked list of arrays rather than of single objects, “for greater efficiency”.",
+        "The same reasoning shapes trees and hash tables. Rust’s `BTreeMap` docs explain that in a binary search tree every element sits in its own heap-allocated node, so “every comparison is a potential cache-miss due to the indirection”. A B-tree node instead holds B−1 to 2B−1 elements in one contiguous array, which cuts allocations by a factor of B and improves cache efficiency, at the price of more comparisons per search. Swiss Tables, the hash table design behind Rust’s `HashMap` and Go 1.24’s maps, keep all slots in one array, split into groups of 8 with a control word of hash fragments, so one comparison checks a whole group of 8 slots at once."
+      ]
+    }
+  ],
+  "kinds": [
+    {
+      "id": "arrays",
+      "name": "Arrays and dynamic arrays",
+      "summary": "Items side by side in one block of memory: read any position in O(1), append at the end in amortized O(1), but insert or delete anywhere else and every later item shifts.",
+      "body": [
+        "An array keeps items in consecutive slots, so the address of item `i` is simple arithmetic and reading or replacing it takes Θ(1). Inserting or removing anywhere but the end means shifting every item after it, and a fixed-size array has to be reallocated to grow. A dynamic array keeps spare capacity: when it fills up it allocates Θ(n) extra slots and copies across, so one append occasionally costs Θ(n) but appends are Θ(1) amortized. Python’s complexity notes put it plainly: the largest costs come from growing past the current allocation, or from inserting or deleting near the beginning, “because everything after that must move”.",
+        "This is the default container nearly everywhere. Python’s `list` is a variable-length array of references, not a linked list. Java’s `ArrayList` runs `get` and `set` in constant time and `add` in amortized constant time. C++’s `std::vector` gives O(1) random access, amortized O(1) insertion and removal at the end, and linear cost elsewhere. Rust’s `Vec` is the one its docs tell you to “probably just use”. Go’s slices grow by copying into a larger array, which is “how dynamic array implementations from other languages work behind the scenes”. When you know the final size, reserve it up front (`Vec::with_capacity`, `std::vector::reserve`, `make([]T, 0, n)`) to skip the copies.",
+        "Keeping the array sorted buys O(log n) search by binary search (`bisect` in Python, `slices.BinarySearch` in Go), but each insert still costs O(n). Python’s `bisect` docs warn that the O(log n) search is dominated by the slow O(n) insertion step. For many inserts into sorted data, use a search tree."
+      ],
+      "sources": [
+        { "label": "MIT 6.006 Introduction to Algorithms (Spring 2020), Lecture 2 notes: Data Structures (arrays, dynamic arrays, amortized analysis)", "url": "https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/79a07dc1cb47d76dae2ffedc701e3d2b_MIT6_006S20_lec2.pdf" },
+        { "label": "Python wiki: TimeComplexity (list operations)", "url": "https://wiki.python.org/moin/TimeComplexity" },
+        { "label": "Python FAQ: How are lists implemented in CPython?", "url": "https://docs.python.org/3/faq/design.html#how-are-lists-implemented-in-cpython" },
+        { "label": "Java SE 21 API: ArrayList", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/ArrayList.html" },
+        { "label": "cppreference: std::vector (complexity of common operations, reserve)", "url": "https://en.cppreference.com/w/cpp/container/vector" },
+        { "label": "Rust std docs: std::collections (when to use Vec, capacity management)", "url": "https://doc.rust-lang.org/std/collections/index.html" },
+        { "label": "The Go Blog: Go Slices: usage and internals (Andrew Gerrand, 2011)", "url": "https://go.dev/blog/slices-intro" },
+        { "label": "Python docs: bisect (O(log n) search dominated by O(n) insertion)", "url": "https://docs.python.org/3/library/bisect.html" },
+        { "label": "Go standard library: package slices (BinarySearch)", "url": "https://pkg.go.dev/slices" }
+      ]
+    },
+    {
+      "id": "linked-lists",
+      "name": "Linked lists",
+      "summary": "Each item in its own node with a pointer to the next one (and, when doubly linked, the previous): O(1) to insert or remove at a node you hold, O(n) to reach position i.",
+      "body": [
+        "A linked list stores each item in a node that holds the item and a pointer to the next node, and keeps a pointer to the first node, the head. Changing the list means relinking pointers, so inserting or deleting at the front takes Θ(1), but reaching item `i` means walking there, O(n). A doubly linked list also links backwards: Java’s `LinkedList` walks from whichever end is closer, and C++’s `std::list` inserts and removes in constant time anywhere you already have an iterator, without fast random access.",
+        "In practice the pointers cost more than Big-O shows. Every node is a separate allocation, and following a pointer can miss the CPU cache. Rust’s docs say it is “almost always better” to use `Vec` or `VecDeque`, and keep `LinkedList` for when you can’t tolerate amortized resizing or need to split and join lists cheaply: appending one `LinkedList` to another is O(1). Java’s docs note that `ArrayList` has a low constant factor compared with `LinkedList`.",
+        "The standard types are Java’s `LinkedList`, C++’s `std::list` and singly linked `std::forward_list`, Rust’s `LinkedList` and Go’s `container/list`, all doubly linked except `forward_list`. Linked lists also live inside other structures: the first hash table design, described by Hans Peter Luhn in 1953, put items in buckets and used a linked list for overflow."
+      ],
+      "sources": [
+        { "label": "MIT 6.006 Introduction to Algorithms (Spring 2020), Lecture 2 notes: Data Structures (linked list sequence)", "url": "https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/79a07dc1cb47d76dae2ffedc701e3d2b_MIT6_006S20_lec2.pdf" },
+        { "label": "Java SE 21 API: LinkedList (operations that index into the list traverse from the nearer end)", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/LinkedList.html" },
+        { "label": "Java SE 21 API: ArrayList (constant factor low compared with LinkedList)", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/ArrayList.html" },
+        { "label": "cppreference: std::list", "url": "https://en.cppreference.com/w/cpp/container/list" },
+        { "label": "Rust std docs: LinkedList (almost always better to use Vec or VecDeque)", "url": "https://doc.rust-lang.org/std/collections/struct.LinkedList.html" },
+        { "label": "Rust std docs: std::collections (when to use a LinkedList; cost table)", "url": "https://doc.rust-lang.org/std/collections/index.html" },
+        { "label": "Go standard library: package container/list (a doubly linked list)", "url": "https://pkg.go.dev/container/list" },
+        { "label": "The Go Blog: Faster Go maps with Swiss Tables (Michael Pratt, Feb 2025): Luhn’s 1953 buckets with linked-list overflow", "url": "https://go.dev/blog/swisstable" }
+      ]
+    },
+    {
+      "id": "stacks-queues",
+      "name": "Stacks, queues and deques",
+      "summary": "Access rules rather than layouts: a stack adds and removes at one end (last in, first out), a queue adds at the back and removes at the front (first in, first out), and a deque does both at both ends.",
+      "body": [
+        "MIT’s 6.006 notes define these as special cases of a sequence: a stack only inserts and deletes at the end, a queue inserts at the end and deletes at the front. Any layout that makes those ends O(1) will do. A dynamic array is a fine stack, since `append` and `pop` at the end are amortized O(1). It is a poor queue: removing from the front shifts everything, so Python’s tutorial says lists “are not efficient for this purpose” and points to `collections.deque`, which appends and pops at either end in about O(1).",
+        "Deques avoid the shifting in one of two ways. Rust’s `VecDeque` is a growable ring buffer and Java’s `ArrayDeque` a resizable array, with most operations in amortized constant time. CPython’s `deque` is a doubly linked list of arrays, and C++’s `std::deque` typically uses a sequence of separately allocated fixed-size arrays, with O(1) random access and O(1) insertion at either end; the price is a large minimum footprint, since a `std::deque` holding one element allocates a whole block (for example 4096 bytes or 16 elements, whichever is larger, on 64-bit libc++).",
+        "Java’s docs say `ArrayDeque` is likely faster than `Stack` when used as a stack and faster than `LinkedList` when used as a queue, and recommend `Deque` over the old `Stack` class. C++’s `std::stack` is an adaptor over another container, `std::deque` by default. In Rust, `Vec` is the stack and `VecDeque` the queue; in Go a slice serves as a stack."
+      ],
+      "sources": [
+        { "label": "MIT 6.006 Introduction to Algorithms (Spring 2020), Lecture 2 notes: Data Structures (stack and queue interfaces)", "url": "https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/79a07dc1cb47d76dae2ffedc701e3d2b_MIT6_006S20_lec2.pdf" },
+        { "label": "Python tutorial: Data Structures, Using Lists as Stacks and as Queues", "url": "https://docs.python.org/3/tutorial/datastructures.html" },
+        { "label": "Python docs: collections.deque (O(1) appends and pops at either end; O(n) for list.pop(0))", "url": "https://docs.python.org/3/library/collections.html" },
+        { "label": "Python wiki: TimeComplexity (collections.deque is a doubly linked list of arrays)", "url": "https://wiki.python.org/moin/TimeComplexity" },
+        { "label": "Rust std docs: VecDeque (a double-ended queue implemented with a growable ring buffer)", "url": "https://doc.rust-lang.org/std/collections/struct.VecDeque.html" },
+        { "label": "Java SE 21 API: ArrayDeque", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/ArrayDeque.html" },
+        { "label": "Java SE 21 API: Stack (Deque should be used in preference)", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/Stack.html" },
+        { "label": "cppreference: std::deque (complexity and minimum memory cost)", "url": "https://en.cppreference.com/w/cpp/container/deque" },
+        { "label": "cppreference: std::stack (container adaptor, std::deque by default)", "url": "https://en.cppreference.com/w/cpp/container/stack" },
+        { "label": "Rust std docs: std::collections (use a Vec for a stack, a VecDeque for a queue)", "url": "https://doc.rust-lang.org/std/collections/index.html" }
+      ]
+    },
+    {
+      "id": "hash-tables",
+      "name": "Hash tables",
+      "summary": "An array indexed by a hash of the key: find, insert and delete in O(1) expected time, with no order among the keys.",
+      "body": [
+        "A hash function maps each key to one of m slots in an array. With more possible keys than slots, two keys will sometimes land on the same slot, so every design handles collisions: chaining keeps a small list per slot, and open addressing probes other slots in the same array. If keys spread evenly and m grows with n, each lookup touches O(1) entries on average, and resizing is amortized like a dynamic array’s, giving “expected amortized O(1)” operations in MIT’s 6.006 notes. Tables grow before they get too full: most cap the load factor (the share of used slots) at 70–90%, and Java’s `HashMap` defaults to 0.75, then rehashes into about twice as many buckets.",
+        "The O(1) is expected, not guaranteed. Python’s complexity table lists O(n) as the worst case for `dict` lookups, and any fixed hash function has inputs that all collide. Rust’s `HashMap` seeds its hash (SipHash 1-3 by default) randomly to resist HashDoS attacks, and its docs note that faster hashers exist for small keys such as integers. Modern designs tune for the CPU: Swiss Tables, presented by Google in 2017, group slots in eights with a control word of 7-bit hash fragments so one comparison checks 8 slots. Rust’s `HashMap` is a port of SwissTable, and Go 1.24 rebuilt its built-in `map` on the design.",
+        "Python’s `dict` and `set` are resizable hash tables, chosen over B-trees for faster lookups. Java has `HashMap` and `HashSet`, C++ `std::unordered_map`, Rust `HashMap` and `HashSet`, and Go its built-in `map`. None keeps keys sorted (Java’s docs say `HashMap` makes no guarantees about order), so for ranges or “next key after k” use a search tree."
+      ],
+      "sources": [
+        { "label": "MIT 6.006 Introduction to Algorithms (Spring 2020), Lecture 4 notes: Hashing", "url": "https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/ce9e94705b914598ce78a00a70a1f734_MIT6_006S20_lec4.pdf" },
+        { "label": "The Go Blog: Faster Go maps with Swiss Tables (Michael Pratt, Feb 2025)", "url": "https://go.dev/blog/swisstable" },
+        { "label": "Java SE 21 API: HashMap (constant-time get and put, default load factor .75)", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/HashMap.html" },
+        { "label": "Python wiki: TimeComplexity (dict and set, average and worst case)", "url": "https://wiki.python.org/moin/TimeComplexity" },
+        { "label": "Rust std docs: HashMap (SwissTable port, SipHash 1-3, HashDoS resistance)", "url": "https://doc.rust-lang.org/std/collections/struct.HashMap.html" },
+        { "label": "Python FAQ: How are dictionaries implemented in CPython?", "url": "https://docs.python.org/3/faq/design.html#how-are-dictionaries-implemented-in-cpython" },
+        { "label": "cppreference: std::unordered_map (average constant-time search, insertion and removal)", "url": "https://en.cppreference.com/w/cpp/container/unordered_map" },
+        { "label": "The Go Blog: Go maps in action (Andrew Gerrand, Feb 2013)", "url": "https://go.dev/blog/maps" }
+      ]
+    },
+    {
+      "id": "search-trees",
+      "name": "Search trees",
+      "summary": "Keys kept in sorted order in a tree, so lookups, inserts, deletes, minimum, maximum and “next key after k” all cost O(log n) as long as the tree stays balanced.",
+      "body": [
+        "In a binary search tree every node’s left subtree holds smaller keys and its right subtree larger ones, so a search goes left or right at each node. Every operation takes time proportional to the tree’s height, and the height depends on the order keys arrive in: random order gives about 1.39 lg n compares per search, but nothing guarantees it. Balanced trees restore the guarantee by rotating nodes after updates. AVL trees (Adelson-Velsky and Landis, 1962, the first such scheme) keep the heights of each node’s two subtrees within one of each other. Red-black trees spend one colour bit per node and keep the height at most 2 log₂(n+1). Java’s `TreeMap` is a red-black tree with guaranteed log(n) `get`, `put` and `remove`, and C++’s `std::map` is usually one.",
+        "B-trees put many keys in each node. Rudolf Bayer and Edward McCreight designed them in 1970 at Boeing Scientific Research Laboratories for indexes too big for main memory, kept on discs and drums that are slow to reach but fast once reading: retrieval, insertion and deletion take time proportional to log_k of the index size, and pages stay at least half full. The same trade works in RAM. Rust’s `BTreeMap` keeps B−1 to 2B−1 elements per node in a contiguous array, which needs B times fewer allocations and misses the cache less than a binary tree.",
+        "This is how databases index. By 1979 Douglas Comer called the B-tree “de facto, the standard organization for indexes in a database system”. PostgreSQL’s btree index is a multi-way balanced tree in which over 99% of pages are typically leaves; a full leaf splits and the split can cascade up to the root. SQLite stores tables and indexes as b-trees of pages, each interior page holding K keys and K+1 child page numbers. Wide nodes keep the tree shallow, so a lookup reads only a few pages from disk."
+      ],
+      "sources": [
+        { "label": "NIST Dictionary of Algorithms and Data Structures: binary search tree", "url": "https://xlinux.nist.gov/dads/HTML/binarySearchTree.html" },
+        { "label": "Sedgewick and Wayne, Algorithms 4th ed.: 3.2 Binary Search Trees (cost proportional to height; 1.39 lg N for random keys)", "url": "https://algs4.cs.princeton.edu/32bst/" },
+        { "label": "MIT 6.006 Introduction to Algorithms (Spring 2020), Lecture 7 notes: Binary Trees II: AVL", "url": "https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/a2c80596cf4a2b5fbc854afdd2f23dcb_MIT6_006S20_lec7.pdf" },
+        { "label": "NIST Dictionary of Algorithms and Data Structures: red-black tree (height at most 2 log2(n+1))", "url": "https://xlinux.nist.gov/dads/HTML/redblack.html" },
+        { "label": "Java SE 21 API: TreeMap (red-black tree, guaranteed log(n) time)", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/TreeMap.html" },
+        { "label": "cppreference: std::map (logarithmic complexity, usually red-black trees)", "url": "https://en.cppreference.com/w/cpp/container/map" },
+        { "label": "Bayer and McCreight: Organization and Maintenance of Large Ordered Indices (Boeing Scientific Research Laboratories report, July 1970)", "url": "https://infolab.usc.edu/csci585/Spring2010/den_ar/indexing.pdf" },
+        { "label": "Rust std docs: BTreeMap (background: B-trees versus binary search trees)", "url": "https://doc.rust-lang.org/std/collections/struct.BTreeMap.html" },
+        { "label": "Douglas Comer: The Ubiquitous B-Tree (ACM Computing Surveys, June 1979)", "url": "http://carlosproal.com/ir/papers/p121-comer.pdf" },
+        { "label": "PostgreSQL docs: B-Tree Indexes (introduction and implementation)", "url": "https://www.postgresql.org/docs/current/btree.html" },
+        { "label": "SQLite: Database File Format, section 1.6 B-tree Pages", "url": "https://www.sqlite.org/fileformat2.html" },
+        { "label": "NIST Dictionary of Algorithms and Data Structures: B-tree (large order keeps height and disk accesses small)", "url": "https://xlinux.nist.gov/dads/HTML/btree.html" }
+      ]
+    },
+    {
+      "id": "heaps",
+      "name": "Heaps and priority queues",
+      "summary": "A tree that is only partly ordered, usually packed into an array, so the smallest (or largest) item is always on top: peek in O(1), push and pop in O(log n).",
+      "body": [
+        "A priority queue keeps many items and hands back the most important one next. The usual layout is a binary heap: an array read as a complete binary tree, where the children of index `i` sit at `2i+1` and `2i+2`, so no pointers are stored. Each parent is at least as large as its children (a max-heap) or at most as large (a min-heap). Insert appends the item and swaps it up past smaller parents; removing the top moves the last item to the root and swaps it down. Both follow one root-to-leaf path, Θ(log n), and a heap can be built from n items in O(n). Heaps keep only that partial order, so finding an arbitrary item is still a linear scan.",
+        "Python’s `heapq` runs these algorithms on a plain `list` as a min-heap, with the smallest item at `heap[0]`. Java’s `PriorityQueue` gives O(log n) `offer` and `poll`, constant-time `peek`, and linear `remove(Object)` and `contains`. C++’s `std::priority_queue` returns the largest element by default, or the smallest with `std::greater`. Rust’s `BinaryHeap` is a max-heap whose `push` is O(1) expected for keys in random order and O(log n) amortized for ascending ones. Go’s `container/heap` works on any type implementing its interface, with `Push` and `Pop` in O(log n) and `Init` in O(n).",
+        "MIT’s 6.006 notes list typical uses: a router choosing which message to send next, an operating system scheduling processes, a discrete-event simulation finding the next event, and graph algorithms. Repeatedly popping a heap also sorts, which is heapsort."
+      ],
+      "sources": [
+        { "label": "MIT 6.006 Introduction to Algorithms (Spring 2020), Lecture 8 notes: Binary Heaps", "url": "https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/40d4851e550507ca14dc778b9b2266cc_MIT6_006S20_lec8.pdf" },
+        { "label": "Python docs: heapq (min-heap on a list; smallest element at heap[0])", "url": "https://docs.python.org/3/library/heapq.html" },
+        { "label": "Java SE 21 API: PriorityQueue (implementation note on costs)", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/PriorityQueue.html" },
+        { "label": "cppreference: std::priority_queue", "url": "https://en.cppreference.com/w/cpp/container/priority_queue" },
+        { "label": "Rust std docs: BinaryHeap (max-heap; time complexity of push and pop)", "url": "https://doc.rust-lang.org/std/collections/struct.BinaryHeap.html" },
+        { "label": "Go standard library: package container/heap", "url": "https://pkg.go.dev/container/heap" }
+      ]
+    },
+    {
+      "id": "tries",
+      "name": "Tries",
+      "summary": "A tree keyed by characters: each step down follows one character of the key, so a lookup costs about the key’s length and keys that share a prefix share a path.",
+      "body": [
+        "A trie has one node for every distinct prefix of the stored strings. In the basic R-way trie each node has R links, one per possible character, so a successful search follows exactly one link per character of the key, L steps however many keys are stored, and a miss usually stops after a few characters. The cost is space: Sedgewick and Wayne count (R+1)N links for N keys, most of them null, and their benchmark R-way trie ran out of memory on a large input. Ternary search tries need far less memory (4N links in the same comparison) and in that benchmark ran as fast as hashing for string keys. Edward Fredkin named the structure in 1960 from “retrieval” and meant it to be said “tree”; many say “try” to tell the two apart.",
+        "Tries shine where hash tables can’t help: finding every key with a given prefix (autocomplete), wildcard matches, and the longest stored prefix of a string. That last one is how routers pick a route: Sedgewick and Wayne’s example forwards a packet for 128.112.136.12 by the longest matching prefix it knows, such as 128.112. The Linux kernel keeps its routing table (`fib_trie`) as an LC-trie, a trie with path and level compression, and searches it by backtracking toward the longest matching prefix.",
+        "Tries are not part of the general collections in these languages: Rust’s `std::collections` lists sequences, maps, sets and a binary heap, and Go’s `container` packages are `heap`, `list` and `ring`. They come from libraries or are written for the job, often over a hash map of children per node."
+      ],
+      "sources": [
+        { "label": "NIST Dictionary of Algorithms and Data Structures: trie (definition, Fredkin’s note on the name, de la Briandais 1959 and Fredkin 1960)", "url": "https://xlinux.nist.gov/dads/HTML/trie.html" },
+        { "label": "Sedgewick and Wayne, Algorithms 4th ed.: 5.2 Tries (prefix and wildcard matching, longest-prefix IP routing)", "url": "https://algs4.cs.princeton.edu/52trie/" },
+        { "label": "Sedgewick and Wayne: Tries lecture slides (R-way trie costs: search hit L, space (R+1)N; ternary search tries)", "url": "https://algs4.cs.princeton.edu/lectures/keynote/52Tries.pdf" },
+        { "label": "Linux kernel docs: LC-trie implementation notes (fib_trie)", "url": "https://docs.kernel.org/networking/fib_trie.html" },
+        { "label": "Rust std docs: std::collections (the standard collection types)", "url": "https://doc.rust-lang.org/std/collections/index.html" },
+        { "label": "Go standard library: package container (heap, list, ring)", "url": "https://pkg.go.dev/container" }
+      ]
+    },
+    {
+      "id": "graph-structures",
+      "name": "Graphs",
+      "summary": "Vertices and the edges between them, stored as adjacency lists (each vertex keeps its neighbours) or as an adjacency matrix (a V×V grid saying whether each pair is connected).",
+      "body": [
+        "An adjacency list maps each vertex to the vertices it has edges to. MIT’s 6.006 notes use an array for that map when vertices are numbered 0 to V−1 and a hash table otherwise, with an array or linked list per vertex, since algorithms mostly iterate over neighbours. The whole graph fits in Θ(V+E) space, listing a vertex’s neighbours takes time proportional to its degree, and breadth-first search runs in time proportional to V+E. Checking whether one particular edge exists means scanning a neighbour list, unless each list is itself a hash set.",
+        "An adjacency matrix is an n×n grid whose cell (i, j) says whether there is an edge from i to j, or holds its weight. Adding an edge or checking one is O(1), but the grid always takes O(n²) space, which is wasteful for sparse graphs where most cells are empty. Stanford’s CS106B notes sum it up: an adjacency list for sparse graphs, a matrix for dense ones.",
+        "In code, a graph is usually a map of lists, such as a Python `dict` from each vertex to a `list` of neighbours, exactly as in MIT’s examples. When the graph itself is the data to store and query, such as people and who follows whom, graph databases keep the vertices and edges on disk and answer questions by walking them; see the graph databases page."
+      ],
+      "sources": [
+        { "label": "MIT 6.006 Introduction to Algorithms (Spring 2020), Lecture 9 notes: Breadth-First Search (graph representations)", "url": "https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/196a95604877d326c6586e60477b59d4_MIT6_006S20_lec9.pdf" },
+        { "label": "Sedgewick and Wayne, Algorithms 4th ed.: 4.1 Undirected Graphs (adjacency lists; BFS proportional to V + E)", "url": "https://algs4.cs.princeton.edu/41graph/" },
+        { "label": "Stanford CS106B (Winter 2024), Lecture 26: Graphs (adjacency list versus adjacency matrix)", "url": "https://web.stanford.edu/class/archive/cs/cs106b/cs106b.1242/lectures/26-graphs/" },
+        { "label": "NIST Dictionary of Algorithms and Data Structures: adjacency-matrix representation", "url": "https://xlinux.nist.gov/dads/HTML/adjacencyMatrixRep.html" },
+        { "label": "NIST Dictionary of Algorithms and Data Structures: adjacency-list representation", "url": "https://xlinux.nist.gov/dads/HTML/adjacencyListRep.html" }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "The first data structures were answers to slow searches. In a 1953 internal IBM memo, Hans Peter Luhn suggested putting items into “buckets” chosen from the key and chaining overflow in a linked list: the hash table with chaining. In 1954 Gene Amdahl, Elaine McGraw and Arthur Samuel used open addressing on the IBM 701, and W. Wesley Peterson published the idea in 1957. René de la Briandais (1959) and Edward Fredkin (1960) described tries for searching files with variable-length keys, and Fredkin named them after “retrieval”.",
+      "Trees made sorted data cheap to change. Georgii Adelson-Velskii and Evgenii Landis published the first balanced binary search tree, the AVL tree, in 1962. J. W. J. Williams published Heapsort in 1964. In 1970 Rudolf Bayer and Edward McCreight, at Boeing Scientific Research Laboratories, described B-trees for indexes stored on discs and drums, and Bayer’s symmetric binary B-trees of 1972 got the red-black name and colouring from Leo Guibas and Robert Sedgewick in 1978. By 1979 Douglas Comer could call the B-tree the de facto standard for database indexes.",
+      "The classic structures have since been retuned for CPU caches rather than replaced. Rust’s sorted map is a B-tree in memory because a binary tree’s scattered nodes cost a cache miss per comparison, and its docs steer people away from linked lists. Google presented Swiss Tables in 2017, an open-addressed hash table that checks a group of 8 slots with one comparison; Rust’s `HashMap` is a port of it, and Go 1.24 rebuilt its built-in map on it in 2025."
+    ],
+    "choices": [
+      {
+        "choice": "Contiguous arrays over linked nodes",
+        "why": "An array finds item `i` by arithmetic and needs one allocation; linked nodes need one allocation each and a pointer chase per step. Rust’s docs say array-based containers are generally faster, smaller and better for the CPU cache."
+      },
+      {
+        "choice": "Grow by a multiple, not one slot at a time",
+        "why": "Growing an array exactly to fit would copy every element on every insert. Allocating Θ(n) spare slots means Θ(n) cheap inserts before the next copy, so appends cost O(1) amortized."
+      },
+      {
+        "choice": "Many keys per node for slow storage",
+        "why": "Bayer and McCreight’s indexes were too big for main memory and lived on discs and drums with long access times but high transfer rates once reading began. Pages of many keys made each slow access count, so operations cost time proportional to log_k of the index size."
+      },
+      {
+        "choice": "Choose the hash function at random",
+        "why": "Any fixed hash function has some set of keys that all collide and turn O(1) into O(n). Choosing from a universal family, or seeding the hash randomly as Rust’s `HashMap` does, keeps an attacker from building such a set (HashDoS)."
+      }
+    ],
+    "timeline": [
+      { "year": "1953", "text": "Hans Peter Luhn’s IBM memo describes hashing into buckets with linked-list overflow" },
+      { "year": "1960", "text": "Edward Fredkin’s “Trie Memory” appears in Communications of the ACM" },
+      { "year": "1962", "text": "Adelson-Velsky and Landis publish the AVL tree, the first balanced binary search tree" },
+      { "year": "1964", "text": "J. W. J. Williams publishes Algorithm 232, Heapsort, in CACM" },
+      { "year": "1970", "text": "Bayer and McCreight describe B-trees in a Boeing research report" },
+      { "year": "1978", "text": "Guibas and Sedgewick give red-black trees their name" },
+      { "year": "2025", "text": "Go 1.24 rebuilds its built-in map on the Swiss Table design" }
+    ],
+    "sources": [
+      { "label": "The Go Blog: Faster Go maps with Swiss Tables (Michael Pratt, Feb 2025)", "url": "https://go.dev/blog/swisstable" },
+      { "label": "NIST Dictionary of Algorithms and Data Structures: trie", "url": "https://xlinux.nist.gov/dads/HTML/trie.html" },
+      { "label": "NIST Dictionary of Algorithms and Data Structures: AVL tree (Adelson-Velskii and Landis, 1962)", "url": "https://xlinux.nist.gov/dads/HTML/avltree.html" },
+      { "label": "MIT 6.006 Introduction to Algorithms (Spring 2020), Lecture 7 notes: AVL, the first proposed balancing scheme", "url": "https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/a2c80596cf4a2b5fbc854afdd2f23dcb_MIT6_006S20_lec7.pdf" },
+      { "label": "NIST Dictionary of Algorithms and Data Structures: heap (Williams, Algorithm 232 Heapsort, CACM 1964)", "url": "https://xlinux.nist.gov/dads/HTML/heap.html" },
+      { "label": "Bayer and McCreight: Organization and Maintenance of Large Ordered Indices (Boeing Scientific Research Laboratories report, July 1970)", "url": "https://infolab.usc.edu/csci585/Spring2010/den_ar/indexing.pdf" },
+      { "label": "NIST Dictionary of Algorithms and Data Structures: red-black tree (Bayer 1972; Guibas and Sedgewick 1978)", "url": "https://xlinux.nist.gov/dads/HTML/redblack.html" },
+      { "label": "Douglas Comer: The Ubiquitous B-Tree (ACM Computing Surveys, June 1979)", "url": "http://carlosproal.com/ir/papers/p121-comer.pdf" },
+      { "label": "Rust std docs: BTreeMap (why a B-tree rather than a binary search tree)", "url": "https://doc.rust-lang.org/std/collections/struct.BTreeMap.html" },
+      { "label": "Rust std docs: LinkedList (almost always better to use Vec or VecDeque)", "url": "https://doc.rust-lang.org/std/collections/struct.LinkedList.html" },
+      { "label": "Rust std docs: HashMap (a Rust port of Google’s SwissTable)", "url": "https://doc.rust-lang.org/std/collections/struct.HashMap.html" },
+      { "label": "MIT 6.006 Introduction to Algorithms (Spring 2020), Lecture 2 notes: dynamic arrays and amortized analysis", "url": "https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/79a07dc1cb47d76dae2ffedc701e3d2b_MIT6_006S20_lec2.pdf" },
+      { "label": "MIT 6.006 Introduction to Algorithms (Spring 2020), Lecture 4 notes: Hashing (universal hash families)", "url": "https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/ce9e94705b914598ce78a00a70a1f734_MIT6_006S20_lec4.pdf" }
+    ]
+  },
+  "sources": [
+    { "label": "MIT 6.006 Introduction to Algorithms (Spring 2020), Lecture 2 notes: Data Structures", "url": "https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/79a07dc1cb47d76dae2ffedc701e3d2b_MIT6_006S20_lec2.pdf" },
+    { "label": "MIT 6.006 Introduction to Algorithms (Spring 2020), Lecture 4 notes: Hashing (sorted array and hash table costs)", "url": "https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/ce9e94705b914598ce78a00a70a1f734_MIT6_006S20_lec4.pdf" },
+    { "label": "MIT 6.006 Introduction to Algorithms (Spring 2020), Lecture 7 notes: Binary Trees II: AVL (set and sequence AVL costs)", "url": "https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/a2c80596cf4a2b5fbc854afdd2f23dcb_MIT6_006S20_lec7.pdf" },
+    { "label": "MIT 6.006 Introduction to Algorithms (Spring 2020), Lecture 8 notes: Binary Heaps", "url": "https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/40d4851e550507ca14dc778b9b2266cc_MIT6_006S20_lec8.pdf" },
+    { "label": "Python wiki: TimeComplexity (list, deque, set and dict)", "url": "https://wiki.python.org/moin/TimeComplexity" },
+    { "label": "Python docs: collections.deque", "url": "https://docs.python.org/3/library/collections.html" },
+    { "label": "Python FAQ: How are lists implemented in CPython?", "url": "https://docs.python.org/3/faq/design.html#how-are-lists-implemented-in-cpython" },
+    { "label": "Python docs: bisect", "url": "https://docs.python.org/3/library/bisect.html" },
+    { "label": "Python docs: heapq", "url": "https://docs.python.org/3/library/heapq.html" },
+    { "label": "Java SE 21 API: ArrayList", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/ArrayList.html" },
+    { "label": "Java SE 21 API: ArrayDeque", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/ArrayDeque.html" },
+    { "label": "Java SE 21 API: Stack", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/Stack.html" },
+    { "label": "Java SE 21 API: TreeMap", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/TreeMap.html" },
+    { "label": "Java SE 21 API: PriorityQueue", "url": "https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/PriorityQueue.html" },
+    { "label": "cppreference: std::vector", "url": "https://en.cppreference.com/w/cpp/container/vector" },
+    { "label": "cppreference: std::deque", "url": "https://en.cppreference.com/w/cpp/container/deque" },
+    { "label": "cppreference: std::list", "url": "https://en.cppreference.com/w/cpp/container/list" },
+    { "label": "cppreference: std::stack", "url": "https://en.cppreference.com/w/cpp/container/stack" },
+    { "label": "cppreference: std::map", "url": "https://en.cppreference.com/w/cpp/container/map" },
+    { "label": "cppreference: std::unordered_map", "url": "https://en.cppreference.com/w/cpp/container/unordered_map" },
+    { "label": "cppreference: std::priority_queue", "url": "https://en.cppreference.com/w/cpp/container/priority_queue" },
+    { "label": "Rust std docs: std::collections (when to use which collection; cost table; capacity management)", "url": "https://doc.rust-lang.org/std/collections/index.html" },
+    { "label": "Rust std docs: LinkedList", "url": "https://doc.rust-lang.org/std/collections/struct.LinkedList.html" },
+    { "label": "Rust std docs: VecDeque", "url": "https://doc.rust-lang.org/std/collections/struct.VecDeque.html" },
+    { "label": "Rust std docs: BTreeMap (background)", "url": "https://doc.rust-lang.org/std/collections/struct.BTreeMap.html" },
+    { "label": "Rust std docs: HashMap", "url": "https://doc.rust-lang.org/std/collections/struct.HashMap.html" },
+    { "label": "Rust std docs: BinaryHeap", "url": "https://doc.rust-lang.org/std/collections/struct.BinaryHeap.html" },
+    { "label": "The Go Blog: Go Slices: usage and internals", "url": "https://go.dev/blog/slices-intro" },
+    { "label": "The Go Blog: Faster Go maps with Swiss Tables (Feb 2025)", "url": "https://go.dev/blog/swisstable" },
+    { "label": "Go standard library: package container/list", "url": "https://pkg.go.dev/container/list" },
+    { "label": "Go standard library: package container/heap", "url": "https://pkg.go.dev/container/heap" },
+    { "label": "Go standard library: package slices (BinarySearch)", "url": "https://pkg.go.dev/slices" },
+    { "label": "Sedgewick and Wayne: Tries lecture slides (R-way trie costs)", "url": "https://algs4.cs.princeton.edu/lectures/keynote/52Tries.pdf" }
+  ]
+}

@@ -1,0 +1,210 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Foreign function interfaces",
+  "category": "code",
+  "order": 90,
+  "summary": "How code in one language calls functions compiled from another: both sides meet at the platform’s C calling convention, and glue code converts values and settles who frees what.",
+  "howItWorks": "Every compiler decides for itself how functions receive arguments, how structs are laid out and how symbols are named, so two languages can only call each other if they agree on one set of rules. In practice that set is the platform’s C ABI. Its calling convention says where arguments go: on x86-64 Linux and macOS the first six integer or pointer arguments travel in `RDI`, `RSI`, `RDX`, `RCX`, `R8` and `R9`; on 64-bit Windows the first four go in `RCX`, `RDX`, `R8` and `R9`. Its type rules fix how big an `int` is and where each struct field sits. A library exposes plain C functions (C++ wraps them in `extern \"C\"` to turn off name mangling, Rust marks them `extern \"C\"` and `#[unsafe(no_mangle)]`), and the caller loads the shared library and looks the symbols up by name. The compiled library doesn’t record argument types, so the caller has to declare every signature: by hand (`ctypes` `argtypes`), from C declarations (`cffi`, Java’s `FunctionDescriptor`), or from attributes a generator reads (.NET’s `[LibraryImport]`, PyO3’s `#[pyfunction]`). Only numbers and pointers cross as they are. Everything else is marshalled: strings are re-encoded and copied, lists become arrays, objects become opaque handles. Every pointer that crosses also raises the question of ownership: memory must go back to the allocator that created it, and a garbage collector must be told while native code still holds one of its objects. Runtimes add their own rules on top. In CPython only a thread holding the global interpreter lock (GIL) may touch Python objects, so long native work should release it, and a Rust panic or C++ exception must not unwind into a frame that isn’t built for it.",
+  "analogy": "A container port. Ships from any country can unload there because the boxes have one standard size and the cranes one standard grip: that is the C ABI. What’s inside still has to be repacked for local trucks, and both sides have to agree on who returns the empty boxes.",
+  "useWhen": [
+    "Reusing a mature native library (SQLite, a codec, a numeric kernel) instead of rewriting it",
+    "Moving a hot loop from Python, Java or JavaScript into Rust, C or C++ while the rest of the program stays put",
+    "Calling operating system APIs that are only published as C functions",
+    "Shipping one core library to several languages through thin bindings, as Polars does for Python and Node.js"
+  ],
+  "avoidWhen": [
+    "Many tiny calls: converting arguments on every call can cost more than the work itself, so batch the work into fewer, larger calls",
+    "Untrusted or crash-prone native code: a wrong signature or a dangling pointer corrupts the whole process, so run it in another process behind RPC",
+    "The two sides only exchange data now and then: a file, a pipe or an HTTP call is easier to debug and version",
+    "You can’t build native binaries for every platform your users run: each OS, CPU and runtime version needs its own build"
+  ],
+  "example": "A Python pipeline parses log lines in a pure-Python loop. The team rewrites the parser in Rust as `parse(line: &str) -> Result<Record, ParseError>`, exposes it with PyO3’s `#[pyfunction]` and builds a wheel with maturin. Python still opens the files and calls `parse()`. PyO3 converts each `str` into a `&str`, returns a `Record` as a Python object, and turns every `Err` into a raised `ValueError`. Inside, the function calls `py.detach` so the GIL is released while Rust works, and four Python threads can parse at once. Crossing the boundary once per line is the next bottleneck, so the following version takes a list of lines per call.",
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "import ctypes, ctypes.util",
+      "",
+      "libc = ctypes.CDLL(ctypes.util.find_library(\"c\"))  # the C library, loaded at run time",
+      "",
+      "# Nothing in the library says what strlen takes or returns, so we declare it.",
+      "libc.strlen.argtypes = [ctypes.c_char_p]",
+      "libc.strlen.restype = ctypes.c_size_t",
+      "print(libc.strlen(b\"hello, C\"))  # 8: bytes are passed as a char* to their data",
+      "",
+      "# qsort sorts a C array in place and calls back into Python to compare elements.",
+      "CMP = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))",
+      "def compare(a, b):",
+      "    return a[0] - b[0]",
+      "",
+      "nums = (ctypes.c_int * 5)(5, 1, 4, 2, 3)  # a C int[5], not a Python list",
+      "libc.qsort.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, CMP]",
+      "libc.qsort.restype = None",
+      "libc.qsort(nums, len(nums), ctypes.sizeof(ctypes.c_int), CMP(compare))",
+      "print(list(nums))  # [1, 2, 3, 4, 5]"
+    ]
+  },
+  "related": ["runtime-vms", "programming-languages", "rpc", "multithreading"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "Two calling conventions on x86-64",
+      "intro": "The same C function compiles to different machine code on Windows and on everything else. A foreign function interface has to follow whichever one the platform uses, which is why bindings are built per OS and CPU.",
+      "corner": "",
+      "columns": ["System V AMD64 ABI", "Microsoft x64"],
+      "rows": [
+        { "label": "Used by", "values": ["Linux, macOS, the BSDs, Solaris", "64-bit Windows"] },
+        { "label": "Integer and pointer arguments", "values": ["First six in `RDI`, `RSI`, `RDX`, `RCX`, `R8`, `R9`", "First four in `RCX`, `RDX`, `R8`, `R9`"] },
+        { "label": "Floating-point arguments", "values": ["First eight in `XMM0` to `XMM7`", "In `XMM0` to `XMM3`, by position among the first four"] },
+        { "label": "The rest", "values": ["On the stack", "On the stack, after the “shadow space” the caller always reserves for the four register arguments"] },
+        { "label": "Integer return value", "values": ["`RAX` (and `RDX` for up to 128 bits)", "`RAX`"] }
+      ],
+      "notes": [
+        "32-bit Windows had several conventions at once (`cdecl`, `stdcall`, `fastcall`), which is why Python’s `ctypes` has both `CDLL` and `WinDLL`, and Rust offers `extern \"system\"`, which picks `stdcall` on 32-bit x86 Windows and the C convention on x86-64 Windows."
+      ]
+    },
+    {
+      "type": "code",
+      "title": "A Rust library that speaks the C ABI",
+      "intro": "Built with `crate-type = [\"cdylib\"]` in `Cargo.toml` and `cargo build --release`, this produces `libgreet.so` (`libgreet.dylib` on macOS, `greet.dll` on Windows) that C, Python, Go or Java can load. `greet` hands out memory that Rust allocated, so the library also exports the function that frees it.",
+      "lang": "rust",
+      "source": [
+        "use std::ffi::{CStr, CString, c_char};",
+        "",
+        "#[unsafe(no_mangle)] // keep the symbol name `add`, as C would",
+        "pub extern \"C\" fn add(a: i32, b: i32) -> i32 {",
+        "    a + b",
+        "}",
+        "",
+        "/// Returns a string Rust allocated; the caller must hand it back to `greet_free`.",
+        "#[unsafe(no_mangle)]",
+        "pub extern \"C\" fn greet(name: *const c_char) -> *mut c_char {",
+        "    let name = unsafe { CStr::from_ptr(name) }.to_string_lossy();",
+        "    CString::new(format!(\"hello, {name}\")).unwrap().into_raw()",
+        "}",
+        "",
+        "#[unsafe(no_mangle)]",
+        "pub extern \"C\" fn greet_free(s: *mut c_char) {",
+        "    if !s.is_null() {",
+        "        drop(unsafe { CString::from_raw(s) }); // Rust frees what Rust allocated",
+        "    }",
+        "}"
+      ]
+    },
+    {
+      "type": "code",
+      "title": "Calling it from Python, and giving the memory back",
+      "intro": "Run from the crate’s directory after the build. Declaring `greet`’s result as `c_char_p` would look simpler, but `ctypes` would copy the string into `bytes` and drop the pointer, so Rust’s allocation could never be freed.",
+      "lang": "python",
+      "source": [
+        "import ctypes, sys",
+        "",
+        "ext = {\"darwin\": \"dylib\", \"win32\": \"dll\"}.get(sys.platform, \"so\")",
+        "lib = ctypes.CDLL(f\"target/release/{'' if ext == 'dll' else 'lib'}greet.{ext}\")",
+        "",
+        "lib.add.argtypes = [ctypes.c_int32, ctypes.c_int32]",
+        "lib.add.restype = ctypes.c_int32",
+        "print(lib.add(2, 40))  # 42",
+        "",
+        "lib.greet.argtypes = [ctypes.c_char_p]",
+        "lib.greet.restype = ctypes.c_void_p  # keep the raw address",
+        "lib.greet_free.argtypes = [ctypes.c_void_p]",
+        "",
+        "ptr = lib.greet(b\"ffi\")",
+        "print(ctypes.string_at(ptr).decode())  # hello, ffi",
+        "lib.greet_free(ptr)  # without this the string leaks: Python's GC never sees it"
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Binding tools, from hand-written to generated",
+      "intro": "They differ in where the signature comes from and who writes the conversion code.",
+      "corner": "Tool",
+      "columns": ["Languages", "You describe the other side with", "What it does for you"],
+      "rows": [
+        { "label": "`ctypes`", "values": ["Python calls C", "`argtypes` and `restype` set in Python at run time", "Calls through libffi, no compiler needed; releases the GIL during each call. A wrong declaration crashes the process."] },
+        { "label": "CFFI", "values": ["Python calls C", "C declarations pasted as a string", "ABI mode calls through libffi like `ctypes`; API mode compiles a C wrapper against the real headers, which its authors call “massively faster” and safer."] },
+        { "label": "PyO3", "values": ["Rust and Python, both ways", "`#[pyfunction]`, `#[pyclass]`, `#[pymodule]` attributes", "Generates a CPython extension module: argument parsing, conversions, `Err` to exception, panics to `PanicException`."] },
+        { "label": "JNI", "values": ["Java and C or C++, both ways", "`native` methods in Java plus a matching C header", "Nothing automatic: C code reads fields through `JNIEnv` calls and manages local and global references by hand."] },
+        { "label": "Java FFM API", "values": ["Java calls C", "`FunctionDescriptor` and `MemoryLayout` objects in Java", "`Linker` turns a native symbol into a `MethodHandle`; an `Arena` frees the native memory it allocated when it closes. Final in Java 22."] },
+        { "label": "P/Invoke", "values": [".NET calls C, with callbacks back", "`[LibraryImport]` on a `static partial` method", "Since .NET 7 a source generator writes the marshalling code at compile time; the older `[DllImport]` builds an IL stub at run time, which ahead-of-time compilation can’t use."] },
+        { "label": "wasm-bindgen", "values": ["Rust compiled to WebAssembly and JavaScript, both ways", "`#[wasm_bindgen]` attributes", "Exports Rust functions and classes to JavaScript, imports JavaScript APIs into Rust, generates TypeScript types, and copies strings between the JavaScript heap and Wasm linear memory."] }
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Where FFI code breaks",
+      "intro": "The compiler on each side checks only its own half, so these bugs show up as crashes or leaks at run time.",
+      "items": [
+        { "name": "A wrong signature", "tag": "crash or garbage", "text": "A shared library carries names, not types. `ctypes` assumes every function returns a C `int` unless told otherwise, so a function that returns a pointer or a `double` hands back nonsense, and passing the wrong argument types can corrupt memory." },
+        { "name": "Collected too early", "tag": "use after free", "text": "A garbage-collected runtime doesn’t know native code kept a reference. Python’s docs warn that a `CFUNCTYPE` callback object must be kept alive while C can call it; JNI frees local references when the native method returns, and only global references survive until freed." },
+        { "name": "Freed by the wrong allocator", "tag": "heap corruption", "text": "Memory goes back to whoever allocated it. A pointer from Rust’s `CString::into_raw` must return to Rust through `CString::from_raw`, never to C’s `free()`, which is why libraries export their own `_free` functions." },
+        { "name": "Unwinding across the boundary", "tag": "abort or undefined behaviour", "text": "A Rust panic that reaches an `extern \"C\"` frame aborts the process, and a C++ exception that enters Rust is undefined behaviour. Catch panics with `catch_unwind` at the edge, or use the `\"C-unwind\"` ABI when unwinding is meant to cross." },
+        { "name": "Strings", "tag": "encoding", "text": "C wants NUL-terminated bytes, Rust strings aren’t terminated (hence `CString`), Java and JavaScript use UTF-16. wasm-bindgen copies each string and replaces unpaired UTF-16 surrogates with U+FFFD, so the Rust string can differ from the JavaScript one." },
+        { "name": "Threads and the GIL", "tag": "deadlock or no speedup", "text": "Only a thread holding CPython’s GIL may touch Python objects. Native code should release it around long work (`Py_BEGIN_ALLOW_THREADS`, PyO3’s `detach`). On the free-threaded build, importing an extension that hasn’t declared it is safe without the GIL turns the GIL back on." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Programs have always needed code written in another language: operating system services published as C functions, numeric libraries, drivers. Wikipedia traces the name “foreign function interface” to the Common Lisp standard; Haskell, Rust, Python and LuaJIT use it too, while Java calls its version the Java Native Interface. Most of these interfaces settled on the same meeting point. The Haskell 2010 report, which made its FFI part of the language standard, specifies only the C calling convention, and adds types such as `CInt` because C doesn’t fix how wide an `int` is.",
+      "Java shows how the design matured. JDK 1.0 shipped a native method interface that let C code read Java fields as members of C structs and relied on a conservative garbage collector that scanned the native stack. Both tied native libraries to one VM’s object layout and collector, so other Java vendors couldn’t adopt it. JNI, part of Java since 1.1 in 1997, replaced direct field access with function calls and opaque local and global references, so the VM can move objects and knows which ones native code still holds. It was portable but laborious: a Java declaration, a C header generated from it, and C glue for every function.",
+      "Dynamic languages took a lighter route. Python 2.5 added `ctypes` in 2006, which calls through libffi and can reach any C function from a signature described at run time. CFFI’s authors later argued that working at that binary level is fragile, because C libraries promise an API, not an exact layout, and let you compile a small wrapper from the real headers instead. The newest tools generate both sides from annotations in a typed language: .NET 7’s P/Invoke source generator in 2022, PyO3 and wasm-bindgen from Rust attributes, and Java 22’s Foreign Function & Memory API in 2024, written to replace what its JEP calls the “brittle machinery” of JNI with plain Java."
+    ],
+    "choices": [
+      { "choice": "Meet at the C ABI", "why": "Every language can already produce and call C functions, and operating systems publish their APIs that way. The price is that classes, exceptions and generics have to be flattened into functions, pointers and integers, and only code that follows the platform’s C convention can be called: JNI, for one, can’t reach a function compiled with any other convention." },
+      { "choice": "Opaque handles instead of raw object pointers", "why": "JDK 1.0 showed that letting C code read objects as structs breaks when a VM lays objects out differently, and forces the collector to scan native stacks. JNI’s references let the garbage collector move objects while native code holds them, at the cost of a function call per field access." },
+      { "choice": "Describe the C side from headers, not by hand", "why": "A signature typed into `ctypes` is a guess the library can’t check. CFFI’s API mode runs the C compiler over the real declarations, so struct layouts and types come from the headers, and the result calls the function directly instead of through libffi." },
+      { "choice": "Make the danger visible", "why": "A foreign call can break every guarantee of the calling language. Rust treats every foreign function as `unsafe`, so each call sits in an `unsafe` block, and Java’s FFM API lets programs use restricted native methods but warns about them by default." }
+    ],
+    "timeline": [
+      { "year": "1997", "text": "JDK 1.1 ships with the Java Native Interface" },
+      { "year": "2006", "text": "Python 2.5 adds `ctypes`, written by Thomas Heller, to the standard library" },
+      { "year": "2010", "text": "Haskell 2010 makes the foreign function interface part of the language standard" },
+      { "year": "2022", "text": ".NET 7 generates P/Invoke marshalling code at compile time with `[LibraryImport]`" },
+      { "year": "2024", "text": "Java 22 finalises the Foreign Function & Memory API (JEP 454) in March" },
+      { "year": "2025", "text": "Python 3.14 makes the free-threaded build officially supported; extensions declare whether they still need the GIL" }
+    ],
+    "sources": [
+      { "label": "Wikipedia: Foreign function interface (naming, operation)", "url": "https://en.wikipedia.org/wiki/Foreign_function_interface" },
+      { "label": "Haskell 2010 Report, chapter 8: Foreign Function Interface (C calling convention, `CInt`)", "url": "https://www.haskell.org/onlinereport/haskell2010/haskellch8.html" },
+      { "label": "Haskell 2010 Report: Preface (FFI added relative to Haskell 98)", "url": "https://www.haskell.org/onlinereport/haskell2010/haskellli2.html" },
+      { "label": "Oracle: JNI Specification, Introduction (JDK 1.0 native method interface and why it was replaced)", "url": "https://docs.oracle.com/en/java/javase/21/docs/specs/jni/intro.html" },
+      { "label": "Oracle: JNI Specification, Design Overview (local and global references, moving objects)", "url": "https://docs.oracle.com/en/java/javase/21/docs/specs/jni/design.html" },
+      { "label": "Wikipedia: Java version history (JDK 1.1 released 19 February 1997)", "url": "https://en.wikipedia.org/wiki/Java_version_history" },
+      { "label": "Python docs: What’s New in Python 2.5 (ctypes by Thomas Heller; released 19 September 2006)", "url": "https://docs.python.org/3/whatsnew/2.5.html" },
+      { "label": "CFFI docs: Goals (API level versus ABI level; Armin Rigo and Maciej Fijalkowski)", "url": "https://cffi.readthedocs.io/en/stable/goals.html" },
+      { "label": "Microsoft .NET Blog: Announcing .NET 7 (8 November 2022)", "url": "https://devblogs.microsoft.com/dotnet/announcing-dotnet-7/" },
+      { "label": "Microsoft Learn: P/Invoke source generation (introduced in .NET 7)", "url": "https://learn.microsoft.com/en-us/dotnet/standard/native-interop/pinvoke-source-generation" },
+      { "label": "OpenJDK: JEP 454, Foreign Function & Memory API (goals, JNI since Java 1.1, delivered in JDK 22)", "url": "https://openjdk.org/jeps/454" },
+      { "label": "OpenJDK: JDK 22 schedule (general availability 19 March 2024)", "url": "https://openjdk.org/projects/jdk/22/" },
+      { "label": "The Rustonomicon: Foreign Function Interface (foreign calls are unsafe)", "url": "https://doc.rust-lang.org/nomicon/ffi.html" },
+      { "label": "Python docs: What’s New in Python 3.14 (free-threaded build officially supported; released 7 October 2025)", "url": "https://docs.python.org/3/whatsnew/3.14.html" },
+      { "label": "PEP 703: Making the Global Interpreter Lock Optional in CPython (`Py_mod_gil` slot)", "url": "https://peps.python.org/pep-0703/" }
+    ]
+  },
+  "sources": [
+    { "label": "Python docs: ctypes (argtypes, restype defaults to int, cdecl and stdcall, CFUNCTYPE lifetime, GIL released around calls)", "url": "https://docs.python.org/3/library/ctypes.html" },
+    { "label": "Python docs: Thread states and the global interpreter lock (Py_BEGIN_ALLOW_THREADS)", "url": "https://docs.python.org/3/c-api/threads.html" },
+    { "label": "PEP 703: Making the Global Interpreter Lock Optional in CPython (Py_mod_gil slot re-enables the GIL)", "url": "https://peps.python.org/pep-0703/" },
+    { "label": "The Rustonomicon: Foreign Function Interface (extern “C”, no_mangle, repr(C), CString, calling conventions, unwinding)", "url": "https://doc.rust-lang.org/nomicon/ffi.html" },
+    { "label": "Rust std docs: CString (into_raw must be returned to Rust, not freed with free())", "url": "https://doc.rust-lang.org/std/ffi/struct.CString.html" },
+    { "label": "cppreference: Language linkage (extern “C”, calling convention and name mangling)", "url": "https://en.cppreference.com/w/cpp/language/language_linkage" },
+    { "label": "Microsoft Learn: x64 calling convention (RCX, RDX, R8, R9; shadow store)", "url": "https://learn.microsoft.com/en-us/cpp/build/x64-calling-convention" },
+    { "label": "Wikipedia: x86 calling conventions (System V AMD64 ABI registers and return values)", "url": "https://en.wikipedia.org/wiki/X86_calling_conventions" },
+    { "label": "libffi: A Portable Foreign Function Interface Library (used by CPython’s ctypes)", "url": "https://sourceware.org/libffi/" },
+    { "label": "CFFI docs: Overview (ABI and API modes; libffi is slow, API mode “massively faster”)", "url": "https://cffi.readthedocs.io/en/stable/overview.html" },
+    { "label": "CFFI docs: Goals", "url": "https://cffi.readthedocs.io/en/stable/goals.html" },
+    { "label": "PyO3 user guide 0.29.3: Error handling (PyResult, Err raises a Python exception)", "url": "https://pyo3.rs/v0.29.3/function/error-handling.html" },
+    { "label": "PyO3 user guide 0.29.3: Parallelism (Python::detach releases the GIL)", "url": "https://pyo3.rs/v0.29.3/parallelism.html" },
+    { "label": "PyO3 user guide 0.29.3: Conversion tables (str to &str, list to Vec<T>)", "url": "https://pyo3.rs/v0.29.3/conversions/tables.html" },
+    { "label": "PyO3 user guide 0.29.3: Supporting free-threaded CPython (re-enabling the GIL on import)", "url": "https://pyo3.rs/v0.29.3/free-threading.html" },
+    { "label": "PyO3 README (Polars and other projects built with it)", "url": "https://github.com/PyO3/pyo3" },
+    { "label": "Oracle: JNI Specification, Design Overview", "url": "https://docs.oracle.com/en/java/javase/21/docs/specs/jni/design.html" },
+    { "label": "OpenJDK: JEP 454, Foreign Function & Memory API", "url": "https://openjdk.org/jeps/454" },
+    { "label": "Microsoft Learn: Platform Invoke (P/Invoke), LibraryImport and callbacks", "url": "https://learn.microsoft.com/en-us/dotnet/standard/native-interop/pinvoke" },
+    { "label": "Microsoft Learn: P/Invoke source generation (IL stubs, Native AOT)", "url": "https://learn.microsoft.com/en-us/dotnet/standard/native-interop/pinvoke-source-generation" },
+    { "label": "The wasm-bindgen Guide: Introduction (strings, classes, TypeScript bindings)", "url": "https://rustwasm.github.io/docs/wasm-bindgen/introduction.html" },
+    { "label": "The wasm-bindgen Guide: str (copies between the JS heap and Wasm linear memory; unpaired surrogates)", "url": "https://rustwasm.github.io/docs/wasm-bindgen/reference/types/str.html" },
+    { "label": "Wikipedia: Foreign function interface", "url": "https://en.wikipedia.org/wiki/Foreign_function_interface" }
+  ]
+}

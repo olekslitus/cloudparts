@@ -1,0 +1,98 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "im (Rust)",
+  "concepts": ["functional-data-structures"],
+  "kinds": ["rrb-vectors"],
+  "provider": "oss",
+  "vendor": "Bodil Stokke",
+  "license": "MPL-2.0 (LGPL-3.0 before version 10)",
+  "website": "https://docs.rs/im/",
+  "repo": "https://github.com/bodil/im-rs",
+  "archived": {
+    "since": "2022-04-29",
+    "reason": "The last release, 15.1.0, came out on 29 April 2022, and the GitHub repository is now archived (read-only). Existing code keeps compiling, but bugs won’t be fixed. Move to `imbl`, a maintained fork whose 1.0 release was fully compatible with `im` 15.0.0, so switching is mostly a change of crate name.",
+    "alternatives": ["imbl"]
+  },
+  "summary": "Persistent collections for Rust: an RRB-tree `Vector`, a hash array mapped trie `HashMap` and B-tree `OrdMap`, with O(1) cloning and copy-on-write updates. Unmaintained since 2022.",
+  "intro": [
+    "The `im` crate offers immutable versions of the standard collections: `Vector` (an RRB tree), `HashMap` and `HashSet` (hash array mapped tries) and `OrdMap` and `OrdSet` (B-trees). Each tree node holds up to 64 values. Cloning a collection only bumps the reference count on its root; nodes are copied lazily, when one of the clones changes them, and then only the changed node and its parents. Values must implement `Clone`, so expensive values are best wrapped in `Rc` or `Arc`.",
+    "Rust’s ownership rules let `im` skip the usual price of immutability. If a node’s reference count says nobody else shares it, an update changes it in place, about an order of magnitude faster than copying and close to the standard collections, so there is no need for Clojure-style transients. The API follows `std::collections`, with mutating methods such as `push_back` and `insert` by default. `im` uses thread-safe `Arc` counters; the twin crate `im-rc` uses `Rc` and is about 20 to 25 percent faster but can’t be shared between threads. `Vector` acts like a plain array until it outgrows one chunk, then adds O(log n) concatenation and splitting, which `Vec` and `VecDeque` can’t do.",
+    "Bodil Stokke published the crate in April 2017. Version 11.0.0 (July 2018) rewrote `Vector` as an RRB tree and moved to a `std`-style API, and 12.0.0 split it into `im` and `im-rc`. The last release, 15.1.0, came out in April 2022 and the repository has since been archived. `imbl`, a fork that keeps the API and fixes bugs, carries the design on."
+  ],
+  "strengths": [
+    "O(1) `clone` and structural sharing make snapshots, undo history and sharing data between threads cheap",
+    "Copy-on-write in place when a node isn’t shared, so code that never clones runs almost as fast as with `std::collections`",
+    "`Vector` concatenates, splits and inserts in the middle in O(log n), which `Vec` and `VecDeque` can’t",
+    "An API close to `std::collections`, so `HashMap` and `BTreeMap` code ports with few changes"
+  ],
+  "limits": [
+    "Unmaintained: no release since 15.1.0 in April 2022 and the repository is archived; new projects should use the `imbl` fork",
+    "Slower than the standard collections at what they do best: `Vec` wins below several hundred elements, and `OrdMap` runs 2 to 3 times slower than `BTreeMap`",
+    "Values must be `Clone`; expensive values need wrapping in `Rc` or `Arc` to avoid deep copies"
+  ],
+  "worksWith": [
+    { "id": "rust", "how": "is a collections crate for" }
+  ],
+  "snippet": {
+    "lang": "rust",
+    "title": "O(1) clones, copy-on-write updates and RRB concatenation (`im = \"15.1.0\"`)",
+    "source": [
+      "use im::{HashMap, Vector};",
+      "",
+      "fn main() {",
+      "    let v1: Vector<u32> = (0..100_000).collect();",
+      "",
+      "    // clone is O(1): it only bumps the root's reference count",
+      "    let mut v2 = v1.clone();",
+      "    v2.set(0, 42); // copies the changed chunk and its path to the root",
+      "    println!(\"{} {}\", v1[0], v2[0]); // 0 42",
+      "",
+      "    // RRB trees concatenate and split in O(log n)",
+      "    let mut joined = v1.clone();",
+      "    joined.append(v2.clone());",
+      "    let tail = joined.split_off(150_000);",
+      "    println!(\"{} {}\", joined.len(), tail.len()); // 150000 50000",
+      "    println!(\"{:?}\", tail.head()); // Some(50000)",
+      "",
+      "    // HashMap is a hash array mapped trie; update returns a new map",
+      "    let prices = HashMap::unit(\"tea\", 3);",
+      "    let more = prices.update(\"cake\", 5);",
+      "    println!(\"{} {}\", prices.len(), more.len()); // 1 2",
+      "}"
+    ]
+  },
+  "history": {
+    "story": [
+      "Bodil Stokke published `im` on crates.io on 17 April 2017. Stokke’s argument was unusual for Rust: the type system already prevents accidental mutation, so the selling point of immutable collections is structural sharing, making a copy as cheap as copying a pointer, and a single default collection with no slow operations to trip over.",
+      "Version 11.0.0 (July 2018) was a rewrite. `Vector` became an RRB tree with head and tail chunks, following the ICFP 2015 RRB vector paper, replacing a Clojure-style vector trie; values were stored directly in nodes instead of behind an `Arc`; and the API was aligned with `std::collections`, mutable by default. Version 12.0.0 (August 2018) split the crate into `im` (thread-safe `Arc`) and `im-rc` (faster `Rc`). Releases continued to 15.0.0 (May 2020) and 15.1.0 (April 2022), after which development stopped. Joe Neeman forked it as `imbl` in August 2021, and that fork is still released."
+    ],
+    "choices": [
+      { "choice": "An RRB tree as the only list type", "why": "It is never much worse than iterating over the data: O(log n) split and join on top of fast indexing, so users don’t have to pick a specialised list per task." },
+      { "choice": "Copy-on-write instead of transients", "why": "Reference counts show whether a node is shared, so unshared nodes are updated in place automatically, without a separate mutable mode." },
+      { "choice": "Values stored directly in nodes", "why": "From 11.0.0, values of any `Clone` type live inside the nodes instead of behind an `Arc` each, at least doubling speed for `Copy` values and improving cache locality." },
+      { "choice": "Two crates: `im` and `im-rc`", "why": "Atomic reference counts make collections `Send` and `Sync` but cost speed, so the same code is published twice, with `Arc` and with `Rc`." }
+    ],
+    "timeline": [
+      { "year": "2017", "text": "Bodil Stokke publishes the first versions of `im` (April)" },
+      { "year": "2018", "text": "10.0.0, the first release called stable (March); 11.0.0 rewrites `Vector` as an RRB tree (July)" },
+      { "year": "2020", "text": "15.0.0 (May)" },
+      { "year": "2021", "text": "Joe Neeman forks it as `imbl`" },
+      { "year": "2022", "text": "15.1.0, the last release (April); the repository is later archived" }
+    ],
+    "sources": [
+      { "label": "crates.io API: im (versions and publish dates, 1.0.0 in April 2017 to 15.1.0 in April 2022)", "url": "https://crates.io/api/v1/crates/im" },
+      { "label": "im changelog (10.0.0, 11.0.0 RRB Vector, 12.0.0 im and im-rc, 15.1.0)", "url": "https://github.com/bodil/im-rs/blob/master/CHANGELOG.md" },
+      { "label": "im crate documentation 15.1.0 (why immutable data structures in Rust)", "url": "https://docs.rs/im/15.1.0/im/" },
+      { "label": "imbl README (a fork of the unmaintained im crate; Copyright 2021 Joe Neeman)", "url": "https://github.com/jneem/imbl" },
+      { "label": "crates.io API: imbl (first published August 2021)", "url": "https://crates.io/api/v1/crates/imbl" }
+    ]
+  },
+  "sources": [
+    { "label": "im crate documentation 15.1.0 (data structures, cloning, in-place mutation, thread safety)", "url": "https://docs.rs/im/15.1.0/im/" },
+    { "label": "im changelog", "url": "https://github.com/bodil/im-rs/blob/master/CHANGELOG.md" },
+    { "label": "bodil/im-rs on GitHub (public archive)", "url": "https://github.com/bodil/im-rs" },
+    { "label": "crates.io API: im (latest version 15.1.0, 29 April 2022; licence MPL-2.0+)", "url": "https://crates.io/api/v1/crates/im" },
+    { "label": "imbl README (fork of the unmaintained im crate, compatible with im 15)", "url": "https://github.com/jneem/imbl" }
+  ],
+  "checked": "2026-10-09"
+}

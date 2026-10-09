@@ -1,0 +1,150 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Cube",
+  "concepts": ["semantic-layer", "static-read-models"],
+  "kinds": ["pre-aggregations"],
+  "provider": "oss",
+  "vendor": "Cube Dev, Inc.",
+  "license": "Apache 2.0 (Cube Core backend), MIT (client libraries)",
+  "website": "https://cube.dev/",
+  "repo": "https://github.com/cube-js/cube",
+  "summary": "An open-source, headless semantic layer: define metrics, joins and access rules once in YAML, query them over SQL, REST or GraphQL, and serve repeated queries from rollups it builds ahead of time.",
+  "intro": [
+    "Cube sits between a SQL data source and everything that reads from it. You describe the data in cubes (entities such as orders, with their measures, dimensions and joins) and views (curated datasets built from cubes), in YAML or JavaScript files kept in git. Consumers query those names through a Postgres-compatible SQL API, REST (JSON) or GraphQL, and AI agents through an MCP server. Cube checks each query against the model, applies access policies, generates SQL in the source’s dialect and returns the result. It connects to warehouses such as Snowflake, BigQuery, Databricks and ClickHouse, query engines such as Athena, Trino and DuckDB, and application databases such as PostgreSQL and MySQL. It has no UI of its own: that is what “headless” means here.",
+    "Its cache is where it becomes a static read model. Pre-aggregations are rollup tables declared in the data model, for example revenue and order count by status and month. A refresh worker builds them in the background and stores them in Cube Store, a distributed engine written in Rust on Apache Arrow and DataFusion that keeps the data as Parquet files in S3, Google Cloud Storage or MinIO. When a query arrives, Cube’s aggregate awareness finds a matching rollup and answers from it instead of the warehouse. Each rollup has a refresh key, every hour by default, or a cheap SQL check such as `SELECT MAX(created_at) FROM orders` that triggers a rebuild only when the data changed. Cube Core is the open-source project; Cube, the company’s commercial product, adds workbooks, dashboards, an analytics chat, hosting and more on the same model."
+  ],
+  "strengths": [
+    "One model for every consumer: SQL, REST, GraphQL and MCP interfaces mean BI tools, apps and AI agents get the same metric definitions and access rules",
+    "Pre-aggregations answer matching queries from Cube Store without touching the warehouse, and a rollup-only mode lets the warehouse stay suspended between refreshes",
+    "Incremental, partitioned rollups refresh only recent partitions (say the last three months), which cuts rebuild time and cost on per-scan warehouses such as BigQuery and Athena",
+    "Code-first and open: Apache 2.0 backend, models in git, and a data model that runs unchanged in Cube Core and the commercial Cube"
+  ],
+  "limits": [
+    "Development mode is an authentication bypass: with `CUBEJS_DEV_MODE=true` the REST and GraphQL APIs accept requests without a token, so it must never be reachable from the internet",
+    "Rollups only help queries they match; anything else goes to the source, or fails in rollup-only mode on a single node, so the set of pre-aggregations needs ongoing tuning",
+    "Rollups are only as fresh as their refresh key, and builds queue when there are too many partitions: Cube’s guidance is to avoid more than 64, and fewer when a rollup has extra indexes",
+    "It needs a SQL source: Cube isn’t built to read files or REST APIs directly (use DuckDB for Parquet on S3), and some drivers need write access to build rollups in the source first",
+    "Several conveniences, such as importing dbt models and scheduled dashboard refreshes, are Premium features of the commercial Cube rather than part of Cube Core"
+  ],
+  "worksWith": [
+    { "id": "snowflake", "how": "compiles metric queries to SQL for" },
+    { "id": "bigquery", "how": "compiles metric queries to SQL for" },
+    { "id": "databricks", "how": "compiles metric queries to SQL for" },
+    { "id": "clickhouse", "how": "compiles metric queries to SQL for" },
+    { "id": "postgresql", "how": "compiles metric queries to SQL for" },
+    { "id": "athena", "how": "compiles metric queries to SQL for" },
+    { "id": "trino", "how": "compiles metric queries to SQL for" },
+    { "id": "duckdb", "how": "queries Parquet and CSV files through" },
+    { "id": "s3", "how": "keeps Cube Store rollup files in" },
+    { "id": "parquet", "how": "stores pre-aggregations as" }
+  ],
+  "snippet": {
+    "lang": "yaml",
+    "title": "model/cubes/orders.yml: a cube with a monthly rollup that matching queries are served from",
+    "source": [
+      "cubes:",
+      "  - name: orders",
+      "    sql_table: orders",
+      "",
+      "    measures:",
+      "      - name: count",
+      "        type: count",
+      "      - name: revenue",
+      "        sql: amount",
+      "        type: sum",
+      "",
+      "    dimensions:",
+      "      - name: id",
+      "        sql: id",
+      "        type: number",
+      "        primary_key: true",
+      "      - name: status",
+      "        sql: status",
+      "        type: string",
+      "      - name: created_at",
+      "        sql: created_at",
+      "        type: time",
+      "",
+      "    pre_aggregations:",
+      "      - name: revenue_by_status_month",
+      "        measures: [revenue, count]",
+      "        dimensions: [status]",
+      "        time_dimension: created_at",
+      "        granularity: month",
+      "        refresh_key:",
+      "          every: 1 hour",
+      "",
+      "# Query it (dev mode needs no token):",
+      "#   curl -G localhost:4000/cubejs-api/v1/load --data-urlencode 'query={\"measures\":[\"orders.revenue\"],",
+      "#     \"dimensions\":[\"orders.status\"],\"timeDimensions\":[{\"dimension\":\"orders.created_at\",\"granularity\":\"month\"}]}'",
+      "# The response lists dev_pre_aggregations.orders_revenue_by_status_month under usedPreAggregations:",
+      "# the answer came from the rollup in Cube Store, not from the orders table."
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Cube’s two cache levels",
+      "intro": "Both are on the read path; only the second is computed ahead of time.",
+      "corner": "",
+      "columns": ["In-memory cache", "Pre-aggregations"],
+      "rows": [
+        { "label": "What it stores", "values": ["Results of queries already run, keyed by the generated SQL", "Rollup tables declared in the data model, stored as Parquet in Cube Store"] },
+        { "label": "When it’s filled", "values": ["On the first request for a query", "Ahead of time, by a background refresh worker"] },
+        { "label": "When it’s refreshed", "values": ["When the cube’s refresh key changes; checked every 2 minutes on Athena, BigQuery, Databricks, Firebolt, Presto and Snowflake, every 10 seconds elsewhere", "Every hour by default, or when a refresh SQL check returns a new value; partitioned rollups can refresh only a recent window"] },
+        { "label": "Set up", "values": ["On by default", "Declared per cube under `pre_aggregations`"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Artyom Keydunov and Pavel Tiunov founded Statsbot in 2016, a business intelligence tool that pulled reports into Slack. To power it they built an engine that generated SQL, cached results and handled security between databases and the front end. Statsbot’s users kept asking whether they could use that engine for their own internal or customer-facing analytics, so the founders released it on its own as Cube.js, an open-source analytics framework, in 2019, launching it on Hacker News.",
+      "Cube.js already sped up queries with pre-aggregations, but they lived in the source database or a separate PostgreSQL or MySQL instance, and that store became the bottleneck for concurrency and latency. In April 2021 Cube Store became generally available: a pre-aggregation store written entirely in Rust on Arrow, DataFusion and Parquet. By August 2022 more of the code was Rust than JavaScript, distribution had moved from npm to Docker, and the company dropped the “.js”: Cube.js became Cube, a headless BI platform.",
+      "The company now sells Cube as an agentic analytics platform with workbooks, dashboards and an AI chat built on the same model, and maintains the open-source part as Cube Core. Its pitch for a semantic layer has shifted with it: agents that write SQL against raw tables produce inconsistent metrics, while agents that query a governed model get consistent ones."
+    ],
+    "choices": [
+      {
+        "choice": "Headless: APIs instead of a UI",
+        "why": "Statsbot’s users wanted the engine behind their own apps and dashboards, so Cube exposes SQL, REST and GraphQL and leaves the visualisation to whatever sits on top."
+      },
+      {
+        "choice": "A dedicated store for rollups",
+        "why": "Keeping pre-aggregations in PostgreSQL or MySQL limited concurrency and latency and lacked features such as approximate distinct counts, so Cube built Cube Store as a drop-in replacement that scales out with more workers."
+      },
+      {
+        "choice": "Rust, Arrow and Parquet",
+        "why": "The team wanted low-level performance for the store and built on existing open-source pieces: Parquet for data at rest, Arrow in memory and DataFusion to execute queries."
+      },
+      {
+        "choice": "Models as code",
+        "why": "Data models, configuration and access policies are files in version control, so changes go through review and CI, and AI tools can propose edits through the same workflow."
+      }
+    ],
+    "timeline": [
+      { "year": "2016", "text": "Keydunov and Tiunov found Statsbot and build the engine behind it" },
+      { "year": "2019", "text": "Cube.js released as an open-source analytics framework" },
+      { "year": "2020", "text": "Cube Dev raises a $6.2M seed round led by Bain Capital Ventures" },
+      { "year": "2021", "text": "Cube Store, written in Rust, becomes generally available in April" },
+      { "year": "2022", "text": "Cube.js is renamed Cube in August" }
+    ],
+    "sources": [
+      { "label": "TechCrunch: Cube Dev raises $6.2M for its open-source data platform (Sept 2020; Statsbot origin)", "url": "https://techcrunch.com/2020/09/29/cube-js-raises-6-5m-for-its-open-source-data-platform/" },
+      { "label": "Pulse 2.0: interview with Cube CEO Artyom Keydunov (Cube Core launch on Hacker News in 2019)", "url": "https://pulse2.com/cube-profile-artyom-keydunov-interview/amp/" },
+      { "label": "Cube blog: Introducing Cube Store (Apr 2021)", "url": "https://cube.dev/blog/introducing-cubestore" },
+      { "label": "Cube blog: Cube.js is now Cube (Aug 2022)", "url": "https://cube.dev/blog/cube-js-is-now-cube" },
+      { "label": "Cube docs: Introduction (Cube Core, code-first, semantic layer for AI agents)", "url": "https://docs.cube.dev/docs/introduction" }
+    ]
+  },
+  "sources": [
+    { "label": "GitHub: cube-js/cube README (Cube Core, data sources, dev mode, licences)", "url": "https://github.com/cube-js/cube" },
+    { "label": "Cube docs: Introduction (cubes and views, access control, pre-aggregations, SQL, REST, GraphQL and MCP)", "url": "https://docs.cube.dev/docs/introduction" },
+    { "label": "Cube docs: Pre-aggregations overview (in-memory cache, refresh keys and defaults)", "url": "https://docs.cube.dev/docs/pre-aggregations" },
+    { "label": "Cube docs: Getting started with pre-aggregations", "url": "https://docs.cube.dev/docs/pre-aggregations/getting-started-pre-aggregations" },
+    { "label": "Cube docs: Using pre-aggregations (rollup-only mode, refresh keys, partitions, best practices)", "url": "https://docs.cube.dev/docs/pre-aggregations/using-pre-aggregations" },
+    { "label": "Cube docs: Cube Store architecture (Rust, Arrow, DataFusion, Parquet in S3, GCS or MinIO)", "url": "https://docs.cube.dev/docs/pre-aggregations/cube-store-architecture" },
+    { "label": "Cube docs: Data sources (warehouses, query engines, databases; no direct file or API access)", "url": "https://docs.cube.dev/admin/connect-to-data/data-sources" },
+    { "label": "Cube docs: dbt integration (Premium and above plans)", "url": "https://docs.cube.dev/docs/integrations/dbt" },
+    { "label": "Cube docs: Scheduled refreshes of dashboards (Premium and Enterprise plans)", "url": "https://docs.cube.dev/docs/explore-analyze/scheduled-refreshes" }
+  ],
+  "checked": "2026-10-09"
+}

@@ -1,0 +1,115 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "nanopb",
+  "concepts": ["binary-parsing"],
+  "kinds": ["schema-codegen"],
+  "provider": "oss",
+  "vendor": "Open-source project by Petteri Aimonen",
+  "license": "zlib",
+  "website": "https://jpa.kapsi.fi/nanopb/",
+  "repo": "https://github.com/nanopb/nanopb",
+  "summary": "A small Protocol Buffers implementation in ANSI C for microcontrollers: a generator turns `.proto` files into C structs, and a runtime of a few kilobytes encodes and decodes them without `malloc`.",
+  "intro": [
+    "You write an ordinary `.proto` file, the same one a server in Go or Java would use. `nanopb_generator.py` reads it with Google’s `protoc` and writes a `.pb.h` with a C struct per message and a `.pb.c` with field descriptors. The runtime is three small C files: `pb_common.c` plus `pb_encode.c`, `pb_decode.c` or both, and using only one of the last two halves the code. Strings, bytes and repeated fields become callbacks by default; give them a `max_size` or `max_count` option, in the `.proto` or in a separate `.options` file, and they become fixed arrays inside the struct with a count field, and the generator also computes each message’s worst-case encoded size. Streams are a struct holding a callback, so a message can be encoded straight to `stdout`, a socket or any other sink your callback writes to, and callbacks let you process messages larger than the RAM you have.",
+    "The docs give the runtime as 5 to 20 kB of code, depending on processor and options, and about 1 kB of stack, and target 32-bit microcontrollers. Everything can be allocated statically or on the stack; `malloc` support is optional. A written security model lists what holds even for malicious input: the decoder never reads more than the stream’s remaining bytes, never touches memory outside the message struct, and leaves counts within array bounds. Build rules exist for Make, CMake, Bazel, Meson, Conan, PlatformIO and vcpkg, and the Zephyr RTOS ships it as a module."
+  ],
+  "strengths": [
+    "Fits small devices: 5 to 20 kB of code, about 1 kB of stack, and no heap needed",
+    "Standard `.proto` files and the standard wire format, so a sensor in C and a backend using any other Protocol Buffers library share one schema",
+    "A documented security model for untrusted input, with fixes published as GitHub security advisories",
+    "Packaged for embedded toolchains: Zephyr, PlatformIO, Arduino, CMake, Bazel and Meson"
+  ],
+  "limits": [
+    "Sizes are your job: without `max_size` or `max_count`, strings and repeated fields become callbacks you write by hand",
+    "Drops unknown fields when decoding, has no reflection, doesn’t support the deprecated groups feature, and always packs numeric arrays",
+    "Trades speed for code size, and has no stable ABI between versions, so using it as a shared library needs care",
+    "The C runtime still has bugs: 0.4.9.2 (August 2026) fixed an attacker-controlled pointer call through callbacks in oneofs and added a recursion depth limit"
+  ],
+  "worksWith": [
+    { "id": "protobuf", "how": "is a small C implementation of" },
+    { "id": "c", "how": "generates message structs and codecs in" }
+  ],
+  "snippet": {
+    "lang": "c",
+    "title": "Encode and decode a reading with a fixed-size array, then reject a message that would overflow it",
+    "source": [
+      "/* reading.proto:",
+      " *   syntax = \"proto3\";",
+      " *   import \"nanopb.proto\";",
+      " *   message Reading {",
+      " *     uint32 sensor_id = 1;",
+      " *     repeated sint32 temps = 2 [(nanopb).max_count = 8]; // hundredths of a degree",
+      " *   }",
+      " * nanopb_generator.py reading.proto  ->  reading.pb.h, reading.pb.c",
+      " * generated: typedef struct { uint32_t sensor_id; pb_size_t temps_count; int32_t temps[8]; } Reading;",
+      " */",
+      "#include <stdio.h>",
+      "#include <pb_encode.h>",
+      "#include <pb_decode.h>",
+      "#include \"reading.pb.h\"",
+      "",
+      "int main(void) {",
+      "    uint8_t buf[Reading_size];  /* worst case, computed by the generator: 54 */",
+      "    Reading out = Reading_init_zero;",
+      "    out.sensor_id = 7;",
+      "    out.temps_count = 2;",
+      "    out.temps[0] = 2100;",
+      "    out.temps[1] = -100;",
+      "",
+      "    pb_ostream_t os = pb_ostream_from_buffer(buf, sizeof buf);",
+      "    if (!pb_encode(&os, Reading_fields, &out)) return 1;",
+      "    for (size_t i = 0; i < os.bytes_written; i++) printf(\"%02x \", buf[i]);",
+      "    printf(\"\\n\");  /* 08 07 12 04 e8 20 c7 01 */",
+      "",
+      "    Reading in = Reading_init_zero;  /* no malloc: the array lives inside the struct */",
+      "    pb_istream_t is = pb_istream_from_buffer(buf, os.bytes_written);",
+      "    if (pb_decode(&is, Reading_fields, &in))",
+      "        printf(\"sensor %u: %d, %d\\n\", (unsigned)in.sensor_id, (int)in.temps[0], (int)in.temps[1]);",
+      "    /* sensor 7: 2100, -100 */",
+      "",
+      "    /* a hostile sender packs 9 readings into room for 8 */",
+      "    const uint8_t nine[] = {0x08, 0x07, 0x12, 0x09, 2, 2, 2, 2, 2, 2, 2, 2, 2};",
+      "    is = pb_istream_from_buffer(nine, sizeof nine);",
+      "    if (!pb_decode(&is, Reading_fields, &in))",
+      "        printf(\"rejected: %s\\n\", PB_GET_ERROR(&is));  /* rejected: array overflow */",
+      "    return 0;",
+      "}"
+    ]
+  },
+  "history": {
+    "story": [
+      "Protocol Buffers gives every message a schema and a compact wire format, which suits devices sending telemetry to servers. Using it on a microcontroller, though, needs an implementation with minimal RAM and code space and no dependence on a heap. Petteri Aimonen wrote nanopb for that in 2011, and its first stable release, 0.1.0, came out in January 2012.",
+      "The design kept the device side small: one generic runtime driven by generated descriptors, and fixed-size fields chosen in the schema so that messages fit in static memory. Over the next decade it grew optional `malloc` support (2014), proto3 singular fields (2016) and, in 0.4.0 at the end of 2019, a new descriptor format, installation from pip and the option to use `protoc` from the `grpcio-tools` package. Its releases continue in the 0.4.9 series, and recent ones include fixes for security issues in decoding untrusted messages."
+    ],
+    "choices": [
+      { "choice": "Static allocation from limits in the schema", "why": "With `max_size` and `max_count`, every field has a known size, so a message is a plain C struct with no `malloc`, and overlong input is rejected instead of overflowing." },
+      { "choice": "A generic runtime driven by descriptors", "why": "The encode and decode functions take a `pb_msgdesc_t` describing the fields, so adding a message adds data rather than code; the docs accept that some speed is lost for code size." },
+      { "choice": "Streams as callbacks", "why": "Encoding through a callback means the output goes wherever the callback writes, and messages larger than RAM can be processed piece by piece." },
+      { "choice": "Reuse Google’s `protoc` for the `.proto` files", "why": "The generator relies on `protoc` to read the schema, so the same `.proto` file serves the device and every other Protocol Buffers library." }
+    ],
+    "timeline": [
+      { "year": "2011", "text": "Petteri Aimonen writes nanopb" },
+      { "year": "2012", "text": "0.1.0, the first stable release (January)" },
+      { "year": "2014", "text": "Optional `malloc` support (0.2.7); 0.3.0 splits out `pb_common.c`" },
+      { "year": "2016", "text": "0.3.7 adds proto3-style singular fields" },
+      { "year": "2019", "text": "0.4.0: new field descriptor format, installable from pip" },
+      { "year": "2026", "text": "0.4.9.2 fixes an attacker-controlled pointer call and limits nesting depth" }
+    ],
+    "sources": [
+      { "label": "nanopb LICENSE.txt (Copyright (c) 2011 Petteri Aimonen, zlib licence)", "url": "https://github.com/nanopb/nanopb/blob/master/LICENSE.txt" },
+      { "label": "nanopb CHANGELOG (0.1.0 in January 2012 to 0.4.9.2 in August 2026)", "url": "https://github.com/nanopb/nanopb/blob/master/CHANGELOG.txt" },
+      { "label": "nanopb docs: Overview (overall structure, features and limitations)", "url": "https://jpa.kapsi.fi/nanopb/docs/" },
+      { "label": "nanopb docs: Basic concepts (generator, protoc, streams)", "url": "https://jpa.kapsi.fi/nanopb/docs/concepts.html" }
+    ]
+  },
+  "sources": [
+    { "label": "nanopb README (usage, generator, build systems)", "url": "https://github.com/nanopb/nanopb" },
+    { "label": "nanopb docs: Overview (5 to 20 kB code, ~1 kB stack, limitations)", "url": "https://jpa.kapsi.fi/nanopb/docs/" },
+    { "label": "nanopb docs: Basic concepts (max_size, max_count, .options files, callbacks)", "url": "https://jpa.kapsi.fi/nanopb/docs/concepts.html" },
+    { "label": "nanopb docs: Security model (trusted and untrusted data, invariants)", "url": "https://jpa.kapsi.fi/nanopb/docs/security.html" },
+    { "label": "nanopb CHANGELOG (security fixes in 0.4.9.1 and 0.4.9.2)", "url": "https://github.com/nanopb/nanopb/blob/master/CHANGELOG.txt" },
+    { "label": "Zephyr docs: Nanopb (module, generator options)", "url": "https://docs.zephyrproject.org/latest/services/serialization/nanopb.html" },
+    { "label": "nanopb LICENSE.txt (zlib)", "url": "https://github.com/nanopb/nanopb/blob/master/LICENSE.txt" }
+  ],
+  "checked": "2026-10-09"
+}

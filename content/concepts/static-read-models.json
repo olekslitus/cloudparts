@@ -1,0 +1,343 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Static read models",
+  "category": "design",
+  "order": 55,
+  "summary": "Render the views readers need ahead of time, as JSON, HTML or Parquet files in object storage behind a CDN, so a read is a file fetch with no database on the path. Also called ahead-of-time view generation or precomputed read models.",
+  "howItWorks": "It is the read side of CQRS taken to the extreme. Writes still go to a command side that checks the rules and saves the change in a database or event store. Each change, or a schedule, triggers a projector: a job that works out which views the change affects, renders each one in full (`products/42.json`, `categories/kettles.json`, a dashboard’s `daily-orders.csv`) and writes it to object storage. A CDN serves those files, so readers never touch the write database, and the number of readers costs bandwidth, not queries. The price is staleness and fan-out. A reader sees the new data only after the projector has run, the file is written and the CDN copy has expired or been invalidated: seconds to minutes with events, up to a whole interval with a schedule. One write can touch many views (a price change updates the product page, its category listing and every search page that shows it), and each one is a full file rewrite. Write each file atomically, as one whole `PUT` or a write to a temporary name and a rename, so readers see the old version or the new one, never half of each. Then expire the cached copy with a short `Cache-Control: max-age`, an explicit invalidation, or a new versioned file name. The same idea appears in three forms: event-driven projections that write files, data apps that run their queries at build time and ship a static site, and pre-aggregated rollups refreshed before anyone asks.",
+  "analogy": "A railway station’s printed timetable. Planners change the schedule in their own system, then print new posters and paste them up on every platform. Thousands of travellers read the posters without asking anyone, but a change made this morning only reaches them once someone has reprinted and replaced every poster it affects.",
+  "useWhen": [
+    "Reads outnumber writes by orders of magnitude and the same few page shapes are read again and again: product pages, public profiles, status pages, published reports",
+    "Readers can tolerate data that is seconds or minutes old",
+    "You want reads to keep working when the write database is slow, down or being migrated",
+    "Dashboards and reports whose data changes daily or hourly, built on a schedule"
+  ],
+  "avoidWhen": [
+    "Each user sees their own data or queries with ad hoc filters: the number of possible views explodes, so serve those from a database or an API",
+    "Users must see their own change immediately (strong read-your-writes), such as a balance right after a transfer",
+    "One write fans out to thousands of views, or the data changes faster than you can rewrite and invalidate the files"
+  ],
+  "example": "A shop has 40,000 products, about 200 price changes an hour and 3 million product and category page views a day. A `ChangePrice` command updates PostgreSQL and records a `PriceChanged` event. A projector rewrites `products/p1.json` and the listing file for its category in S3, then invalidates both paths in CloudFront. That is 400 file writes an hour against 125,000 page views an hour, almost all of them CDN hits that never reach S3, let alone the database. A shopper can see the old price for up to a minute; the checkout reads the current price from the write side, so nobody is charged the stale one.",
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "import json, os, tempfile",
+      "from pathlib import Path",
+      "",
+      "ROOT = Path(tempfile.mkdtemp())          # stands in for an S3 bucket behind a CDN",
+      "",
+      "def publish(key: str, view: dict) -> None:",
+      "    path = ROOT / key",
+      "    path.parent.mkdir(parents=True, exist_ok=True)",
+      "    tmp = path.with_suffix(\".tmp\")",
+      "    tmp.write_text(json.dumps(view))",
+      "    os.replace(tmp, path)                # readers see the old file or the new one, never half",
+      "",
+      "# Write side: the source of truth (a database in real life)",
+      "products = {\"p1\": {\"name\": \"Kettle\", \"price\": 30, \"category\": \"kitchen\"},",
+      "            \"p2\": {\"name\": \"Toaster\", \"price\": 45, \"category\": \"kitchen\"}}",
+      "",
+      "# Projector: one change re-renders every view that shows the product",
+      "def on_price_changed(product_id: str, price: int) -> list[str]:",
+      "    products[product_id][\"price\"] = price",
+      "    p = products[product_id]",
+      "    publish(f\"products/{product_id}.json\", p)",
+      "    listing = [{\"id\": i, **q} for i, q in products.items() if q[\"category\"] == p[\"category\"]]",
+      "    publish(f\"categories/{p['category']}.json\", {\"items\": listing})",
+      "    return [f\"products/{product_id}.json\", f\"categories/{p['category']}.json\"]",
+      "",
+      "print(on_price_changed(\"p1\", 28))        # ['products/p1.json', 'categories/kitchen.json']",
+      "",
+      "# Read side: a plain file fetch, no database involved",
+      "print(json.loads((ROOT / \"categories/kitchen.json\").read_text())[\"items\"][0])",
+      "# {'id': 'p1', 'name': 'Kettle', 'price': 28, 'category': 'kitchen'}"
+    ]
+  },
+  "related": ["cqrs", "cache", "cdn", "olap", "semantic-layer"],
+  "diagram": {
+    "caption": "Commands reach the write side, which records an event per change. The projector reads the events at its own pace and rewrites both files each change affects. Readers ask the CDN for product and category pages; most are hits, and misses fetch the file from object storage. No read ever reaches the database.",
+    "w": 860,
+    "h": 310,
+    "zones": [
+      { "x": 14, "y": 12, "w": 832, "h": 118, "label": "Write side" },
+      { "x": 14, "y": 142, "w": 832, "h": 156, "label": "Read side: static files" }
+    ],
+    "nodes": [
+      {
+        "id": "cmds",
+        "x": 95,
+        "y": 75,
+        "label": "Users",
+        "sub": "commands · ChangePrice",
+        "emit": { "every": 1600, "jitter": 0.4, "color": 0 },
+        "out": ["write"]
+      },
+      {
+        "id": "write",
+        "x": 290,
+        "y": 75,
+        "label": "Command side",
+        "sub": "rules · database",
+        "mode": "gate",
+        "p": 0.9,
+        "denyText": "rejected",
+        "out": ["events"],
+        "concept": "cqrs"
+      },
+      {
+        "id": "events",
+        "x": 520,
+        "y": 75,
+        "kind": "log",
+        "cells": 6,
+        "retain": 40,
+        "label": "Change events",
+        "sub": "PriceChanged …",
+        "readers": [{ "to": "proj", "every": 1500, "name": "projector" }]
+      },
+      {
+        "id": "proj",
+        "x": 745,
+        "y": 220,
+        "label": "Projector",
+        "sub": "renders JSON",
+        "route": "fanout",
+        "out": ["vp", "vc"]
+      },
+      {
+        "id": "vp",
+        "x": 530,
+        "y": 185,
+        "label": "products/p1.json",
+        "sub": "object storage",
+        "concept": "object",
+        "mode": "reply",
+        "delay": 70
+      },
+      {
+        "id": "vc",
+        "x": 530,
+        "y": 260,
+        "label": "categories/kitchen.json",
+        "sub": "object storage",
+        "concept": "object",
+        "mode": "reply",
+        "delay": 70
+      },
+      {
+        "id": "cdn",
+        "x": 290,
+        "y": 222,
+        "label": "CDN",
+        "sub": "edge cache · max-age 60",
+        "concept": "cdn",
+        "mode": "cache",
+        "p": 0.85,
+        "route": "type",
+        "rules": { "product": ["vp"], "category": ["vc"] }
+      },
+      {
+        "id": "readers",
+        "x": 95,
+        "y": 222,
+        "label": "Users",
+        "sub": "reads · page loads",
+        "emit": {
+          "every": 300,
+          "jitter": 0.4,
+          "req": true,
+          "types": ["product", "category"],
+          "colorByType": { "product": 1, "category": 2 }
+        },
+        "out": ["cdn"]
+      }
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "When to regenerate the views",
+      "intro": "Every static read model needs a trigger. The choice sets how stale a reader’s view can be and how much rendering you pay for.",
+      "corner": "Trigger",
+      "columns": ["How it works", "Worst-case staleness", "Cost driver"],
+      "rows": [
+        {
+          "label": "On each change",
+          "values": [
+            "An event per write starts a projector that rewrites only the views that change touches",
+            "Event lag plus render and CDN expiry, usually seconds",
+            "Fan-out: views touched per write, times writes"
+          ]
+        },
+        {
+          "label": "On a schedule",
+          "values": [
+            "A job rebuilds every view (or every changed partition) every hour or day, as a static site build or a rollup refresh",
+            "The whole interval",
+            "Size of the full rebuild, even when little changed"
+          ]
+        },
+        {
+          "label": "On read, in the background",
+          "values": [
+            "The first request after a view expires gets the old file and triggers a re-render, as with stale-while-revalidate or Next.js incremental static regeneration",
+            "One expiry period plus one render",
+            "Popular views only; rarely read ones may stay old"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Getting new files past the cache",
+      "intro": "Writing the new file is half the job: copies at the CDN edge and in browsers keep serving the old one until they expire or are replaced.",
+      "items": [
+        {
+          "name": "Short max-age",
+          "tag": "simplest",
+          "text": "Serve views with `Cache-Control: max-age=60` (or `s-maxage` for the CDN only). Staleness is capped at a minute and nothing needs purging, but the CDN asks the origin again every minute for every popular file."
+        },
+        {
+          "name": "Invalidate paths",
+          "tag": "per changed file",
+          "text": "After writing, the projector asks the CDN to drop the changed paths. On CloudFront the first 1,000 invalidation paths a month are free and each further path is charged, so a write that fans out to many files gets expensive. A wildcard such as `/categories/*` counts as one path."
+        },
+        {
+          "name": "Invalidate by tag",
+          "tag": "for fan-out",
+          "text": "Tag each file with what it shows (`product:p1`) when you write it, then invalidate the tag: every cached file carrying it is dropped, whatever its path. CloudFront supports this with a `#` prefix in an invalidation request."
+        },
+        {
+          "name": "Versioned file names",
+          "tag": "no purge at all",
+          "text": "Write `daily-orders.2444bc86.csv` instead of overwriting `daily-orders.csv`, and point a small, short-lived index or page at the new name. Cached copies of old names stay correct forever, and rolling back is a pointer change. Static site generators that hash file contents work this way."
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Fan-out is the real cost",
+      "body": [
+        "A database view is computed when it is read; a static view is computed for every write that could change it, whether or not anyone reads it. If a write touches one product page, that is cheap. If it touches the product page, two category listings, 30 search result pages and the home page, every write becomes 34 renders, uploads and invalidations. Keep view shapes few and coarse, render pages that list many items from one shared file rather than embedding copies, and leave per-user and ad hoc queries to a database.",
+        "The same arithmetic limits build-time data apps. A legacy Evidence build pre-rendered every permutation of every parameterized page, and its docs suggested switching to single-page-app mode when a project had more than 1,000 pages because builds got slow. Microsoft’s Materialized View pattern makes the matching warning for views in general: when many queries each need their own view, the storage needed and its cost can become unacceptable."
+      ]
+    }
+  ],
+  "kinds": [
+    {
+      "id": "static-view-files",
+      "name": "Views as static files",
+      "summary": "An event-driven projector renders each affected view as a JSON or HTML file in object storage, and a CDN serves it, so the read path has no database at all.",
+      "body": [
+        "This is a CQRS read model whose store is a bucket. The write side publishes an event per change, often through a transactional outbox so a saved change can’t lose its event. A projector, typically a serverless function triggered by the event, loads what it needs, renders every view the change touches and writes each one as a whole object. On Amazon S3 a `PUT` that overwrites a key is atomic and strongly consistent: a reader gets either the old object or the new one, never part of each.",
+        "The CDN then has to let go of the old copy. A short `max-age` caps staleness without any extra calls; path or tag invalidations drop copies right away but cost per path beyond a free tier on CloudFront; versioned file names avoid invalidation entirely. Microsoft’s guidance for materialized views applies directly: keep serving the last complete version until the new one is built and checked, and alert when the newest view is older than you can accept, because a lost event means a view that is silently stale.",
+        "Pick it for public, read-heavy pages with a handful of shapes. Avoid it when views depend on who is asking, or when one write would rewrite thousands of files."
+      ],
+      "sources": [
+        { "label": "Azure Architecture Center: Materialized View pattern (refresh, staleness, atomic publication)", "url": "https://learn.microsoft.com/en-us/azure/architecture/patterns/materialized-view" },
+        { "label": "Azure Architecture Center: CQRS pattern (separate read store, outbox, idempotent consumers)", "url": "https://learn.microsoft.com/en-us/azure/architecture/patterns/cqrs" },
+        { "label": "Amazon S3 User Guide: data consistency model (strong read-after-write, atomic single-key updates)", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html" },
+        { "label": "Amazon CloudFront Developer Guide: Invalidate files (versioned names vs invalidation)", "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/Invalidation.html" },
+        { "label": "Amazon CloudFront Developer Guide: Invalidating content by cache tags", "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/invalidation-by-tags.html" },
+        { "label": "Amazon CloudFront Developer Guide: Pay for file invalidation (1,000 free paths a month)", "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/PayingForInvalidation.html" }
+      ]
+    },
+    {
+      "id": "build-time-data-apps",
+      "name": "Data apps built ahead of time",
+      "summary": "A static site generator for dashboards and reports: queries run once during the build, their results are saved as data files next to the pages, and the site is redeployed on a schedule.",
+      "body": [
+        "Observable Framework calls these steps data loaders: a script in any language (SQL, Python, R, a shell command) that runs during the build and writes its output, such as a CSV, JSON or PNG file, which the page then loads as a static file with a content hash in its name. Its docs give the reasons plainly: data is precomputed, so pages load instantly; snapshots can be aggregated and anonymized before they leave; and viewers never need access to the warehouse. Freshness comes from rebuilding, for example a GitHub Actions workflow that builds and deploys once a day.",
+        "Evidence started the same way in 2021, as “Jekyll or Hugo for SQL analysts”: its build ran every query, pre-rendered all pages and kept serving the last good version if a query failed. Its limits show the trade-off. The legacy version topped out around 2 million rows, needed a build for every data or content change and pre-rendered every page permutation, so Evidence’s current version runs queries on page load instead.",
+        "Pick it for reports and dashboards that change hourly or daily and look the same for every viewer. Interactivity happens in the browser over the shipped snapshot, often with DuckDB-Wasm, so keep that snapshot small."
+      ],
+      "sources": [
+        { "label": "Observable Framework docs: Data loaders (static snapshots at build time; source on GitHub)", "url": "https://github.com/observablehq/framework/blob/main/docs/data-loaders.md" },
+        { "label": "Observable Framework docs: What is Framework? (static-site architecture)", "url": "https://github.com/observablehq/framework/blob/main/docs/what-is-framework.md" },
+        { "label": "Observable Framework docs: Deploying (scheduled daily builds with GitHub Actions)", "url": "https://github.com/observablehq/framework/blob/main/docs/deploying.md" },
+        { "label": "Observable Framework docs: Files (content hashes in built file names)", "url": "https://github.com/observablehq/framework/blob/main/docs/files.md" },
+        { "label": "Observable Framework docs: SQL (client-side queries with DuckDB)", "url": "https://github.com/observablehq/framework/blob/main/docs/sql.md" },
+        { "label": "Evidence legacy docs: Deployment overview (queries run once at build time; SPA mode over 1,000 pages)", "url": "https://legacy-docs.evidence.dev/deployment/overview" },
+        { "label": "Evidence docs: Migration guide (legacy static builds vs queries on page load; ~2M rows)", "url": "https://docs.evidence.dev/migration-guide" },
+        { "label": "Hacker News: Launch HN: Evidence (YC S21), a static site generator for data analysts (Aug 2021)", "url": "https://news.ycombinator.com/item?id=28304781" }
+      ]
+    },
+    {
+      "id": "pre-aggregations",
+      "name": "Pre-aggregated rollups",
+      "summary": "Summary tables (revenue by day and region, say) that a database or a semantic layer builds and refreshes ahead of queries, then answers matching queries from instead of the raw rows.",
+      "body": [
+        "The views here are tables, not files, but the idea is the same: compute the answer before anyone asks. A materialized view in PostgreSQL stores a query’s result and is recomputed in full by `REFRESH MATERIALIZED VIEW`; its docs note the data is “not always current”, and the `CONCURRENTLY` option lets readers keep querying during a refresh. Cube calls its version pre-aggregations: rollups declared in the data model, built by a background refresh worker into Cube Store (which keeps them as Parquet files in object storage) and matched to incoming queries automatically, so a query for revenue by month never reaches the warehouse.",
+        "Freshness is a refresh key. In Cube a rollup is rebuilt every hour by default, or when a cheap check such as `SELECT MAX(created_at) FROM orders` returns a new value, and partitioned rollups can refresh only the last few months. In rollup-only mode Cube answers only from rollups, so the warehouse can stay suspended between refreshes.",
+        "Pick it for analytics with a known set of measures and dimensions over large data. Avoid it for one-off exploration, where every query has a new shape and no rollup matches."
+      ],
+      "sources": [
+        { "label": "PostgreSQL docs: REFRESH MATERIALIZED VIEW (CONCURRENTLY)", "url": "https://www.postgresql.org/docs/current/sql-refreshmaterializedview.html" },
+        { "label": "PostgreSQL docs: Materialized views (“the data is not always current”)", "url": "https://www.postgresql.org/docs/current/rules-materializedviews.html" },
+        { "label": "Cube docs: Using pre-aggregations (matching, rollup-only mode, refresh keys, partitions)", "url": "https://docs.cube.dev/docs/pre-aggregations/using-pre-aggregations" },
+        { "label": "Cube docs: Cube Store architecture (Parquet files in S3, GCS or MinIO)", "url": "https://docs.cube.dev/docs/pre-aggregations/cube-store-architecture" }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Rendering pages ahead of time is older than CQRS. When Tom Preston-Werner announced Jekyll in November 2008, Preston-Werner wanted a personal blog as a static site rather than “a dynamic site that required ongoing maintenance”: templates and posts go in, a complete static website comes out, ready for any web server. Rebuilding on change replaced querying on every request.",
+      "In February 2009 Martin Fowler described a pattern under the name Eager Read Derivation, from a talk by Greg Young at QCon San Francisco. Reads didn’t touch the main database at all. The domain model ran the derivation logic for every screen up front and sent messages that kept reporting databases, structured the same way as the read requests, up to date. Fowler pointed out the inconsistency window (click faster than the messages and you don’t see your own update) and noted that most high-volume websites already populated databases with derived data. Young’s CQRS Documents (2010) gave the reason it pays: the query side of most web systems handles two or more orders of magnitude more transactions than the command side.",
+      "The 2020s brought the idea to files and data apps. Next.js 9.5 made incremental static regeneration stable in July 2020, re-rendering static pages in the background as traffic arrives and keeping the old page if regeneration fails. Evidence launched in 2021 as a static site generator for SQL analysts, and Observable Framework followed in February 2024 with data loaders that snapshot data at build time. Evidence also shows the limit: in 2025 its new Studio product moved queries to the server, and its migration guide sets the old build per change and roughly 2 million rows against queries on page load over hundreds of millions."
+    ],
+    "choices": [
+      {
+        "choice": "Derive on write, not on read",
+        "why": "Reads vastly outnumber writes, so computing each view once per change is cheaper than once per request, and the read side needs no domain logic at all."
+      },
+      {
+        "choice": "Plain files instead of a read database",
+        "why": "Static files can be served by any web server or CDN, need no per-request compute and give viewers no route to the source data. Observable’s docs list speed, smaller payloads and security as the reasons for build-time snapshots."
+      },
+      {
+        "choice": "Publish whole versions, never patch in place",
+        "why": "A reader must never see half a view. Atomic object writes, versioned file names and builds that keep the last good version live when a query fails all serve the same goal."
+      },
+      {
+        "choice": "Bound the staleness instead of removing it",
+        "why": "Asynchronous derivation always has an inconsistency window. Designs make it explicit with an event lag budget, a `max-age`, a revalidate interval or a rebuild schedule, and keep anything that must be current, such as a checkout price, on the write side."
+      }
+    ],
+    "timeline": [
+      { "year": "2008", "text": "Tom Preston-Werner announces Jekyll, a static site generator for a personal blog" },
+      { "year": "2009", "text": "Martin Fowler describes Eager Read Derivation from Greg Young’s QCon talk" },
+      { "year": "2010", "text": "Greg Young’s CQRS Documents set out denormalised, eventually consistent query sides" },
+      { "year": "2020", "text": "Next.js 9.5 makes incremental static regeneration stable" },
+      { "year": "2021", "text": "Evidence launches as a static site generator for SQL analysts" },
+      { "year": "2024", "text": "Observable Framework 1.0 ships data loaders that snapshot data at build time" },
+      { "year": "2025", "text": "Evidence Studio moves queries server-side, leaving static builds as the legacy mode" }
+    ],
+    "sources": [
+      { "label": "Tom Preston-Werner: Blogging Like a Hacker (Nov 2008)", "url": "https://tom.preston-werner.com/2008/11/17/blogging-like-a-hacker.html" },
+      { "label": "Martin Fowler: Eager Read Derivation (bliki, Feb 2009)", "url": "https://martinfowler.com/bliki/EagerReadDerivation.html" },
+      { "label": "Greg Young: CQRS Documents (2010)", "url": "https://cqrs.files.wordpress.com/2010/11/cqrs_documents.pdf" },
+      { "label": "Next.js blog: Next.js 9.5 (stable incremental static regeneration, July 2020)", "url": "https://nextjs.org/blog/next-9-5" },
+      { "label": "Hacker News: Launch HN: Evidence (YC S21) (Aug 2021)", "url": "https://news.ycombinator.com/item?id=28304781" },
+      { "label": "GitHub: Observable Framework v1.0.0 release (Feb 2024)", "url": "https://github.com/observablehq/framework/releases/tag/v1.0.0" },
+      { "label": "Evidence blog: Introducing Evidence Studio (June 2025; server-side queries)", "url": "https://evidence.dev/blog/evidence-studio" },
+      { "label": "Observable Framework docs: What is Framework? (static-site architecture)", "url": "https://github.com/observablehq/framework/blob/main/docs/what-is-framework.md" }
+    ]
+  },
+  "sources": [
+    { "label": "Martin Fowler: CQRS (bliki, Jul 2011)", "url": "https://martinfowler.com/bliki/CQRS.html" },
+    { "label": "Martin Fowler: Eager Read Derivation (bliki, Feb 2009)", "url": "https://martinfowler.com/bliki/EagerReadDerivation.html" },
+    { "label": "Greg Young: CQRS Documents (2010)", "url": "https://cqrs.files.wordpress.com/2010/11/cqrs_documents.pdf" },
+    { "label": "Azure Architecture Center: CQRS pattern", "url": "https://learn.microsoft.com/en-us/azure/architecture/patterns/cqrs" },
+    { "label": "Azure Architecture Center: Materialized View pattern", "url": "https://learn.microsoft.com/en-us/azure/architecture/patterns/materialized-view" },
+    { "label": "Amazon S3 User Guide: data consistency model", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html" },
+    { "label": "Amazon CloudFront Developer Guide: Manage how long content stays in the cache (max-age, s-maxage)", "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/Expiration.html" },
+    { "label": "Amazon CloudFront Developer Guide: Invalidate files", "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/Invalidation.html" },
+    { "label": "Amazon CloudFront Developer Guide: Invalidating content by cache tags", "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/invalidation-by-tags.html" },
+    { "label": "Amazon CloudFront Developer Guide: Pay for file invalidation", "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/PayingForInvalidation.html" },
+    { "label": "Next.js blog: Next.js 9.5 (incremental static regeneration)", "url": "https://nextjs.org/blog/next-9-5" },
+    { "label": "Observable Framework docs: Data loaders", "url": "https://github.com/observablehq/framework/blob/main/docs/data-loaders.md" },
+    { "label": "Observable Framework docs: Files (content hashes)", "url": "https://github.com/observablehq/framework/blob/main/docs/files.md" },
+    { "label": "Evidence legacy docs: Deployment overview", "url": "https://legacy-docs.evidence.dev/deployment/overview" },
+    { "label": "Cube docs: Using pre-aggregations", "url": "https://docs.cube.dev/docs/pre-aggregations/using-pre-aggregations" }
+  ]
+}

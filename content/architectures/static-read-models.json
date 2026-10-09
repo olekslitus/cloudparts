@@ -1,0 +1,203 @@
+{
+  "$schema": "../../.astro/collections/architectures.schema.json",
+  "title": "CQRS with a static read side",
+  "order": 55,
+  "summary": "Commands update PostgreSQL; a Lambda projector rewrites the affected JSON views in S3, and CloudFront serves every read without touching a database.",
+  "intro": "A CQRS app whose read models are files. Writes go through API Gateway to a command handler that checks the rules and saves the change in PostgreSQL, together with an event in an outbox table. Each event reaches a projector function, which works out which views the change touches, renders them as JSON and writes them to S3. Readers fetch those files through CloudFront, so a spike in traffic hits the CDN, not the database, and pages keep loading even while the database is down for maintenance. The price is a few seconds to a minute of staleness and a file rewrite for every view a change affects.",
+  "fits": "Public, read-heavy catalogues, listings and status pages with a few view shapes and up to thousands of writes an hour",
+  "diagram": {
+    "caption": "Commands pass API Gateway to a Lambda handler that writes PostgreSQL; each change’s event waits in SQS until the projector function renders the two JSON files it affects into S3. Shoppers load product and category pages from CloudFront, mostly as cache hits, and misses read the file from S3. No read touches PostgreSQL.",
+    "w": 900,
+    "h": 320,
+    "zones": [
+      { "x": 14, "y": 10, "w": 872, "h": 108, "label": "Command side" },
+      { "x": 14, "y": 130, "w": 872, "h": 180, "label": "Read side: static files" }
+    ],
+    "nodes": [
+      {
+        "id": "writers",
+        "x": 85,
+        "y": 66,
+        "label": "Merchants",
+        "sub": "commands · ChangePrice",
+        "emit": { "every": 1500, "jitter": 0.4, "color": 0 },
+        "out": ["api"]
+      },
+      {
+        "id": "api",
+        "x": 255,
+        "y": 66,
+        "label": "Amazon API Gateway",
+        "sub": "auth · throttling",
+        "tech": "api-gateway",
+        "mode": "gate",
+        "p": 0.97,
+        "denyText": "429 throttled",
+        "out": ["cmd"]
+      },
+      {
+        "id": "cmd",
+        "x": 435,
+        "y": 66,
+        "label": "Command handler",
+        "sub": "AWS Lambda · rules",
+        "tech": "lambda",
+        "kind": "pool",
+        "max": 3,
+        "work": 300,
+        "idle": 3000,
+        "cold": 300,
+        "out": ["pg"]
+      },
+      {
+        "id": "pg",
+        "x": 610,
+        "y": 66,
+        "label": "PostgreSQL",
+        "sub": "products · outbox",
+        "tech": "postgresql",
+        "out": ["sqs"]
+      },
+      {
+        "id": "sqs",
+        "x": 790,
+        "y": 66,
+        "label": "Amazon SQS",
+        "sub": "PriceChanged events",
+        "tech": "sqs",
+        "kind": "queue",
+        "cap": 8,
+        "gap": 300,
+        "out": ["proj"]
+      },
+      {
+        "id": "proj",
+        "x": 790,
+        "y": 222,
+        "label": "Projector",
+        "sub": "AWS Lambda · renders JSON",
+        "tech": "lambda",
+        "kind": "pool",
+        "max": 3,
+        "work": 600,
+        "idle": 3000,
+        "cold": 300,
+        "route": "fanout",
+        "out": ["vp", "vc"]
+      },
+      {
+        "id": "vp",
+        "x": 570,
+        "y": 185,
+        "label": "Amazon S3",
+        "sub": "products/p1.json",
+        "tech": "s3",
+        "mode": "reply",
+        "delay": 70
+      },
+      {
+        "id": "vc",
+        "x": 570,
+        "y": 265,
+        "label": "Amazon S3",
+        "sub": "categories/kitchen.json",
+        "tech": "s3",
+        "mode": "reply",
+        "delay": 70
+      },
+      {
+        "id": "cdn",
+        "x": 330,
+        "y": 225,
+        "label": "Amazon CloudFront",
+        "sub": "edge cache · max-age 60",
+        "tech": "cloudfront",
+        "mode": "cache",
+        "p": 0.9,
+        "route": "type",
+        "rules": { "product": ["vp"], "category": ["vc"] }
+      },
+      {
+        "id": "readers",
+        "x": 100,
+        "y": 225,
+        "label": "Shoppers",
+        "sub": "page loads",
+        "emit": {
+          "every": 260,
+          "jitter": 0.45,
+          "req": true,
+          "types": ["product", "category"],
+          "colorByType": { "product": 1, "category": 2 }
+        },
+        "out": ["cdn"]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "title": "A command changes the source of truth",
+      "text": "A merchant’s `ChangePrice` request passes API Gateway’s authentication and throttling to a Lambda command handler. It checks the rules (the price is positive, the merchant owns the product) and, in one PostgreSQL transaction, updates the `products` row and inserts a `PriceChanged` row into an `outbox` table. Either both are saved or neither is, so no change can lose its event.",
+      "nodes": ["writers", "api", "cmd", "pg"]
+    },
+    {
+      "title": "The outbox feeds a queue",
+      "text": "A small relay (a scheduled job polling the outbox, or change data capture) sends each new outbox row to SQS and marks it sent. A crash between sending and marking means the event goes out twice, so everything downstream must be idempotent.",
+      "nodes": ["pg", "sqs"]
+    },
+    {
+      "title": "The projector rewrites every affected view",
+      "text": "Lambda polls SQS and hands the projector batches of events. For each one it re-reads the product’s current state from PostgreSQL, rather than trusting the event, so duplicates and out-of-order events still produce the right file. It renders `products/p1.json` and the listing for the product’s category and writes each with one `PutObject`; S3 replaces an object atomically, so readers get the old file or the new one, never half. Files go up with `Cache-Control: max-age=60`, or the projector invalidates the changed paths in CloudFront.",
+      "nodes": ["sqs", "proj", "vp", "vc"]
+    },
+    {
+      "title": "Readers only ever fetch files",
+      "text": "Product and category pages request their JSON from CloudFront. Most requests are edge cache hits; a miss fetches the object from S3. The page renders in the browser from that JSON, and nothing on the read path queries PostgreSQL, so read traffic adds no load to the database.",
+      "nodes": ["readers", "cdn", "vp", "vc"]
+    },
+    {
+      "title": "Rebuild everything when the view format changes",
+      "text": "Adding a field to `products/*.json` means re-rendering every file, not waiting for the next change. Run the same render code as a batch job over all products, writing the new files under a new prefix (`v2/`), then switch the pages to it. Old and new versions never mix in a cache, and switching back is a one-line change.",
+      "nodes": ["proj", "pg"]
+    }
+  ],
+  "good": [
+    "Reads scale with the CDN, not the database: a traffic spike costs bandwidth, and PostgreSQL only sees writes and projector reads",
+    "Pages keep working while the write side is slow, down or being migrated; only freshness suffers",
+    "Every view is a file you can open, diff and cache, and a broken view can be fixed by re-rendering it",
+    "Each piece is managed and billed per use: no read replicas or cache cluster to size"
+  ],
+  "watch": [
+    "Staleness adds up: relay delay, queue wait, render time and up to `max-age` at the edge. Measure the age of each file against its source and alert when it passes your budget, because a lost event leaves a view silently stale",
+    "Fan-out: if one change appears on the product page, two category listings and 30 search pages, every write becomes 34 renders and uploads. Keep views coarse, and serve search and per-user pages from an API instead",
+    "Invalidation costs money at scale: CloudFront’s first 1,000 invalidation paths a month are free and each further path is charged. Prefer short `max-age`, wildcard paths, cache tags (one tag per product) or versioned file names over invalidating thousands of paths",
+    "Users don’t see their own write right away. After a merchant saves a price, show the value the command returned, not the file, or the page will look like the save failed"
+  ],
+  "swaps": [
+    {
+      "text": "For internal dashboards and reports, skip the event pipeline: Observable Framework, or a legacy Evidence project, runs its queries at build time and a GitHub Actions schedule rebuilds and redeploys the static site every hour or day. Current Evidence queries live instead.",
+      "techs": ["observable-framework", "evidence", "github-actions"]
+    },
+    {
+      "text": "For analytics APIs over a warehouse, let Cube build pre-aggregated rollups in Cube Store on a refresh key and answer matching queries from them, instead of rendering files yourself.",
+      "techs": ["cube", "snowflake"]
+    },
+    {
+      "text": "With event sourcing, append events to KurrentDB instead of PostgreSQL plus an outbox, and run the projector as a catch-up subscription. A new or broken view is rebuilt by replaying the streams from the start.",
+      "techs": ["kurrentdb"]
+    },
+    {
+      "text": "On Cloudflare, write the views to R2 and serve them through Cloudflare’s CDN, and R2 charges nothing for egress.",
+      "techs": ["r2", "cloudflare"]
+    }
+  ],
+  "sources": [
+    { "label": "Azure Architecture Center: CQRS pattern (outbox, idempotent read-model consumers)", "url": "https://learn.microsoft.com/en-us/azure/architecture/patterns/cqrs" },
+    { "label": "Azure Architecture Center: Materialized View pattern (refresh recency alerts, versioned replacement)", "url": "https://learn.microsoft.com/en-us/azure/architecture/patterns/materialized-view" },
+    { "label": "Amazon S3 User Guide: data consistency model (atomic single-key updates)", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html" },
+    { "label": "Amazon CloudFront Developer Guide: Pay for file invalidation (1,000 free paths a month, wildcards)", "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/PayingForInvalidation.html" },
+    { "label": "Amazon CloudFront Developer Guide: Invalidating content by cache tags", "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/invalidation-by-tags.html" },
+    { "label": "Amazon CloudFront Developer Guide: Invalidate files (versioned file names recommended for frequent updates)", "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/Invalidation.html" },
+    { "label": "Observable Framework docs: Deploying (scheduled builds with GitHub Actions)", "url": "https://github.com/observablehq/framework/blob/main/docs/deploying.md" }
+  ]
+}

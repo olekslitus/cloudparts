@@ -1,0 +1,103 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Construct",
+  "concepts": ["binary-parsing"],
+  "kinds": ["declarative-binary"],
+  "provider": "oss",
+  "vendor": "Open-source project by Tomer Filiba, Corbin Simpson and Arkadiusz Bulski",
+  "license": "MIT",
+  "website": "https://construct.readthedocs.io/",
+  "repo": "https://github.com/construct/construct",
+  "summary": "A Python library where a binary format is an object built from small pieces, which can both parse bytes into Python values and build values back into bytes.",
+  "intro": [
+    "A format is a value you assemble in Python. `Struct(\"width\" / Int8ub, \"height\" / Int8ub, \"pixels\" / Array(this.width * this.height, Byte))` names each field with `/`, and `this` expressions let a size or condition depend on fields read earlier. Pieces cover integers of every size and byte order, `Const` magic bytes, `BitStruct` for bit fields, `PrefixedArray` and `PascalString` for length-prefixed data, `If` and `Switch` for branches, `Pointer` to jump to an offset, `Lazy` for fields parsed only when accessed, and tunnels that compress or length-prefix a whole substructure. Because the description is data rather than code, `parse` turns bytes into a `Container` and `build` turns a dict back into bytes, from the same object. Its docs list network formats (Ethernet, IP, TCP, DNS, DHCP), images (PNG, GIF, BMP), executables (ELF, PE) and file systems (ext2, FAT16, MBR) among the things it has parsed.",
+    "Interpreting the object tree field by field has a cost, so since 2.9 any construct can `compile()` itself into a generated Python module that parses faster, at the cost of some features and some safety checks. The docs’ own example goes from 129 to 45 microseconds per parse, and they recommend PyPy for more speed still. Construct runs on CPython 3.8 to 3.12 and PyPy with no required dependencies, can export a definition as a Kaitai Struct `.ksy` file, and gets type hints from the separate `construct-typing` package."
+  ],
+  "strengths": [
+    "One definition parses and builds, with bit and byte granularity, offsets, lazy fields and conditional branches",
+    "Pure Python with no required dependencies; `pip install construct` and it runs anywhere Python does",
+    "Errors name the path to the failing field, such as `(parsing) -> a -> b -> c -> foo`, which makes malformed input quick to locate",
+    "Interactive: a format can be built up and tested in a Python shell, and the `construct-editor` package is a visual editor for binary blobs built on it"
+  ],
+  "limits": [
+    "Speed takes extra steps: the docs recommend PyPy and `compile()`, but compiled parsers drop lambdas, parse hooks and the debugger, and the docs warn not to use them on corrupted or untrusted data",
+    "Releases have slowed: 2.10.70 in November 2023 is the latest, though commits continued into 2025",
+    "Big version jumps broke code: 2.8 renamed the integer, float and many field types, and 2.10 removed `Embedded`, so old examples often need porting",
+    "Python only, and without static types unless you add `construct-typing`"
+  ],
+  "worksWith": [
+    { "id": "python", "how": "parses and builds binary data in" },
+    { "id": "kaitai-struct", "how": "exports definitions as .ksy files for" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "One definition that parses a sensor packet and builds a new one",
+    "source": [
+      "from construct import Struct, Const, BitStruct, Nibble, Int16ub, Int16sb, Int8ub, PrefixedArray, Check, this",
+      "",
+      "# \"SN\" | version: 4 bits | flags: 4 bits | sensor id: u16 | count: u8 | count × i16",
+      "Reading = Struct(",
+      "    \"magic\" / Const(b\"SN\"),",
+      "    \"header\" / BitStruct(\"version\" / Nibble, \"flags\" / Nibble),",
+      "    Check(this.header.version == 1),",
+      "    \"sensor_id\" / Int16ub,",
+      "    \"temps\" / PrefixedArray(Int8ub, Int16sb),  # hundredths of a degree",
+      ")",
+      "",
+      "r = Reading.parse(b\"SN\\x12\\x00\\x07\\x02\\x08\\x34\\xff\\x9c\")",
+      "print(r.header.version, r.header.flags, r.sensor_id, list(r.temps))",
+      "# 1 2 7 [2100, -100]",
+      "",
+      "# the same definition builds bytes; the count prefix comes from the list",
+      "out = Reading.build(dict(header=dict(version=1, flags=3), sensor_id=7, temps=[2100, -100, 2250]))",
+      "print(out.hex(\" \"))",
+      "# 53 4e 13 00 07 03 08 34 ff 9c 08 ca",
+      "",
+      "try:",
+      "    Reading.parse(b\"SN\\x22\\x00\\x07\\x00\")",
+      "except Exception as e:",
+      "    print(type(e).__name__)  # CheckError"
+    ]
+  },
+  "history": {
+    "story": [
+      "Tomer Filiba, also the author of the RPyC and Plumbum libraries, wrote Construct as a way to define binary data structures in Python instead of parsing them by hand. Filiba recalls giving up on it somewhere in 2007, right after releasing version 2.0, thinking it complete enough to survive on its own; instead code rot set in.",
+      "Corbin Simpson took it over in January 2011, moved it to GitHub, fixed bugs and wrote the documentation, and the project built a following on PyPI. Filiba sketched a Construct 3 that would generate efficient C or Python code from definitions, and back-ported its `this` expressions in 2012. Arkadiusz Bulski, by far its most prolific committer, then drove a run of breaking releases: 2.8 in 2016 with the `/` naming syntax and new type names, 2.9 in 2018 with compilation to Python, and 2.10 in January 2020, which removed `Embedded`. The project also began collaborating with Kaitai Struct, whose FAQ calls Construct its closest analogue."
+    ],
+    "choices": [
+      { "choice": "A format is a data structure, not code", "why": "A description can run in either direction, parsing bytes into objects and building objects into bytes, which hand-written parsing code can’t." },
+      { "choice": "Build formats from Python objects", "why": "No separate schema language or compiler step: formats are composed, tested and debugged with ordinary Python." },
+      { "choice": "`this` expressions instead of lambdas", "why": "An expression like `this.width * this.height` reads like the format’s own spec, and unlike a lambda, 2.9’s compiler can turn it into plain Python." },
+      { "choice": "Compile to Python, not Cython", "why": "The docs say benchmarks showed PyPy running the generated code much faster than Cython, so the Cython work was withdrawn." }
+    ],
+    "timeline": [
+      { "year": "2007", "text": "Construct 2.0; Filiba steps back from the project" },
+      { "year": "2011", "text": "Corbin Simpson takes over maintenance and moves it to GitHub" },
+      { "year": "2016", "text": "2.8 introduces `\"name\" / Field` syntax and new integer names" },
+      { "year": "2018", "text": "2.9 compiles definitions into Python modules" },
+      { "year": "2020", "text": "2.10 (January) removes `Embedded` and adds compiled building" },
+      { "year": "2023", "text": "2.10.70, the latest release (November)" }
+    ],
+    "sources": [
+      { "label": "Tomer Filiba: The Future of Construct (May 2012)", "url": "https://tomerfiliba.com/blog/Construct-Plans" },
+      { "label": "Tomer Filiba: A Survey of Construct 3 (January 2013)", "url": "https://tomerfiliba.com/blog/Survey-of-Construct3" },
+      { "label": "Construct docs: Transition to 2.8", "url": "https://construct.readthedocs.io/en/latest/transition28.html" },
+      { "label": "Construct docs: Transition to 2.9 (compilation)", "url": "https://construct.readthedocs.io/en/latest/transition29.html" },
+      { "label": "Construct docs: Transition to 2.10", "url": "https://construct.readthedocs.io/en/latest/transition210.html" },
+      { "label": "Construct docs: home page (2.10 released January 2020, Kaitai Struct collaboration)", "url": "https://construct.readthedocs.io/en/latest/" },
+      { "label": "Construct docs: Compilation (Cython withdrawn in favour of PyPy)", "url": "https://construct.readthedocs.io/en/latest/compilation.html" },
+      { "label": "PyPI: construct (release history)", "url": "https://pypi.org/project/construct/#history" },
+      { "label": "Kaitai Struct FAQ: Construct is the closest analog", "url": "https://doc.kaitai.io/faq.html" },
+      { "label": "GitHub: construct/construct contributors", "url": "https://github.com/construct/construct/graphs/contributors" }
+    ]
+  },
+  "sources": [
+    { "label": "Construct docs: Introduction (features, formats parsed, requirements, extras)", "url": "https://construct.readthedocs.io/en/latest/intro.html" },
+    { "label": "Construct docs: The Basics (fields, structs, error paths)", "url": "https://construct.readthedocs.io/en/latest/basics.html" },
+    { "label": "Construct docs: Compilation (restrictions, untrusted data warning, benchmark)", "url": "https://construct.readthedocs.io/en/latest/compilation.html" },
+    { "label": "Construct docs: Transition to 2.10 (Python 3.8 to 3.12)", "url": "https://construct.readthedocs.io/en/latest/transition210.html" },
+    { "label": "PyPI: construct (MIT licence, release history)", "url": "https://pypi.org/project/construct/" },
+    { "label": "construct/construct on GitHub", "url": "https://github.com/construct/construct" }
+  ],
+  "checked": "2026-10-09"
+}

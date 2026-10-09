@@ -1,0 +1,187 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "API frameworks",
+  "category": "network",
+  "order": 85,
+  "summary": "Libraries that turn ordinary functions into HTTP or GraphQL endpoints: they route each request, parse and check its input, serialize the result and describe the API for docs and generated clients.",
+  "howItWorks": "A web server and an API framework split the work. The server, such as Uvicorn, accepts connections and parses HTTP, then calls your application through a standard interface. In Python that interface is WSGI, a single synchronous callable that takes a request and returns a response, or its successor ASGI, a single `async` callable that gets a `scope` describing the connection plus `receive` and `send` functions for messages, which also suits WebSockets and other long-lived connections. The framework is the application on the other side of that call. Its router maps a method and path, such as `POST /orders`, to one of your functions. Before calling it, the framework binds request data to the function’s parameters: path segments, query strings, headers and the JSON body, converted to the declared types and validated. A body with `quantity: 0` where the model says the value must be greater than 0 is rejected with an error (a `422` in FastAPI), and your function never runs. On the way out the framework serializes the return value to JSON, filtering it through a response model so internal fields stay inside. Because the same declarations describe every endpoint, frameworks such as FastAPI generate an OpenAPI document from them, which Swagger UI, ReDoc and client generators read. A GraphQL library works differently. There is one endpoint, and the work happens in an engine: it parses the query text into a syntax tree, validates it against the schema (an unknown field or a missing required argument fails here, before any data is touched), then executes it by calling a resolver function for each requested field and assembling a result shaped like the query. Schema libraries on top of the engine differ in where the schema comes from: SDL text with resolvers attached to it (schema-first), or classes and type hints in your code (code-first).",
+  "analogy": "A hotel front desk. The desk doesn’t clean rooms or cook; it sends each guest to the right department (routing), checks that their booking form is complete before passing it on (validation), and hands back every bill in one standard layout (serialization). The brochure listing every service is printed from the same forms the desk checks, so it’s never out of date (generated docs).",
+  "useWhen": [
+    "Any HTTP or GraphQL service with more than a handful of endpoints, where hand-written parsing and checking would repeat in every handler",
+    "Public or partner APIs that need an accurate OpenAPI document or GraphQL schema for docs and generated clients",
+    "Input from untrusted callers: declare the fields and types once, and malformed requests are turned away before your code runs",
+    "Adding GraphQL to an existing web app: most GraphQL libraries mount as one route or sub-application beside the other endpoints"
+  ],
+  "avoidWhen": [
+    "A single webhook or health check: a bare ASGI or WSGI callable, or a small toolkit such as Starlette, is enough",
+    "Hot paths where per-request validation and serialization cost too much; FastAPI’s own docs point out it can’t be faster than the Starlette layer it builds on",
+    "Choosing by benchmark numbers alone: most benchmarks don’t exercise the validation and serialization a framework adds, let alone your database work"
+  ],
+  "example": "A shop’s mobile app sends `POST /orders` with `{\"sku\": \"A-1\", \"quantity\": \"3\"}`. Uvicorn parses the HTTP request and calls the FastAPI app over ASGI. FastAPI’s router picks `create_order`, Pydantic turns the string `\"3\"` into the integer `3`, and the function returns a row that also holds an internal `cost_cents` field. The response model drops that field, so the client gets `201` and `{\"id\": 42, \"sku\": \"A-1\", \"quantity\": 3}`. The same request with `quantity: 0` gets `422` and the message “Input should be greater than 0”, and `create_order` never runs. The OpenAPI document behind the `/docs` page is built from the same two models.",
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "# pip install fastapi httpx2",
+      "from fastapi import FastAPI",
+      "from fastapi.testclient import TestClient",
+      "from pydantic import BaseModel, Field",
+      "",
+      "class OrderIn(BaseModel):    # what a caller may send",
+      "    sku: str",
+      "    quantity: int = Field(gt=0)",
+      "",
+      "class OrderOut(BaseModel):   # what the API promises to send back",
+      "    id: int",
+      "    sku: str",
+      "    quantity: int",
+      "",
+      "app = FastAPI()",
+      "",
+      "@app.post(\"/orders\", response_model=OrderOut, status_code=201)",
+      "def create_order(order: OrderIn):  # route + parsed, validated body",
+      "    row = {\"id\": 42, **order.model_dump(), \"cost_cents\": 870}",
+      "    return row  # filtered through OrderOut on the way out",
+      "",
+      "client = TestClient(app)  # calls the ASGI app in-process, no server needed",
+      "r = client.post(\"/orders\", json={\"sku\": \"A-1\", \"quantity\": \"3\"})",
+      "print(r.status_code, r.json())  # 201 {'id': 42, 'sku': 'A-1', 'quantity': 3}",
+      "r = client.post(\"/orders\", json={\"sku\": \"A-1\", \"quantity\": 0})",
+      "print(r.status_code, r.json()[\"detail\"][0][\"msg\"])  # 422 Input should be greater than 0",
+      "print(list(app.openapi()[\"paths\"]))  # ['/orders']: docs come from the same types"
+    ]
+  },
+  "related": ["web-api", "rpc", "dto", "service-layer"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "Who does what in a Python API stack",
+      "intro": "Each layer only talks to its neighbours, so most of them can be swapped: another ASGI server under the same app, or another GraphQL library on the same engine.",
+      "columns": ["Example", "Its job"],
+      "rows": [
+        { "label": "ASGI server", "values": ["Uvicorn", "Accepts connections, parses HTTP and calls the app as `app(scope, receive, send)`; `--workers` runs several processes"] },
+        { "label": "Web toolkit", "values": ["Starlette", "Routing, request and response objects, middleware, WebSockets, background tasks and a test client"] },
+        { "label": "API framework", "values": ["FastAPI", "Binds parameters from type hints, runs dependencies and generates OpenAPI; its `FastAPI` class subclasses `Starlette`"] },
+        { "label": "Data models", "values": ["Pydantic", "Validates and converts input, serializes output and emits JSON Schema"] },
+        { "label": "GraphQL engine", "values": ["graphql-core", "Parses, validates and executes queries; a Python port of the GraphQL.js reference implementation"] },
+        { "label": "GraphQL schema library", "values": ["Strawberry and Graphene (code-first), Ariadne (schema-first)", "Build the graphql-core schema and plug into the web framework as a router or a mounted ASGI app"] }
+      ]
+    },
+    {
+      "type": "code",
+      "title": "What a GraphQL engine does, step by step",
+      "intro": "graphql-core on its own, with a schema written in SDL and one resolver. `graphql_sync` runs all three steps; `parse` and `validate` are shown separately to make them visible.",
+      "lang": "python",
+      "source": [
+        "# pip install graphql-core",
+        "from graphql import build_schema, graphql_sync, parse, validate",
+        "",
+        "schema = build_schema(\"\"\"",
+        "  type Order { id: ID!  totalCents: Int! }",
+        "  type Query { orders(customer: String!): [Order!]! }",
+        "\"\"\")  # schema-first: the SDL text is the contract",
+        "",
+        "ORDERS = {\"ada\": [{\"id\": \"1\", \"totalCents\": 1299}]}",
+        "root = {\"orders\": lambda info, customer: ORDERS.get(customer, [])}  # the resolver",
+        "",
+        "document = parse('{ orders(customer: \"ada\") { totalCents } }')  # 1. text to an AST",
+        "print(validate(schema, document))  # 2. check it against the schema: []",
+        "print(graphql_sync(schema, '{ orders(customer: \"ada\") { totalCents } }', root_value=root))",
+        "# 3. execute: ExecutionResult(data={'orders': [{'totalCents': 1299}]}, errors=None)",
+        "print(graphql_sync(schema, '{ orders(customer: \"ada\") { cost } }').errors[0].message)",
+        "# Cannot query field 'cost' on type 'Order'.  (rejected before any resolver runs)"
+      ]
+    }
+  ],
+  "kinds": [
+    {
+      "id": "http-api-frameworks",
+      "name": "HTTP API frameworks",
+      "summary": "Map each method and path to a function, and turn its typed parameters and return value into validated requests, JSON responses and an OpenAPI document.",
+      "body": [
+        "An HTTP API framework exposes many endpoints, one per resource and verb, such as `GET /orders/{id}` and `POST /orders`. The newer ones read each handler’s declared parameter types. FastAPI takes path, query, header and body parameters from Python type hints and Pydantic models; ASP.NET Core minimal APIs bind route values, query strings, headers, JSON bodies and form values to typed parameters. From the same declarations they validate input, serialize output and, in FastAPI’s case, describe every endpoint in OpenAPI for Swagger UI, ReDoc and client generators.",
+        "Older designs keep these jobs apart. Flask is a microframework that leaves validation and documentation to plug-ins. Django REST Framework, built on Django, was one of the first to generate API documentation automatically. Falcon hands each function a request and a response object, so nothing can be declared in the signature. In TypeScript, NestJS repeats types in decorators because the types are gone after compilation. Starlette sits lower still: routing, requests and responses, with validation left to you.",
+        "Pick an HTTP API framework for resource-shaped APIs, file uploads, webhooks and anything where each URL should mean one thing. Most can also host a GraphQL endpoint as one more route."
+      ],
+      "sources": [
+        { "label": "FastAPI docs: Features", "url": "https://fastapi.tiangolo.com/features/" },
+        { "label": "FastAPI docs: Request Body (what a model declaration does)", "url": "https://fastapi.tiangolo.com/tutorial/body/" },
+        { "label": "FastAPI docs: Alternatives, Inspiration and Comparisons (Flask, Django REST Framework, Falcon, NestJS, Starlette)", "url": "https://fastapi.tiangolo.com/alternatives/" },
+        { "label": "Microsoft Learn: Parameter binding in minimal API apps", "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/minimal-apis/parameter-binding" }
+      ]
+    },
+    {
+      "id": "graphql-libraries",
+      "name": "GraphQL libraries",
+      "summary": "An engine that parses, validates and executes GraphQL queries, plus a schema library on top that defines types and resolvers either as SDL text or as code.",
+      "body": [
+        "Every GraphQL server runs the same steps from the specification: parse the query into a syntax tree, validate it against the schema, then execute it by calling one resolver per requested field. In Python that engine is graphql-core, a port of the JavaScript reference implementation GraphQL.js that follows it closely: version 3.3.0 matches GraphQL.js 17.0.2. You rarely build the engine’s schema objects by hand, because a schema library does it for you.",
+        "Schema-first libraries start from SDL. In Ariadne the schema is a string, you attach resolver functions to its fields with objects such as `QueryType`, and `make_executable_schema` joins the two. Code-first libraries generate the schema from code: Strawberry reads type hints on classes decorated with `@strawberry.type`, and Graphene uses `ObjectType` subclasses with `resolve_` methods. Strawberry, Ariadne and Graphene 3 all run on graphql-core 3, so they parse, validate and execute queries the same way and differ in how you write the schema.",
+        "They plug into a web framework as one route. Strawberry’s `GraphQLRouter` is a FastAPI router, Ariadne’s `GraphQL` is an ASGI app that FastAPI mounts, and Graphene 3 uses the `starlette-graphene3` package. Resolvers that load related data one row at a time cause N+1 queries, so libraries such as Strawberry ship a DataLoader that batches and caches those lookups."
+      ],
+      "sources": [
+        { "label": "GraphQL-core 3 docs: Introduction", "url": "https://graphql-core-3.readthedocs.io/en/latest/intro.html" },
+        { "label": "GraphQL-core 3 README (versions, Graphene, Ariadne and Strawberry on graphql-core)", "url": "https://github.com/graphql-python/graphql-core/blob/main/README.md" },
+        { "label": "Ariadne docs: Introduction (SDL, resolvers, executable schema)", "url": "https://ariadnegraphql.org/server/Docs/intro" },
+        { "label": "Ariadne docs: FastAPI integration", "url": "https://ariadnegraphql.org/server/Integrations/fastapi-integration" },
+        { "label": "Strawberry docs: FastAPI integration", "url": "https://strawberry.rocks/docs/integrations/fastapi" },
+        { "label": "Strawberry docs: DataLoaders", "url": "https://strawberry.rocks/docs/guides/dataloaders" },
+        { "label": "Graphene README", "url": "https://github.com/graphql-python/graphene/blob/master/README.md" },
+        { "label": "starlette-graphene3 README", "url": "https://github.com/ciscorn/starlette-graphene3/blob/master/README.md" }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In the early 2000s each Python web framework (Zope, Quixote, Webware, Twisted Web and others) ran only on certain servers, so choosing a framework limited the choice of server and the other way round. PEP 333, created in December 2003, defined WSGI: one standard interface between web servers and Python applications, after the portability Java’s servlet API gave Java frameworks. Servers and frameworks could then evolve separately. WSGI’s single synchronous callable can’t keep a WebSocket open, so ASGI kept the idea of one callable but made it asynchronous and message-based; its 3.0 specification is dated March 2019.",
+      "Frameworks above that interface first handled routing and HTML. Building APIs added three more chores: parsing and validating input, serializing output and documenting endpoints. In Python these came as separate plug-ins, such as Marshmallow for schemas, Webargs for parsing and APISpec for OpenAPI written as YAML inside docstrings, and the docs went stale whenever someone changed the code but not the YAML. Swagger gave API descriptions a standard format, and in November 2015 SmartBear, Google, Microsoft and others formed the OpenAPI Initiative under the Linux Foundation to carry it on as OpenAPI. Hug and then APIStar read parameter types from Python type hints. When APIStar’s creator turned to Starlette in 2018, Sebastián Ramírez built FastAPI on Starlette and Pydantic, so one set of type hints drives validation, serialization and the OpenAPI document.",
+      "GraphQL took another path. Facebook started it in 2012 while rebuilding its native mobile apps, because neither REST resources nor its SQL-like FQL tables fitted the data News Feed needed, and in 2015 it published a specification and a reference implementation, GraphQL.js. Other languages ported that engine. In Python, graphql-core 3 follows GraphQL.js closely, and Strawberry, Ariadne and Graphene build their different schema styles on top of it."
+    ],
+    "choices": [
+      { "choice": "A standard callable between server and framework", "why": "PEP 333 argued that Python’s many frameworks each tied users to particular servers, while Java’s servlet API let any framework run on any server. One agreed interface, WSGI and later ASGI, lets you swap Uvicorn for another server without touching the app." },
+      { "choice": "Declare inputs as types instead of parsing them by hand", "why": "Without a validation layer every handler repeats the same checks. Reading types from function signatures and models means one declaration gives parsing, conversion, validation and editor completion." },
+      { "choice": "Generate the API description from the code that validates", "why": "APISpec’s YAML in docstrings drifted from the real parameters and schemas. Building OpenAPI from the same declarations the framework enforces keeps the docs and the behaviour in step." },
+      { "choice": "Keep the GraphQL engine separate from the schema style", "why": "Parsing, validation and execution are fixed by the specification, so one engine can serve several libraries. graphql-core does that work for Strawberry, Ariadne and Graphene, which compete only on how you define the schema." }
+    ],
+    "timeline": [
+      { "year": "2003", "text": "PEP 333 defines WSGI, a standard interface between Python web servers and applications" },
+      { "year": "2012", "text": "Facebook starts GraphQL while rebuilding its native mobile apps" },
+      { "year": "2015", "text": "Facebook publishes the GraphQL specification and GraphQL.js; the OpenAPI Initiative forms in November" },
+      { "year": "2018", "text": "Starlette appears in June and FastAPI 0.1.0 in December, both built on ASGI" },
+      { "year": "2019", "text": "ASGI 3.0 specification, dated March 20" },
+      { "year": "2023", "text": "Pydantic 2, with a Rust core, ships in June; FastAPI 0.100.0 supports it in July" },
+      { "year": "2026", "text": "Starlette 1.0 in March, after nearly eight years of 0.x releases" }
+    ],
+    "sources": [
+      { "label": "PEP 333: Python Web Server Gateway Interface v1.0 (created 7 December 2003)", "url": "https://peps.python.org/pep-0333/" },
+      { "label": "ASGI docs: Introduction (what’s wrong with WSGI)", "url": "https://asgi.readthedocs.io/en/latest/introduction.html" },
+      { "label": "ASGI specification, version 3.0 (2019-03-20)", "url": "https://asgi.readthedocs.io/en/latest/specs/main.html" },
+      { "label": "FastAPI docs: Alternatives, Inspiration and Comparisons", "url": "https://fastapi.tiangolo.com/alternatives/" },
+      { "label": "FastAPI docs: History, Design and Future", "url": "https://fastapi.tiangolo.com/history-design-future/" },
+      { "label": "OpenAPI Initiative: FAQ (formation in November 2015, Swagger donation)", "url": "https://www.openapis.org/faq" },
+      { "label": "Engineering at Meta: GraphQL, a data query language (Sep 2015)", "url": "https://engineering.fb.com/2015/09/14/core-infra/graphql-a-data-query-language/" },
+      { "label": "GraphQL-core 3 README (port of GraphQL.js; libraries built on it)", "url": "https://github.com/graphql-python/graphql-core/blob/main/README.md" },
+      { "label": "Starlette release notes (created June 2018; 1.0.0 on March 22, 2026)", "url": "https://starlette.dev/release-notes/" },
+      { "label": "PyPI JSON API: fastapi release history (0.1.0 uploaded 8 December 2018)", "url": "https://pypi.org/pypi/fastapi/json" },
+      { "label": "Pydantic: Announcement, Pydantic V2 release (June 30, 2023)", "url": "https://pydantic.dev/articles/pydantic-v2-final" },
+      { "label": "FastAPI release notes (0.100.0, July 7, 2023: Pydantic v2 support)", "url": "https://fastapi.tiangolo.com/release-notes/" }
+    ]
+  },
+  "sources": [
+    { "label": "ASGI docs: Introduction", "url": "https://asgi.readthedocs.io/en/latest/introduction.html" },
+    { "label": "FastAPI docs: Features", "url": "https://fastapi.tiangolo.com/features/" },
+    { "label": "FastAPI docs: Request Body", "url": "https://fastapi.tiangolo.com/tutorial/body/" },
+    { "label": "FastAPI docs: Response Model (filtering output)", "url": "https://fastapi.tiangolo.com/tutorial/response-model/" },
+    { "label": "FastAPI docs: Handling Errors (RequestValidationError)", "url": "https://fastapi.tiangolo.com/tutorial/handling-errors/" },
+    { "label": "FastAPI docs: Additional Responses in OpenAPI (the default 422 Validation Error response)", "url": "https://fastapi.tiangolo.com/advanced/additional-responses/" },
+    { "label": "FastAPI docs: Benchmarks (Uvicorn, Starlette and FastAPI compared)", "url": "https://fastapi.tiangolo.com/benchmarks/" },
+    { "label": "FastAPI docs: Alternatives, Inspiration and Comparisons (Uvicorn, Starlette, Pydantic)", "url": "https://fastapi.tiangolo.com/alternatives/" },
+    { "label": "Microsoft Learn: Parameter binding in minimal API apps", "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/minimal-apis/parameter-binding" },
+    { "label": "GraphQL-core 3 docs: Introduction", "url": "https://graphql-core-3.readthedocs.io/en/latest/intro.html" },
+    { "label": "GraphQL-core 3 docs: Parsing GraphQL queries", "url": "https://graphql-core-3.readthedocs.io/en/latest/usage/parser.html" },
+    { "label": "GraphQL-core 3 docs: Validating GraphQL queries", "url": "https://graphql-core-3.readthedocs.io/en/latest/usage/validator.html" },
+    { "label": "GraphQL-core 3 README", "url": "https://github.com/graphql-python/graphql-core/blob/main/README.md" },
+    { "label": "Ariadne docs: Introduction", "url": "https://ariadnegraphql.org/server/Docs/intro" },
+    { "label": "Strawberry docs: FastAPI integration", "url": "https://strawberry.rocks/docs/integrations/fastapi" },
+    { "label": "FastAPI docs: GraphQL", "url": "https://fastapi.tiangolo.com/how-to/graphql/" }
+  ]
+}

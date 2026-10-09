@@ -1,0 +1,181 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "PyO3",
+  "concepts": ["ffi"],
+  "provider": "oss",
+  "vendor": "PyO3 project and contributors",
+  "license": "Apache 2.0 or MIT, at your option",
+  "website": "https://pyo3.rs/",
+  "repo": "https://github.com/PyO3/pyo3",
+  "summary": "Rust bindings for Python: attributes such as `#[pyfunction]` and `#[pyclass]` turn Rust code into a CPython extension module, and the same crate can embed a Python interpreter in a Rust program.",
+  "intro": [
+    "A Python extension module is a shared library that CPython loads on `import` and talks to through its C API. PyO3 writes that glue. You mark a Rust module with `#[pymodule]`, functions with `#[pyfunction]` and structs with `#[pyclass]`, and its procedural macros generate the rest: parsing Python arguments into Rust types (a `str` into a `&str`, a `list` into a `Vec<T>`), converting return values back, and raising a Python exception when a function returns `Err`. A Rust panic surfaces in Python as `PanicException` instead of unwinding through C. Code that works with Python objects directly does it through a `Python<'py>` token, obtained with `Python::attach`, and smart pointers such as `Bound<'py, T>` that borrow its lifetime, so the compiler won’t let a thread touch Python objects unless it is attached to the interpreter. Instances of a `#[pyclass]` get borrow checking at run time, much like `RefCell`, because once Python owns an object Rust’s compile-time checker can’t see who else holds it.",
+    "Long Rust work can call `py.detach(|| ...)` to release the GIL so other Python threads run meanwhile. PyO3 has built modules for free-threaded CPython since 0.23, and since 0.28 it assumes they are thread-safe: a module that relies on the GIL declares `#[pymodule(gil_used = true)]`, and the interpreter then re-enables the GIL when it is imported. The `abi3` features compile against CPython’s limited API, so one wheel works on every later 3.x release; 0.29 (June 2026) added `abi3t`, the stable ABI for the free-threaded build from Python 3.15. PyO3 supports CPython 3.9 and newer, PyPy and GraalPy, needs Rust 1.85, and is usually built and packaged with maturin. Polars, pydantic-core, cryptography, orjson, tokenizers and tiktoken all use it."
+  ],
+  "strengths": [
+    "Rust functions and structs become Python functions and classes through attributes; argument parsing, type conversion and exception mapping are generated",
+    "Python’s rules are checked by the Rust compiler: touching Python objects needs the attached-interpreter token, and `#[pyclass]` types must be `Send` because any Python thread may use or drop them",
+    "Real parallelism: `detach` releases the GIL around Rust work, and modules are ready for free-threaded Python by default since 0.28",
+    "Fewer wheels with the `abi3` and `abi3t` stable-ABI features, and packaging handled by maturin or setuptools-rust"
+  ],
+  "limits": [
+    "Conversions cost time: a `Vec<i32>` argument type-checks and converts the whole list on every call, while Python-native types such as `Bound<PyList>` are almost free to accept but keep Python’s dynamic typing",
+    "A `#[pyclass]` can’t have lifetime or generic parameters, so borrowed or generic Rust types need wrapper structs, one per concrete type",
+    "The API still moves: 0.21 replaced GIL-bound references with `Bound`, 0.26 renamed `with_gil` and `allow_threads` to `attach` and `detach`, and 0.28 flipped the free-threading default, so upgrades take migration work",
+    "A compiled extension needs a wheel for every OS and CPU (and every Python version without `abi3`), and anyone installing from source needs a Rust toolchain"
+  ],
+  "worksWith": [
+    { "id": "python", "how": "builds native extension modules for" },
+    { "id": "rust", "how": "generates Python bindings from code in" },
+    { "id": "polars", "how": "binds the Rust core to Python in" }
+  ],
+  "snippet": {
+    "lang": "rust",
+    "title": "A Rust struct used as a Python class (src/lib.rs of a maturin project named counter)",
+    "source": [
+      "use pyo3::prelude::*;",
+      "",
+      "#[pymodule]",
+      "mod counter {",
+      "    use pyo3::exceptions::PyValueError;",
+      "    use pyo3::prelude::*;",
+      "    use std::collections::HashMap;",
+      "",
+      "    /// A Rust struct that Python sees as a class.",
+      "    #[pyclass]",
+      "    struct WordCounter {",
+      "        counts: HashMap<String, u64>,",
+      "    }",
+      "",
+      "    #[pymethods]",
+      "    impl WordCounter {",
+      "        #[new]",
+      "        fn new() -> Self {",
+      "            WordCounter { counts: HashMap::new() }",
+      "        }",
+      "",
+      "        /// `text` arrives as a &str; the GIL is released while Rust splits it.",
+      "        fn feed(&mut self, py: Python<'_>, text: &str) {",
+      "            let words: Vec<String> =",
+      "                py.detach(|| text.split_whitespace().map(str::to_lowercase).collect());",
+      "            for w in words {",
+      "                *self.counts.entry(w).or_insert(0) += 1;",
+      "            }",
+      "        }",
+      "",
+      "        /// Returned as a Python list of (str, int) tuples; Err becomes an exception.",
+      "        fn top(&self, n: usize) -> PyResult<Vec<(String, u64)>> {",
+      "            if n == 0 {",
+      "                return Err(PyValueError::new_err(\"n must be at least 1\"));",
+      "            }",
+      "            let mut v: Vec<_> = self.counts.iter().map(|(w, c)| (w.clone(), *c)).collect();",
+      "            v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));",
+      "            v.truncate(n);",
+      "            Ok(v)",
+      "        }",
+      "    }",
+      "}"
+    ]
+  },
+  "sections": [
+    {
+      "type": "code",
+      "title": "Using it from Python",
+      "intro": "After `maturin develop` in the project directory (PyO3 0.29.3, CPython 3.14).",
+      "lang": "python",
+      "source": [
+        "from counter import WordCounter",
+        "",
+        "c = WordCounter()",
+        "c.feed(\"the cat and the hat\")",
+        "c.feed(\"The end\")",
+        "print(c.top(2))  # [('the', 3), ('and', 1)]",
+        "",
+        "try:",
+        "    c.top(0)",
+        "except ValueError as e:",
+        "    print(e)  # n must be at least 1",
+        "",
+        "try:",
+        "    c.feed(42)  # PyO3 checks the argument type before Rust runs",
+        "except TypeError as e:",
+        "    print(e)  # 'int' object is not an instance of 'str'"
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Ways to put Rust or C behind a Python import",
+      "intro": "PyO3 is one of several routes. They differ in who writes the glue and what the result depends on.",
+      "corner": "",
+      "columns": ["PyO3", "CFFI", "ctypes"],
+      "rows": [
+        { "label": "Native side", "values": ["Rust", "Any library with a C API; Rust through `extern \"C\"`", "Any shared library with C functions"] },
+        { "label": "Glue written by", "values": ["PyO3’s macros, from Rust attributes", "CFFI, from C declarations you paste in", "You, in Python, at run time"] },
+        { "label": "Python objects in native code", "values": ["Yes: classes, exceptions and iterators, held as `Bound` values", "No: C types only", "No: C types only"] },
+        { "label": "Needs a compiler at install", "values": ["Yes, unless a wheel matches", "API mode yes, ABI mode no", "No"] }
+      ],
+      "notes": [
+        "maturin builds wheels for PyO3 and CFFI bindings alike, and for UniFFI, which generates `ctypes` bindings from an interface definition."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Before PyO3 there was rust-cpython, Daniel Grunwald’s Rust bindings for the Python interpreter, copyrighted from 2015. It declared Python classes through `py_class!`, a `macro_rules!` language of its own, and handed Rust code owned Python objects that needed the GIL even to drop. In May 2017 Nikolay Kim was committing to a fork of it, and PyO3 0.1.0 came out on 23 July 2017. When a user asked that day why the fork existed, the reply listed what had changed: procedural macros and specialization instead of a macro language that was “very hard to extend”, Rust structs left as they were, and APIs that returned references bounded by the GIL’s lifetime.",
+      "Those features needed nightly Rust, which kept PyO3 out of many production builds until 0.11 in June 2020 added support for stable Rust 1.39. A family of tools grew around it under the PyO3 organisation: pyo3-pack (renamed maturin in 2019) to build and publish wheels, and setuptools-rust for existing `setup.py` projects. rust-cpython’s README now tells users to switch to PyO3, whose guide describes the two as “fundamentally different” today.",
+      "The largest recent changes follow CPython’s move away from the GIL. 0.21 (March 2024) introduced the `Bound` smart-pointer API in place of references tied to the GIL. 0.23 (November 2024) added support for free-threaded Python 3.13t. 0.26 (August 2025) renamed `Python::with_gil` and `allow_threads` to `attach` and `detach`, the same words CPython’s docs use for a thread state, and 0.28 (February 2026) made free-threading support opt-out instead of opt-in."
+    ],
+    "choices": [
+      {
+        "choice": "Procedural macros instead of a macro language",
+        "why": "rust-cpython’s `py_class!` defined classes in a macro language its users found hard to extend, for example with async support. PyO3’s attributes sit on ordinary Rust structs and functions and leave them unchanged, so the same code stays usable from Rust."
+      },
+      {
+        "choice": "Model the GIL in Rust’s type system",
+        "why": "Python objects may only be touched while the thread is attached to the interpreter. Tying object handles to a `Python<'py>` lifetime turns that rule into a compile-time check. On free-threaded Python the token no longer means exclusive access, so PyO3’s guide warns that unsafe code which used it as a lock has to be audited."
+      },
+      {
+        "choice": "Borrow checking at run time for Python-owned structs",
+        "why": "Once a `#[pyclass]` object belongs to Python, any number of Python references can reach it, which Rust’s compile-time borrow checker can’t track. PyO3 tracks shared and mutable borrows at run time, like `RefCell`; a class declared `frozen` opts out and manages its own interior mutability."
+      },
+      {
+        "choice": "Build tooling outside the library",
+        "why": "Building an extension means compiling a `cdylib`, setting `PYO3_BUILD_EXTENSION_MODULE`, passing extra linker arguments on macOS and not linking `libpython` for manylinux wheels. maturin and setuptools-rust do all of this automatically, so PyO3 itself stays an ordinary Cargo dependency."
+      }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "Daniel Grunwald’s rust-cpython brings Rust bindings to Python" },
+      { "year": "2017", "text": "PyO3 forks rust-cpython; 0.1.0 released on 23 July, nightly Rust only" },
+      { "year": "2020", "text": "0.11 (June) works on stable Rust; 0.13 (December) adds `abi3` wheels" },
+      { "year": "2024", "text": "0.21 (March) introduces the `Bound` API; 0.23 (November) supports free-threaded Python" },
+      { "year": "2025", "text": "0.26 (August) renames GIL handling to `attach` and `detach`" },
+      { "year": "2026", "text": "0.28 (February) makes free-threading the default; 0.29 (June) adds the `abi3t` stable ABI" }
+    ],
+    "sources": [
+      { "label": "GitHub: dgrunwald/rust-cpython README (copyright 2015–2021; please switch to PyO3)", "url": "https://github.com/dgrunwald/rust-cpython" },
+      { "label": "GitHub: PyO3 commit history, May 2017 (commits by Nikolay Kim)", "url": "https://github.com/PyO3/pyo3/commits/main/?since=2017-05-01&until=2017-05-20" },
+      { "label": "GitHub: PyO3 v0.1.0 README (Rust nightly required, Apache 2.0)", "url": "https://github.com/PyO3/pyo3/blob/v0.1.0/README.md" },
+      { "label": "GitHub: PyO3 issue #55, Provide comparison between PyO3 and rust-cpython (23 July 2017)", "url": "https://github.com/PyO3/pyo3/issues/55" },
+      { "label": "PyO3 0.20 guide source: PyO3 and rust-cpython (began as a fork, “fundamentally different”)", "url": "https://docs.rs/crate/pyo3/0.20.0/source/guide/src/rust_cpython.md" },
+      { "label": "PyO3 CHANGELOG (0.1.0 to 0.29.3)", "url": "https://github.com/PyO3/pyo3/blob/main/CHANGELOG.md" },
+      { "label": "maturin Changelog (0.7.0, August 2019: pyo3-pack renamed maturin)", "url": "https://github.com/PyO3/maturin/blob/main/Changelog.md" },
+      { "label": "Python docs: Thread states and the global interpreter lock (attached and detached thread states)", "url": "https://docs.python.org/3/c-api/threads.html" }
+    ]
+  },
+  "sources": [
+    { "label": "GitHub: PyO3 README (requirements, supported Pythons, license, projects using it)", "url": "https://github.com/PyO3/pyo3" },
+    { "label": "PyO3 user guide 0.29.3: Introduction", "url": "https://pyo3.rs/v0.29.3/" },
+    { "label": "PyO3 user guide 0.29.3: Python classes (Send, no lifetimes or generics, runtime borrow checking)", "url": "https://pyo3.rs/v0.29.3/class.html" },
+    { "label": "PyO3 user guide 0.29.3: Conversion tables (conversion cost of Rust types versus Python-native types)", "url": "https://pyo3.rs/v0.29.3/conversions/tables.html" },
+    { "label": "PyO3 user guide 0.29.3: Error handling (PyResult, PyErr)", "url": "https://pyo3.rs/v0.29.3/function/error-handling.html" },
+    { "label": "PyO3 user guide 0.29.3: Parallelism (Python::detach)", "url": "https://pyo3.rs/v0.29.3/parallelism.html" },
+    { "label": "PyO3 user guide 0.29.3: Supporting free-threaded CPython (gil_used, default since 0.28)", "url": "https://pyo3.rs/v0.29.3/free-threading.html" },
+    { "label": "PyO3 user guide 0.29.3: Building and distribution (abi3, abi3t, maturin, setuptools-rust, macOS linker flags)", "url": "https://pyo3.rs/v0.29.3/building-and-distribution.html" },
+    { "label": "PyO3 CHANGELOG (PanicException in 0.10, Bound in 0.21, attach and detach in 0.26, abi3t in 0.29)", "url": "https://github.com/PyO3/pyo3/blob/main/CHANGELOG.md" },
+    { "label": "maturin User Guide: Bindings (pyo3, cffi, uniffi, bin)", "url": "https://www.maturin.rs/bindings.html" },
+    { "label": "CFFI docs: Goals (supports PyPy and CPython; based on LuaJIT’s FFI)", "url": "https://cffi.readthedocs.io/en/stable/goals.html" },
+    { "label": "CFFI docs: Overview (ABI and API modes)", "url": "https://cffi.readthedocs.io/en/stable/overview.html" },
+    { "label": "Python docs: ctypes", "url": "https://docs.python.org/3/library/ctypes.html" }
+  ],
+  "checked": "2026-10-09"
+}

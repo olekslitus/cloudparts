@@ -1,0 +1,100 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Pydantic",
+  "concepts": ["dto"],
+  "provider": "oss",
+  "vendor": "Pydantic Services Inc. (created by Samuel Colvin)",
+  "license": "MIT",
+  "website": "https://pydantic.dev/",
+  "repo": "https://github.com/pydantic/pydantic",
+  "summary": "A Python data validation library: declare a class with type hints, and it checks and converts incoming data, serializes it back to dicts or JSON, and describes it as JSON Schema.",
+  "intro": [
+    "You describe data as a class that subclasses `BaseModel`, with one type-hinted attribute per field, such as `birthday: date` or `weight: Annotated[float, Gt(0)]`. Creating an instance, or calling `model_validate` on a dict or `model_validate_json` on raw JSON, checks every field and converts what it sensibly can: by default the string `\"123\"` becomes the integer `123` and an ISO date string becomes a `date`. Anything that doesn’t fit raises one `ValidationError` listing every failing field and its location. Strict mode turns the conversions off. Fields the model doesn’t declare are ignored by default, or kept or rejected with `extra='allow'` or `extra='forbid'`, so a request model works as a data transfer object: only the fields it lists get through. On the way out, `model_dump()` and `model_dump_json()` serialize a model, optionally leaving out unset, default or `None` fields, and `model_json_schema()` describes it as JSON Schema.",
+    "Since version 2 (June 2023) the validation logic lives in a separate package, `pydantic-core`, written in Rust with PyO3; Pydantic reads your type hints and builds a schema that the Rust validators run. `TypeAdapter` validates types that aren’t models, such as a `TypedDict` or `dict[str, HttpUrl]`, Pydantic dataclasses wrap standard dataclasses, and `@validate_call` checks a function’s arguments. FastAPI uses Pydantic for all request and response validation and puts its JSON Schemas into the OpenAPI document. Version 2.14 (October 8, 2026) supports Python 3.10 to 3.15."
+  ],
+  "strengths": [
+    "Schemas are ordinary Python type hints, so editors, mypy and Pyright understand the validated data",
+    "A Rust core: benchmarks in the V2 plan put it 4 to 50 times faster than Pydantic 1.9.1, and the docs show it beating hand-written validation code",
+    "Validation, serialization and JSON Schema from one class, which is what lets FastAPI generate OpenAPI from your models",
+    "Clear errors: one `ValidationError` lists every failing field, its location, the input and an error type"
+  ],
+  "limits": [
+    "Lax conversion is the default, so `\"123\"` quietly becomes `123`; you have to ask for strict mode where that matters",
+    "Unknown fields are dropped silently by default, so a misspelled optional field is ignored rather than reported unless you set `extra='forbid'`",
+    "Version 2 changed much of the API: Pydantic 1 code needs migrating (the `bump-pydantic` tool helps), and Pydantic 1 doesn’t support Python 3.14 or later"
+  ],
+  "worksWith": [
+    { "id": "python", "how": "validates data described with type hints in" },
+    { "id": "rust", "how": "implements its validation core in" },
+    { "id": "pyo3", "how": "binds its Rust core to Python with" },
+    { "id": "json", "how": "parses, validates and emits" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "A request model as a data transfer object: extra fields dropped, every error listed",
+    "source": [
+      "# pip install pydantic",
+      "from datetime import date",
+      "from pydantic import BaseModel, Field, ValidationError",
+      "",
+      "class SignupRequest(BaseModel):  # the fields a caller may set, and nothing else",
+      "    email: str = Field(pattern=r\"^[^@\\s]+@[^@\\s]+$\")",
+      "    birthday: date",
+      "    plan: str = \"free\"",
+      "",
+      "req = SignupRequest.model_validate_json(",
+      "    '{\"email\": \"ada@example.com\", \"birthday\": \"1815-12-10\", \"is_admin\": true}'",
+      ")",
+      "print(req)  # email='ada@example.com' birthday=datetime.date(1815, 12, 10) plan='free'",
+      "print(req.model_dump_json())  # {\"email\":\"ada@example.com\",\"birthday\":\"1815-12-10\",\"plan\":\"free\"}",
+      "",
+      "try:",
+      "    SignupRequest(email=\"nope\", birthday=\"yesterday\")",
+      "except ValidationError as e:",
+      "    print(e.error_count(), [err[\"loc\"] for err in e.errors()])  # 2 [('email',), ('birthday',)]",
+      "",
+      "print(list(SignupRequest.model_json_schema()[\"properties\"]))  # ['email', 'birthday', 'plan']"
+    ]
+  },
+  "history": {
+    "story": [
+      "Python type hints arrived with PEP 484 in Python 3.5, but the interpreter doesn’t check them. Samuel Colvin started Pydantic in 2017 to use them at run time: declare a class with type hints, and incoming data is checked and converted against them. The first release, 0.0.1, went to PyPI in May 2017, and version 1.0 followed in October 2019. FastAPI, released at the end of 2018, chose Pydantic for all of its data handling, and its author contributed JSON Schema support and editor improvements back.",
+      "By 2022 Pydantic had 26 million downloads a month, but its core logic had barely changed since the first experiment. Colvin took a sabbatical to rewrite it: in July 2022 Colvin published the V2 plan, moving validation into `pydantic-core`, a Rust package built with PyO3, while keeping the Python API much the same. In February 2023 Colvin founded a company, Pydantic, with a seed round led by Sequoia, and Pydantic V2 was released on June 30, 2023.",
+      "The rewrite rippled through the ecosystem. FastAPI 0.100.0 supported Pydantic 2 in July 2023, and the Pydantic team built `bump-pydantic` to rewrite most model code automatically. Pydantic 1 stopped supporting new Python versions from 3.14, and FastAPI dropped it in December 2025."
+    ],
+    "choices": [
+      { "choice": "Type hints are the schema", "why": "Developers already write type hints, and type checkers and IDEs already understand them, so there’s no separate schema language to learn and keep in step with the code." },
+      { "choice": "Convert by default, strict on request", "why": "Data from JSON, forms and query strings arrives as strings and numbers, so turning `\"2020-01-01T12:00\"` into a `datetime` is usually what you want. Strict mode exists for when it isn’t. Because JSON has no type for dates, UUIDs or bytes, Pydantic parses and validates JSON in one step, so it can still turn a JSON string into a `datetime` sensibly." },
+      { "choice": "Rewrite the core in Rust, keep the Python API", "why": "Colvin wanted speed, a tree of small validators without Python’s function-call overhead, and Rust’s help with a complex codebase. The plan was that users would keep writing the same type-hinted classes while `pydantic-core` did the work underneath." }
+    ],
+    "timeline": [
+      { "year": "2017", "text": "Samuel Colvin publishes 0.0.1 on PyPI in May" },
+      { "year": "2018", "text": "FastAPI adopts Pydantic for all of its data handling" },
+      { "year": "2019", "text": "Version 1.0 in October" },
+      { "year": "2022", "text": "V2 plan in July: a Rust core, `pydantic-core`, built with PyO3" },
+      { "year": "2023", "text": "Company founded with a Sequoia-led seed round (February); Pydantic V2 released June 30" },
+      { "year": "2026", "text": "Pydantic 2.14 on October 8 drops Python 3.9 and adds Python 3.15" }
+    ],
+    "sources": [
+      { "label": "PyPI JSON API: pydantic release history (0.0.1 in May 2017, 1.0 in October 2019)", "url": "https://pypi.org/pypi/pydantic/json" },
+      { "label": "PyPI JSON API: pydantic 0.0.1 (author Samuel Colvin)", "url": "https://pypi.org/pypi/pydantic/0.0.1/json" },
+      { "label": "Samuel Colvin: Pydantic V2 plan (Jul 2022)", "url": "https://pydantic.dev/articles/pydantic-v2" },
+      { "label": "Samuel Colvin: Pydantic, the company (Feb 2023)", "url": "https://pydantic.dev/articles/company-announcement" },
+      { "label": "Pydantic: Announcement, Pydantic V2 release (Jun 2023)", "url": "https://pydantic.dev/articles/pydantic-v2-final" },
+      { "label": "Pydantic: Announcement, Pydantic v2.14 release (Oct 2026)", "url": "https://pydantic.dev/articles/pydantic-v2-14-release" },
+      { "label": "FastAPI docs: History, Design and Future (contributions to Pydantic)", "url": "https://fastapi.tiangolo.com/history-design-future/" },
+      { "label": "FastAPI release notes (0.100.0, 0.119.0, 0.126.0)", "url": "https://fastapi.tiangolo.com/release-notes/" },
+      { "label": "PEP 484: Type Hints", "url": "https://peps.python.org/pep-0484/" }
+    ]
+  },
+  "sources": [
+    { "label": "Pydantic docs: Why use Pydantic Validation?", "url": "https://docs.pydantic.dev/latest/why/" },
+    { "label": "Pydantic docs: Models (validation, data conversion, extra data)", "url": "https://docs.pydantic.dev/latest/concepts/models/" },
+    { "label": "Samuel Colvin: Pydantic V2 plan (Jul 2022)", "url": "https://pydantic.dev/articles/pydantic-v2" },
+    { "label": "Pydantic: Announcement, Pydantic v2.14 release (Oct 2026)", "url": "https://pydantic.dev/articles/pydantic-v2-14-release" },
+    { "label": "FastAPI docs: Alternatives, Inspiration and Comparisons (what FastAPI uses Pydantic for)", "url": "https://fastapi.tiangolo.com/alternatives/" },
+    { "label": "FastAPI release notes (0.100.0 migration notes and bump-pydantic; 0.119.0 on Pydantic 1 and Python 3.14)", "url": "https://fastapi.tiangolo.com/release-notes/" },
+    { "label": "Pydantic LICENSE (MIT)", "url": "https://github.com/pydantic/pydantic/blob/main/LICENSE" }
+  ],
+  "checked": "2026-10-09"
+}

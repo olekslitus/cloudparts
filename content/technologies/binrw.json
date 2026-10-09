@@ -1,0 +1,111 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "binrw",
+  "concepts": ["binary-parsing"],
+  "kinds": ["declarative-binary"],
+  "provider": "oss",
+  "vendor": "Open-source project by jam1garner, Colin Snover, Kitlith and roblabla",
+  "license": "MIT",
+  "website": "https://docs.rs/binrw/latest/binrw/",
+  "repo": "https://github.com/jam1garner/binrw",
+  "summary": "A Rust derive macro that generates a reader and a writer for a struct or enum from directives describing its binary layout, reading from any seekable stream.",
+  "intro": [
+    "You put `#[binrw]` (or `#[derive(BinRead, BinWrite)]`) on a type and describe its layout with directives in `#[br(...)]` for reading, `#[bw(...)]` for writing and `#[brw(...)]` for both: `big` or `little` for byte order, `magic = b\"DOG\"` for fixed leading bytes, `count = n` for arrays, `assert(...)` for validation, `align_before` and padding, `calc` to compute a field on write, `temp` for a field that is read but not kept, and `parse_with` for a hand-written reader. Directives are written as Rust expressions rather than strings, so they can name earlier fields and your editor checks them. Built-in helpers cover common patterns: `NullString` for C strings, `FilePtr` for a field that holds an offset to data elsewhere in the file, and `PosValue` to remember where a value was found.",
+    "binrw reads from anything that implements `io::Read + io::Seek` and writes to `io::Write + io::Seek`, so a file, a socket wrapped in `NoSeek` or a buffer in memory all work, and a `BufReader` wrapper speeds up reads from disk. The struct in memory is an ordinary Rust value: binrw never casts raw bytes into a struct, so it needs no `#[repr(C)]` and has no risk of undefined behaviour from misaligned data. It reads whole bytes; for fields narrower than a byte, the docs point to bit-field crates such as `bilge` or `modular-bitfield`, or you split the byte yourself."
+  ],
+  "strengths": [
+    "Directives cover the routine parts of binary formats: magic numbers, byte order, padding and alignment, assertions, offsets and counts",
+    "Directive arguments are real Rust expressions, so they get type checking and IDE support",
+    "Since 0.10, the short `read()` and `write()` calls only compile for types that declare a byte order, so a format can’t silently follow the host CPU’s endianness",
+    "`FilePtr` and seek directives handle formats that store offsets to data elsewhere in the file"
+  ],
+  "limits": [
+    "No fields narrower than a byte: bit flags need another crate or manual shifting, unlike deku or Construct",
+    "Expects a seekable stream; reading from a pipe or socket needs the `NoSeek` wrapper",
+    "Still 0.x since 2020, and minor releases break APIs: 0.10 renamed `write_to` to `write`, removed `Endian::Native` and changed the `NullString` API",
+    "Reads into owned Rust values rather than zero-copy views of the input, so large byte arrays are copied out of the buffer"
+  ],
+  "worksWith": [
+    { "id": "rust", "how": "generates binary readers and writers in" }
+  ],
+  "snippet": {
+    "lang": "rust",
+    "title": "A sensor packet with a version check and a count computed on write",
+    "source": [
+      "use binrw::{binrw, io::Cursor, BinRead, BinWrite};",
+      "",
+      "// \"SN\" | version: 4 bits | flags: 4 bits | sensor id: u16 | count: u8 | count × i16",
+      "#[binrw]",
+      "#[brw(big, magic = b\"SN\")]",
+      "#[derive(Debug)]",
+      "struct Reading {",
+      "    #[br(temp, assert(vf >> 4 == 1, \"unsupported version {}\", vf >> 4))]",
+      "    #[bw(calc = (version << 4) | flags)]",
+      "    vf: u8, // binrw reads whole bytes; split the nibbles by hand",
+      "    #[br(calc = vf >> 4)]",
+      "    #[bw(ignore)]",
+      "    version: u8,",
+      "    #[br(calc = vf & 0x0F)]",
+      "    #[bw(ignore)]",
+      "    flags: u8,",
+      "    sensor_id: u16,",
+      "    #[br(temp)]",
+      "    #[bw(try_calc = u8::try_from(temps.len()))] // written from the Vec, never stale",
+      "    count: u8,",
+      "    #[br(count = count)]",
+      "    temps: Vec<i16>, // hundredths of a degree",
+      "}",
+      "",
+      "fn main() {",
+      "    let bytes = [b'S', b'N', 0x12, 0x00, 0x07, 0x02, 0x08, 0x34, 0xFF, 0x9C];",
+      "    let mut r = Reading::read(&mut Cursor::new(&bytes)).unwrap();",
+      "    println!(\"{r:?}\");",
+      "    // Reading { version: 1, flags: 2, sensor_id: 7, temps: [2100, -100] }",
+      "",
+      "    r.temps.push(2250);",
+      "    let mut out = Cursor::new(Vec::new());",
+      "    r.write(&mut out).unwrap();",
+      "    println!(\"{:02x?}\", out.into_inner());",
+      "    // [53, 4e, 12, 00, 07, 03, 08, 34, ff, 9c, 08, ca]",
+      "",
+      "    let v2 = [b'S', b'N', 0x22, 0x00, 0x07, 0x00];",
+      "    println!(\"{}\", Reading::read(&mut Cursor::new(&v2)).unwrap_err());",
+      "}"
+    ]
+  },
+  "history": {
+    "story": [
+      "binrw started as binread, a crate by jam1garner “for helping parse structs from binary data using macro magic”. binread 1.0 reached crates.io in April 2020 and could only read: a program that also had to write the format back still needed a second, hand-written serializer.",
+      "binrw, first published in September 2020, is the same idea in both directions, and binread’s README now tells users to upgrade because binrw “is the same thing but supports both reads and writes”. Colin Snover, Kitlith and roblabla are now listed as authors alongside jam1garner. Version 0.10, in September 2022, finished the writing side with full documentation, added `NoSeek` for streams that can’t seek and `BufReader` for faster file reads, and made byte order explicit for the convenience functions."
+    ],
+    "choices": [
+      { "choice": "Directives as code, not strings", "why": "Attribute arguments are parsed as Rust expressions, so they can refer to earlier fields by name and get the compiler’s and the IDE’s checks." },
+      { "choice": "Never transmute bytes into structs", "why": "Unlike zero-copy libraries, the in-memory struct doesn’t have to match the raw data, which avoids undefined behaviour and slow unaligned access on some architectures." },
+      { "choice": "Standard `Read + Seek` streams", "why": "Data can come from memory, disk or the network, and buffering or decompression can be layered underneath without binrw knowing." },
+      { "choice": "Make byte order explicit", "why": "Since 0.10 the convenience functions without a byte-order argument only work for types that declare one, which prevents unintentional architecture-specific byte ordering." }
+    ],
+    "timeline": [
+      { "year": "2020", "text": "binread 1.0 (April); binrw 0.1 adds writing (September)" },
+      { "year": "2021", "text": "binread 2.2, its last release; users move to binrw" },
+      { "year": "2022", "text": "0.10: documented writing, `NoSeek`, `BufReader`, explicit byte order" },
+      { "year": "2025", "text": "0.15 (May) reduces generated code to speed up compiles" }
+    ],
+    "sources": [
+      { "label": "binread README (superseded by binrw)", "url": "https://github.com/jam1garner/binread" },
+      { "label": "crates.io API: binread versions and release dates", "url": "https://crates.io/api/v1/crates/binread" },
+      { "label": "crates.io API: binrw versions and release dates", "url": "https://crates.io/api/v1/crates/binrw" },
+      { "label": "binrw release notes: Version 0.10.0 (September 2022)", "url": "https://github.com/jam1garner/binrw/releases/tag/v0.10.0" },
+      { "label": "binrw release notes: Version 0.15.0 (May 2025)", "url": "https://github.com/jam1garner/binrw/releases/tag/v0.15.0" },
+      { "label": "binrw workspace Cargo.toml (authors, licence)", "url": "https://github.com/jam1garner/binrw/blob/master/Cargo.toml" },
+      { "label": "binrw docs on docs.rs (no transmuting, Read + Seek)", "url": "https://docs.rs/binrw/latest/binrw/" }
+    ]
+  },
+  "sources": [
+    { "label": "binrw docs on docs.rs (directives, input and output, built-in types, bit fields, no_std)", "url": "https://docs.rs/binrw/latest/binrw/" },
+    { "label": "binrw README (features)", "url": "https://github.com/jam1garner/binrw" },
+    { "label": "binrw release notes: Version 0.10.0 (breaking changes, NoSeek, BufReader, ReadEndian)", "url": "https://github.com/jam1garner/binrw/releases/tag/v0.10.0" },
+    { "label": "binrw workspace Cargo.toml (authors, MIT licence)", "url": "https://github.com/jam1garner/binrw/blob/master/Cargo.toml" },
+    { "label": "crates.io API: binrw versions", "url": "https://crates.io/api/v1/crates/binrw" }
+  ],
+  "checked": "2026-10-09"
+}

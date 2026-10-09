@@ -1,0 +1,107 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Starlette",
+  "concepts": ["api-frameworks"],
+  "kinds": ["http-api-frameworks"],
+  "provider": "oss",
+  "vendor": "Marcelo Trylesinski and contributors (created by Kim Christie)",
+  "license": "BSD 3-Clause",
+  "website": "https://starlette.dev/",
+  "repo": "https://github.com/Kludex/starlette",
+  "summary": "A small ASGI toolkit for Python: routing, requests and responses, middleware, WebSockets and a test client, usable as a whole framework or piece by piece, and the base FastAPI is built on.",
+  "intro": [
+    "A Starlette app is an ASGI application. You pass it a routing table, a list of `Route`, `WebSocketRoute` and `Mount` entries, and each route points at an endpoint that takes a `request` and returns a response. Paths capture parameters in braces, and convertors such as `{order_id:int}`, `float`, `uuid` and `path` turn them into Python values. `Mount` nests a list of routes or a whole other ASGI app under a prefix, which is how static files, sub-applications and GraphQL servers attach. Around that sit middleware (CORS, GZip, sessions), background tasks, a `lifespan` hook for startup and shutdown, and a `TestClient` that calls the app in-process. Each component can be used on its own, and the docs pitch them as building blocks to share between ASGI frameworks.",
+    "Starlette parses and routes, but it doesn’t validate input, serialize models or generate API docs; that is what FastAPI adds on top. Endpoints can be `async def` or plain `def`: plain functions, synchronous background tasks and file handling run in a thread pool of 40 threads by default, shared with libraries such as FastAPI. Its only required dependency is AnyIO, which lets it run on asyncio or Trio. Version 1.0 (March 2026) removed the old decorator-style API (`@app.route`, `on_startup`) in favour of the `routes`, `middleware` and `lifespan` arguments, and the project now follows semantic versioning."
+  ],
+  "strengths": [
+    "Small and focused: one required dependency (AnyIO), and components that work on their own in any ASGI app",
+    "WebSockets, background tasks, streaming responses, sessions and an in-process test client built in",
+    "The foundation of FastAPI and a dependency of the Python MCP SDK, so its routing and request handling are widely exercised",
+    "Stable API since 1.0 (March 2026), with semantic versioning from then on"
+  ],
+  "limits": [
+    "No request validation, serialization or OpenAPI generation: you check `await request.json()` yourself, or use FastAPI",
+    "Plain `def` endpoints share a thread pool of 40 threads by default; blocking work beyond that waits, unless you raise the AnyIO limit",
+    "Version 1.0 removed `@app.route`, `@app.middleware`, `on_startup` and `on_shutdown`, so older tutorials and code need updating",
+    "Built-in GraphQL support was removed in 0.17.0 (2021); GraphQL now comes from third-party libraries such as Strawberry or Ariadne"
+  ],
+  "worksWith": [
+    { "id": "python", "how": "is an async web toolkit for" },
+    { "id": "opentelemetry", "how": "has an optional tracing middleware for" },
+    { "id": "json", "how": "parses request bodies and responds in" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Routes, a mount and a path convertor, tested in-process",
+    "source": [
+      "# pip install starlette httpx2",
+      "from starlette.applications import Starlette",
+      "from starlette.responses import JSONResponse",
+      "from starlette.routing import Mount, Route",
+      "from starlette.testclient import TestClient",
+      "",
+      "async def get_order(request):",
+      "    order_id = request.path_params[\"order_id\"]  # already an int",
+      "    return JSONResponse({\"id\": order_id, \"status\": \"paid\"})",
+      "",
+      "async def create_order(request):",
+      "    body = await request.json()  # parsing is built in; validation is up to you",
+      "    if not isinstance(body.get(\"quantity\"), int) or body[\"quantity\"] < 1:",
+      "        return JSONResponse({\"error\": \"quantity must be a positive integer\"}, status_code=400)",
+      "    return JSONResponse({\"id\": 43, **body}, status_code=201)",
+      "",
+      "app = Starlette(routes=[",
+      "    Mount(\"/orders\", routes=[",
+      "        Route(\"/\", create_order, methods=[\"POST\"]),",
+      "        Route(\"/{order_id:int}\", get_order),",
+      "    ]),",
+      "])",
+      "",
+      "client = TestClient(app)",
+      "print(client.get(\"/orders/42\").json())                            # {'id': 42, 'status': 'paid'}",
+      "print(client.get(\"/orders/abc\").status_code)                      # 404: the int convertor didn’t match",
+      "print(client.post(\"/orders/\", json={\"quantity\": 0}).status_code)  # 400"
+    ]
+  },
+  "history": {
+    "story": [
+      "Python’s web interface standard, WSGI, is one synchronous call per request, which can’t hold a WebSocket open. ASGI replaced it with one asynchronous callable that exchanges messages, but in 2018 there were few frameworks built for it. Kim Christie, who had created Django REST Framework, the API framework APIStar and the ASGI server Uvicorn, stopped developing APIStar as a server and created Starlette in June 2018 as a lightweight ASGI framework and toolkit.",
+      "FastAPI, first released in December 2018, made Starlette its base: the `FastAPI` class subclasses `Starlette`. In June 2021, version 0.15.0 moved Starlette’s async internals onto AnyIO, which added Trio support, and deprecated the built-in `GraphQLApp`; 0.17.0 removed it that November, leaving GraphQL to libraries such as Strawberry, Ariadne and Graphene. Marcelo Trylesinski, who works at Pydantic, now maintains it, and the repository lives under Trylesinski’s GitHub account, `Kludex`.",
+      "After years of 0.x releases, the 1.0.0 release candidate in February 2026 removed every feature marked for removal, and 1.0.0 followed on March 22, 2026. Its maintainer called it a stability and versioning milestone, not a rewrite, and reported downloads of 325 million a month, up from 57 million a year earlier."
+    ],
+    "choices": [
+      { "choice": "A toolkit as well as a framework", "why": "Every piece is an ASGI component, so a response class, a middleware or the router can be reused in another ASGI framework. That modularity is how FastAPI could build on Starlette instead of reimplementing it." },
+      { "choice": "Endpoints receive one `request` argument", "why": "Since 0.6.0, endpoints no longer take path parameters as keyword arguments; they read `request.path_params`. Unusual among Python frameworks, but every endpoint then has the same signature, which the release notes argue is more consistent all the way through." },
+      { "choice": "AnyIO instead of asyncio directly", "why": "Moving the low-level async code onto AnyIO in 0.15.0 let the same Starlette app run on asyncio or Trio." },
+      { "choice": "Leave validation and GraphQL to other libraries", "why": "Starlette stays small: request validation, serialization and docs live in FastAPI, and the built-in GraphQL support was dropped in favour of dedicated libraries." }
+    ],
+    "timeline": [
+      { "year": "2018", "text": "Created in June by Kim Christie" },
+      { "year": "2018", "text": "FastAPI 0.1.0, built on Starlette, released in December" },
+      { "year": "2021", "text": "0.15.0 in June moves onto AnyIO, adds Trio and deprecates built-in GraphQL" },
+      { "year": "2021", "text": "0.17.0 removes GraphQL support in November" },
+      { "year": "2026", "text": "1.0.0 release candidate in February removes deprecated APIs" },
+      { "year": "2026", "text": "Starlette 1.0.0 on March 22, at 325 million downloads a month" }
+    ],
+    "sources": [
+      { "label": "Starlette release notes (0.6.0, 0.15.0, 0.17.0, 1.0.0rc1 and 1.0.0)", "url": "https://starlette.dev/release-notes/" },
+      { "label": "Marcelo Trylesinski: Starlette 1.0 is here! (Mar 2026)", "url": "https://marcelotryle.com/blog/2026/03/22/starlette-10-is-here/" },
+      { "label": "FastAPI docs: Alternatives, Inspiration and Comparisons (APIStar, Starlette, Uvicorn)", "url": "https://fastapi.tiangolo.com/alternatives/" },
+      { "label": "ASGI docs: Introduction (what’s wrong with WSGI)", "url": "https://asgi.readthedocs.io/en/latest/introduction.html" },
+      { "label": "PyPI JSON API: fastapi release history (0.1.0 uploaded 8 December 2018)", "url": "https://pypi.org/pypi/fastapi/json" },
+      { "label": "Starlette docs: GraphQL (deprecated in 0.15.0, removed in 0.17.0)", "url": "https://starlette.dev/graphql/" }
+    ]
+  },
+  "sources": [
+    { "label": "Starlette docs: Introduction (features, dependencies, toolkit use)", "url": "https://starlette.dev/" },
+    { "label": "Starlette docs: Routing (convertors, Mount, body size limits)", "url": "https://starlette.dev/routing/" },
+    { "label": "Starlette docs: Applications (routes, middleware, lifespan)", "url": "https://starlette.dev/applications/" },
+    { "label": "Starlette docs: Thread Pool (40 tokens by default)", "url": "https://starlette.dev/threadpool/" },
+    { "label": "Starlette docs: GraphQL", "url": "https://starlette.dev/graphql/" },
+    { "label": "Starlette release notes", "url": "https://starlette.dev/release-notes/" },
+    { "label": "Marcelo Trylesinski: Starlette 1.0 is here! (Mar 2026)", "url": "https://marcelotryle.com/blog/2026/03/22/starlette-10-is-here/" },
+    { "label": "FastAPI docs: Alternatives, Inspiration and Comparisons (what Starlette does and doesn’t provide)", "url": "https://fastapi.tiangolo.com/alternatives/" },
+    { "label": "Starlette LICENSE.md (BSD 3-Clause)", "url": "https://github.com/Kludex/starlette/blob/main/LICENSE.md" }
+  ],
+  "checked": "2026-10-09"
+}

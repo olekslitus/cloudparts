@@ -1,0 +1,205 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Semantic layers",
+  "category": "analytics",
+  "order": 70,
+  "summary": "One shared, code-defined model of metrics, dimensions and joins that BI tools, apps and AI agents query by name, which the layer compiles to SQL against the warehouse and often caches.",
+  "howItWorks": "Without one, every dashboard, notebook and app writes its own SQL for “revenue”, and they drift apart: one subtracts refunds, another doesn’t. A semantic layer moves those definitions into one model, usually YAML or a small language in git. The model names entities (orders, customers), the joins between them, dimensions to group and filter by (country, month, status) and measures or metrics with their aggregation (`net_revenue = SUM(amount) - SUM(refunded)`). Consumers ask for metrics by dimensions through the layer’s API: a SQL interface that looks like a database, REST or GraphQL for apps, or an MCP server for AI agents. The layer checks the request against the model, applies access rules such as row-level filters for the caller, works out the joins, and generates SQL in the warehouse’s own dialect. Many layers also cache: results in memory, or rollup tables refreshed ahead of time and used whenever a query matches them, so busy dashboards don’t rescan raw tables. The warehouse still does the heavy work; the layer decides what to ask it.",
+  "analogy": "A restaurant chain’s recipe book. Every branch, the delivery app and the catering team order “house curry” by name, and the kitchen cooks it the same way each time. Nobody improvises their own version, and when the recipe changes, it changes everywhere at once.",
+  "useWhen": [
+    "Several tools (BI, spreadsheets, embedded dashboards, AI agents) report the same metrics and the numbers disagree",
+    "Customer-facing analytics, where an app needs a governed API with per-tenant access rules instead of raw SQL",
+    "AI agents should answer questions from defined metrics instead of guessing at raw tables",
+    "Dashboards repeatedly hit the warehouse with the same aggregations and you want a cache in front of it"
+  ],
+  "avoidWhen": [
+    "One team, one BI tool and a handful of reports: the BI tool’s own model or a few dbt models is enough",
+    "Exploratory analysis over new, unmodelled data, where analysts need raw SQL more than governed metrics",
+    "You can’t staff the model: an outdated semantic layer is a second source of wrong numbers"
+  ],
+  "example": "A SaaS company reports “active customers” and “net revenue” in its BI tool, in a customer-facing usage dashboard and through an AI chat assistant. Before, each had its own SQL, and the board deck and the app disagreed by 4% because one forgot refunds. With a semantic layer, the definition lives in one YAML file reviewed in pull requests. The BI tool connects to its SQL endpoint, the app calls its REST API with a token that limits each customer to their own rows, and the assistant uses its MCP server. A monthly rollup of revenue by plan and country answers 90% of dashboard queries in milliseconds without touching the warehouse.",
+  "providers": {
+    "aws": "Amazon Quick Sight Topics",
+    "gcp": "Looker (LookML)",
+    "azure": "Power BI semantic models",
+    "oss": "Cube, dbt Semantic Layer (MetricFlow, Apache 2.0), Snowflake semantic views, Apache Ossie (exchange format)"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "import sqlite3",
+      "",
+      "# The semantic layer: metrics, dimensions and joins, defined once",
+      "MODEL = {",
+      "    \"table\": \"orders o\",",
+      "    \"joins\": {\"customers\": \"JOIN customers c ON c.id = o.customer_id\"},",
+      "    \"metrics\": {\"revenue\": \"SUM(o.amount)\", \"orders\": \"COUNT(*)\",",
+      "                \"net_revenue\": \"SUM(o.amount) - SUM(o.refunded)\"},",
+      "    \"dimensions\": {\"country\": (\"c.country\", \"customers\"), \"status\": (\"o.status\", None)},",
+      "}",
+      "",
+      "def compile_query(metrics: list[str], by: list[str]) -> str:",
+      "    dims = [MODEL[\"dimensions\"][d] for d in by]",
+      "    joins = sorted({MODEL[\"joins\"][j] for _, j in dims if j})",
+      "    cols = [f\"{expr} AS {d}\" for d, (expr, _) in zip(by, dims)]",
+      "    cols += [f\"{MODEL['metrics'][m]} AS {m}\" for m in metrics]",
+      "    sql = f\"SELECT {', '.join(cols)} FROM {MODEL['table']} {' '.join(joins)}\"",
+      "    return sql + (f\" GROUP BY {', '.join(e for e, _ in dims)}\" if dims else \"\")",
+      "",
+      "db = sqlite3.connect(\":memory:\")",
+      "db.executescript(\"\"\"",
+      "  CREATE TABLE customers (id INT, country TEXT);",
+      "  CREATE TABLE orders (id INT, customer_id INT, amount REAL, refunded REAL, status TEXT);",
+      "  INSERT INTO customers VALUES (1, 'DE'), (2, 'FR');",
+      "  INSERT INTO orders VALUES (1, 1, 100, 0, 'paid'), (2, 1, 50, 50, 'refunded'), (3, 2, 80, 0, 'paid');",
+      "\"\"\")",
+      "",
+      "# A BI tool, an app and an AI agent all ask by name; nobody rewrites the SQL",
+      "sql = compile_query([\"net_revenue\"], by=[\"country\"])",
+      "print(sql)",
+      "# SELECT c.country AS country, SUM(o.amount) - SUM(o.refunded) AS net_revenue FROM orders o JOIN customers c ON c.id = o.customer_id GROUP BY c.country",
+      "print(db.execute(sql).fetchall())   # [('DE', 100.0), ('FR', 80.0)]"
+    ]
+  },
+  "related": ["olap", "warehouse", "etl", "static-read-models"],
+  "diagram": {
+    "caption": "A BI tool, an app and an AI agent all ask the semantic layer for the same metric by name. The layer answers most requests from rollups it refreshed ahead of time; the rest it compiles to SQL and sends to the warehouse, which takes far longer to reply.",
+    "w": 780,
+    "h": 270,
+    "nodes": [
+      {
+        "id": "bi",
+        "x": 100,
+        "y": 55,
+        "label": "BI tool",
+        "sub": "SQL interface",
+        "emit": { "every": 900, "jitter": 0.4, "req": true, "color": 0 },
+        "out": ["layer"]
+      },
+      {
+        "id": "app",
+        "x": 100,
+        "y": 135,
+        "label": "Customer app",
+        "sub": "REST · per-tenant rules",
+        "emit": { "every": 700, "jitter": 0.4, "req": true, "color": 1 },
+        "out": ["layer"]
+      },
+      {
+        "id": "agent",
+        "x": 100,
+        "y": 215,
+        "label": "AI agent",
+        "sub": "MCP · net_revenue by plan",
+        "emit": { "every": 1300, "jitter": 0.4, "req": true, "color": 2 },
+        "out": ["layer"]
+      },
+      {
+        "id": "layer",
+        "x": 390,
+        "y": 135,
+        "label": "Semantic layer",
+        "sub": "metrics · joins · access rules",
+        "mode": "cache",
+        "p": 0.75,
+        "out": ["wh"]
+      },
+      {
+        "id": "wh",
+        "x": 650,
+        "y": 135,
+        "label": "Warehouse",
+        "sub": "generated SQL",
+        "concept": "warehouse",
+        "mode": "reply",
+        "delay": 900
+      }
+    ]
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "Where the model lives",
+      "intro": "Most semantic layers do the same job; they differ in who owns the model and who can query it.",
+      "items": [
+        {
+          "name": "Inside a BI tool",
+          "tag": "Looker, Power BI",
+          "text": "LookML models in a Git-backed Looker project describe dimensions, measures and joins, and Looker’s SQL generator turns each Explore query into SQL. Power BI semantic models are, in effect, Analysis Services tabular models. Both are built for their own tool first."
+        },
+        {
+          "name": "Standalone and headless",
+          "tag": "Cube",
+          "text": "Cube Core keeps cubes and views in YAML or JavaScript and exposes them through a Postgres-compatible SQL API, REST and GraphQL, with pre-aggregations as its cache. It has no UI of its own, so any BI tool, app or agent can sit on top."
+        },
+        {
+          "name": "Next to the transformations",
+          "tag": "dbt",
+          "text": "The dbt Semantic Layer defines metrics in the dbt project, on top of the models that build the tables. MetricFlow compiles requests into a query plan and then into SQL for the target engine; it moved to the Apache 2.0 licence in 2025. The hosted Semantic Layer needs a dbt Starter or Enterprise-tier account."
+        },
+        {
+          "name": "Inside the warehouse",
+          "tag": "Snowflake",
+          "text": "Snowflake semantic views are schema-level objects created with `CREATE SEMANTIC VIEW`. You query them with `SELECT`, share them through listings and give them to Cortex Agents, but only inside Snowflake."
+        }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "The idea dates to the start of business intelligence. In November 1991 Business Objects filed a US patent, granted in 1996, for a system that let end users query relational databases “without knowing the relational structure” or SQL: users worked with familiar business terms, called business objects, and the software wrote the queries. Rivals such as Cognos paid licence fees for it, and for decades each BI tool kept its own model that only it could use.",
+      "Looker made the model code. LookML describes dimensions, measures and joins in files kept in Git, and Looker generates SQL from it for every query; Google completed its acquisition of Looker in February 2020. In the late 2010s and early 2020s, standalone products split the model from the dashboard entirely, under names like “metrics layer”, “headless BI” or “universal semantic layer”. Cube.js, released as open source in 2019 from the engine behind the Statsbot BI app, served one model to any front end. dbt Labs said in 2021 that it would build its own semantic layer, and in 2023 bought Transform, whose MetricFlow engine compiles metric definitions into SQL.",
+      "Large language models raised the stakes: an agent writing SQL against raw tables invents its own definitions. In September 2025 Snowflake, RelationalAI and other partners announced the Open Semantic Interchange, an open-source effort to define a common, vendor-agnostic specification for semantic models. That autumn dbt Labs moved MetricFlow to the Apache 2.0 licence, aligned with the same goals and built with partners including Snowflake and Salesforce. The format is now an Apache Incubator project, Apache Ossie, and Cube converts models to and from it."
+    ],
+    "choices": [
+      {
+        "choice": "Business terms in front of SQL",
+        "why": "The 1991 patent’s premise: people who know the business shouldn’t need to know table structures or SQL to ask a question, so the system maps their vocabulary onto the database."
+      },
+      {
+        "choice": "Models as code in version control",
+        "why": "LookML, Cube and dbt all keep definitions in files, so metric changes get review, history, tests and CI like application code, and AI tools can edit them through the same pull requests."
+      },
+      {
+        "choice": "Compile, don’t copy",
+        "why": "The layer generates SQL for the warehouse’s own dialect instead of storing another copy of the data, so the warehouse stays the single store and the model stays small."
+      },
+      {
+        "choice": "Headless, with many APIs",
+        "why": "A model locked inside one BI tool can’t serve apps, spreadsheets or agents. Standalone layers expose SQL, REST, GraphQL and MCP so every consumer gets the same numbers."
+      }
+    ],
+    "timeline": [
+      { "year": "1991", "text": "Business Objects files its patent for querying databases through business objects (granted 1996)" },
+      { "year": "2019", "text": "Cube.js released as open source" },
+      { "year": "2020", "text": "Google completes its acquisition of Looker" },
+      { "year": "2023", "text": "dbt Labs acquires Transform and its MetricFlow engine" },
+      { "year": "2025", "text": "Open Semantic Interchange announced in September; MetricFlow moves to Apache 2.0" }
+    ],
+    "sources": [
+      { "label": "Google Patents: US5555403A, Relational database access system using semantically dynamic objects (Business Objects, filed 1991)", "url": "https://patents.google.com/patent/US5555403A/en" },
+      { "label": "Wikipedia: Semantic layer (history, standalone semantic layers)", "url": "https://en.wikipedia.org/wiki/Semantic_layer" },
+      { "label": "Looker docs: What is LookML?", "url": "https://cloud.google.com/looker/docs/what-is-lookml" },
+      { "label": "Google Cloud blog: Welcoming Looker to Google Cloud (Feb 2020)", "url": "https://cloud.google.com/blog/topics/inside-google-cloud/google-completes-looker-acquisition" },
+      { "label": "Pulse 2.0: interview with Cube CEO Artyom Keydunov (Statsbot, Cube Core launch in 2019)", "url": "https://pulse2.com/cube-profile-artyom-keydunov-interview/amp/" },
+      { "label": "dbt Labs blog: dbt Labs signs definitive agreement to acquire Transform (Feb 2023)", "url": "https://www.getdbt.com/blog/dbt-acquisition-transform" },
+      { "label": "dbt Labs blog: Announcing open source MetricFlow (Coalesce 2025; 2021 semantic layer plans)", "url": "https://www.getdbt.com/blog/open-source-metricflow-governed-metrics" },
+      { "label": "RelationalAI: RelationalAI joins Snowflake and industry leaders to establish the Open Semantic Interchange (Sept 2025)", "url": "https://www.relational.ai/post/rai-joins-snowflake-and-industry-leaders-to-establish-the-open-semantic-interchange" },
+      { "label": "Apache Ossie (incubating): project site", "url": "https://ossie.apache.org/updates/announcing-the-open-semantic-interchange-osi/" },
+      { "label": "Cube docs: Apache Ossie (convert Cube models to and from the format)", "url": "https://docs.cube.dev/docs/integrations/apache-ossie" }
+    ]
+  },
+  "sources": [
+    { "label": "Cube docs: Introduction (data modeling, access control, caching, APIs)", "url": "https://docs.cube.dev/docs/introduction" },
+    { "label": "Cube docs: Pre-aggregations overview (in-memory cache and rollups)", "url": "https://docs.cube.dev/docs/pre-aggregations" },
+    { "label": "GitHub: cube-js/cube README (Cube Core, headless, SQL, REST and GraphQL APIs)", "url": "https://github.com/cube-js/cube" },
+    { "label": "dbt docs: dbt Semantic Layer (MetricFlow, caching, MCP server, plan requirements)", "url": "https://docs.getdbt.com/docs/use-dbt-semantic-layer/dbt-sl" },
+    { "label": "GitHub: dbt-labs/metricflow README (query plan to SQL, licence history)", "url": "https://github.com/dbt-labs/metricflow" },
+    { "label": "Looker docs: What is LookML?", "url": "https://cloud.google.com/looker/docs/what-is-lookml" },
+    { "label": "Microsoft Learn: Semantic models in the Power BI service", "url": "https://learn.microsoft.com/en-us/power-bi/connect-data/service-datasets-understand" },
+    { "label": "Snowflake docs: Overview of semantic views", "url": "https://docs.snowflake.com/en/user-guide/views-semantic/overview" },
+    { "label": "Amazon Quick docs: Working with Amazon Quick Sight Topics (multi-dataset semantic layer)", "url": "https://docs.aws.amazon.com/quick/latest/userguide/topics.html" },
+    { "label": "Cube docs: Apache Ossie (Open Semantic Interchange format)", "url": "https://docs.cube.dev/docs/integrations/apache-ossie" },
+    { "label": "Wikipedia: Semantic layer", "url": "https://en.wikipedia.org/wiki/Semantic_layer" }
+  ]
+}

@@ -1,0 +1,177 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Binary parsing and encoding",
+  "category": "code",
+  "order": 85,
+  "summary": "Reading and writing bytes laid out in a fixed format, such as packet headers, file headers and firmware messages, without trusting what those bytes claim about themselves.",
+  "howItWorks": "A binary format fixes where every field sits and how it is stored. Multi-byte numbers have a byte order: big-endian puts the most significant byte first, as the IPv4 header does (hence “network byte order”), while little-endian puts the least significant byte first, as x86 and Apple M1 processors do in memory. Read the same two bytes `00 07` in the wrong order and sensor 7 becomes sensor 1792. Small values share a byte as bit fields: IPv4 packs a 4-bit version and a 4-bit header length into its first byte, and a parser pulls them apart with shifts and masks. Variable-length data needs framing. A length prefix says how many items or bytes follow; tag-length-value (TLV) adds a type tag in front, so an old reader can skip a field it doesn’t know, as Protocol Buffers does. Every length, count and offset in the input is a claim made by whoever sent it, so a parser checks it against the bytes it actually has before reading. Libraries take three broad approaches: annotate a struct and let the library derive the reader and writer (declarative layouts), compose small parsing functions (parser combinators), or write a schema and let a compiler generate the encoder and decoder.",
+  "analogy": "A customs form with numbered boxes. Box 1 holds a four-letter code, box 2 says how many item lines follow, and each line has the same three columns. A careful clerk counts the attached lines before stamping anything, rather than taking box 2 at its word.",
+  "useWhen": [
+    "Speaking a format someone else defined: network packets, file headers, device and firmware protocols",
+    "Microcontrollers and radio links, where each byte on the wire and each kilobyte of code matters",
+    "Large files or high message rates, where fixed offsets beat scanning text"
+  ],
+  "avoidWhen": [
+    "You control both ends and only need to move data: use an existing format such as Protocol Buffers, CBOR or JSON instead of inventing a layout",
+    "Copying an in-memory C struct onto the wire: padding, alignment and byte order then depend on the compiler and the CPU",
+    "Hand-writing parsers for untrusted input in a memory-unsafe language when a generated or memory-safe parser is available"
+  ],
+  "example": "Temperature sensors send 10-byte packets over a radio link: the magic bytes `SN`, one byte holding a 4-bit version and 4-bit flags, a big-endian 16-bit sensor id, a count, then that many signed 16-bit readings in hundredths of a degree. The same data as compact JSON, `{\"sensor\":7,\"temps\":[2100,-100]}`, is 32 bytes. The gateway reads the count, checks that exactly two bytes per reading follow, and drops packets cut short in transit instead of reading past the end of its buffer.",
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "import struct",
+      "",
+      "# \"SN\" | version: 4 bits | flags: 4 bits | sensor id: u16 | count: u8 | count × i16",
+      "packet = bytes.fromhex(\"534e 12 0007 02 0834 ff9c\")",
+      "",
+      "def parse(buf: bytes) -> dict:",
+      "    if len(buf) < 6 or buf[:2] != b\"SN\":",
+      "        raise ValueError(\"not a reading\")",
+      "    vf, sensor_id, count = struct.unpack_from(\">BHB\", buf, 2)  # > = big-endian",
+      "    version, flags = vf >> 4, vf & 0x0F                          # two 4-bit fields",
+      "    if version != 1:",
+      "        raise ValueError(f\"unsupported version {version}\")",
+      "    if len(buf) != 6 + 2 * count:                                # never trust a length",
+      "        raise ValueError(f\"expected {6 + 2 * count} bytes, got {len(buf)}\")",
+      "    temps = struct.unpack_from(f\">{count}h\", buf, 6)",
+      "    return {\"version\": version, \"flags\": flags, \"sensor\": sensor_id, \"temps\": list(temps)}",
+      "",
+      "print(parse(packet))",
+      "# {'version': 1, 'flags': 2, 'sensor': 7, 'temps': [2100, -100]}",
+      "",
+      "print(struct.unpack(\"<H\", packet[3:5])[0])  # same two bytes read little-endian: 1792, not 7",
+      "",
+      "try:",
+      "    parse(packet[:8])  # truncated in transit",
+      "except ValueError as e:",
+      "    print(e)  # expected 10 bytes, got 8"
+    ]
+  },
+  "related": ["file-formats", "network-protocols", "rpc", "functional"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "Three ways to write the parser",
+      "intro": "All three read the same bytes. They differ in where the description of the format lives and whether you also get a writer for free.",
+      "corner": "",
+      "columns": ["Declarative layouts", "Parser combinators", "Code from a schema"],
+      "rows": [
+        { "label": "You write", "values": ["A struct or schema object with attributes: sizes, byte order, counts, magic bytes", "Small functions (“take 2 bytes”, “match `SN`”) combined into bigger ones", "A message definition, such as a `.proto` file"] },
+        { "label": "Who decides the bytes", "values": ["The format’s author; you describe it as it is", "The format’s author; you describe it as it is", "The schema compiler’s own encoding"] },
+        { "label": "Writing as well as reading", "values": ["Yes, from the same description", "No, the encoder is separate code", "Yes, both are generated"] },
+        { "label": "Strong at", "values": ["Fixed headers, bit fields, counted arrays", "Streams that arrive in chunks, formats where later fields depend on earlier ones, text as well as binary", "Formats you own and evolve; many languages at once"] },
+        { "label": "Examples", "values": ["deku and binrw (Rust), Construct (Python), Kaitai Struct (YAML, many languages)", "nom (Rust), Hammer (C)", "nanopb and the official Protocol Buffers compilers"] }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Treat every length as a claim",
+      "body": [
+        "Most binary formats carry their own lengths, and the bug that keeps recurring is believing them. The TLS heartbeat extension (RFC 6520) sends a `uint16 payload_length` followed by the payload, and the RFC says to discard a message whose length is too large. OpenSSL 1.0.1 before 1.0.1g did not handle these packets properly, and crafted heartbeats made it over-read its buffer and send back process memory, private keys included: Heartbleed, CVE-2014-0160.",
+        "The language-theoretic security (LangSec) community argues for a stricter habit: treat the set of valid inputs as a formal language and recognize the whole input before acting on any of it, instead of scattering checks through the program. Libraries help by making the checks structural. nanopb promises it will never read more than the stream’s remaining bytes or write outside the message struct, whatever the input; nom returns an error or “need more data” rather than reading past its slice. Speed shortcuts can quietly drop those checks: Construct’s compiled parsers omit some of them, and its docs say not to use them on corrupted or untrusted data."
+      ]
+    }
+  ],
+  "kinds": [
+    {
+      "id": "declarative-binary",
+      "name": "Declarative binary layouts",
+      "summary": "Describe the layout once, on a struct or as a schema object, and the library derives both the reader and the writer from that description.",
+      "body": [
+        "In Rust, deku and binrw are derive macros: attributes on a struct say how each field is stored, such as `#[deku(bits = 4)]` for a 4-bit field, `count = \"count\"` for an array whose length came earlier, or binrw’s `magic = b\"DOG\"` for fixed leading bytes. Construct does the same in Python by building a `Struct` object out of pieces like `Const`, `BitStruct` and `PrefixedArray`. Because the description is data rather than parsing code, one definition parses bytes into objects and builds objects back into bytes, so the reader and writer can’t drift apart.",
+        "They differ in reach. deku works at bit level throughout. binrw reads whole bytes from any `io::Read + io::Seek` stream, follows offsets with `FilePtr`, and leaves bit fields to helper crates. Construct is Python only, though it can compile a definition into faster Python code. Kaitai Struct takes the idea further: its descriptions are YAML files compiled into parsers for many languages, and its FAQ calls Construct its closest analogue.",
+        "This style suits formats made of fixed fields, counts and tagged variants. When a field’s meaning depends on more context than attributes can express, each library lets you drop into a hand-written reader function for that one field."
+      ],
+      "sources": [
+        { "label": "deku docs on docs.rs: declarative, symmetric, bit-level reading and writing", "url": "https://docs.rs/deku/latest/deku/" },
+        { "label": "binrw docs on docs.rs: directives, io::Read + io::Seek, FilePtr, bit fields via other crates", "url": "https://docs.rs/binrw/latest/binrw/" },
+        { "label": "Construct docs: Introduction (declarative and symmetrical parser and builder)", "url": "https://construct.readthedocs.io/en/latest/intro.html" },
+        { "label": "Construct docs: Compilation (faster Python, fewer checks)", "url": "https://construct.readthedocs.io/en/latest/compilation.html" },
+        { "label": "Kaitai Struct FAQ: Construct is the closest analog", "url": "https://doc.kaitai.io/faq.html" }
+      ]
+    },
+    {
+      "id": "parser-combinators",
+      "name": "Parser combinators",
+      "summary": "Small parsing functions, each returning the value it read plus the rest of the input, composed into a parser for the whole format.",
+      "body": [
+        "A parser here is just a function: give it input and it returns the parsed value and the remaining input, or an error. Basic ones match a literal or take N bytes; combinators such as `pair` (one parser after another), `alt` (try several) and `length_count` (read a count, then that many items) build bigger parsers out of them. The idea comes from functional programming, and the parsers hold no mutable state, so the same input always gives the same result.",
+        "nom brought this to Rust in 2015 for binary formats first. Because a Rust slice knows its own bounds, a nom parser can hand back pieces of the input without copying them and can’t read past the end. Its streaming parsers return `Incomplete` with how many more bytes they need when data arrives in chunks, which is how network protocols usually arrive. Its authors used it to put memory-safe parsers inside C programs: a TLS parser for the Suricata intrusion detection system and an FLV demuxer for VLC.",
+        "The cost is that a parser is code, not a description: it reads but doesn’t write, so an encoder is a separate piece of work. Hammer, a C library from the LangSec community, offers the same combinator style with a choice of parsing algorithms behind it."
+      ],
+      "sources": [
+        { "label": "Chifflier and Couprie: Writing parsers like it is 2017 (IEEE S&P Workshops 2017)", "url": "http://spw17.langsec.org/papers/chifflier-parsing-in-2017.pdf" },
+        { "label": "nom README: parser combinators, zero-copy, streaming", "url": "https://github.com/rust-bakery/nom" },
+        { "label": "nom CHANGELOG (releases since 2015)", "url": "https://github.com/rust-bakery/nom/blob/main/CHANGELOG.md" },
+        { "label": "Hammer README: bit-oriented parser combinators in C with several backends", "url": "https://github.com/UpstandingHackers/hammer" }
+      ]
+    },
+    {
+      "id": "schema-codegen",
+      "name": "Code generated from a schema",
+      "summary": "A schema compiler reads a message definition, such as a `.proto` file, and generates the types, encoder and decoder for your language.",
+      "body": [
+        "Here you own the format. You define messages and fields, and the compiler decides the bytes. Protocol Buffers writes each field as a tag holding its field number and wire type, followed by the value: a varint, a fixed-size number, or a length and that many bytes. That is tag-length-value, so an old decoder skips fields added after it was built.",
+        "nanopb is a schema compiler for microcontrollers. It reads a standard `.proto` file and emits C structs plus field descriptors for a runtime of 5 to 20 kB of code that uses about 1 kB of stack. Options such as `max_count` and `max_size` turn repeated fields and strings into fixed arrays inside the struct, so decoding needs no `malloc`, and input that would overflow an array is rejected.",
+        "A schema can’t describe a format that already exists, because the compiler chooses the bytes; the Kaitai Struct FAQ says the two kinds of tool solve completely different problems. Schemaless binary formats such as CBOR sit in between: any decoder can read the data without a schema, and the CDDL notation can describe the expected shape when you want one."
+      ],
+      "sources": [
+        { "label": "Protocol Buffers docs: Encoding (tags, wire types, varints, TLV)", "url": "https://protobuf.dev/programming-guides/encoding/" },
+        { "label": "nanopb docs: Overview (features and limitations)", "url": "https://jpa.kapsi.fi/nanopb/docs/" },
+        { "label": "nanopb docs: Basic concepts (max_count, max_size, generated structs)", "url": "https://jpa.kapsi.fi/nanopb/docs/concepts.html" },
+        { "label": "Kaitai Struct FAQ: compared with Protocol Buffers, ASN.1, Thrift and others", "url": "https://doc.kaitai.io/faq.html" },
+        { "label": "RFC 8949: Concise Binary Object Representation (CBOR)", "url": "https://www.rfc-editor.org/rfc/rfc8949" },
+        { "label": "RFC 8610: Concise Data Definition Language (CDDL)", "url": "https://www.rfc-editor.org/rfc/rfc8610" }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Byte order was argued over before most of today’s formats existed. In April 1980 Danny Cohen’s note “On Holy Wars and a Plea for Peace” borrowed the Big-Endians and Little-Endians from Gulliver’s Travels to name the two camps. The IPv4 specification, RFC 791 of September 1981, chose big-endian for the internet protocol: the most significant octet of a field goes first, and small fields like the 4-bit version share a byte. Programs read such headers with hand-written code that copied bytes, shifted and masked.",
+      "That hand-written code, mostly in C, became a leading source of security bugs. A 2017 paper by Pierre Chifflier and Geoffroy Couprie counted 95 vulnerabilities in the Wireshark protocol analyser in 2016 alone, and Heartbleed in 2014 was a buffer over-read in OpenSSL’s handling of TLS heartbeat messages, which carry their own length field. The LangSec movement, from Len Sassaman and Meredith L. Patterson’s 2010 Black Hat talk onwards, argued that input handling should be a recognizer for a precisely specified language rather than checks scattered through a program.",
+      "Libraries took the ad hoc code away in three ways. For declarative layouts, Tomer Filiba’s Construct reached version 2.0 in Python around 2007, and Rust’s deku and binrw (2020) moved the idea into derive macros. Parser combinators, which Graham Hutton described in 1992, reached binary formats through the C library Hammer and through nom (2015) in Rust, which drew on Haskell’s Parsec. Schema compilers such as Protocol Buffers chose their own bytes, and nanopb (2012) fitted that approach onto microcontrollers."
+    ],
+    "choices": [
+      { "choice": "Describe the layout once, derive both directions", "why": "A reader and a writer written separately drift apart. Construct’s docs put it plainly: the description is a data structure, not code, so it can parse in one direction and build in the other." },
+      { "choice": "Parsers as pure functions that return the rest of the input", "why": "With no mutable state, small parsers can be tested alone and combined freely, and in Rust a parser that returns slices of its input can’t read past the end of them." },
+      { "choice": "Check everything before using anything", "why": "LangSec’s argument: when validation is scattered through a program, what it actually accepts no longer matches the programmer’s assumptions, which leaves room for exploits." },
+      { "choice": "Let a compiler choose the bytes when you own the format", "why": "If nobody else defined the layout, a schema compiler can pick one that old readers can skip through, as Protocol Buffers’ field tags allow, and generate code for every language in use." }
+    ],
+    "timeline": [
+      { "year": "1980", "text": "Danny Cohen names the big-endian and little-endian camps" },
+      { "year": "1981", "text": "RFC 791 fixes the IPv4 header: bit fields, most significant octet first" },
+      { "year": "1992", "text": "Graham Hutton’s “Higher-order functions for parsing”" },
+      { "year": "2007", "text": "Construct 2.0, a declarative binary parser and builder for Python" },
+      { "year": "2014", "text": "Heartbleed; the first LangSec workshop at IEEE Security & Privacy" },
+      { "year": "2015", "text": "nom 1.0 brings parser combinators for binary data to Rust" },
+      { "year": "2020", "text": "deku and binrw derive binary readers and writers from Rust structs" }
+    ],
+    "sources": [
+      { "label": "Danny Cohen: On Holy Wars and a Plea for Peace (IEN 137, 1 April 1980)", "url": "https://www.rfc-editor.org/ien/ien137.txt" },
+      { "label": "RFC 791: Internet Protocol (September 1981), header format and Appendix B", "url": "https://www.rfc-editor.org/rfc/rfc791" },
+      { "label": "Chifflier and Couprie: Writing parsers like it is 2017 (IEEE S&P Workshops 2017)", "url": "http://spw17.langsec.org/papers/chifflier-parsing-in-2017.pdf" },
+      { "label": "NVD: CVE-2014-0160 (Heartbleed, published April 2014)", "url": "https://nvd.nist.gov/vuln/detail/CVE-2014-0160" },
+      { "label": "LangSec: Language-theoretic Security (principles, workshops since 2014, talks since 2010)", "url": "http://langsec.org/" },
+      { "label": "Graham Hutton: Higher-order functions for parsing (Journal of Functional Programming, July 1992)", "url": "https://www.cs.nott.ac.uk/~pszgmh/bib.html" },
+      { "label": "Tomer Filiba: The Future of Construct (May 2012)", "url": "https://tomerfiliba.com/blog/Construct-Plans" },
+      { "label": "Hammer README: bit-oriented parser combinators in C", "url": "https://github.com/UpstandingHackers/hammer" },
+      { "label": "nom CHANGELOG: 1.0.0 (November 2015)", "url": "https://github.com/rust-bakery/nom/blob/main/CHANGELOG.md" },
+      { "label": "crates.io API: deku versions (0.1.1, March 2020)", "url": "https://crates.io/api/v1/crates/deku" },
+      { "label": "crates.io API: binrw versions (0.1.0, September 2020)", "url": "https://crates.io/api/v1/crates/binrw" },
+      { "label": "nanopb CHANGELOG: 0.1.0, first stable release (January 2012)", "url": "https://github.com/nanopb/nanopb/blob/master/CHANGELOG.txt" }
+    ]
+  },
+  "sources": [
+    { "label": "Python docs: struct, byte order, size and alignment", "url": "https://docs.python.org/3/library/struct.html" },
+    { "label": "RFC 791: Internet Protocol (header bit fields, transmission order)", "url": "https://www.rfc-editor.org/rfc/rfc791" },
+    { "label": "Protocol Buffers docs: Encoding (varints, tag-length-value)", "url": "https://protobuf.dev/programming-guides/encoding/" },
+    { "label": "RFC 6520: TLS and DTLS Heartbeat Extension (payload_length)", "url": "https://www.rfc-editor.org/rfc/rfc6520" },
+    { "label": "NVD: CVE-2014-0160 (Heartbleed)", "url": "https://nvd.nist.gov/vuln/detail/CVE-2014-0160" },
+    { "label": "LangSec: Language-theoretic Security", "url": "http://langsec.org/" },
+    { "label": "nanopb docs: Security model (invariants for untrusted input)", "url": "https://jpa.kapsi.fi/nanopb/docs/security.html" },
+    { "label": "nom README", "url": "https://github.com/rust-bakery/nom" },
+    { "label": "Construct docs: Compilation (do not use compiled parsers on untrusted data)", "url": "https://construct.readthedocs.io/en/latest/compilation.html" },
+    { "label": "Chifflier and Couprie: Writing parsers like it is 2017", "url": "http://spw17.langsec.org/papers/chifflier-parsing-in-2017.pdf" }
+  ]
+}

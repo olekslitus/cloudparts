@@ -1,0 +1,93 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "imbl",
+  "concepts": ["functional-data-structures"],
+  "kinds": ["rrb-vectors"],
+  "provider": "oss",
+  "vendor": "Joe Neeman and contributors",
+  "license": "MPL-2.0",
+  "website": "https://docs.rs/imbl/",
+  "repo": "https://github.com/jneem/imbl",
+  "summary": "The maintained fork of Rust’s `im` crate: persistent collections with an RRB-tree `Vector`, a hash array mapped trie `HashMap` and a B+ tree `OrdMap`, with O(1) cloning and copy-on-write updates.",
+  "intro": [
+    "`imbl` continues the `im` crate after its author stopped maintaining it. Its 1.0 release was fully compatible with `im` 15.0.0, so switching is mostly a change of crate name. It offers the same immutable versions of the standard collections: `Vector` (an RRB tree with O(log n) split and concatenation), `HashMap` and `HashSet` (hash array mapped tries) and `OrdMap` and `OrdSet` (B+ trees since version 6.0.0). Each tree node holds up to 64 values.",
+    "Cloning only bumps a reference count, and a node is copied only when a shared clone changes it; a node nobody else shares is updated in place, about an order of magnitude faster than an immutable update. Collections use thread-safe `Arc` by default. Instead of a separate `im-rc` crate, `imbl` makes the pointer type a parameter through the `archery` crate, so single-threaded code can use `GenericVector<T, RcK>` with `Rc`, and a `triomphe` feature swaps in a faster `Arc`. Like `im`, it is slower than the standard collections at their best operations: `Vec` wins below several hundred elements and `OrdMap` runs 2 to 3 times slower than `BTreeMap`.",
+    "The fork has kept releasing: it fixed critical `Vector` bugs in 2.0.0 (2022), rewrote `OrdMap` as a B+ tree in 6.0.0 (July 2025), sped up `HashMap` and the B-tree in 7.0.0 (January 2026), and shipped 7.0.2 in September 2026. It needs Rust 1.85 or later."
+  ],
+  "strengths": [
+    "A drop-in path off the archived `im` crate, with bug fixes in `Vector`, `OrdMap` and `OrdSet`",
+    "O(1) `clone`, structural sharing and in-place updates of unshared nodes",
+    "`Vector` concatenates, splits and inserts in the middle in O(log n), which `Vec` and `VecDeque` can’t",
+    "The shared pointer type is pluggable: `Arc` by default, `Rc` for single-threaded code, or `triomphe::Arc`"
+  ],
+  "limits": [
+    "Slower than `Vec` for small collections and than `BTreeMap` for ordered maps, as with `im`",
+    "Values must be `Clone`; expensive values need wrapping in `Rc` or `Arc`",
+    "Frequent major versions (2.0 in 2022, then 3.0 to 7.0 between 2024 and 2026), and a minimum Rust version that rises over time"
+  ],
+  "worksWith": [
+    { "id": "rust", "how": "is a collections crate for" }
+  ],
+  "snippet": {
+    "lang": "rust",
+    "title": "O(1) clones, RRB concatenation, a B+ tree map and an `Rc` vector (`imbl = \"7.0.2\"`)",
+    "source": [
+      "use imbl::{GenericVector, OrdMap, Vector, shared_ptr::RcK};",
+      "",
+      "fn main() {",
+      "    let v1: Vector<u32> = (0..100_000).collect();",
+      "",
+      "    // clone is O(1); the first write copies only the touched chunk and its path",
+      "    let mut v2 = v1.clone();",
+      "    v2.set(0, 42);",
+      "    println!(\"{} {}\", v1[0], v2[0]); // 0 42",
+      "",
+      "    // RRB tree: O(log n) concatenation and split",
+      "    let mut joined = v1.clone();",
+      "    joined.append(v2);",
+      "    let tail = joined.split_off(150_000);",
+      "    println!(\"{} {}\", joined.len(), tail.len()); // 150000 50000",
+      "",
+      "    // OrdMap is a B+ tree; update returns a new map and leaves the old one alone",
+      "    let m1: OrdMap<&str, u32> = OrdMap::unit(\"tea\", 3);",
+      "    let m2 = m1.update(\"cake\", 5);",
+      "    println!(\"{:?} {:?}\", m1, m2); // {\"tea\": 3} {\"cake\": 5, \"tea\": 3}",
+      "",
+      "    // single-threaded code can swap Arc for the cheaper Rc",
+      "    let local: GenericVector<u32, RcK> = (1..=3).collect();",
+      "    println!(\"{}\", local.iter().sum::<u32>()); // 6",
+      "}"
+    ]
+  },
+  "history": {
+    "story": [
+      "Bodil Stokke’s `im` crate (2017) brought RRB vectors, hash array mapped tries and B-tree maps to Rust, but its last release, 15.1.0, came out in April 2022 and the repository was later archived.",
+      "Joe Neeman forked it as `imbl` in August 2021 and released 1.0.0 on 11 August, “our fork/continuation of `im`”, fully compatible with `im` 15.0.0 apart from fixes to deleting from and iterating over large ordered maps and sets. Later releases fixed critical `Vector` bugs (2.0.0, 2022), made the pointer type generic so one crate covers both `Arc` and `Rc` (5.0.0, 2025), rewrote `OrdMap` and `OrdSet` as B+ trees (6.0.0, 2025) and improved `HashMap` memory use and speed (6.1.0 and 7.0.0)."
+    ],
+    "choices": [
+      { "choice": "Fork and stay API-compatible", "why": "Users of the unmaintained `im` crate could switch by changing a dependency, so 1.0 matched `im` 15.0.0 and listed only the fixes made since." },
+      { "choice": "One crate with a generic pointer type", "why": "Instead of publishing twin crates like `im` and `im-rc`, the `archery` crate lets each collection take `Arc`, `Rc` or `triomphe::Arc` as a type parameter." },
+      { "choice": "B+ trees for ordered maps", "why": "Version 6.0.0 rewrote `OrdMap` and `OrdSet` as B+ trees for significant performance gains, keeping O(log n) operations." }
+    ],
+    "timeline": [
+      { "year": "2021", "text": "Joe Neeman releases `imbl` 1.0.0, compatible with `im` 15.0.0 (August)" },
+      { "year": "2022", "text": "2.0.0 fixes several critical `Vector` bugs (April)" },
+      { "year": "2025", "text": "5.0.0 adds pluggable pointer types; 6.0.0 rewrites `OrdMap` as a B+ tree" },
+      { "year": "2026", "text": "7.0.0 (January) speeds up `HashMap` and the B-tree; 7.0.2 in September" }
+    ],
+    "sources": [
+      { "label": "imbl changelog (1.0.0 to 7.0.2)", "url": "https://github.com/jneem/imbl/blob/main/CHANGELOG.md" },
+      { "label": "imbl README (fork of the unmaintained im crate, compatible with im 15.0.0)", "url": "https://github.com/jneem/imbl" },
+      { "label": "crates.io API: imbl (versions and publish dates)", "url": "https://crates.io/api/v1/crates/imbl" },
+      { "label": "crates.io API: im (last release 15.1.0, 29 April 2022)", "url": "https://crates.io/api/v1/crates/im" },
+      { "label": "bodil/im-rs on GitHub (public archive)", "url": "https://github.com/bodil/im-rs" }
+    ]
+  },
+  "sources": [
+    { "label": "imbl documentation 7.0.2 (data structures, cloning, in-place mutation, thread safety, feature flags)", "url": "https://docs.rs/imbl/7.0.2/imbl/" },
+    { "label": "imbl README", "url": "https://github.com/jneem/imbl" },
+    { "label": "imbl changelog", "url": "https://github.com/jneem/imbl/blob/main/CHANGELOG.md" },
+    { "label": "crates.io API: imbl (latest 7.0.2, 9 September 2026; MPL-2.0; Rust 1.85)", "url": "https://crates.io/api/v1/crates/imbl" }
+  ],
+  "checked": "2026-10-09"
+}

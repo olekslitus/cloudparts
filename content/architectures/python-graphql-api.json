@@ -1,0 +1,124 @@
+{
+  "$schema": "../../.astro/collections/architectures.schema.json",
+  "title": "GraphQL API in Python",
+  "order": 90,
+  "summary": "Uvicorn runs a FastAPI app that mounts Strawberry’s GraphQL router; graphql-core parses, validates and executes each query, and resolvers load rows through SQLAlchemy from PostgreSQL.",
+  "intro": "A GraphQL API in Python isn’t one library but five, each with one job. Uvicorn speaks HTTP and calls the app over ASGI. FastAPI routes the request and runs dependencies. Strawberry turns type-annotated classes into a GraphQL schema and plugs into FastAPI as a router. graphql-core, the Python port of the GraphQL reference implementation, parses, validates and executes the query. Your resolvers, `async` methods on the Strawberry classes, load rows through SQLAlchemy from PostgreSQL. A runnable version of this stack, with SQLite standing in for PostgreSQL, is on the FastAPI page.",
+  "fits": "Python teams whose web or mobile clients need to choose the fields they get, often next to a few REST endpoints",
+  "diagram": {
+    "caption": "Clients post GraphQL queries (blue) to one endpoint. Uvicorn hands each request to FastAPI over ASGI, FastAPI routes it to Strawberry’s router, and graphql-core validates and executes it; resolvers load rows through SQLAlchemy from PostgreSQL, and the answer travels back the same way. Pink queries fail validation, so graphql-core answers them with an error list and the database never sees them. Green requests are plain REST calls that FastAPI validates with Pydantic models.",
+    "w": 880,
+    "h": 300,
+    "nodes": [
+      {
+        "id": "clients", "x": 75, "y": 150, "label": "Clients", "sub": "POST /graphql",
+        "emit": {
+          "every": 520, "jitter": 0.4, "req": true,
+          "types": ["query", "query", "query", "bad", "rest"],
+          "colorByType": { "query": 0, "bad": 3, "rest": 2 }
+        },
+        "out": ["server"]
+      },
+      { "id": "server", "x": 215, "y": 150, "label": "Uvicorn", "sub": "ASGI server", "concept": "api-frameworks", "out": ["fastapi"] },
+      {
+        "id": "fastapi", "x": 370, "y": 150, "label": "FastAPI", "sub": "routes /graphql", "tech": "fastapi",
+        "out": ["strawberry", "pydantic"],
+        "route": "type",
+        "rules": { "query": ["strawberry"], "bad": ["strawberry"], "rest": ["pydantic"] }
+      },
+      { "id": "strawberry", "x": 565, "y": 60, "label": "Strawberry", "sub": "GraphQLRouter · schema", "tech": "strawberry", "out": ["gqlcore"] },
+      {
+        "id": "gqlcore", "x": 770, "y": 60, "label": "graphql-core", "sub": "parse · validate · execute", "tech": "graphql-core",
+        "out": ["orm"],
+        "route": "type",
+        "rules": { "query": ["orm"] },
+        "delay": 40
+      },
+      { "id": "pydantic", "x": 565, "y": 240, "label": "Pydantic", "sub": "REST request models", "tech": "pydantic", "out": ["orm"] },
+      { "id": "orm", "x": 770, "y": 160, "label": "SQLAlchemy", "sub": "AsyncSession · select()", "tech": "sqlalchemy", "out": ["pg"] },
+      { "id": "pg", "x": 770, "y": 255, "label": "PostgreSQL", "sub": "orders table", "tech": "postgresql", "mode": "reply", "delay": 40 }
+    ]
+  },
+  "steps": [
+    {
+      "title": "The client posts one GraphQL document",
+      "text": "A client sends `POST /graphql` with a JSON body holding the `query` and its `variables`, such as `{ orders(customer: \"ada\") { id totalCents } }`. Uvicorn, the ASGI server FastAPI recommends, accepts the connection, parses the HTTP request and calls the app as `app(scope, receive, send)`: the `scope` describes the request, and the body arrives as `http.request` messages from `receive`. Its `--workers` option runs several processes.",
+      "nodes": ["clients", "server"]
+    },
+    {
+      "title": "FastAPI routes it to Strawberry",
+      "text": "`app.include_router(GraphQLRouter(schema), prefix=\"/graphql\")` registered Strawberry’s router like any other FastAPI router, so FastAPI’s routing (Starlette’s, underneath) sends the request there. `GraphQLRouter` is a FastAPI `APIRouter`, so its `context_getter` is a FastAPI dependency: it can use `Depends()` to check a token or open a database session, and whatever it returns becomes the `info.context` that every resolver sees, next to the request, the response and background tasks. The same route serves the GraphiQL explorer to browsers and accepts queries by `GET` unless you turn that off.",
+      "nodes": ["fastapi", "strawberry"]
+    },
+    {
+      "title": "Strawberry hands the query to graphql-core",
+      "text": "At startup, `strawberry.Schema(Query)` read the type hints on the `@strawberry.type` classes and built a graphql-core schema from them, turning the Python attribute `total_cents` into the GraphQL field `totalCents`. Per request, Strawberry decodes the body and passes the query, variables and context to graphql-core, the Python port of GraphQL.js that does the GraphQL work itself. Strawberry pins it to one minor version, `graphql-core>=3.3.0,<3.4.0`.",
+      "nodes": ["strawberry", "gqlcore"]
+    },
+    {
+      "title": "graphql-core parses, validates, then executes",
+      "text": "graphql-core parses the text into a syntax tree of nodes, then validates that tree against the schema with the rules of the GraphQL specification. A misspelled field or a missing required argument stops here with an error that names the line and column, and no resolver runs. A valid query is executed field by field: for each field graphql-core calls its resolver with the parent value and an `info` object that carries the context, awaits resolvers that are coroutines, and gathers the results into a tree shaped like the query.",
+      "nodes": ["gqlcore"]
+    },
+    {
+      "title": "Resolvers load rows through SQLAlchemy",
+      "text": "The `orders` resolver is an `async` method on the Strawberry `Query` class. It takes the session from `info.context` and awaits `session.scalars(select(OrderRow).where(OrderRow.customer == customer))`. SQLAlchemy renders that as SQL for PostgreSQL and runs it through an async driver, and the resolver turns each row into a Strawberry `Order`. Keep resolvers `async`: Strawberry runs plain `def` resolvers on the event loop too, so one blocking call stalls every request on that worker. Nested fields that each load their own rows cause N+1 queries; a Strawberry `DataLoader` batches them into one call.",
+      "nodes": ["orm", "pg"]
+    },
+    {
+      "title": "The answer travels back",
+      "text": "graphql-core returns an `ExecutionResult` with `data` and `errors`. A resolver that raises doesn’t sink the whole query: its field becomes `null`, and the error, with the field’s `path`, goes into `errors` next to the rest of the data. Strawberry turns the result into the JSON response (its `process_result` hook can hide internal errors), Starlette sends it through ASGI, and Uvicorn writes the HTTP response. Even a query that failed validation comes back as HTTP `200` with an `errors` list, so monitor the errors, not the status codes.",
+      "nodes": ["gqlcore", "strawberry", "fastapi", "server"]
+    },
+    {
+      "title": "REST routes share the app",
+      "text": "Ordinary FastAPI path operations live in the same app. A health check or a `POST /orders/import` validates its body with a Pydantic model, uses the same dependencies and reaches the same SQLAlchemy session factory; only the `/graphql` prefix belongs to Strawberry.",
+      "nodes": ["fastapi", "pydantic", "orm"]
+    }
+  ],
+  "good": [
+    "Each library does one job, so each can be replaced on its own: another ASGI server, another GraphQL library on graphql-core, another database behind SQLAlchemy",
+    "Every query is checked against the schema before any resolver runs, so misspelled or malformed queries never reach the database",
+    "One FastAPI app serves GraphQL and REST, with the same dependencies for authentication and database sessions",
+    "Async from the socket to the database driver, so one worker process can have many queries waiting on PostgreSQL at once"
+  ],
+  "watch": [
+    "Strawberry runs even sync resolvers on the event loop: write them as `async def`, or move blocking calls off it with `run_in_threadpool`",
+    "Nested resolvers that each query the database cause N+1 queries; batch them with a `DataLoader`",
+    "Each table is described twice, as a SQLAlchemy model and as a Strawberry type, and the two have to be kept in step by hand",
+    "Clients write the queries, so a public API needs depth or cost limits, and failures arrive as HTTP `200` with an `errors` list",
+    "graphql-core doesn’t follow semantic versioning: a minor version can break its API, which is why Strawberry pins it to `3.3.x`"
+  ],
+  "swaps": [
+    {
+      "text": "Prefer to write the schema as SDL? Ariadne is schema-first: the schema is a string, resolvers are bound to its fields with objects such as `QueryType`, and `make_executable_schema` joins them. FastAPI mounts Ariadne’s `GraphQL` ASGI app with `app.mount(\"/graphql/\", GraphQL(schema))`. Ariadne runs on graphql-core 3 too, so parsing, validation and execution don’t change.",
+      "techs": ["ariadne", "graphql-core", "fastapi"]
+    },
+    {
+      "text": "Graphene, the older code-first library, defines types as `ObjectType` subclasses with `resolve_` methods and also runs on graphql-core 3. Starlette’s built-in `GraphQLApp` for Graphene was removed in 0.17.0, so FastAPI mounts it through the `starlette-graphene3` package instead.",
+      "techs": ["graphene", "graphql-core", "starlette"]
+    },
+    {
+      "text": "If clients don’t need to pick their fields, drop GraphQL: FastAPI path operations with Pydantic request and response models give each resource its own URL, reject bad input with `422`, and publish an OpenAPI document with Swagger UI at `/docs`. Uvicorn, SQLAlchemy and PostgreSQL stay as they are.",
+      "techs": ["fastapi", "pydantic", "rest", "sqlalchemy", "postgresql"]
+    }
+  ],
+  "sources": [
+    { "label": "Strawberry docs: FastAPI integration (GraphQLRouter, context_getter, sync vs async resolvers)", "url": "https://strawberry.rocks/docs/integrations/fastapi" },
+    { "label": "Strawberry docs: DataLoaders", "url": "https://strawberry.rocks/docs/guides/dataloaders" },
+    { "label": "Strawberry pyproject.toml (graphql-core>=3.3.0,<3.4.0)", "url": "https://github.com/strawberry-graphql/strawberry/blob/main/pyproject.toml" },
+    { "label": "GraphQL-core 3 docs: Introduction", "url": "https://graphql-core-3.readthedocs.io/en/latest/intro.html" },
+    { "label": "GraphQL-core 3 docs: Parsing GraphQL queries and schema notation", "url": "https://graphql-core-3.readthedocs.io/en/latest/usage/parser.html" },
+    { "label": "GraphQL-core 3 docs: Validating GraphQL queries", "url": "https://graphql-core-3.readthedocs.io/en/latest/usage/validator.html" },
+    { "label": "GraphQL-core 3 docs: Executing queries (errors and partial data)", "url": "https://graphql-core-3.readthedocs.io/en/latest/usage/queries.html" },
+    { "label": "GraphQL-core 3 README (resolver signature, versioning, libraries built on it)", "url": "https://github.com/graphql-python/graphql-core/blob/main/README.md" },
+    { "label": "FastAPI docs: GraphQL", "url": "https://fastapi.tiangolo.com/how-to/graphql/" },
+    { "label": "FastAPI docs: Alternatives, Inspiration and Comparisons (Uvicorn)", "url": "https://fastapi.tiangolo.com/alternatives/" },
+    { "label": "ASGI docs: Introduction (scope, receive, send)", "url": "https://asgi.readthedocs.io/en/latest/introduction.html" },
+    { "label": "Ariadne docs: Introduction (schema-first)", "url": "https://ariadnegraphql.org/server/Docs/intro" },
+    { "label": "Ariadne docs: FastAPI integration", "url": "https://ariadnegraphql.org/server/Integrations/fastapi-integration" },
+    { "label": "Graphene README", "url": "https://github.com/graphql-python/graphene/blob/master/README.md" },
+    { "label": "starlette-graphene3 README", "url": "https://github.com/ciscorn/starlette-graphene3/blob/master/README.md" },
+    { "label": "Starlette docs: GraphQL (removed in 0.17.0)", "url": "https://starlette.dev/graphql/" }
+  ]
+}

@@ -1,0 +1,119 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "deku",
+  "concepts": ["binary-parsing"],
+  "kinds": ["declarative-binary"],
+  "provider": "oss",
+  "vendor": "Open-source project started by Emmanuel Thompson (sharksforarms)",
+  "license": "MIT or Apache 2.0",
+  "website": "https://docs.rs/deku/latest/deku/",
+  "repo": "https://github.com/sharksforarms/deku",
+  "summary": "A Rust derive macro that turns an annotated struct or enum into a bit-level reader and writer for the same binary layout.",
+  "intro": [
+    "You add `#[derive(DekuRead, DekuWrite)]` to a struct or enum and describe the layout with `#[deku(...)]` attributes: `endian = \"big\"`, `bits = 4` for a field narrower than a byte, `magic = b\"SN\"` for fixed leading bytes, `count = \"count\"` for an array whose length was read earlier, and `id` or `id_type` to pick an enum variant from a tag in the input. `ctx` passes values such as byte order or an earlier field down to nested types. The derive generates `from_bytes` and `from_reader` for reading, from a byte slice or any `io::Read + Seek` source, and `to_bytes` and `to_writer` for writing. Byte-aligned fields are read with the standard library; when a layout needs bit-level control, deku uses the `bitvec` crate underneath.",
+    "Because one definition drives both directions, a value read and written back comes out byte for byte, and Rust still chooses how the struct sits in memory; only the wire form is packed. deku runs without the standard library when its `alloc` feature is on, and fixed-size types get a `DekuSize` trait whose `SIZE_BYTES` constant sizes a static buffer at compile time, which suits embedded code. It is still at version 0.x: 0.20 shipped in October 2025, and several recent releases changed the API."
+  ],
+  "strengths": [
+    "Fields of any bit width anywhere in a struct, most significant bit first by default and least significant first since 0.19",
+    "One derive gives a reader and a writer that agree with each other, including tagged enums with a `default` variant for unknown ids",
+    "Works in `no_std` builds with only `alloc`, and `DekuSize` gives compile-time sizes for fixed-size messages",
+    "A `logging` feature reports each step of a read at trace level, which helps find where a parse went wrong"
+  ],
+  "limits": [
+    "Counts don’t follow the data: push to a `Vec` and its `count` field stays stale until you call `update()`",
+    "Still 0.x with breaking releases: 0.17 (2024) moved reading to `io::Read` and renamed `type` to `id_type`, and 0.18 made readers require `Seek`",
+    "Bit-level support costs speed when you don’t need it; the docs suggest turning off the default `bits` feature for byte-only formats",
+    "A parent’s byte order must be passed to child types through `ctx`, and forgetting it shows up as a “mismatched types” error from the derive"
+  ],
+  "worksWith": [
+    { "id": "rust", "how": "derives binary readers and writers in" }
+  ],
+  "snippet": {
+    "lang": "rust",
+    "title": "A sensor packet with 4-bit fields and a counted array, read, changed and written back",
+    "source": [
+      "use deku::prelude::*;",
+      "",
+      "// \"SN\" | version: 4 bits | flags: 4 bits | sensor id: u16 | count: u8 | count × i16",
+      "#[derive(Debug, PartialEq, DekuRead, DekuWrite)]",
+      "#[deku(magic = b\"SN\", endian = \"big\")]",
+      "struct Reading {",
+      "    #[deku(bits = 4)]",
+      "    version: u8,",
+      "    #[deku(bits = 4)]",
+      "    flags: u8,",
+      "    sensor_id: u16,",
+      "    #[deku(update = \"self.temps.len()\")]",
+      "    count: u8,",
+      "    #[deku(count = \"count\")]",
+      "    temps: Vec<i16>, // hundredths of a degree",
+      "}",
+      "",
+      "fn main() {",
+      "    let bytes = [b'S', b'N', 0x12, 0x00, 0x07, 0x02, 0x08, 0x34, 0xFF, 0x9C];",
+      "    let (_rest, mut r) = Reading::from_bytes((&bytes, 0)).unwrap();",
+      "    println!(\"{r:?}\");",
+      "    // Reading { version: 1, flags: 2, sensor_id: 7, count: 2, temps: [2100, -100] }",
+      "",
+      "    r.temps.push(2250);",
+      "    r.update().unwrap(); // recompute `count` from the Vec before writing",
+      "    println!(\"{:02x?}\", r.to_bytes().unwrap());",
+      "    // [53, 4e, 12, 00, 07, 03, 08, 34, ff, 9c, 08, ca]",
+      "",
+      "    let bad = [b'S', b'N', 0x12, 0x00, 0x07, 0x05, 0x08, 0x34]; // says 5, has 1",
+      "    println!(\"{:?}\", Reading::from_bytes((&bad, 0)).is_err()); // true",
+      "}"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "deku, binrw or Construct?",
+      "intro": "All three derive a reader and a writer from one description of the layout. They differ in language, in how small a field can be, and in how they keep a count in step with its array.",
+      "corner": "",
+      "columns": ["deku", "binrw", "Construct"],
+      "rows": [
+        { "label": "Language", "values": ["Rust, derive macro", "Rust, derive macro", "Python objects"] },
+        { "label": "Smallest field", "values": ["One bit", "One byte; bit fields through crates such as `bilge`", "One bit, inside `BitStruct`"] },
+        { "label": "Reads from", "values": ["Byte slices or `io::Read + Seek`", "`io::Read + Seek`, or a `NoSeek` wrapper", "Bytes, streams and files"] },
+        { "label": "Count before an array", "values": ["`update` attribute, applied when you call `update()`", "`calc` or `try_calc` computes it on write", "`PrefixedArray` writes it from the list"] },
+        { "label": "Licence", "values": ["MIT or Apache 2.0", "MIT", "MIT"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Without a tool like this, a Rust program that speaks a binary protocol needs two hand-written functions per message: one that reads the bytes and one that writes them back, kept in step by hand. Emmanuel Thompson, who publishes as sharksforarms, started deku to remove that “redundant, error-prone” pair. The first release reached crates.io in March 2020, and eight more minor versions followed before the end of that year.",
+      "The crate was built on `bitvec`, so fields could be any number of bits from the start. As it found users, much of the work moved to performance: in 2022 a byte-only fast path for reading, and in 2024 version 0.17 replaced slice-based reading with streaming from `io::Read`, which its changelog credits with “massive performance and usability improvements”. Contributor wcampbell0x2a, who wrote that byte fast path, is now a co-owner of the crate. The same year bit-level support became an optional feature, and 0.19 in 2025 added least-significant-bit-first ordering for formats that need it."
+    ],
+    "choices": [
+      { "choice": "One derive for both directions", "why": "The README’s pitch is symmetry: the reader and writer come from the same attributes, so they can’t disagree about the layout." },
+      { "choice": "Let Rust choose the memory layout", "why": "The struct isn’t `#[repr(C, packed)]` or transmuted from bytes; deku reads and writes the packed wire form while the compiler lays out the struct as it likes." },
+      { "choice": "Bits as a first-class size", "why": "Network headers and TLVs pack flags and small numbers into partial bytes, so `bits = N` works on any field, at the cost of a `bitvec` dependency that later became optional." },
+      { "choice": "Stream from `io::Read` instead of slicing", "why": "Reading from any source, including a file, without loading it whole made 0.17 faster, at the cost of removing attributes that looked at the rest of the input." }
+    ],
+    "timeline": [
+      { "year": "2020", "text": "First release on crates.io (March); 0.9 by October" },
+      { "year": "2022", "text": "Fixes undefined behaviour in its slice code and yanks affected versions; a faster byte-only read path" },
+      { "year": "2024", "text": "0.17 reads from `io::Read`; 0.18 adds seek attributes and makes bit support optional" },
+      { "year": "2025", "text": "0.19 adds `bit_order = \"lsb\"`; 0.20 adds an `alloc` feature for heapless targets" }
+    ],
+    "sources": [
+      { "label": "deku README (why use deku, example)", "url": "https://github.com/sharksforarms/deku" },
+      { "label": "deku CHANGELOG (0.10 to 0.20)", "url": "https://github.com/sharksforarms/deku/blob/master/CHANGELOG.md" },
+      { "label": "crates.io API: deku versions and release dates", "url": "https://crates.io/api/v1/crates/deku" },
+      { "label": "GitHub: sharksforarms (Emmanuel Thompson)", "url": "https://github.com/sharksforarms" },
+      { "label": "deku docs on docs.rs (owners, in-memory representation)", "url": "https://docs.rs/deku/latest/deku/" }
+    ]
+  },
+  "sources": [
+    { "label": "deku docs on docs.rs (attributes, context, DekuSize, no_std, logging, bitvec feature)", "url": "https://docs.rs/deku/latest/deku/" },
+    { "label": "deku docs: list of attributes", "url": "https://docs.rs/deku/latest/deku/attributes/index.html" },
+    { "label": "deku README", "url": "https://github.com/sharksforarms/deku" },
+    { "label": "deku CHANGELOG (0.17 reader API, 0.18 Seek, 0.19 bit_order, 0.20 alloc)", "url": "https://github.com/sharksforarms/deku/blob/master/CHANGELOG.md" },
+    { "label": "deku Cargo.toml (licence MIT OR Apache-2.0)", "url": "https://github.com/sharksforarms/deku/blob/master/Cargo.toml" },
+    { "label": "binrw docs on docs.rs (bit fields via other crates, NoSeek, calc)", "url": "https://docs.rs/binrw/latest/binrw/" },
+    { "label": "Construct docs: Introduction (bit and byte granularity, PrefixedArray)", "url": "https://construct.readthedocs.io/en/latest/intro.html" }
+  ],
+  "checked": "2026-10-09"
+}

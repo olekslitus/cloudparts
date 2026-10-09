@@ -1,0 +1,115 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "CBOR",
+  "concepts": ["file-formats"],
+  "kinds": ["binary-serialization"],
+  "provider": "oss",
+  "vendor": "IETF (open standard, RFC 8949)",
+  "license": "Open standard, free to use",
+  "website": "https://cbor.io/",
+  "summary": "Concise Binary Object Representation: a binary format with JSON’s data model plus byte strings and tags, designed for tiny decoders and readable without a schema.",
+  "intro": [
+    "CBOR starts from JSON’s data model (numbers, strings, arrays, maps, true, false and null) and encodes it in binary. Every item begins with one byte: the top 3 bits give one of eight major types (unsigned integer, negative integer, byte string, text string, array, map, tag, or float and simple values), and the low 5 bits hold a small value directly or say whether 1, 2, 4 or 8 more bytes follow, in big-endian order. So `7` is the single byte `07`, `500` is `19 01 f4`, and a map of three pairs starts with `a3`. Strings carry their length in bytes, arrays and maps their number of items, so a decoder never scans for a closing quote or bracket. The data model adds what JSON lacks: raw byte strings (no base64), integers distinct from floats, 16-bit floats, and map keys of any type, including small integers.",
+    "Tags give a value extra meaning without changing the core format: tag 1 marks an epoch timestamp, tag 2 a big integer stored as bytes, and IANA keeps a registry that later RFCs and third parties add to; a decoder that doesn’t know a tag can still pass on its content. For protocols that sign or compare bytes, RFC 8949 defines deterministic encoding: shortest-form integers and lengths, no indefinite lengths, and map keys sorted by their encoded bytes. CDDL (RFC 8610) can describe the expected shape of CBOR or JSON data when a protocol wants a schema. CBOR was first published as RFC 7049 in 2013 and became Internet Standard 94 as RFC 8949 in December 2020, with no change to the bytes. It is the encoding under COSE, which does for CBOR what the JOSE standards do for JSON: signatures, MACs, encryption and keys, and under WebAuthn’s authenticator data and public keys."
+  ],
+  "strengths": [
+    "No schema needed: any CBOR decoder can read any CBOR data, like JSON, but with native byte strings and distinct integer and float types",
+    "Small encoders and decoders were the top design goal after expressiveness, aimed at devices with around 10 KiB of RAM",
+    "Deterministic encoding is specified, so signed or hashed data has one byte form; WebAuthn requires a variant of it",
+    "Extensible through registered tags for dates, big numbers and more, while old decoders keep working"
+  ],
+  "limits": [
+    "Map keys travel in every message, where Protocol Buffers sends only a field number; protocols that care switch to integer keys, as FIDO’s CTAP2 does",
+    "Not human-readable: debugging needs a decoder or the diagnostic notation, where JSON is plain text",
+    "Duplicate map keys are well-formed but invalid, and each protocol must say how to handle them; streaming decoders often can’t detect them",
+    "Converting to JSON is lossy: byte strings become base64url text, most tag numbers are dropped, and non-string map keys need a mapping that can collide"
+  ],
+  "worksWith": [
+    { "id": "json", "how": "extends the data model of" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Encode with the cbor2 library: sizes, byte strings, a date tag and deterministic output",
+    "source": [
+      "import json",
+      "from datetime import datetime, timezone",
+      "import cbor2",
+      "",
+      "reading = {\"sensor\": 7, \"temps\": [2100, -100], \"ok\": True}",
+      "encoded = cbor2.dumps(reading)",
+      "print(encoded.hex(\" \"))",
+      "# a3 66 73 65 6e 73 6f 72 07 65 74 65 6d 70 73 82 19 08 34 38 63 62 6f 6b f5",
+      "# a3 = map of 3 pairs, 66 = 6-byte text, 82 = array of 2, 19 08 34 = 2100, 38 63 = -1 - 99, f5 = true",
+      "print(len(encoded), len(json.dumps(reading, separators=(\",\", \":\"))))  # 25 42",
+      "print(cbor2.loads(encoded) == reading)  # True: no schema needed to decode",
+      "",
+      "# types JSON lacks: raw bytes, and a timestamp marked with tag 1 (c1)",
+      "at = datetime(2026, 10, 9, tzinfo=timezone.utc)",
+      "print(cbor2.dumps({\"sig\": b\"\\x00\\xff\", \"at\": at}, datetime_as_timestamp=True).hex(\" \"))",
+      "# a2 63 73 69 67 42 00 ff 62 61 74 c1 1a 6a c8 2e 80",
+      "",
+      "# deterministic encoding: same data, same bytes, whatever the key order",
+      "a = cbor2.dumps({\"b\": 1, \"a\": 2}, canonical=True)",
+      "b = cbor2.dumps({\"a\": 2, \"b\": 1}, canonical=True)",
+      "print(a == b, a.hex(\" \"))  # True a2 61 61 02 61 62 01"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "CBOR, JSON or Protocol Buffers?",
+      "intro": "CBOR sits between the two: self-describing like JSON, binary like Protocol Buffers.",
+      "corner": "",
+      "columns": ["CBOR", "JSON", "Protocol Buffers"],
+      "rows": [
+        { "label": "Schema needed to read", "values": ["No; CDDL is optional", "No", "Yes: without the `.proto` a decoder sees only field numbers"] },
+        { "label": "Field names on the wire", "values": ["Yes, as map keys (text or small integers)", "Yes, as quoted strings", "No, a field number and wire type in a varint tag"] },
+        { "label": "Binary data", "values": ["Native byte strings", "Must be encoded as text, usually base64", "Native `bytes` fields"] },
+        { "label": "Numbers", "values": ["Integers up to 64 bits, separate 16-, 32- and 64-bit floats", "Decimal text; range and precision left to implementations", "Varints, zigzag and fixed-size integers, 32- and 64-bit floats"] },
+        { "label": "One byte form for the same data", "values": ["Deterministic encoding defined in RFC 8949", "Not defined by RFC 8259", "Not guaranteed; the docs say serialization is not canonical"] },
+        { "label": "Typical use", "values": ["IoT messages, COSE signatures, WebAuthn", "Web APIs and configuration", "RPC and event payloads with a shared schema"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "A major motivation for CBOR was the Internet of Things, with very simple, inexpensive devices that need a data format, and the obvious candidates didn’t fit. ASN.1’s BER and DER encodings take complex code to decode numbers on a constrained device. MessagePack, published around 2011, was compact but didn’t separate text from binary strings and had no clear extension mechanism. JSON was the model everyone liked, since data could be exchanged without agreeing on a schema first, but it is text and has no binary type.",
+      "Carsten Bormann of Universität Bremen and Paul Hoffman wrote CBOR to meet a ranked list of goals: encode most data formats used in Internet standards, keep encoders and decoders very small, need no schema, stay reasonably compact, and extend without version negotiation. RFC 7049 was published in October 2013. Other standards built on it: COSE for signing and encryption in 2017, and CDDL in 2019 as a notation to describe CBOR data.",
+      "RFC 8949 replaced RFC 7049 in December 2020 and made CBOR Internet Standard 94 without changing the format. One change answered errata reports that the old “canonical CBOR” key-sorting rules were onerous: they became “deterministic encoding”, sorting map keys by their encoded bytes, with the old length-first order kept for protocols that already used it."
+    ],
+    "choices": [
+      { "choice": "Start from JSON’s data model", "why": "JSON showed that data could be exchanged without casting a schema in concrete, which works better when both ends evolve quickly. CBOR keeps that and adds byte strings." },
+      { "choice": "Code size before message size", "why": "The objectives rank a small decoder above compact output, so CBOR avoids compression and bit-fiddling and uses plain machine representations such as big-endian integers and IEEE floats." },
+      { "choice": "Tags for extension", "why": "New types such as dates and big numbers get a tag number instead of a new format version, and decoders that don’t understand a tag can still decode its content." },
+      { "choice": "Several encodings allowed, one form defined for when it matters", "why": "The number 7 may be encoded in more than one way, which keeps encoders simple; protocols that sign or compare bytes opt into deterministic encoding." }
+    ],
+    "timeline": [
+      { "year": "2013", "text": "RFC 7049 publishes CBOR (October)" },
+      { "year": "2017", "text": "COSE (RFC 8152) builds signing and encryption on CBOR" },
+      { "year": "2019", "text": "CDDL (RFC 8610) gives CBOR a schema notation" },
+      { "year": "2020", "text": "RFC 8949 makes CBOR Internet Standard 94 (December)" },
+      { "year": "2022", "text": "COSE revised as RFC 9052, Internet Standard 96" }
+    ],
+    "sources": [
+      { "label": "RFC 7049: Concise Binary Object Representation (October 2013)", "url": "https://www.rfc-editor.org/rfc/rfc7049" },
+      { "label": "RFC 8949: CBOR (December 2020), Section 1.1 Objectives, Appendix E and Appendix G", "url": "https://www.rfc-editor.org/rfc/rfc8949" },
+      { "label": "cbor.io: CBOR overview (JSON data model, no schema, Internet of Things)", "url": "https://cbor.io/" },
+      { "label": "RFC 8152: CBOR Object Signing and Encryption (July 2017)", "url": "https://www.rfc-editor.org/rfc/rfc8152" },
+      { "label": "RFC 8610: Concise Data Definition Language (June 2019)", "url": "https://www.rfc-editor.org/rfc/rfc8610" },
+      { "label": "RFC 9052: COSE Structures and Process (August 2022, STD 96)", "url": "https://www.rfc-editor.org/rfc/rfc9052" }
+    ]
+  },
+  "sources": [
+    { "label": "RFC 8949: Concise Binary Object Representation (CBOR)", "url": "https://www.rfc-editor.org/rfc/rfc8949" },
+    { "label": "RFC 7228: Terminology for Constrained-Node Networks (class 1: about 10 KiB RAM)", "url": "https://www.rfc-editor.org/rfc/rfc7228" },
+    { "label": "RFC 8610: Concise Data Definition Language (CDDL)", "url": "https://www.rfc-editor.org/rfc/rfc8610" },
+    { "label": "RFC 9052: CBOR Object Signing and Encryption (COSE)", "url": "https://www.rfc-editor.org/rfc/rfc9052" },
+    { "label": "W3C: Web Authentication Level 3 (CTAP2 canonical CBOR, COSE_Key, attestation object)", "url": "https://www.w3.org/TR/webauthn-3/" },
+    { "label": "RFC 8259: The JSON Data Interchange Format (numbers, object names)", "url": "https://www.rfc-editor.org/rfc/rfc8259" },
+    { "label": "Protocol Buffers docs: Encoding (tags, varints, schema needed to interpret fields)", "url": "https://protobuf.dev/programming-guides/encoding/" },
+    { "label": "Protocol Buffers docs: Proto Serialization Is Not Canonical", "url": "https://protobuf.dev/programming-guides/serialization-not-canonical/" },
+    { "label": "cbor.io: CBOR overview", "url": "https://cbor.io/" },
+    { "label": "cbor2 docs: API reference (dumps, canonical, datetime_as_timestamp)", "url": "https://cbor2.readthedocs.io/en/latest/api.html" }
+  ],
+  "checked": "2026-10-09"
+}

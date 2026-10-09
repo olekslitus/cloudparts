@@ -1,0 +1,185 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "AWS Lake Formation",
+  "concepts": ["data-lake", "iam"],
+  "provider": "aws",
+  "vendor": "Amazon Web Services",
+  "license": "Proprietary",
+  "website": "https://aws.amazon.com/lake-formation/",
+  "summary": "AWS’s permission layer for data lakes: database-style `GRANT` and `REVOKE` on Glue Data Catalog databases, tables, columns, rows and cells, enforced by handing query engines short-lived S3 credentials for the data they may read.",
+  "intro": [
+    "Lake Formation doesn’t store data or run queries. It sits on the AWS Glue Data Catalog, which it shares with Glue, and adds a permissions model borrowed from relational databases. A data lake administrator registers S3 locations, with a service-linked role or an IAM role that Lake Formation can assume, then grants permissions such as `SELECT`, `INSERT`, `DELETE`, `ALTER`, `DROP` and `DESCRIBE` on catalogs, databases, tables and views to IAM users and roles, SAML users and groups, or other accounts. Data filters narrow a `SELECT` grant to some columns, to the rows matching an expression such as `region = 'eu'`, or to both at once, which AWS calls cell-level security. LF-Tags make this scale: you attach key-value tags such as `module=Sales` to databases, tables or columns (tables inherit from their database, columns from their table) and grant on tag expressions instead of named resources, so a new table is covered as soon as it carries the tag. Every request still has to pass IAM as well as Lake Formation.",
+    "Enforcement works through credential vending. When Athena, Redshift Spectrum, EMR, Glue or Quick asks the Data Catalog for a table, the catalog checks Lake Formation and returns only the metadata the user may see. If the table’s S3 location is registered, the engine then asks Lake Formation for temporary credentials, reads the files itself and applies the column, row and cell filters before it returns results; these services are trusted callers. Other engines use the same path through `GetTemporaryGlueTableCredentials` (off by default, enabled with IAM session tags or the “full table access” setting) or through the Glue Iceberg REST endpoint, which is how Snowflake, Databricks and open-source Spark read Lake Formation-governed Iceberg tables. Cross-account grants go through AWS Resource Access Manager, to an account, an organization, an organizational unit or a single IAM principal, and the consumer queries shared tables through resource links. Creating and using permissions costs nothing; you pay for the services that store and query the data.",
+    "For backward compatibility with Glue, Lake Formation starts switched off in effect: the `IAMAllowedPrincipals` group holds `Super` on existing catalog resources and new ones default to “Use only IAM access control”, so IAM policies alone decide. Turning that off used to move every user of a table at once. Hybrid access mode (September 2023) lets you register a location so that only principals you explicitly opt in are governed by Lake Formation (and need both its permissions and IAM), while everyone else keeps their IAM and bucket-policy access."
+  ],
+  "strengths": [
+    "Grants at database, table, column, row and cell level in one place, honoured by Athena, Redshift Spectrum, EMR, Glue and Quick",
+    "LF-Tags replace per-resource grants with a few tag grants: in AWS’s own example, 17 named grants become 5 tag assignments and 4 tag grants, and new tables need no new policy",
+    "Sharing across accounts and organizations without copying data, down to single IAM principals in another account, with column filters carried along",
+    "Engines get short-lived credentials scoped to registered locations instead of broad bucket access, and CloudTrail records who read what through which service",
+    "No charge for permissions, and hybrid access mode lets you adopt it one table and one team at a time"
+  ],
+  "limits": [
+    "The fine-grained rules are enforced by the query engines, not by S3: AWS’s integrated services apply row and cell filters, but external engines using the full-table-access setting only get credentials for tables the role may read in full",
+    "Support differs by engine and format: Athena Spark, Hive on EMR Serverless and EMR on EKS can’t query Lake Formation tables, Glue ETL needs version 5.0 for fine-grained reads, and writes to Iceberg tables need full table access",
+    "Two permission systems at once: every request must pass IAM and Lake Formation, the defaults leave IAM in charge, and hybrid locations behave differently per principal, so access problems take careful debugging",
+    "Filters have edges: they only apply to `SELECT`, row filters can’t use `array` or `map` columns, cell-level security doesn’t work on views or resource links, and one principal can hold at most 100 data filters per table",
+    "It governs the Glue Data Catalog and the sources federated into it; tables in another catalog keep that catalog’s own access control"
+  ],
+  "worksWith": [
+    { "id": "s3", "how": "vends scoped credentials for data in" },
+    { "id": "aws-iam", "how": "adds database-style grants on top of" },
+    { "id": "athena", "how": "is enforced at query time by" },
+    { "id": "spark", "how": "is enforced in EMR and Glue jobs by" },
+    { "id": "iceberg", "how": "governs tables stored as" },
+    { "id": "hudi", "how": "governs tables stored as" },
+    { "id": "delta-lake", "how": "governs tables stored as" },
+    { "id": "s3-tables", "how": "grants fine-grained access to" },
+    { "id": "snowflake", "how": "vends credentials over Iceberg REST to" },
+    { "id": "databricks", "how": "vends credentials over Iceberg REST to" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Register a bucket, grant by tag, add a cell-level filter and share with another account",
+    "source": [
+      "# 1. Let Lake Formation manage the bucket; it assumes this role to vend credentials",
+      "aws lakeformation register-resource \\",
+      "  --resource-arn arn:aws:s3:::acme-lake \\",
+      "  --role-arn arn:aws:iam::111122223333:role/LakeFormationRegistrationRole",
+      "",
+      "# 2. Tag-based access: define a tag, tag a database (its tables inherit it), grant on the tag",
+      "aws lakeformation create-lf-tag --tag-key domain --tag-values sales finance",
+      "aws lakeformation add-lf-tags-to-resource \\",
+      "  --resource '{\"Database\": {\"Name\": \"sales\"}}' \\",
+      "  --lf-tags '[{\"TagKey\": \"domain\", \"TagValues\": [\"sales\"]}]'",
+      "aws lakeformation grant-permissions \\",
+      "  --principal DataLakePrincipalIdentifier=arn:aws:iam::111122223333:role/analyst \\",
+      "  --permissions SELECT DESCRIBE \\",
+      "  --resource '{\"LFTagPolicy\": {\"ResourceType\": \"TABLE\",",
+      "    \"Expression\": [{\"TagKey\": \"domain\", \"TagValues\": [\"sales\"]}]}}'",
+      "",
+      "# 3. Cell-level security: EU support sees EU rows only, and never the card number",
+      "cat > eu_filter.json <<'EOF'",
+      "{\"TableData\": {",
+      "  \"TableCatalogId\": \"111122223333\", \"DatabaseName\": \"sales\", \"TableName\": \"orders\",",
+      "  \"Name\": \"eu_no_card\",",
+      "  \"RowFilter\": {\"FilterExpression\": \"region = 'eu'\"},",
+      "  \"ColumnWildcard\": {\"ExcludedColumnNames\": [\"card_number\"]}}}",
+      "EOF",
+      "aws lakeformation create-data-cells-filter --cli-input-json file://eu_filter.json",
+      "aws lakeformation grant-permissions \\",
+      "  --principal DataLakePrincipalIdentifier=arn:aws:iam::111122223333:role/eu-support \\",
+      "  --permissions SELECT \\",
+      "  --resource '{\"DataCellsFilter\": {\"TableCatalogId\": \"111122223333\",",
+      "    \"DatabaseName\": \"sales\", \"TableName\": \"orders\", \"Name\": \"eu_no_card\"}}'",
+      "",
+      "# 4. Share every table tagged domain=sales with another account (through AWS RAM)",
+      "aws lakeformation grant-permissions \\",
+      "  --principal DataLakePrincipalIdentifier=444455556666 \\",
+      "  --permissions SELECT DESCRIBE --permissions-with-grant-option SELECT DESCRIBE \\",
+      "  --resource '{\"LFTagPolicy\": {\"CatalogId\": \"111122223333\", \"ResourceType\": \"TABLE\",",
+      "    \"Expression\": [{\"TagKey\": \"domain\", \"TagValues\": [\"sales\"]}]}}'"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "What each engine enforces",
+      "intro": "Lake Formation decides; the engine applies the decision. Support for standard Glue tables, from the Lake Formation developer guide, checked 2026-10-09.",
+      "columns": ["Table level", "Column level", "Row and cell level"],
+      "rows": [
+        { "label": "Athena SQL", "values": ["Read and write", "Read", "Read"] },
+        { "label": "Redshift Spectrum", "values": ["Read and write", "Read", "Read"] },
+        { "label": "Spark on EMR (EC2) or EMR Serverless", "values": ["Read and write", "Read", "Read"] },
+        { "label": "Hive on EMR (EC2)", "values": ["Read and write", "Read", "Not supported"] },
+        { "label": "AWS Glue ETL", "values": ["Read and write", "Read, Glue 5.0 or later", "Read, Glue 5.0 or later"] },
+        { "label": "Athena Spark, Hive on EMR Serverless, EMR on EKS", "values": ["Not supported", "Not supported", "Not supported"] },
+        { "label": "Engines using the full-table-access setting (for example over Glue Iceberg REST)", "values": ["Read and write", "No partial grants: credentials only if the role may read the whole table", "No partial grants: credentials only if the role may read the whole table"] }
+      ],
+      "notes": [
+        "For Iceberg tables, Athena and Spark on EMR read with table, column, row and cell permissions, but writes need full table access. Lake Formation doesn’t manage permissions for `MERGE`, `UPDATE`, `VACUUM` or `OPTIMIZE` on open table formats in Athena.",
+        "Hudi and Delta Lake tables have narrower support, mostly reads; Glue ETL supports them with table-level permissions only."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Three ways to grant",
+      "intro": "All three can be mixed. AWS recommends LF-Tags once a catalog has many objects.",
+      "items": [
+        { "name": "Named resources", "tag": "simple, grows linearly", "text": "`GRANT SELECT ON sales.orders TO role/analyst`, in effect. Clear for a handful of tables; every new table or principal means new grants." },
+        { "name": "LF-Tags", "tag": "recommended at scale", "text": "Grant on a tag expression such as `module=Sales`. Tags are inherited from database to table to column and can be overridden, and resources are covered the moment they are tagged. LF-Tags aren’t IAM tags; the two can’t be swapped." },
+        { "name": "Data filters", "tag": "columns, rows, cells", "text": "A named filter on one table: included or excluded columns plus a PartiQL row expression. Granted with `SELECT` only, since filters apply to reads." }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Lake Formation and Iceberg catalogs outside AWS",
+      "body": [
+        "Engines outside AWS reach Lake Formation-governed tables through the Glue Iceberg REST endpoint at `https://glue.<region>.amazonaws.com/iceberg`, signed with SigV4. For them to receive data credentials, an administrator turns on “Allow external engines to access data in Amazon S3 locations with full table access”, registers the bucket, and grants the engine’s IAM role table permissions and data location access. Snowflake documents this setup for its Iceberg catalog integrations, including S3 Tables through Glue; AWS has published walkthroughs for Databricks and for open-source Spark.",
+        "The catch is in the name: the external engine gets credentials for the whole table, so column, row and cell filters only hold inside the AWS engines that apply them. S3 Tables can since March 2026 use plain IAM policies through Glue in some Regions, with Lake Formation as an opt-in for fine-grained control."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Before Lake Formation, access to a data lake on AWS was written as S3 bucket policies and IAM policies, which name buckets and object prefixes, not tables and columns. AWS previewed Lake Formation at re:Invent 2018 and made it generally available on 8 August 2019 in five Regions, pitched as a way to set up a secure data lake “in days”: blueprints to ingest data, machine-learning transforms to clean it, and one place for table- and column-level permissions that Athena, Redshift Spectrum and EMR would honour.",
+      "The key decision was to build on the Glue Data Catalog rather than replace it. AWS made the Glue and Lake Formation catalogs “one and the same” so customers could adopt it without moving data, which meant the catalog had to support two permission models at once: the existing IAM policies and the new grants. Existing setups kept IAM in charge until customers upgraded. The grant model then grew: tag-based access control in May 2021, row- and cell-level security at re:Invent in November 2021, and hybrid access mode in September 2023, because until then putting a table under Lake Formation meant moving all of its users in a single step.",
+      "Open table formats changed who asks for credentials. Glue 5.0 Spark jobs enforce row, column and cell rules on Iceberg tables, S3 Tables can be governed through it, and engines outside AWS, such as Snowflake, Databricks and open-source Spark, read tables through the Glue Iceberg REST endpoint with credentials Lake Formation vends."
+    ],
+    "choices": [
+      { "choice": "Share the Glue Data Catalog instead of adding a new one", "why": "Customers already described their lakes in Glue, and the engines already read it. Making Lake Formation’s catalog the same one let them adopt grants without moving data or metadata, at the cost of running IAM and Lake Formation permissions side by side." },
+      { "choice": "Enforce through the engines and vended credentials", "why": "S3 can only allow or deny whole objects. To hide columns, rows and cells, Lake Formation gives trusted engines temporary access to the files and relies on them to filter, and checks permissions before it returns metadata at all." },
+      { "choice": "Grants on tags, not only on names", "why": "Named grants multiply with every new table and principal. Tags decouple policy from resources: data stewards define the tag ontology and grant on it, data engineers tag resources when they create them, and Lake Formation evaluates the result at query time." },
+      { "choice": "An incremental path from IAM", "why": "Switching a catalog from IAM-only access forced every user and workload over at once. Hybrid access mode keeps both paths per location, so teams opt principals in one at a time without duplicating data for each access model." }
+    ],
+    "timeline": [
+      { "year": "2018", "text": "Lake Formation previewed at re:Invent" },
+      { "year": "2019", "text": "Generally available on 8 August in five Regions, with table- and column-level permissions" },
+      { "year": "2021", "text": "Tag-based access control with LF-Tags (May); row- and cell-level security generally available (November)" },
+      { "year": "2023", "text": "Hybrid access mode lets IAM and Lake Formation govern the same tables (September)" },
+      { "year": "2026", "text": "Glue Data Catalog adds IAM-only authorization for S3 Tables, with Lake Formation as an opt-in (March)" }
+    ],
+    "sources": [
+      { "label": "AWS News Blog: AWS Lake Formation, now generally available, by Danilo Poccia (8 August 2019; preview at re:Invent 2018, dual permissions model)", "url": "https://aws.amazon.com/blogs/aws/aws-lake-formation-now-generally-available/" },
+      { "label": "AWS What’s New: AWS Lake Formation is now generally available (August 2019; five Regions)", "url": "https://aws.amazon.com/about-aws/whats-new/2019/08/aws-lake-formation-is-now-generally-available" },
+      { "label": "AWS What’s New: AWS Lake Formation now supports tag-based access control (May 2021)", "url": "https://aws.amazon.com/about-aws/whats-new/2021/05/aws-lake-formation-now-supports-tag-based-access-control" },
+      { "label": "AWS News Blog: General availability of cell-level security and governed tables (30 November 2021)", "url": "https://aws.amazon.com/blogs/aws/aws-lake-formation-general-availability-of-cell-level-security-and-governed-tables-with-automatic-compaction" },
+      { "label": "AWS What’s New: Lake Formation launches hybrid access mode for the Glue Data Catalog (September 2023)", "url": "https://aws.amazon.com/about-aws/whats-new/2023/09/aws-lake-formation-hybrid-access-mode-glue-catalog" },
+      { "label": "AWS What’s New: Glue Data Catalog supports IAM-based authorization for S3 Tables (March 2026)", "url": "https://aws.amazon.com/about-aws/whats-new/2026/03/gdc-simplified-permissions-s3tables-iceberg-views/" }
+    ]
+  },
+  "sources": [
+    { "label": "Lake Formation docs: What is AWS Lake Formation? (column, row and cell-level controls, LF-Tags, CloudTrail, cross-account)", "url": "https://docs.aws.amazon.com/lake-formation/latest/dg/what-is-lake-formation.html" },
+    { "label": "Lake Formation docs: How it works (metadata check, credential vending, engine-side filtering)", "url": "https://docs.aws.amazon.com/lake-formation/latest/dg/how-it-works.html" },
+    { "label": "Lake Formation docs: Permissions reference (permissions per resource type, CLI grants)", "url": "https://docs.aws.amazon.com/lake-formation/latest/dg/lf-permissions-reference.html" },
+    { "label": "Lake Formation docs: Tag-based access control (inheritance, 17 grants versus 5 assignments and 4 grants)", "url": "https://docs.aws.amazon.com/lake-formation/latest/dg/tag-based-access-control.html" },
+    { "label": "Lake Formation docs: Granting permissions with the LF-TBAC method (account, organization and OU principals)", "url": "https://docs.aws.amazon.com/lake-formation/latest/dg/granting-catalog-perms-TBAC.html" },
+    { "label": "Lake Formation docs: Data filtering and cell-level security", "url": "https://docs.aws.amazon.com/lake-formation/latest/dg/data-filtering.html" },
+    { "label": "Lake Formation docs: Data filtering limitations (100 filters per principal per table, no array or map in row filters)", "url": "https://docs.aws.amazon.com/lake-formation/latest/dg/data-filtering-notes.html" },
+    { "label": "Lake Formation docs: Using Lake Formation application integration (GetTemporaryGlueTableCredentials, disabled by default)", "url": "https://docs.aws.amazon.com/lake-formation/latest/dg/using-cred-vending.html" },
+    { "label": "Lake Formation docs: Application integration for full table access", "url": "https://docs.aws.amazon.com/lake-formation/latest/dg/full-table-credential-vending.html" },
+    { "label": "Lake Formation docs: Integrating third-party services (scoped-down STS credentials)", "url": "https://docs.aws.amazon.com/lake-formation/latest/dg/Integrating-with-LakeFormation.html" },
+    { "label": "Lake Formation docs: Cross-account data sharing (AWS RAM, direct shares to IAM principals, resource links)", "url": "https://docs.aws.amazon.com/lake-formation/latest/dg/cross-account-permissions.html" },
+    { "label": "Lake Formation docs: Hybrid access mode", "url": "https://docs.aws.amazon.com/lake-formation/latest/dg/hybrid-access-mode.html" },
+    { "label": "Lake Formation docs: Hybrid access mode considerations and limitations", "url": "https://docs.aws.amazon.com/lake-formation/latest/dg/notes-hybrid.html" },
+    { "label": "Lake Formation docs: Changing the default settings (IAMAllowedPrincipals, Use only IAM access control)", "url": "https://docs.aws.amazon.com/lake-formation/latest/dg/change-settings.html" },
+    { "label": "Lake Formation docs: Using Lake Formation with AWS Glue (shared Data Catalog, Glue 5.0 fine-grained access)", "url": "https://docs.aws.amazon.com/lake-formation/latest/dg/glue-features-lf.html" },
+    { "label": "Lake Formation docs: AWS service integrations (Athena, Redshift Spectrum, Quick, EMR)", "url": "https://docs.aws.amazon.com/lake-formation/latest/dg/service-integrations.html" },
+    { "label": "Lake Formation docs: Working with other AWS services (supported permission types per engine and table format)", "url": "https://docs.aws.amazon.com/lake-formation/latest/dg/working-with-services.html" },
+    { "label": "Lake Formation docs: S3 Tables integration with the Glue Data Catalog and Lake Formation", "url": "https://docs.aws.amazon.com/lake-formation/latest/dg/create-s3-tables-catalog.html" },
+    { "label": "AWS Lake Formation pricing (permissions at no charge)", "url": "https://aws.amazon.com/lake-formation/pricing/" },
+    { "label": "AWS Lake Formation FAQs (IAM and Lake Formation checks, trusted callers)", "url": "https://aws.amazon.com/lake-formation/faqs/" },
+    { "label": "AWS CLI reference: lakeformation register-resource", "url": "https://docs.aws.amazon.com/cli/latest/reference/lakeformation/register-resource.html" },
+    { "label": "AWS CLI reference: lakeformation create-lf-tag", "url": "https://docs.aws.amazon.com/cli/latest/reference/lakeformation/create-lf-tag.html" },
+    { "label": "AWS CLI reference: lakeformation add-lf-tags-to-resource", "url": "https://docs.aws.amazon.com/cli/latest/reference/lakeformation/add-lf-tags-to-resource.html" },
+    { "label": "AWS CLI reference: lakeformation grant-permissions (LFTagPolicy, DataCellsFilter)", "url": "https://docs.aws.amazon.com/cli/latest/reference/lakeformation/grant-permissions.html" },
+    { "label": "AWS CLI reference: lakeformation create-data-cells-filter", "url": "https://docs.aws.amazon.com/cli/latest/reference/lakeformation/create-data-cells-filter.html" },
+    { "label": "AWS Glue docs: Connecting to the Data Catalog using the Glue Iceberg REST endpoint", "url": "https://docs.aws.amazon.com/glue/latest/dg/connect-glu-iceberg-rest.html" },
+    { "label": "Snowflake docs: Configure a catalog integration for AWS Glue Iceberg REST (Lake Formation access control)", "url": "https://docs.snowflake.com/en/user-guide/tables-iceberg-configure-catalog-integration-rest-glue" },
+    { "label": "Snowflake docs: Use catalog-vended credentials for Iceberg tables (S3 Tables through Glue and Lake Formation)", "url": "https://docs.snowflake.com/en/user-guide/tables-iceberg-configure-catalog-integration-vended-credentials" },
+    { "label": "AWS Big Data Blog: Access Iceberg tables in S3 from Databricks using the Glue Iceberg REST Catalog (January 2025)", "url": "https://aws.amazon.com/blogs/big-data/access-amazon-s3-iceberg-tables-from-databricks-using-aws-glue-iceberg-rest-catalog-in-amazon-sagemaker-lakehouse/" },
+    { "label": "AWS Big Data Blog: Read and write S3 Iceberg tables using the Glue Iceberg REST Catalog from open-source Spark (December 2024)", "url": "https://aws.amazon.com/blogs/big-data/read-and-write-s3-iceberg-table-using-aws-glue-iceberg-rest-catalog-from-open-source-apache-spark" },
+    { "label": "AWS What’s New: Glue Data Catalog supports IAM-based authorization for S3 Tables (March 2026)", "url": "https://aws.amazon.com/about-aws/whats-new/2026/03/gdc-simplified-permissions-s3tables-iceberg-views/" }
+  ],
+  "checked": "2026-10-09"
+}

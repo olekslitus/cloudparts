@@ -1,0 +1,354 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Purely functional data structures",
+  "category": "code",
+  "order": 22,
+  "summary": "Collections that are never changed in place: every update returns a new version that shares most of its memory with the old one, and every old version stays valid.",
+  "howItWorks": "An ordinary, ephemeral data structure is destroyed by an update: after you insert, the old version is gone. A persistent one keeps every version usable; it is partially persistent if only the newest version can be updated, fully persistent if any version can. In a functional language every structure is persistent automatically, because nothing is ever overwritten. The trick that makes this cheap is structural sharing. To insert into a balanced tree, you copy only the nodes on the path from the root to the change and point the copies at the untouched subtrees, so an update costs O(log n) new nodes instead of a copy of the whole collection. Wide trees push this further: Clojure and Scala use 32-way nodes, so updating one element of a large vector copies between one and five nodes. Persistence breaks one classic tool, amortization. A two-list queue is cheap on average because one expensive `reverse` pays for many cheap operations, but if a program keeps an old version and pops from it again and again, it pays for that same `reverse` every time. Chris Okasaki’s fix (1996) is lazy evaluation with memoization: the expensive work is set up as a suspension, the first version to need it runs it, and every other version reuses the cached result. Scheduling those suspensions turns many amortized bounds into worst-case ones. The costs are real: each update allocates new nodes, every lookup follows pointers through several levels instead of indexing one array, and a garbage collector or reference counts must free the versions nobody holds any more.",
+  "analogy": "Correcting a printed report by reprinting only the pages that changed and stapling them to the untouched old pages. Both the old and the new report are complete, and together they use little more paper than one.",
+  "useWhen": [
+    "Data read by many threads while one updates it: each reader holds a snapshot that can never change underneath it, with no locks",
+    "Undo, redo and history: keeping an old version costs only the nodes that changed since",
+    "Cheap change detection: if two references are identical nothing inside changed, which is how React’s `memo` and Immutable.js skip work",
+    "Backtracking, speculative edits and versioned trees, where you branch from an old state and keep both"
+  ],
+  "avoidWhen": [
+    "Small collections owned by one piece of code: a plain array wins below a few hundred elements",
+    "Tight loops of random reads: an RRB vector is 2 to 3.5 times slower at random access than a mutable array",
+    "Amortized structures used persistently without memoization (strict code, no lazy values): the bounds no longer hold"
+  ],
+  "example": "An editor keeps a 100,000-line file as a persistent vector with 32-way nodes. Because 32³ is 32,768 and 32⁴ is about a million, the tree is four levels deep. Typing in one line replaces that line and copies the four nodes above it: about 128 pointers instead of 100,000. Undo is free: the editor keeps the root of every earlier version, and 1,000 undo steps cost about 4,000 small nodes rather than 1,000 copies of the file. The UI compares the old and new line references and redraws only the line whose reference changed.",
+  "snippet": {
+    "lang": "ts",
+    "source": [
+      "type Tree = { key: number; left: Tree; right: Tree } | null;",
+      "",
+      "// insert copies only the nodes on the path from the root to the new key",
+      "function insert(t: Tree, key: number): Tree {",
+      "  if (t === null) return { key, left: null, right: null };",
+      "  if (key < t.key) {",
+      "    const left = insert(t.left, key);",
+      "    return left === t.left ? t : { ...t, left };",
+      "  }",
+      "  if (key > t.key) {",
+      "    const right = insert(t.right, key);",
+      "    return right === t.right ? t : { ...t, right };",
+      "  }",
+      "  return t; // already present: share the whole tree",
+      "}",
+      "",
+      "const keys = (t: Tree): number[] =>",
+      "  t === null ? [] : [...keys(t.left), t.key, ...keys(t.right)];",
+      "",
+      "let v1: Tree = null;",
+      "for (const k of [50, 30, 70, 20, 40, 60, 80]) v1 = insert(v1, k);",
+      "const v2 = insert(v1, 65);",
+      "",
+      "console.log(keys(v1)); // [20, 30, 40, 50, 60, 70, 80]: the old version still works",
+      "console.log(keys(v2)); // [20, 30, 40, 50, 60, 65, 70, 80]",
+      "console.log(v1!.left === v2!.left); // true: the whole left half is shared",
+      "console.log(v1!.right!.right === v2!.right!.right); // true: so is the 80 leaf",
+      "console.log(v1!.right === v2!.right); // false: only 50, 70 and 60 were copied",
+      "console.log(insert(v2, 65) === v2); // true: no change, no copy"
+    ]
+  },
+  "related": ["functional", "data-structures", "persistence"],
+  "sections": [
+    {
+      "type": "code",
+      "title": "Why amortization breaks when old versions live on",
+      "intro": "The textbook functional queue: a front list and a reversed rear list. Used once, each `reverse` is paid for by the pushes before it. Pop the same old version three times and the program pays for the same `reverse` three times.",
+      "lang": "ts",
+      "source": [
+        "type List<T> = { head: T; tail: List<T> } | null;",
+        "type Queue<T> = { front: List<T>; rear: List<T> }; // rear is kept reversed",
+        "",
+        "let steps = 0; // cells copied by reverse",
+        "",
+        "function reverse<T>(xs: List<T>): List<T> {",
+        "  let out: List<T> = null;",
+        "  for (; xs !== null; xs = xs.tail) { out = { head: xs.head, tail: out }; steps++; }",
+        "  return out;",
+        "}",
+        "",
+        "// invariant: front is empty only when the whole queue is empty",
+        "const check = <T>(front: List<T>, rear: List<T>): Queue<T> =>",
+        "  front === null ? { front: reverse(rear), rear: null } : { front, rear };",
+        "",
+        "const push = <T>(q: Queue<T>, x: T): Queue<T> => check(q.front, { head: x, tail: q.rear });",
+        "",
+        "function pop<T>(q: Queue<T>): [T, Queue<T>] {",
+        "  if (q.front === null) throw new Error(\"empty queue\");",
+        "  return [q.front.head, check(q.front.tail, q.rear)];",
+        "}",
+        "",
+        "let q: Queue<number> = { front: null, rear: null };",
+        "for (let i = 1; i <= 1000; i++) q = push(q, i);",
+        "// now front = [1] and rear = [1000, 999, ..., 2]",
+        "",
+        "steps = 0;",
+        "let [, rest] = pop(q); // pays for reversing 999 cells",
+        "[, rest] = pop(rest);",
+        "[, rest] = pop(rest);",
+        "console.log(steps); // 999: used once, the reverse is paid for by the 999 pushes",
+        "",
+        "steps = 0;",
+        "pop(q); pop(q); pop(q); // the same old version, three times",
+        "console.log(steps); // 2997: every logical future pays for the same reverse"
+      ]
+    },
+    {
+      "type": "code",
+      "title": "Okasaki’s fix: let laziness pay once",
+      "intro": "The banker’s queue from Okasaki’s thesis, in Haskell. It rotates as soon as the rear grows longer than the front, so the lazy `f ++ reverse r` is set up long before anyone needs it. Haskell runs a suspended computation at most once and caches the result, so every version that shares the rotated front shares the work too.",
+      "lang": "haskell",
+      "source": [
+        "-- front length, front, rear length, rear (kept reversed)",
+        "data Queue a = Queue !Int [a] !Int [a]",
+        "",
+        "empty :: Queue a",
+        "empty = Queue 0 [] 0 []",
+        "",
+        "snoc :: Queue a -> a -> Queue a",
+        "snoc (Queue lf f lr r) x = check (Queue lf f (lr + 1) (x : r))",
+        "",
+        "uncons :: Queue a -> Maybe (a, Queue a)",
+        "uncons (Queue _ [] _ _) = Nothing",
+        "uncons (Queue lf (x : f) lr r) = Just (x, check (Queue (lf - 1) f lr r))",
+        "",
+        "-- keep |rear| <= |front|; the rotation is a lazy, memoized suspension",
+        "check :: Queue a -> Queue a",
+        "check q@(Queue lf f lr r)",
+        "  | lr <= lf = q",
+        "  | otherwise = Queue (lf + lr) (f ++ reverse r) 0 []",
+        "",
+        "toList :: Queue a -> [a]",
+        "toList q = maybe [] (\\(x, q') -> x : toList q') (uncons q)",
+        "",
+        "main :: IO ()",
+        "main = do",
+        "  let q = foldl snoc empty [1 .. 1000 :: Int]",
+        "      first = fmap fst . uncons",
+        "  -- pop the same old version twice: the second pop reuses the memoized rotation",
+        "  print (first q, first q) -- (Just 1,Just 1)",
+        "  print (take 5 (toList (snoc q 1001))) -- [1,2,3,4,5]",
+        "  print (length (toList q)) -- 1000: q itself is unchanged"
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Which structure for which job",
+      "intro": "Bounds as the papers and library docs state them. They hold even when old versions are shared, which is the point of these designs.",
+      "corner": "Structure",
+      "columns": ["Good at", "Bounds", "Where you meet it"],
+      "rows": [
+        { "label": "Banker’s and real-time queues", "values": ["FIFO queues", "`snoc`, `head`, `tail` O(1) amortized (banker’s) or worst case (real-time)", "Okasaki’s thesis and book"] },
+        { "label": "Finger tree", "values": ["Sequences: both ends, concatenation, splitting", "Ends O(1) amortized; concatenate and split O(log n) of the smaller piece", "Haskell `Data.Sequence`"] },
+        { "label": "RRB vector", "values": ["Indexed sequences that also concatenate and slice", "Index and update effectively constant (32-way); concatenate, split and insert-at O(log n)", "`im` (Rust), `immer` (C++)"] },
+        { "label": "Hash array mapped trie", "values": ["Unordered maps and sets", "Lookup and update in about log₃₂ n hops", "Clojure maps, Scala `HashMap`, Immutable.js `Map`"] },
+        { "label": "Balanced search tree", "values": ["Sorted maps and sets, range queries", "O(log n) lookup, insert and delete; each update copies one path", "Haskell `Data.Map`, Scala `TreeMap`"] },
+        { "label": "Brodal–Okasaki heap", "values": ["Priority queues that merge", "`findMin`, `insert`, `meld` O(1), `deleteMin` O(log n), all worst case", "Okasaki’s thesis (section 7.2.2) and book"] },
+        { "label": "Zipper", "values": ["Editing near a cursor in a tree or list", "Moving and editing at the focus O(1), except moving up", "Structure editors, `clojure.zip`"] }
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Since Okasaki",
+      "intro": "Okasaki’s book (1998) collected the field. These are the main results since, most of them from the answers to the cstheory.stackexchange question “What’s new in purely functional data structures since Okasaki?”, each checked against the paper itself.",
+      "items": [
+        { "name": "Ideal Hash Trees (Phil Bagwell)", "tag": "2001", "text": "The hash array mapped trie: hash the key, then use 5 bits of the hash per level to choose among 32 children, with a bitmap so empty slots cost one bit each. Bagwell built it as a mutable hash table; Rich Hickey made a persistent version the core of Clojure’s maps in 2007." },
+        { "name": "Priority search queues (Ralf Hinze)", "tag": "2001", "text": "A blend of a finite map and a priority queue: logarithmic access by key and constant access to the binding with the smallest priority, enough for a purely functional Dijkstra’s shortest paths." },
+        { "name": "Catenable deques (Radu Mihaescu and Robert Tarjan)", "tag": "2003", "text": "A simpler take on Kaplan and Tarjan’s 1999 deques, which do push, pop, inject, eject and catenation in worst-case O(1). Their constant-time version is written for pure Lisp, with no lazy evaluation." },
+        { "name": "Maxiphobic heaps (Chris Okasaki)", "tag": "2005", "text": "Proposed as an easier-to-teach alternative to leftist heaps: merge compares subtree sizes and combines the two smaller of the three leftover subtrees, so each step keeps at most two thirds of the elements and merge stays O(log n)." },
+        { "name": "Finger trees (Ralf Hinze and Ross Paterson)", "tag": "2006", "text": "2-3 finger trees give amortized O(1) access to both ends and O(log n) concatenation and splitting. Caching a monoid in each node turns the same tree into a sequence, priority queue or search tree." },
+        { "name": "Catenable sorted lists (Brodal, Makris and Tsichlas)", "tag": "2006", "text": "A purely functional search tree with O(log n) search and update that joins two trees in worst-case O(1) time, answering an open question from Kaplan and Tarjan." },
+        { "name": "Persistent union-find (Conchon and Filliâtre)", "tag": "2007", "text": "A union-find that is persistent from the outside and as fast as the imperative one, by hiding mutation inside persistent arrays. A Coq proof checks that the side effects can’t be observed." },
+        { "name": "Confluently persistent tries (Demaine, Langerman and Price)", "tag": "2008", "text": "Motivated by version control: directory trees where subtrees can be copied between any two versions. Their structures beat plain path copying for many deep but nearby edits, and some are purely functional." },
+        { "name": "Red-black delete (Matt Might)", "tag": "2010", "text": "Okasaki’s red-black trees left deletion as an exercise. Might’s version adds two temporary colours, double black and negative black, and splits delete into remove, bubble and balance." },
+        { "name": "RRB-Trees (Phil Bagwell and Tiark Rompf)", "tag": "2011", "text": "Relaxed radix-balanced trees let the 32-way vectors of Clojure and Scala concatenate, insert at any index and split in O(log n), while keeping their fast indexing and updates." },
+        { "name": "RRB Vector (Stucki, Rompf, Ureche and Bagwell)", "tag": "2015", "text": "A practical RRB vector for Scala that caches the most recently used branch: memory on par with arrays, and a parallel speedup of at least 7 times on 4 CPUs with 8 cores each." },
+        { "name": "Persistence for the Masses (Juan Pedro Bolívar Puente)", "tag": "2017", "text": "RRB vectors in C++ with unboxed elements, pluggable memory management and in-place “transient” updates. The paper behind the `immer` library." }
+      ]
+    }
+  ],
+  "kinds": [
+    {
+      "id": "functional-queues",
+      "name": "Queues and deques",
+      "summary": "First-in-first-out queues and double-ended queues built from immutable lists, from the two-list trick to deques that concatenate in constant time.",
+      "body": [
+        "The classic functional queue keeps two lists: the front in order and the rear reversed, so adding at the back and removing from the front are both a cons. When the front runs out, the rear is reversed into a new front. Used once, that costs O(1) per operation on average, but if a program pops the same old version repeatedly it reverses the same rear each time. Okasaki’s banker’s queue uses lazy lists and rotates as soon as the rear is longer than the front, so the rotation is a memoized suspension that later versions share. Okasaki’s real-time queue goes further: each operation forces a little of the pending work, which makes every operation O(1) in the worst case.",
+        "Double-ended queues and concatenation are harder. Kaplan and Tarjan (1999) gave a purely functional deque with worst-case O(1) push, pop, inject, eject and catenation and no laziness at all, beating an earlier O(log* k) bound. Kaplan, Okasaki and Tarjan (2000) traded that for something much simpler: catenable deques with O(1) amortized operations that are purely functional if memoization is allowed. In 2003 Mihaescu and Tarjan described a simpler constant-time design in Princeton course notes, written for pure Lisp without lazy evaluation.",
+        "Pick a two-list queue when versions are not reused, a banker’s or real-time queue when they are, and a finger tree (Haskell’s `Data.Sequence`) when you also need indexing or splitting. Scala’s immutable `Queue` documents its `enqueue` and `dequeue` as constant time."
+      ],
+      "sources": [
+        { "label": "Chris Okasaki: Purely Functional Data Structures (PhD thesis, CMU-CS-96-177, 1996), sections 3.1 to 4.2", "url": "https://www.cs.cmu.edu/~rwh/students/okasaki.pdf" },
+        { "label": "Kaplan and Tarjan: Purely Functional, Real-Time Deques with Catenation (JACM 46(5), 1999)", "url": "http://www.math.tau.ac.il/~haimk/adv-ds-2000/jacm-final.pdf" },
+        { "label": "Kaplan, Okasaki and Tarjan: Simple Confluently Persistent Catenable Lists (SIAM J. Computing 30(3), 2000), abstract", "url": "https://collaborate.princeton.edu/en/publications/simple-confluently-persistent-catenable-lists/" },
+        { "label": "Princeton COS 528: Notes on Catenable Deques in Pure LISP (Mihaescu and Tarjan, 2003)", "url": "http://www.cs.princeton.edu/courses/archive/fall03/cs528/handouts/Notes%20on%20Catenable%20Deques.doc" },
+        { "label": "Scala documentation: Concrete Immutable Collection Classes (Queue, Vector, hash tries)", "url": "https://docs.scala-lang.org/overviews/collections-2.13/concrete-immutable-collection-classes.html" }
+      ]
+    },
+    {
+      "id": "functional-heaps",
+      "name": "Priority queues",
+      "summary": "Heaps built from trees instead of arrays, where merging two heaps is the core operation and every version stays valid.",
+      "body": [
+        "Array-backed binary heaps rely on overwriting slots, so functional heaps are trees, and their key operation is merge: insert merges in a one-element heap, and delete-min merges the root’s children. Okasaki’s book presents leftist heaps first, as simple in either setting. Binomial heaps mirror binary numbers, one tree per 1 bit; Okasaki’s skew binomial heaps make insert O(1) in the worst case. Brodal and Okasaki (1996) went all the way: `findMin`, `insert` and `meld` in O(1) and `deleteMin` in O(log n), all worst case, derived from binomial queues in three steps (no cascading links, a global root for the minimum, and heaps that contain heaps).",
+        "Simpler options trade guarantees for code you can write from memory. Pairing heaps (Fredman, Sedgewick, Sleator and Tarjan, 1986) are a root plus a list of sub-heaps, with O(1) find-min, meld and insert and O(log n) amortized delete-min. Okasaki’s maxiphobic heaps (2005), proposed for teaching, compare subtree sizes instead: when merging, the two smaller of the three leftover subtrees are merged first, so each step works on at most two thirds of the elements and merge stays O(log n).",
+        "A priority search queue (Hinze, 2001) is both a map and a priority queue: find the binding for a key in O(log n) and read the binding with the smallest priority in O(1). Hinze uses it for a simple, purely functional version of Dijkstra’s shortest-path algorithm."
+      ],
+      "sources": [
+        { "label": "Chris Okasaki: Purely Functional Data Structures (Cambridge University Press, 1998), chapter 3 summary (leftist heaps, binomial queues, red-black trees)", "url": "https://www.cambridge.org/core/books/purely-functional-data-structures/some-familiar-data-structures-in-a-functional-setting/079AE6D76DB1F9BB0071B45067BF70FA" },
+        { "label": "Chris Okasaki: Purely Functional Data Structures (PhD thesis, 1996), sections 6.2.2 and 6.4.2 (binomial and skew binomial heaps)", "url": "https://www.cs.cmu.edu/~rwh/students/okasaki.pdf" },
+        { "label": "Brodal and Okasaki: Optimal purely functional priority queues (JFP 6(6), November 1996), abstract", "url": "https://doi.org/10.1017/S095679680000201X" },
+        { "label": "Wikipedia: Pairing heap", "url": "https://en.wikipedia.org/wiki/Pairing_heap" },
+        { "label": "Chris Okasaki: Alternatives to two classic data structures (SIGCSE 2005), abstract", "url": "https://athena.westpoint.edu/items/900bf23e-63a4-4bfd-924f-65775dba8018" },
+        { "label": "Gerth Stølting Brodal: Self-adjusting data structures, lecture slides (maxiphobic heaps, max size ⅔n)", "url": "https://cs.au.dk/~gerth/aa11/slides/selfadjusting.pdf" },
+        { "label": "Ralf Hinze: A Simple Implementation Technique for Priority Search Queues (ICFP 2001)", "url": "https://www.cs.ox.ac.uk/people/Ralf.Hinze/publications/ICFP01.pdf" }
+      ]
+    },
+    {
+      "id": "functional-search-trees",
+      "name": "Balanced search trees",
+      "summary": "Sorted maps and sets as balanced binary trees, where an update copies the path from the root to the change and shares everything else.",
+      "body": [
+        "Any balanced search tree becomes persistent by path copying: an insert or delete copies the O(log n) nodes on its search path and leaves the rest shared, a method found independently by Myers, by Krijnen and Meertens, by Reps, Teitelbaum and Demers, and by Swart. Red-black trees are the usual choice. Okasaki’s 1999 functional pearl showed an insertion “any competent programmer should be able to implement in fifteen minutes or less”, with every rebalancing case handled by one small `balance` function.",
+        "Deletion was the missing piece: Okasaki’s book left it as an exercise, and Stefan Kahrs’s widely copied version enforces the invariants with types and is hard to transliterate. In 2010 Matt Might published a simpler delete that temporarily allows two extra colours, double black and negative black, and splits the work into remove, bubble and balance; an algorithm inspired by it was later published in the Journal of Functional Programming as “Deletion: The curse of the red-black tree”.",
+        "Haskell’s `Data.Map` uses weight-balanced trees instead (Adams 1993, after Nievergelt and Reingold’s trees of bounded balance), which keep a size in every node; Scala’s `TreeMap` and `TreeSet` are red-black trees. Choose these over a hash trie when you need ordered iteration, ranges or the smallest key."
+      ],
+      "sources": [
+        { "label": "Driscoll, Sarnak, Sleator and Tarjan: Making Data Structures Persistent (JCSS 38(1), 1989), section 4 on path copying", "url": "https://www.cs.cmu.edu/~sleator/papers/making-data-structures-persistent.pdf" },
+        { "label": "Chris Okasaki: Red-black trees in a functional setting (JFP 9(4), 1999), abstract", "url": "https://doi.org/10.1017/S0956796899003494" },
+        { "label": "Matt Might: The missing method: Deleting from Okasaki’s red-black trees (2010)", "url": "https://matt.might.net/articles/red-black-delete/" },
+        { "label": "Haskell containers: Data.Map.Strict, Implementation (size balanced trees)", "url": "https://hackage.haskell.org/package/containers/docs/Data-Map-Strict.html" },
+        { "label": "Scala documentation: Concrete Immutable Collection Classes (red-black trees)", "url": "https://docs.scala-lang.org/overviews/collections-2.13/concrete-immutable-collection-classes.html" }
+      ]
+    },
+    {
+      "id": "finger-trees",
+      "name": "Finger trees",
+      "summary": "A general-purpose persistent sequence with cheap access at both ends and logarithmic concatenation and splitting, which also works as a priority queue or search tree.",
+      "body": [
+        "Ralf Hinze and Ross Paterson’s 2-3 finger trees (2006) keep one to four elements in a “digit” at each end, called fingers, and a deeper finger tree of 2-3 nodes in the middle. Adding or removing at either end takes amortized O(1) time, and concatenating or splitting takes time logarithmic in the size of the smaller piece. They grew out of the implicit deques in Okasaki’s book: replacing pairs with 2-3 nodes makes concatenation efficient.",
+        "The general part is the measurement. Each internal node caches a value from a monoid: the size of its subtree gives an indexed sequence, the maximum priority gives a priority queue, the largest key gives an ordered sequence, so one split function serves all of them. Earlier structures by Kaplan and Tarjan reach the same bounds, some in the worst case, but are much more complex.",
+        "Haskell’s `Data.Sequence` is a size-annotated finger tree: O(1) at both ends, O(log n) concatenation, splitting and indexing, with bounds that hold even when sequences are shared. It is slower than a list when you only need a stack, and its memory use is high: Stucki and colleagues measured finger trees an order of magnitude larger than RRB vectors."
+      ],
+      "sources": [
+        { "label": "Hinze and Paterson: Finger trees: a simple general-purpose data structure (JFP 16(2), 2006), summary page", "url": "https://www.staff.city.ac.uk/~ross/papers/FingerTree.html" },
+        { "label": "Haskell containers: Data.Sequence (performance and implementation notes)", "url": "https://hackage.haskell.org/package/containers/docs/Data-Sequence.html" },
+        { "label": "Stucki, Rompf, Ureche and Bagwell: RRB Vector: A Practical General Purpose Immutable Sequence (ICFP 2015)", "url": "https://www.cs.purdue.edu/homes/rompf/papers/stucki-icfp15.pdf" }
+      ]
+    },
+    {
+      "id": "hamts",
+      "name": "Hash array mapped tries",
+      "summary": "Hash maps and sets stored as a 32-way tree indexed by the bits of each key’s hash, so an update copies only a few small nodes.",
+      "body": [
+        "Phil Bagwell’s hash array mapped trie (2001) treats a key’s hash as a path: the first 5 bits pick one of 32 children at the root, the next 5 bits one of 32 at the next level, and so on until the key is the only one on its branch. Each node stores a 32-bit bitmap of which children exist plus a packed array of just those children, found by counting the set bits below the target (a single CPU `popcount`). Empty slots cost one bit each, and there is no root table to size or resize. Bagwell’s paper presents it as a fast, space-efficient hash table; making it persistent came later.",
+        "Rich Hickey turned it into the persistent hash map at the heart of Clojure (released 2007): a 32-way HAMT where an update copies the nodes on one path, so lookups take about log₃₂ n hops. Hickey called it the breakthrough that made Clojure practical, and Hickey’s paper credits Clojure’s example for persistent HAMTs in Scala 2.8 (2010), Haskell’s `unordered-containers` (2011) and Erlang’s large maps (2015). Scala 2.13 uses a refined variant, the compressed hash-array mapped prefix-tree (CHAMP), which improves locality and keeps one canonical shape per set of keys.",
+        "Use a HAMT for unordered maps and sets with lots of updates and shared versions. Implementations specialise small maps: Scala stores maps of up to four entries as single objects, and Immutable.js keeps maps of up to eight entries as a flat array before switching to trie nodes. If you need sorted keys, use a balanced search tree instead."
+      ],
+      "sources": [
+        { "label": "Phil Bagwell: Ideal Hash Trees (EPFL, 2001)", "url": "https://lampwww.epfl.ch/papers/idealhashtrees.pdf" },
+        { "label": "Rich Hickey: A History of Clojure (HOPL IV, 2020), section 3.4.1", "url": "https://download.clojure.org/papers/clojure-hopl-iv-final.pdf", "archive": "https://web.archive.org/web/20211227185750/https://download.clojure.org/papers/clojure-hopl-iv-final.pdf" },
+        { "label": "Clojure reference: Data Structures (maps and vectors in log32N hops)", "url": "https://clojure.org/reference/data_structures" },
+        { "label": "Scala documentation: Concrete Immutable Collection Classes (Compressed Hash-Array Mapped Prefix-trees)", "url": "https://docs.scala-lang.org/overviews/collections-2.13/concrete-immutable-collection-classes.html" },
+        { "label": "Immutable.js source: src/Map.js (ArrayMapNode, BitmapIndexedNode, HashArrayMapNode)", "url": "https://github.com/immutable-js/immutable-js/blob/main/src/Map.js" }
+      ]
+    },
+    {
+      "id": "rrb-vectors",
+      "name": "RRB vectors",
+      "summary": "Immutable vectors built as wide trees whose nodes may be slightly underfull, so they concatenate, slice and insert in the middle in O(log n) while indexing stays nearly as fast as a plain radix tree.",
+      "body": [
+        "Clojure’s and Scala’s vectors are radix-balanced trees: every node has exactly 32 slots, so the index itself spells the path, 5 bits per level, and a vector indexed by 32-bit integers is at most 7 levels deep. That makes lookup and update effectively constant, but concatenating two vectors means rebuilding one of them. Phil Bagwell and Tiark Rompf’s relaxed radix-balanced trees (RRB-Trees, EPFL report 2011) allow nodes that are not completely full. An unbalanced node stores the cumulative sizes of its children, so lookup does a short search there and falls back to plain radix indexing in balanced subtrees. Concatenation merges the touching edges of the two trees and rebalances them, which keeps the height logarithmic and makes concatenation, insert-at and split O(log n).",
+        "Nicolas Stucki, Rompf, Vlad Ureche and Bagwell turned this into a practical Scala collection (ICFP 2015). Each vector caches one focused branch from the root to a leaf, which makes appends at either end, updates and deletions amortized constant time when they happen near each other. In their benchmarks memory use was on par with arrays and an order of magnitude below red-black and finger trees, sequential reads were at most 2 times slower than an array and random access 2 to 3.5 times slower. Bagwell died on 6 October 2012, before the paper appeared.",
+        "Pick an RRB vector as a default immutable sequence when you also need to join, split or insert in the middle, for example to split work across threads and join the results. Rust’s `im` crate has used one for `Vector` since 2018, and Juan Pedro Bolívar Puente’s C++ library `immer` offers one as `flex_vector`, described in Bolívar Puente’s ICFP 2017 paper."
+      ],
+      "sources": [
+        { "label": "Bagwell and Rompf: RRB-Trees: Efficient Immutable Vectors (EPFL technical report, 2011), Infoscience record and abstract", "url": "https://infoscience.epfl.ch/record/169879" },
+        { "label": "Stucki, Rompf, Ureche and Bagwell: RRB Vector: A Practical General Purpose Immutable Sequence (ICFP 2015)", "url": "https://www.cs.purdue.edu/homes/rompf/papers/stucki-icfp15.pdf" },
+        { "label": "im crate changelog: 11.0.0 (July 2018), RRB Vector", "url": "https://github.com/bodil/im-rs/blob/master/CHANGELOG.md" },
+        { "label": "Juan Pedro Bolívar Puente: Persistence for the Masses: RRB-Vectors in a Systems Language (ICFP 2017)", "url": "https://public.sinusoid.es/misc/immer/immer-icfp17.pdf" }
+      ]
+    },
+    {
+      "id": "zippers",
+      "name": "Zippers",
+      "summary": "A tree or list held by a cursor: the focused subtree plus the path back to the root, turned inside out so edits at the cursor are cheap and purely functional.",
+      "body": [
+        "Updating one spot deep in a tree normally means copying its whole path from the root. That is fine once, but too slow when a program keeps editing the same area, like the buffer of a text editor. Gérard Huet’s zipper (1997) holds the tree by its current position instead of its root. A location is the focused subtree plus a path: the siblings to its left, the siblings to its right, and the parent’s path, with pointers from the root to the cursor reversed, “like a returned glove”.",
+        "Moving left, right or down and replacing, inserting or deleting at the cursor take constant time; moving up costs time proportional to the number of siblings to the left, because it rebuilds the parent node. Huet coined it for the structure editor of a proof assistant and wrote that the idea had probably been invented many times but never published. It works for any tree shape and in any language, functional or not, lazy or not.",
+        "Use a zipper for editors, tree walks that change nodes as they go, and anything with a cursor. Clojure ships one in the standard library as `clojure.zip`."
+      ],
+      "sources": [
+        { "label": "Gérard Huet: Functional Pearl: The Zipper (JFP 7(5), September 1997)", "url": "https://doi.org/10.1017/S0956796897002864" },
+        { "label": "Clojure API: clojure.zip (functional hierarchical zipper, see Huet)", "url": "https://clojure.github.io/clojure/clojure.zip-api.html" }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Persistence was studied first as an algorithms problem. Driscoll, Sarnak, Sleator and Tarjan presented “Making Data Structures Persistent” in 1986 (journal version 1989), naming ephemeral, partially and fully persistent structures and giving general methods for linked structures with O(1) amortized space per update step. They noted the simpler rival, found independently by several researchers: copy the whole access path on each update, at O(log n) space per change. In functional languages that path copying happens by itself, because nothing is ever overwritten.",
+      "What functional programmers lacked was a toolbox. In 1996 Chris Okasaki’s thesis at Carnegie Mellon observed that most textbook data structures depend on assignment, and that amortized structures break when old versions are reused. Okasaki showed that lazy evaluation with memoization reconciles amortization with persistence, and published numerous new structures; the 1998 book with Standard ML and Haskell code became the field’s reference. Kaplan and Tarjan meanwhile solved catenable deques in worst-case O(1) time without laziness.",
+      "The ideas reached mainstream programmers through engineering rather than theory. Rich Hickey found Okasaki’s structures too slow for Clojure and their amortized costs hard to explain, so in 2006–07 Hickey built persistent 32-way trees on Phil Bagwell’s hash array mapped tries and shipped them as Clojure’s default collections. Scala, Haskell and Erlang adopted persistent HAMTs, Facebook’s Immutable.js (2014) brought them to JavaScript and React apps, and Bagwell and Rompf’s RRB-Trees added fast concatenation to the same vectors."
+    ],
+    "choices": [
+      { "choice": "Copy the path, share the rest", "why": "Copying the whole structure on every change costs O(n). Copying only the nodes on the path to the change costs O(log n) in a balanced tree, and the copies can point at the untouched subtrees because those will never change." },
+      { "choice": "Pay for expensive work with laziness, not saved credits", "why": "Classic amortization banks savings that only one future can spend; with persistence, many futures compete for them. A memoized suspension can be shared by every version that needs it, so Okasaki accounted for debt instead of savings." },
+      { "choice": "Wide 32-way nodes instead of binary trees", "why": "Bagwell’s tries and Hickey’s vectors branch 32 ways, so trees are only a few levels deep and each lookup touches a handful of compact arrays. Hickey found the result performed more like O(1) than its O(log n) bound." },
+      { "choice": "An immutable interface, not necessarily a pure implementation", "why": "Hickey wrote that it mattered only that consumers saw immutable, persistent values; Hickey’s nodes are built with mutation and never changed afterwards. Conchon and Filliâtre’s persistent union-find likewise hides side effects behind a persistent interface." }
+    ],
+    "timeline": [
+      { "year": "1986", "text": "Driscoll, Sarnak, Sleator and Tarjan present “Making Data Structures Persistent”" },
+      { "year": "1996", "text": "Okasaki’s thesis reconciles amortization and persistence with lazy evaluation" },
+      { "year": "1999", "text": "Kaplan and Tarjan publish deques with worst-case O(1) catenation" },
+      { "year": "2001", "text": "Bagwell publishes “Ideal Hash Trees”" },
+      { "year": "2006", "text": "Hinze and Paterson publish finger trees" },
+      { "year": "2007", "text": "Clojure ships persistent hash maps and vectors as its default collections" },
+      { "year": "2015", "text": "Stucki and colleagues present the RRB vector at ICFP" }
+    ],
+    "sources": [
+      { "label": "Driscoll, Sarnak, Sleator and Tarjan: Making Data Structures Persistent (JCSS 38(1), 1989; STOC 1986)", "url": "https://www.cs.cmu.edu/~sleator/papers/making-data-structures-persistent.pdf" },
+      { "label": "Chris Okasaki: Purely Functional Data Structures (PhD thesis, CMU-CS-96-177, 1996)", "url": "https://www.cs.cmu.edu/~rwh/students/okasaki.pdf" },
+      { "label": "Cambridge University Press: Purely Functional Data Structures (Okasaki, 1998), book description", "url": "https://www.cambridge.org/core/books/purely-functional-data-structures/0409255DA1B48FA731859AC72E34D494" },
+      { "label": "Kaplan and Tarjan: Purely Functional, Real-Time Deques with Catenation (JACM 46(5), 1999)", "url": "http://www.math.tau.ac.il/~haimk/adv-ds-2000/jacm-final.pdf" },
+      { "label": "Phil Bagwell: Ideal Hash Trees (EPFL, 2001)", "url": "https://lampwww.epfl.ch/papers/idealhashtrees.pdf" },
+      { "label": "Rich Hickey: A History of Clojure (HOPL IV, 2020), section 3.4.1", "url": "https://download.clojure.org/papers/clojure-hopl-iv-final.pdf", "archive": "https://web.archive.org/web/20211227185750/https://download.clojure.org/papers/clojure-hopl-iv-final.pdf" },
+      { "label": "Hinze and Paterson: Finger trees: a simple general-purpose data structure (JFP, 2006)", "url": "https://www.staff.city.ac.uk/~ross/papers/FingerTree.html" },
+      { "label": "Conchon and Filliâtre: A Persistent Union-Find Data Structure (ML Workshop 2007)", "url": "https://usr.lmf.cnrs.fr/~jcf/publis/puf-wml07.pdf" },
+      { "label": "Immutable.js: first commit by Lee Byron (May 2014)", "url": "https://github.com/immutable-js/immutable-js/commit/b82b6191fb18395d22ff516adf06a61124ffe6d6" },
+      { "label": "Stucki, Rompf, Ureche and Bagwell: RRB Vector: A Practical General Purpose Immutable Sequence (ICFP 2015)", "url": "https://www.cs.purdue.edu/homes/rompf/papers/stucki-icfp15.pdf" }
+    ]
+  },
+  "sources": [
+    { "label": "Driscoll, Sarnak, Sleator and Tarjan: Making Data Structures Persistent (JCSS 38(1), 1989)", "url": "https://www.cs.cmu.edu/~sleator/papers/making-data-structures-persistent.pdf" },
+    { "label": "Chris Okasaki: Purely Functional Data Structures (PhD thesis, CMU-CS-96-177, 1996), chapters 1, 3 and 4", "url": "https://www.cs.cmu.edu/~rwh/students/okasaki.pdf" },
+    { "label": "cstheory.stackexchange: What’s new in purely functional data structures since Okasaki? (reading list)", "url": "https://cstheory.stackexchange.com/questions/1539/whats-new-in-purely-functional-data-structures-since-okasaki" },
+    { "label": "Scala documentation: Concrete Immutable Collection Classes (vectors copy one to five 32-way nodes per update)", "url": "https://docs.scala-lang.org/overviews/collections-2.13/concrete-immutable-collection-classes.html" },
+    { "label": "Stucki, Rompf, Ureche and Bagwell: RRB Vector: A Practical General Purpose Immutable Sequence (ICFP 2015)", "url": "https://www.cs.purdue.edu/homes/rompf/papers/stucki-icfp15.pdf" },
+    { "label": "im crate documentation 15.1.0 (structural sharing, when cloning happens, Vec versus Vector)", "url": "https://docs.rs/im/15.1.0/im/" },
+    { "label": "React docs: Tutorial: Tic-Tac-Toe, “Why immutability is important”", "url": "https://react.dev/learn/tutorial-tic-tac-toe" },
+    { "label": "React docs: memo (props compared with Object.is)", "url": "https://react.dev/reference/react/memo" },
+    { "label": "Immutable.js README (value equality and reference checks)", "url": "https://github.com/immutable-js/immutable-js/blob/main/README.md" },
+    { "label": "Demaine, Langerman and Price: Confluently Persistent Tries for Efficient Version Control (Algorithmica 57(3), 2010; SWAT 2008)", "url": "https://erikdemaine.org/papers/ConfluentTries_Algorithmica/" },
+    { "label": "Ralf Hinze: A Simple Implementation Technique for Priority Search Queues (ICFP 2001)", "url": "https://www.cs.ox.ac.uk/people/Ralf.Hinze/publications/ICFP01.pdf" },
+    { "label": "Princeton COS 528: Notes on Catenable Deques in Pure LISP (Mihaescu and Tarjan, 2003)", "url": "http://www.cs.princeton.edu/courses/archive/fall03/cs528/handouts/Notes%20on%20Catenable%20Deques.doc" },
+    { "label": "Kaplan and Tarjan: Purely Functional, Real-Time Deques with Catenation (JACM 46(5), 1999)", "url": "http://www.math.tau.ac.il/~haimk/adv-ds-2000/jacm-final.pdf" },
+    { "label": "Chris Okasaki: Alternatives to two classic data structures (SIGCSE 2005), abstract", "url": "https://athena.westpoint.edu/items/900bf23e-63a4-4bfd-924f-65775dba8018" },
+    { "label": "Gerth Stølting Brodal: Self-adjusting data structures, lecture slides (maxiphobic heaps)", "url": "https://cs.au.dk/~gerth/aa11/slides/selfadjusting.pdf" },
+    { "label": "Brodal and Okasaki: Optimal purely functional priority queues (JFP 6(6), 1996), abstract", "url": "https://doi.org/10.1017/S095679680000201X" },
+    { "label": "Hinze and Paterson: Finger trees: a simple general-purpose data structure (JFP 16(2), 2006)", "url": "https://www.staff.city.ac.uk/~ross/papers/FingerTree.html" },
+    { "label": "Brodal, Makris and Tsichlas: Purely Functional Worst Case Constant Time Catenable Sorted Lists (ESA 2006)", "url": "https://cs.au.dk/~gerth/papers/esa06trees.pdf" },
+    { "label": "Conchon and Filliâtre: A Persistent Union-Find Data Structure (ML Workshop 2007)", "url": "https://usr.lmf.cnrs.fr/~jcf/publis/puf-wml07.pdf" },
+    { "label": "Matt Might: The missing method: Deleting from Okasaki’s red-black trees (2010)", "url": "https://matt.might.net/articles/red-black-delete/" },
+    { "label": "Bagwell and Rompf: RRB-Trees: Efficient Immutable Vectors (EPFL technical report, 2011)", "url": "https://infoscience.epfl.ch/record/169879" },
+    { "label": "Phil Bagwell: Ideal Hash Trees (EPFL, 2001)", "url": "https://lampwww.epfl.ch/papers/idealhashtrees.pdf" },
+    { "label": "Rich Hickey: A History of Clojure (HOPL IV, 2020), section 3.4.1", "url": "https://download.clojure.org/papers/clojure-hopl-iv-final.pdf", "archive": "https://web.archive.org/web/20211227185750/https://download.clojure.org/papers/clojure-hopl-iv-final.pdf" },
+    { "label": "Juan Pedro Bolívar Puente: Persistence for the Masses: RRB-Vectors in a Systems Language (ICFP 2017)", "url": "https://public.sinusoid.es/misc/immer/immer-icfp17.pdf" },
+    { "label": "Gérard Huet: Functional Pearl: The Zipper (JFP 7(5), 1997)", "url": "https://doi.org/10.1017/S0956796897002864" },
+    { "label": "Haskell containers: Data.Sequence and Data.Map documentation", "url": "https://hackage.haskell.org/package/containers/docs/Data-Sequence.html" },
+    { "label": "Clojure API: clojure.zip", "url": "https://clojure.github.io/clojure/clojure.zip-api.html" }
+  ]
+}

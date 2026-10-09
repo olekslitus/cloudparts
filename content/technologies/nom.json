@@ -1,0 +1,115 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "nom",
+  "concepts": ["binary-parsing"],
+  "kinds": ["parser-combinators"],
+  "provider": "oss",
+  "vendor": "Open-source project created by Geoffroy Couprie, now in the rust-bakery organisation",
+  "license": "MIT",
+  "website": "https://docs.rs/nom/latest/nom/",
+  "repo": "https://github.com/rust-bakery/nom",
+  "summary": "A Rust parser combinator library, built for binary formats first, whose parsers return slices of their input instead of copying it and can ask for more data when input arrives in pieces.",
+  "intro": [
+    "In nom a parser is a function that takes input and returns `IResult`: either the remaining input plus the value it parsed, or an error. Small parsers come built in, such as `tag(\"SN\")` to match literal bytes, `take(4)`, `be_u16` and `le_u32` for integers in either byte order, and a `bits` module that treats bytes as a bit stream. Combinators build bigger parsers from them: `pair` and tuples run parsers in sequence, `alt` tries alternatives, `many0` repeats, `length_count` reads a count and then that many items, and `map_res` converts the result. Since nom 8 (January 2025), combinators are applied through the `Parser` trait, written `combinator(arg).parse(input)`.",
+    "Input can be `&[u8]`, `&str` or bits, and when a parser returns part of its input it returns a slice of it rather than a copy. Each basic parser comes in a `complete` version, for input that is all in memory, and a `streaming` version that returns `Incomplete` with how many more bytes it needs, so a network service can wait for the next packet instead of failing. nom works without the standard library, with or without an allocator. Its README lists parsers built on it for TLS, X.509, DER, Kerberos, SNMP, pcap, Matroska, tar, gzip, SQL and more."
+  ],
+  "strengths": [
+    "Zero-copy: parsers hand back slices of the input, so a header parser can return the payload without copying it",
+    "Streaming built in: `Incomplete` tells the caller how much more data is needed, and the same parser works on whole or chunked input",
+    "One set of combinators for bytes, bits and text, so it fits binary protocols and text formats such as configuration files alike",
+    "Parsers are small functions that can be unit-tested alone; the README says fuzzing has so far found flaws only in code written outside nom"
+  ],
+  "limits": [
+    "Reads only: there is no matching serializer, so writing the format back out is separate code",
+    "Three major rewrites of the API: functions replaced macros in 5.0 (2019), macros were removed in 7.0 (2021) and 8.0 (2025) moved to the `Parser` trait, so older tutorials don’t compile",
+    "You choose `streaming` or `complete` for each basic parser; a streaming parser at the end of a whole file reports `Incomplete` rather than an error",
+    "Generic signatures can need hand-written type annotations, for example the error type when switching into bit-level parsing"
+  ],
+  "worksWith": [
+    { "id": "rust", "how": "parses binary and text formats in" }
+  ],
+  "snippet": {
+    "lang": "rust",
+    "title": "A sensor packet with 4-bit fields and a counted array, parsed from complete and partial input",
+    "source": [
+      "use nom::{",
+      "    bits::{bits, streaming::take},",
+      "    bytes::streaming::tag,",
+      "    error::Error,",
+      "    multi::length_count,",
+      "    number::streaming::{be_i16, be_u16, u8},",
+      "    IResult, Parser,",
+      "};",
+      "",
+      "#[derive(Debug)]",
+      "struct Reading {",
+      "    version: u8,",
+      "    flags: u8,",
+      "    sensor_id: u16,",
+      "    temps: Vec<i16>, // hundredths of a degree",
+      "}",
+      "",
+      "// one byte split into two 4-bit fields",
+      "fn nibbles(input: &[u8]) -> IResult<&[u8], (u8, u8)> {",
+      "    bits::<_, _, Error<(&[u8], usize)>, _, _>((take(4usize), take(4usize))).parse(input)",
+      "}",
+      "",
+      "// \"SN\" | version: 4 bits | flags: 4 bits | sensor id: u16 | count: u8 | count × i16",
+      "fn reading(input: &[u8]) -> IResult<&[u8], Reading> {",
+      "    let (input, _) = tag(&b\"SN\"[..]).parse(input)?;",
+      "    let (input, (version, flags)) = nibbles(input)?;",
+      "    let (input, sensor_id) = be_u16(input)?;",
+      "    let (input, temps) = length_count(u8, be_i16).parse(input)?;",
+      "    Ok((input, Reading { version, flags, sensor_id, temps }))",
+      "}",
+      "",
+      "fn main() {",
+      "    let bytes = [b'S', b'N', 0x12, 0x00, 0x07, 0x02, 0x08, 0x34, 0xFF, 0x9C, 0xAA];",
+      "    println!(\"{:?}\", reading(&bytes));",
+      "    // Ok(([170], Reading { version: 1, flags: 2, sensor_id: 7, temps: [2100, -100] }))",
+      "",
+      "    // the second reading hasn't arrived yet: nom asks for more instead of failing",
+      "    println!(\"{:?}\", reading(&bytes[..8]));",
+      "    // Err(Incomplete(Size(2)))",
+      "",
+      "    println!(\"{:?}\", reading(b\"XX\\x12\"));",
+      "    // Err(Error(Error { input: [88, 88, 18], code: Tag }))",
+      "}"
+    ]
+  },
+  "history": {
+    "story": [
+      "Geoffroy Couprie wrote nom to parse binary formats in Rust as fast as the usual hand-written C parsers but without their buffer overflows. Couprie published it in early 2015, months before Rust itself reached 1.0, and nom’s own stable 1.0 followed that November. Its first parsers were written with Rust macros such as `named!` and `do_parse!`, which generated the code that consumed input safely.",
+      "In 2017 Couprie and Pierre Chifflier of France’s national cybersecurity agency, ANSSI, presented “Writing parsers like it is 2017” at the IEEE Security & Privacy workshops. They argued for fixing whole classes of parsing bugs by writing parsers in a memory-safe language with combinators, and showed nom parsers running inside C programs: an FLV demuxer for VLC and a TLS parser for the Suricata intrusion detection system.",
+      "Later versions changed how parsers are written while keeping the model. Version 5 (2019) rebuilt nom on plain functions, version 7 (2021) removed the original macros, and version 8 (2025) moved combinators onto a trait to shrink the generated code and the API, moving tools for programming-language parsing into a separate `nom-language` crate."
+    ],
+    "choices": [
+      { "choice": "Return slices, never copies", "why": "Rust’s compiler tracks which code owns which memory, and a slice carries a pointer and a length, so a parser can return parts of its input safely without copying them." },
+      { "choice": "Don’t own the input", "why": "Because nom parsers only borrow the data, a host program in C can keep its own buffers and call into Rust, as the VLC and Suricata integrations did." },
+      { "choice": "Say “need more data” instead of guessing", "why": "Network formats and huge files arrive in parts; nom reports `Incomplete` rather than returning a wrong result, so the outcome is the same whether data comes whole or in chunks." },
+      { "choice": "From macros to functions to traits", "why": "Macros came first; functions in 5.0 made parsers ordinary Rust, and traits in 8.0 cut the amount of code each parser generates." }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "First releases in early 2015; 1.0 in November" },
+      { "year": "2017", "text": "“Writing parsers like it is 2017” puts nom parsers into VLC and Suricata" },
+      { "year": "2019", "text": "5.0 rebuilds nom on functions instead of macros" },
+      { "year": "2021", "text": "7.0 removes the original macro combinators" },
+      { "year": "2025", "text": "8.0 moves to the `Parser` trait and splits out `nom-language`" }
+    ],
+    "sources": [
+      { "label": "nom CHANGELOG (0.1.1 in 2015 to 8.0.0 in 2025)", "url": "https://github.com/rust-bakery/nom/blob/main/CHANGELOG.md" },
+      { "label": "Chifflier and Couprie: Writing parsers like it is 2017 (IEEE S&P Workshops 2017)", "url": "http://spw17.langsec.org/papers/chifflier-parsing-in-2017.pdf" },
+      { "label": "nom README (designed for binary formats from the beginning)", "url": "https://github.com/rust-bakery/nom" },
+      { "label": "GitHub: Geal (Geoffroy Couprie)", "url": "https://github.com/Geal" },
+      { "label": "Rust Blog: Announcing Rust 1.0 (May 15, 2015)", "url": "https://blog.rust-lang.org/2015/05/15/Rust-1.0/" },
+      { "label": "crates.io API: nom versions and release dates", "url": "https://crates.io/api/v1/crates/nom" }
+    ]
+  },
+  "sources": [
+    { "label": "nom README (combinators, technical features, streaming, MSRV, parsers written with nom)", "url": "https://github.com/rust-bakery/nom" },
+    { "label": "nom docs on docs.rs", "url": "https://docs.rs/nom/latest/nom/" },
+    { "label": "nom CHANGELOG (5.0 functions, 7.0 macros removed, 8.0 Parser trait)", "url": "https://github.com/rust-bakery/nom/blob/main/CHANGELOG.md" },
+    { "label": "Chifflier and Couprie: Writing parsers like it is 2017", "url": "http://spw17.langsec.org/papers/chifflier-parsing-in-2017.pdf" }
+  ],
+  "checked": "2026-10-09"
+}
