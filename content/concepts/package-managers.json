@@ -1,0 +1,122 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Package managers",
+  "category": "tools",
+  "order": 30,
+  "summary": "Tools that choose versions for a project’s dependencies, record the exact choice in a lockfile and install that same set on every machine.",
+  "howItWorks": "A project lists what it needs in a manifest (`pyproject.toml`, `package.json`, `Cargo.toml`), usually as ranges: `pydantic>=2.14`, or Cargo’s `\"0.1.12\"`, which means `>=0.1.12, <0.2.0`. Each of those packages has its own ranges, so the package manager runs a resolver: it searches for one set of versions that satisfies every constraint at once, backing up when a choice leads to a conflict. In the worst case that search is NP-complete, which is why resolvers borrow tricks from SAT solvers (PubGrub, used by Dart’s pub and by uv) or avoid the search by design (Go’s minimal version selection). The answer goes into a lockfile (`uv.lock`, `package-lock.json`, `Cargo.lock`, `poetry.lock`) with the exact version of every package, direct and transitive, and usually its download URL and a hash of the file. Installs then read the lockfile instead of resolving again, so a laptop, CI and production get identical trees. The last job is isolation. pip and uv install a single version of each package into an environment, so each Python project gets its own virtual environment: a directory with its own `site-packages` on top of a shared interpreter. npm sidesteps the one-version rule by nesting a second copy inside `node_modules` when two packages need different versions; Cargo can link two semver-incompatible versions of a crate into one binary.",
+  "analogy": "A recipe says “500 g of flour, any brand”. The receipt from today’s shop says exactly which brand and which bag. Cooks who follow the recipe get whatever is on the shelf that day; cooks who follow the receipt get exactly what you used.",
+  "useWhen": [
+    "Any application with third-party dependencies: commit the lockfile so laptops, CI and production install the same versions",
+    "CI and deploys: install in locked mode (`npm ci`, `cargo build --locked`, `uv sync --locked`) so a stale lockfile fails the build instead of being quietly rewritten",
+    "Several Python projects on one machine: one virtual environment each, so they can need different versions of the same library"
+  ],
+  "avoidWhen": [
+    "Expecting a library’s lockfile to protect its users: an application that installs the library resolves its ranges again and ignores the library’s lockfile",
+    "Editing a lockfile by hand: uv, Cargo and Poetry all say it is generated and should not be changed manually",
+    "Installing a project’s dependencies into the same environment as the package manager itself; Poetry’s docs warn it can then upgrade or remove its own dependencies"
+  ],
+  "example": "A Python service declares `pydantic>=2.14` and locks it: `uv.lock` pins pydantic 2.14.0 and its four dependencies. A developer adds `httpx>=0.28` to `pyproject.toml` by hand and pushes without relocking. CI runs `uv sync --locked`, which refuses: “The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.” Running `uv lock` adds httpx 0.28.1 plus the five packages it pulls in (anyio, certifi, h11, httpcore, idna), and the next locked sync installs exactly those versions. Without the locked flag, CI would have resolved on its own and could have tested versions nobody had reviewed.",
+  "snippet": {
+    "lang": "bash",
+    "source": [
+      "uv init --bare demo && cd demo   # a pyproject.toml and nothing else",
+      "uv add 'pydantic>=2.14'          # writes the range, resolves, creates uv.lock and .venv",
+      "# Resolved 6 packages ... + pydantic==2.14.0",
+      "",
+      "grep -A1 '^name = \"pydantic\"' uv.lock",
+      "# name = \"pydantic\"",
+      "# version = \"2.14.0\"",
+      "",
+      "# now add \"httpx>=0.28\" to dependencies in pyproject.toml by hand, without relocking",
+      "uv sync --locked                 # what CI runs; npm ci and cargo build --locked act the same way",
+      "# error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.",
+      "# hint: To update the lockfile, run `uv lock`.",
+      "",
+      "uv lock                          # Added anyio, certifi, h11, httpcore, httpx v0.28.1, idna",
+      "uv sync --locked                 # installs exactly what uv.lock lists; exit code 0"
+    ]
+  },
+  "related": ["build-tools", "static-analysis", "version-control", "cicd"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "The same ideas in four ecosystems",
+      "intro": "The file names differ; the split between a hand-written manifest and a generated lockfile is the same.",
+      "corner": "Tool",
+      "columns": ["Manifest", "Lockfile", "Install exactly what’s locked", "Isolation"],
+      "rows": [
+        { "label": "Python with uv", "values": ["`pyproject.toml`", "`uv.lock` (one universal file for every OS and Python version)", "`uv sync --locked`", "A `.venv` per project"] },
+        { "label": "Python with Poetry", "values": ["`pyproject.toml`", "`poetry.lock`", "`poetry install` with the lockfile present", "A virtualenv per project, by default in Poetry’s cache"] },
+        { "label": "JavaScript with npm", "values": ["`package.json`", "`package-lock.json`", "`npm ci`", "`node_modules`, nesting a second copy when versions conflict"] },
+        { "label": "Rust with Cargo", "values": ["`Cargo.toml`", "`Cargo.lock`", "`cargo build --locked`", "Per build; two semver-incompatible versions of a crate can coexist"] }
+      ],
+      "notes": ["pip can also write the standard `pylock.toml` format (PEP 751) with `pip lock`, which was still experimental when checked."]
+    },
+    {
+      "type": "text",
+      "title": "Why resolution is hard, and how resolvers cope",
+      "body": [
+        "Picking versions sounds simple until two packages disagree. If A needs D version 1 and B needs D version 2, and only one D can be installed, there is no answer, and the resolver has to prove that and explain it. Russ Cox showed in 2016 that deciding whether any valid set exists is NP-complete by encoding 3-SAT as package versions.",
+        "Practical resolvers rely on that worst case being rare. pip has backtracked since version 20.3 (November 2020): it picks the newest version, follows its dependencies, and steps back when it hits a conflict, which can look like pip downloading many versions of one package. PubGrub, designed for Dart’s pub and reused by uv through `pubgrub-rs`, adapts conflict-driven clause learning from SAT solvers, so each conflict teaches it which combinations to skip and its error messages can explain why no solution exists.",
+        "Go took another route. Minimal version selection treats every requirement as a minimum, never a maximum, and chooses the oldest version that satisfies all of them, so no search is needed and builds use versions close to what the authors tested. Python and JavaScript ranges can have upper bounds, so their resolvers still search; uv offers `--resolution lowest` to test a library against its oldest allowed dependencies."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Early package managers installed whatever versions matched at the moment you ran them, so two installs of the same project a week apart could differ. Ruby’s Bundler made the lockfile a habit: Yehuda Katz explained in December 2010 that applications should commit `Gemfile.lock`, which pins every gem including dependencies of dependencies, while libraries should not, because their users resolve their own versions. Other ecosystems settled on the same split: Cargo tells applications to commit `Cargo.lock`, and npm 5 began writing `package-lock.json` automatically in May 2017.",
+      "Python grew the pieces separately. `venv` (Python 3.3, PEP 405) gave each project its own environment; pip installed packages but only gained a backtracking resolver in 20.3, in November 2020; pip-tools (`pip-compile`) and Poetry added lockfiles, each in its own format. A standard lockfile, `pylock.toml`, was accepted as PEP 751 in March 2025, and uv folded the resolver, installer, environments and Python itself into one tool.",
+      "Meanwhile the resolution problem itself got attention. Russ Cox proved in 2016 that version selection is NP-complete and in 2018 proposed minimal version selection for Go, which avoids the search. Dart’s pub built PubGrub to keep the search fast in practice and its failures readable."
+    ],
+    "choices": [
+      { "choice": "Ranges in the manifest, exact versions in a lockfile", "why": "Ranges let a project accept bug-fix releases and let libraries coexist; the lockfile freezes one tested answer so every machine installs the same thing until someone deliberately updates it." },
+      { "choice": "Hashes and URLs in the lockfile", "why": "With the exact file and its hash recorded, an installer can check it got the same bytes and, as PEP 751 puts it, work out what to install without resolving again." },
+      { "choice": "One environment per project", "why": "Python can import only one version of a package per environment, so isolation, not nesting, is how two projects use different versions. npm instead nests a second copy when two packages need different versions." },
+      { "choice": "Newest compatible versus minimal versions", "why": "Most resolvers prefer the newest version that fits, to pick up fixes. Go chose the oldest version that satisfies every minimum, trading freshness for builds that match what authors tested and no search at all." }
+    ],
+    "timeline": [
+      { "year": "2010", "text": "Bundler’s guidance: applications commit `Gemfile.lock`, libraries don’t" },
+      { "year": "2012", "text": "Python 3.3 ships `venv` (PEP 405)" },
+      { "year": "2016", "text": "Russ Cox proves version selection NP-complete" },
+      { "year": "2017", "text": "npm 5 writes `package-lock.json` by default" },
+      { "year": "2018", "text": "Go proposes minimal version selection" },
+      { "year": "2020", "text": "pip 20.3 ships a backtracking resolver" },
+      { "year": "2025", "text": "PEP 751 standardises `pylock.toml`; pip 25.1 adds an experimental `pip lock`" }
+    ],
+    "sources": [
+      { "label": "Yehuda Katz: Clarifying the roles of the .gemspec and Gemfile (Dec 2010)", "url": "https://yehudakatz.com/2010/12/16/clarifying-the-roles-of-the-gemspec-and-gemfile/" },
+      { "label": "PEP 405: Python virtual environments (Python 3.3)", "url": "https://peps.python.org/pep-0405/" },
+      { "label": "Russ Cox: Version SAT (Dec 2016)", "url": "https://research.swtch.com/version-sat" },
+      { "label": "npm blog: v5.0.0 (May 2017)", "url": "https://blog.npmjs.org/post/161081169345/v500" },
+      { "label": "Russ Cox: Minimal version selection (Feb 2018)", "url": "https://research.swtch.com/vgo-mvs" },
+      { "label": "pip changelog: 20.3 (2020-11-30) and 25.1 (2025-04-26)", "url": "https://pip.pypa.io/en/stable/news/" },
+      { "label": "pip docs: Dependency resolution (backtracking since 20.3)", "url": "https://pip.pypa.io/en/stable/topics/dependency-resolution/" },
+      { "label": "PEP 751: A file format to record Python dependencies for installation reproducibility (resolved March 2025)", "url": "https://peps.python.org/pep-0751/" },
+      { "label": "Dart pub: PubGrub version solving algorithm", "url": "https://github.com/dart-lang/pub/blob/master/doc/solver.md" },
+      { "label": "Astral blog: uv, unified Python packaging (Aug 2024)", "url": "https://astral.sh/blog/uv-unified-python-packaging" }
+    ]
+  },
+  "sources": [
+    { "label": "Cargo Book: Specifying dependencies (default requirements)", "url": "https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html" },
+    { "label": "Cargo Book: Cargo.toml vs Cargo.lock", "url": "https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html" },
+    { "label": "Cargo Book: Dependency resolution (multiple versions of a crate)", "url": "https://doc.rust-lang.org/cargo/reference/resolver.html" },
+    { "label": "Cargo Book: cargo build (--locked)", "url": "https://doc.rust-lang.org/cargo/commands/cargo-build.html" },
+    { "label": "npm docs: package-lock.json", "url": "https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json" },
+    { "label": "npm docs: npm ci", "url": "https://docs.npmjs.com/cli/v11/commands/npm-ci" },
+    { "label": "npm docs: Folders (nested node_modules, hoisting)", "url": "https://docs.npmjs.com/cli/v11/configuring-npm/folders" },
+    { "label": "uv docs: Project structure and files (the lockfile)", "url": "https://docs.astral.sh/uv/concepts/projects/layout/" },
+    { "label": "uv docs: Locking and syncing (--locked, --frozen)", "url": "https://docs.astral.sh/uv/concepts/projects/sync/" },
+    { "label": "uv docs: Resolution (universal resolution, lowest resolution)", "url": "https://docs.astral.sh/uv/concepts/resolution/" },
+    { "label": "uv docs: Resolver internals (pubgrub-rs)", "url": "https://docs.astral.sh/uv/reference/internals/resolver/" },
+    { "label": "Poetry docs: Basic usage (poetry.lock)", "url": "https://python-poetry.org/docs/basic-usage/" },
+    { "label": "Poetry docs: Introduction (install Poetry in its own environment)", "url": "https://python-poetry.org/docs/" },
+    { "label": "Python docs: venv", "url": "https://docs.python.org/3/library/venv.html" },
+    { "label": "pip docs: pip lock (experimental, writes pylock.toml)", "url": "https://pip.pypa.io/en/stable/cli/pip_lock/" },
+    { "label": "pip docs: Secure installs (hash-checking mode)", "url": "https://pip.pypa.io/en/stable/topics/secure-installs/" },
+    { "label": "pip docs: Dependency resolution", "url": "https://pip.pypa.io/en/stable/topics/dependency-resolution/" },
+    { "label": "Russ Cox: Version SAT (Dec 2016)", "url": "https://research.swtch.com/version-sat" },
+    { "label": "Dart pub: PubGrub version solving algorithm", "url": "https://github.com/dart-lang/pub/blob/master/doc/solver.md" },
+    { "label": "PEP 751: A file format to record Python dependencies for installation reproducibility", "url": "https://peps.python.org/pep-0751/" }
+  ]
+}

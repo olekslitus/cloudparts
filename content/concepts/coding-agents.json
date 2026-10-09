@@ -1,0 +1,240 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "AI coding agents",
+  "category": "tools",
+  "order": 20,
+  "summary": "A language model in a loop with tools: it reads files, runs commands and edits code, sees each result, and decides the next step until the task is done.",
+  "howItWorks": "You give the agent a goal, such as “fix the failing tests”. A program around the model, often called the harness, sends the model your request plus its context: instructions, earlier messages and the tools it may call. The model doesn’t act by itself. It answers with a proposed tool call, such as “read `src/auth.ts`” or “run `npm test`”. The harness checks that call against your permission rules, runs it (often inside an OS sandbox), and appends the output to the context. The model reads that result and proposes the next call, and the loop repeats until it answers in plain text: run the tests, read the error, find the file, edit it, run the tests again. Instruction files checked into the repository (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`) are loaded at the start of every session, because each session begins with an empty context. Extra tools, such as an issue tracker or a database, plug in through the Model Context Protocol (MCP), a JSON-RPC protocol where a server lists its tools (`tools/list`) and the agent calls them (`tools/call`). Everything the agent reads, runs and writes lands in one context window of limited size, so managing what goes into it decides how well the agent works.",
+  "analogy": "A contractor working from a radio. They can’t see the house; they ask you to read a label, try a switch or open a wall, and you report back exactly what happened. The house rules taped by the door (the instruction file) tell them what not to touch, you refuse requests that break them (permissions), and their notebook only holds so many pages, so a good contractor writes a short summary before starting a fresh one.",
+  "useWhen": [
+    "Changes you can check automatically: failing tests, type errors, lint fixes, dependency upgrades",
+    "Finding your way around an unfamiliar codebase before you change it",
+    "Mechanical work across many files, such as a rename or an API migration with a clear pattern",
+    "Backlog tickets a cloud agent can turn into draft pull requests while you do something else"
+  ],
+  "avoidWhen": [
+    "Nobody will review the result: agents produce plausible code that can be wrong",
+    "There is no way to verify the change (no tests, no build, no way to run it)",
+    "The agent would get credentials or network access it doesn’t need; prompt injection in a web page or issue can steer it",
+    "Hard design problems in a codebase no one on the team understands well enough to review the plan"
+  ],
+  "example": "Dex Horthy of HumanLayer describes fixing a bug in BAML, a 300,000-line Rust codebase Horthy had never worked in. The agent first wrote a research document on how the relevant code works. The first attempt concluded the bug was invalid, so Horthy threw it away and ran the research again with more steering. A second session turned the research into a short implementation plan, and a third implemented it. The pull request took about an hour and was approved by the maintainer the next morning. A plan written without the research also “would have worked”, but fixed the problem in a worse place.",
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "import shlex",
+      "import subprocess",
+      "",
+      "ALLOW = {\"echo\", \"python3\"}  # permission rule: these run without asking",
+      "",
+      "",
+      "def run(command: str) -> str:",
+      "    argv = shlex.split(command)",
+      "    if argv[0] not in ALLOW:",
+      "        return f\"denied: {argv[0]} needs approval\"  # a real harness asks the user here",
+      "    done = subprocess.run(argv, capture_output=True, text=True, timeout=60)",
+      "    return (done.stdout + done.stderr)[-2000:]  # trim: long logs eat the context window",
+      "",
+      "",
+      "def model(context: list[dict]) -> dict:",
+      "    \"\"\"Stand-in for the LLM: reads the whole context, proposes the next step.\"\"\"",
+      "    script = [\"echo starting\", \"rm -rf build\", \"python3 -c 'print(6 * 7)'\"]",
+      "    step = sum(1 for m in context if m[\"role\"] == \"tool\")",
+      "    if step < len(script):",
+      "        return {\"tool\": \"run\", \"input\": script[step]}",
+      "    return {\"answer\": \"6 * 7 = \" + context[-1][\"content\"].strip()}",
+      "",
+      "",
+      "context = [{\"role\": \"user\", \"content\": \"Use Python to work out 6 * 7\"}]",
+      "while True:  # the agent loop",
+      "    reply = model(context)",
+      "    if \"answer\" in reply:",
+      "        print(reply[\"answer\"])",
+      "        break",
+      "    result = run(reply[\"input\"])  # the harness, not the model, executes the call",
+      "    print(f\"run({reply['input']!r}) -> {result.strip()!r}\")",
+      "    context.append({\"role\": \"tool\", \"content\": result})",
+      "",
+      "# run('echo starting') -> 'starting'",
+      "# run('rm -rf build') -> 'denied: rm needs approval'",
+      "# run(\"python3 -c 'print(6 * 7)'\") -> '42'",
+      "# 6 * 7 = 42"
+    ]
+  },
+  "related": ["dev-environments", "containers", "remote-access"],
+  "sections": [
+    {
+      "type": "text",
+      "title": "Permissions and sandboxes",
+      "body": [
+        "An agent can run any command you could, so two separate layers decide what actually happens. Permission rules say which tool calls run without asking, which prompt you, and which are refused. Claude Code checks deny rules first, then ask, then allow, so a broad deny such as `Bash(aws *)` can’t be undone by a narrower allow. OpenCode uses the same three outcomes but starts permissive: most actions default to “allow”. Most agents also offer a read-only planning mode that explores without editing.",
+        "The second layer is an operating-system sandbox around the commands the agent runs. Codex and Claude Code use Seatbelt on macOS and bubblewrap on Linux to confine writes to the working directory and to block or filter network access; Codex turns its sandbox on by default and keeps `.git` read-only even inside the workspace. Gemini CLI’s sandbox is opt-in (`-s`) and can use Seatbelt, Docker, Podman or gVisor. Cloud agents go further and run each task on a separate virtual machine or container.",
+        "Rules on command text are easy to sidestep: Claude Code’s docs note that a deny rule on `curl` doesn’t match the same program called by its full path or inside `sh -c`. The sandbox is what holds. Network access matters most, because anything the agent reads, such as a web page or an issue comment, can carry instructions (prompt injection) that it may follow."
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Four terminal agents side by side",
+      "intro": "They share the loop; they differ in which models they drive, which instruction file they read and how hard they fence in commands.",
+      "corner": "Agent",
+      "columns": ["Instruction file", "Models", "Command sandbox", "Licence"],
+      "rows": [
+        {
+          "label": "Claude Code",
+          "values": ["`CLAUDE.md`; reads `AGENTS.md` in its place", "Claude, via Anthropic or Bedrock, Google Cloud and Microsoft Foundry", "Seatbelt or bubblewrap, set up with `/sandbox`", "Proprietary"]
+        },
+        {
+          "label": "OpenAI Codex CLI",
+          "values": ["`AGENTS.md`, up to 32 KiB combined by default", "OpenAI models, with a ChatGPT plan or an API key", "On by default: Seatbelt, or bubblewrap plus seccomp", "Apache 2.0"]
+        },
+        {
+          "label": "Gemini CLI",
+          "values": ["`GEMINI.md`; the file name is configurable, e.g. to `AGENTS.md`", "Gemini", "Opt-in: Seatbelt, Docker, Podman, gVisor or LXC", "Apache 2.0"]
+        },
+        {
+          "label": "OpenCode",
+          "values": ["`AGENTS.md`; falls back to `CLAUDE.md`", "75+ providers, plus local models", "Permission rules; most actions default to allow", "MIT"]
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Context engineering: research, plan, implement",
+      "body": [
+        "In “Advanced Context Engineering for Coding Agents” (August 2025), Dex Horthy of HumanLayer argues that each turn of an agent is a stateless function call: context window in, next step out. The context is the only lever you have, so optimise it for correctness, completeness, size and trajectory. The worst things it can contain are, in order, incorrect information, missing information and too much noise. Searching files, reading code flow, test and build logs and large JSON from tools all fill it up.",
+        "Horthy’s answer is “frequent intentional compaction”: build the whole workflow around context and keep utilisation around 40–60%. Work happens in three steps, each in a fresh session that starts from the last step’s markdown file. Research finds the relevant files and how data flows, often using subagents so their searching never enters the main context. Plan lists the exact changes and how each phase will be tested. Implement works through the plan phase by phase, writing progress back into the plan file.",
+        "Human attention goes where it has the most leverage. A bad line of code is one bad line, a bad line in a plan can become hundreds, and a misunderstanding in the research can become thousands, so people review the research and the plan more closely than the diff. Horthy is clear about the limits: it isn’t magic, it needs someone engaged for hours, an attempt to remove Hadoop from parquet-java failed because the research didn’t go deep enough, and Horthy’s team of three was spending about $12,000 a month on Opus. Claude Code’s own docs make a similar point: performance degrades as the context fills, so explore and plan before you code."
+      ]
+    },
+    {
+      "type": "code",
+      "title": "A minimal AGENTS.md",
+      "intro": "Plain Markdown with no required fields, at the repository root. Agents read the nearest file in the directory tree, so a monorepo can add one per package.",
+      "lang": "text",
+      "source": [
+        "# AGENTS.md",
+        "",
+        "## Setup",
+        "- Install dependencies: `pnpm install`",
+        "- Run the tests: `pnpm test` (must pass before you finish)",
+        "",
+        "## Conventions",
+        "- TypeScript strict mode; no `any`",
+        "- Put new API handlers in `src/routes/`, one file per resource",
+        "",
+        "## Don’t",
+        "- Edit generated files in `src/gen/`",
+        "- Commit or push; leave that to a human"
+      ]
+    }
+  ],
+  "kinds": [
+    {
+      "id": "terminal-agents",
+      "name": "Terminal agents",
+      "summary": "Agents you start in a shell, in your repository, that use the tools already installed on your machine.",
+      "body": [
+        "A terminal agent runs where you run `git` and your test suite. It reads files in the current directory, runs commands you could run, and shows its tool calls and diffs as it goes. Claude Code, OpenAI’s Codex CLI, Gemini CLI and OpenCode all work this way, and most now also ship editor extensions or desktop apps that drive the same loop.",
+        "Because they’re command-line programs, they also run without a person: `claude -p`, `codex exec`, `gemini -p` and `opencode run` take one prompt, work, and exit, so they fit into scripts and CI jobs. The trade-off is that they act on your real machine, so permission rules and an OS sandbox matter more than for a cloud agent with its own VM. When you close the laptop, the work stops."
+      ],
+      "sources": [
+        { "label": "Claude Code docs: How Claude Code works (the agentic loop, what Claude can access)", "url": "https://code.claude.com/docs/en/how-claude-code-works" },
+        { "label": "Claude Code docs: Overview (pipe, script and automate with `claude -p`)", "url": "https://code.claude.com/docs/en/overview" },
+        { "label": "Codex docs: Codex CLI (`codex exec` for scripts and CI)", "url": "https://learn.chatgpt.com/docs/codex/cli" },
+        { "label": "Gemini CLI README (headless mode, built-in tools)", "url": "https://github.com/google-gemini/gemini-cli" },
+        { "label": "OpenCode docs: Intro (terminal interface, desktop app, IDE extension)", "url": "https://opencode.ai/docs/" },
+        { "label": "Cognition: Devin in Windsurf, on local and cloud agents (Apr 2026)", "url": "https://cognition.ai/blog/devin-in-windsurf" }
+      ]
+    },
+    {
+      "id": "editor-agents",
+      "name": "Editor agents",
+      "summary": "Agents in a panel inside the code editor, working on the open project and showing their edits as reviewable diffs.",
+      "body": [
+        "An editor agent is the same loop, hosted by the editor. It starts from what you have open: the current file, a selection, the project’s files, and sometimes the editor’s own diagnostics. Edits appear inline or as a diff you accept or reject, and terminal commands run in the editor’s terminal. Cursor describes its Agent as three parts: instructions (the system prompt and rules), tools (file editing, codebase search, terminal) and a model.",
+        "The editor and the agent are increasingly separate choices. VS Code calls the runtime that drives the loop an agent harness and can host Copilot, Claude and Codex harnesses; Claude Code and Codex both ship extensions for VS Code and its forks such as Cursor and Windsurf. Pick an editor agent when you want to watch and steer every change; pick a terminal or cloud agent when you want to hand off a task and review the result."
+      ],
+      "sources": [
+        { "label": "VS Code docs: Understand AI agents (agent loop, agent harness, execution environment)", "url": "https://code.visualstudio.com/docs/agents/concepts/agents" },
+        { "label": "Cursor docs: Agent overview (instructions, tools, model)", "url": "https://cursor.com/docs/agent/overview" },
+        { "label": "Anthropic: Introducing Claude 4 (Claude Code GA, VS Code and JetBrains extensions; May 2025)", "url": "https://www.anthropic.com/news/claude-4" },
+        { "label": "Codex docs: Codex IDE extension (VS Code, Cursor, Windsurf, JetBrains, Xcode)", "url": "https://learn.chatgpt.com/docs/codex/ide" }
+      ]
+    },
+    {
+      "id": "cloud-agents",
+      "name": "Cloud agents",
+      "summary": "Agents that run each task on a machine in someone else’s cloud, take work from a chat, ticket or web app, and come back with a pull request.",
+      "body": [
+        "A cloud agent gets its own computer per task: a VM or container with your repository cloned, its dependencies installed and, often, a browser. You start it from a web app, Slack, an issue tracker or the CLI, and it keeps working after you close your laptop. Devin, Codex cloud and Claude Code’s cloud sessions all work this way; OpenAI’s first Codex cloud release said tasks typically took 1 to 30 minutes and ran with internet access disabled.",
+        "The separate machine is both the point and the cost. It can’t damage your laptop, and you can run many tasks in parallel, but its environment has to be set up to match yours (setup scripts, secrets, network allowlists), and your code runs on the vendor’s infrastructure. Cognition, which makes Devin, frames the split this way: a local agent makes you faster, a cloud agent does the work while you’re not there. Several products now let you start a session locally and hand it to the cloud."
+      ],
+      "sources": [
+        { "label": "Cognition: Devin in Windsurf, on local and cloud agents (Apr 2026)", "url": "https://cognition.ai/blog/devin-in-windsurf" },
+        { "label": "Cognition: Devin CLI, start local and hand off to the cloud (Apr 2026)", "url": "https://cognition.ai/blog/devin-for-terminal" },
+        { "label": "OpenAI: Introducing Codex (cloud sandbox per task, 1 to 30 minutes, internet disabled; May 2025)", "url": "https://openai.com/index/introducing-codex/", "archive": "https://web.archive.org/web/20251214010705/https://openai.com/index/introducing-codex/" },
+        { "label": "Codex docs: Codex Cloud (each task has its own workspace)", "url": "https://learn.chatgpt.com/docs/cloud" },
+        { "label": "Claude Code docs: Use Claude Code in the cloud (isolated VMs, network limits)", "url": "https://code.claude.com/docs/en/claude-code-on-the-web" }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "The first popular AI coding tools completed code as you typed. GitHub Copilot’s technical preview in June 2021 suggested whole lines or functions, powered by OpenAI’s Codex model, but it couldn’t open another file, run the code or see whether its suggestion worked. Research then gave models a way to act. The ReAct paper (October 2022) had a model interleave reasoning with actions against an outside environment and read back what happened. SWE-bench (October 2023) turned that into a hard test: 2,294 real GitHub issues from 12 Python projects, where the best model, Claude 2, resolved 1.96%.",
+      "In 2024 the loop met software engineering. Cognition announced Devin in March, an agent with a shell, editor and browser in a sandbox, and reported 13.86% on a quarter of SWE-bench. In May, SWE-agent showed that the interface mattered as much as the model: custom commands for viewing, editing and testing code lifted it to 12.5%. Anthropic’s December 2024 guide put the idea plainly: agents are “typically just LLMs using tools based on environmental feedback in a loop”, and they need ground truth from the environment, such as test results, at each step.",
+      "2025 brought the terminal agents: Claude Code in February, OpenAI’s Codex CLI in April and Gemini CLI in June. Shared conventions followed. Anthropic had open-sourced MCP in November 2024 as one protocol for tools, OpenAI released `AGENTS.md` in August 2025 as one place for project instructions, and in December 2025 both moved to the Linux Foundation’s new Agentic AI Foundation. By then the open question was less whether agents could code than how to feed them: practitioners such as Dex Horthy called it context engineering, getting the most out of today’s models by controlling exactly what they see."
+    ],
+    "choices": [
+      { "choice": "Let the model drive a loop of tool calls", "why": "One-shot generation can’t check itself. Running tests and reading the output gives the model ground truth at each step, and code is unusually well suited to this because results can be verified automatically." },
+      { "choice": "Design the tools for the model, not just reuse human ones", "why": "SWE-agent found that a purpose-built agent-computer interface beat raw shell access, and Anthropic reported spending more time optimising tools than prompts, for example requiring absolute file paths after the model kept getting relative ones wrong." },
+      { "choice": "Keep instructions in a file in the repository", "why": "Each session starts with an empty context. A checked-in Markdown file (`CLAUDE.md`, `AGENTS.md`) is loaded every time and reviewed like code; `AGENTS.md` chose a vendor-neutral name so one file works across agents." },
+      { "choice": "Keep a human able to say no", "why": "Agents run real commands with real credentials. The MCP spec says there should always be a human in the loop able to deny tool calls, and agents add permission rules, sandboxes and read-only plan modes so autonomy can grow step by step." }
+    ],
+    "timeline": [
+      { "year": "2021", "text": "GitHub Copilot’s technical preview brings AI code completion to the editor" },
+      { "year": "2022", "text": "The ReAct paper has a model interleave reasoning with actions" },
+      { "year": "2023", "text": "SWE-bench tests models on 2,294 real GitHub issues; the best solves 1.96%" },
+      { "year": "2024", "text": "Devin (March) and SWE-agent (May) work real issues in a sandbox; MCP open-sourced (November)" },
+      { "year": "2025", "text": "Claude Code, Codex CLI and Gemini CLI launch; `AGENTS.md` released in August" },
+      { "year": "2025", "text": "MCP and `AGENTS.md` move to the Linux Foundation’s Agentic AI Foundation (December)" }
+    ],
+    "sources": [
+      { "label": "GitHub blog: Introducing GitHub Copilot, your AI pair programmer (June 2021)", "url": "https://github.blog/news-insights/product-news/introducing-github-copilot-ai-pair-programmer/" },
+      { "label": "Yao et al.: ReAct, Synergizing Reasoning and Acting in Language Models (arXiv, Oct 2022)", "url": "https://arxiv.org/abs/2210.03629" },
+      { "label": "Jimenez et al.: SWE-bench, Can Language Models Resolve Real-World GitHub Issues? (arXiv, Oct 2023)", "url": "https://arxiv.org/abs/2310.06770" },
+      { "label": "Cognition: Introducing Devin, the first AI software engineer (Mar 2024)", "url": "https://cognition.ai/blog/introducing-devin" },
+      { "label": "Yang et al.: SWE-agent, Agent-Computer Interfaces Enable Automated Software Engineering (arXiv, May 2024)", "url": "https://arxiv.org/abs/2405.15793" },
+      { "label": "Anthropic: Building effective agents (Dec 2024)", "url": "https://www.anthropic.com/engineering/building-effective-agents" },
+      { "label": "Anthropic: Introducing the Model Context Protocol (Nov 2024)", "url": "https://www.anthropic.com/news/model-context-protocol" },
+      { "label": "Anthropic: Claude 3.7 Sonnet and Claude Code (Feb 2025)", "url": "https://www.anthropic.com/news/claude-3-7-sonnet" },
+      { "label": "OpenAI: Introducing Codex (mentions the Codex CLI launch the month before; May 2025)", "url": "https://openai.com/index/introducing-codex/", "archive": "https://web.archive.org/web/20251214010705/https://openai.com/index/introducing-codex/" },
+      { "label": "Google: Gemini CLI, your open-source AI agent (June 2025)", "url": "https://blog.google/technology/developers/introducing-gemini-cli-open-source-ai-agent/" },
+      { "label": "Linux Foundation: Formation of the Agentic AI Foundation with MCP, goose and AGENTS.md (Dec 2025)", "url": "https://www.linuxfoundation.org/press/linux-foundation-announces-the-formation-of-the-agentic-ai-foundation" },
+      { "label": "AGENTS.md: a simple, open format for guiding coding agents", "url": "https://agents.md/" },
+      { "label": "Model Context Protocol spec: Tools (human in the loop able to deny tool invocations)", "url": "https://modelcontextprotocol.io/specification/2025-06-18/server/tools" },
+      { "label": "Dex Horthy (HumanLayer): Advanced Context Engineering for Coding Agents, written version (Aug 2025)", "url": "https://github.com/humanlayer/advanced-context-engineering-for-coding-agents/blob/main/ace-fca.md" }
+    ]
+  },
+  "sources": [
+    { "label": "Anthropic: Building effective agents (LLMs using tools based on environmental feedback in a loop)", "url": "https://www.anthropic.com/engineering/building-effective-agents" },
+    { "label": "VS Code docs: Understand AI agents (agent loop, agent harness)", "url": "https://code.visualstudio.com/docs/agents/concepts/agents" },
+    { "label": "Claude Code docs: How Claude Code works (agentic loop, context window, permission modes)", "url": "https://code.claude.com/docs/en/how-claude-code-works" },
+    { "label": "Claude Code docs: Best practices (context fills fast; explore, plan, then code)", "url": "https://code.claude.com/docs/en/best-practices" },
+    { "label": "Claude Code docs: Configure permissions (deny, then ask, then allow; what Bash rules don’t match)", "url": "https://code.claude.com/docs/en/permissions" },
+    { "label": "Claude Code docs: Sandboxing (Seatbelt on macOS, bubblewrap on Linux)", "url": "https://code.claude.com/docs/en/sandboxing" },
+    { "label": "Claude Code docs: How Claude remembers your project (CLAUDE.md, AGENTS.md)", "url": "https://code.claude.com/docs/en/memory" },
+    { "label": "Claude Code docs: Third-party integrations (Bedrock, Google Cloud, Microsoft Foundry)", "url": "https://code.claude.com/docs/en/third-party-integrations" },
+    { "label": "Codex docs: Agent approvals and security (sandbox modes, Seatbelt, bwrap and seccomp, prompt injection)", "url": "https://learn.chatgpt.com/docs/agent-approvals-security" },
+    { "label": "Codex docs: Custom instructions with AGENTS.md (discovery order, 32 KiB default limit)", "url": "https://learn.chatgpt.com/docs/agent-configuration/agents-md" },
+    { "label": "Gemini CLI docs: Provide context with GEMINI.md files", "url": "https://www.geminicli.com/docs/cli/gemini-md" },
+    { "label": "Gemini CLI docs: Sandboxing (Seatbelt, Docker, Podman, gVisor, LXC)", "url": "https://www.geminicli.com/docs/cli/sandbox" },
+    { "label": "OpenCode docs: Rules (AGENTS.md, Claude Code compatibility)", "url": "https://opencode.ai/docs/rules/" },
+    { "label": "OpenCode docs: Permissions (allow, ask, deny; permissive defaults)", "url": "https://opencode.ai/docs/permissions/" },
+    { "label": "OpenCode docs: Providers (75+ LLM providers, local models)", "url": "https://opencode.ai/docs/providers/" },
+    { "label": "Model Context Protocol docs: Architecture (JSON-RPC 2.0, stdio and Streamable HTTP)", "url": "https://modelcontextprotocol.io/docs/learn/architecture" },
+    { "label": "Model Context Protocol spec: Tools (tools/list, tools/call)", "url": "https://modelcontextprotocol.io/specification/2025-06-18/server/tools" },
+    { "label": "AGENTS.md: format, nested files, FAQ", "url": "https://agents.md/" },
+    { "label": "Cognition: Devin is now generally available (first-draft PRs for backlog tasks; Dec 2024)", "url": "https://cognition.ai/blog/devin-generally-available" },
+    { "label": "Dex Horthy (HumanLayer): Advanced Context Engineering for Coding Agents, written version (Aug 2025)", "url": "https://github.com/humanlayer/advanced-context-engineering-for-coding-agents/blob/main/ace-fca.md" }
+  ]
+}

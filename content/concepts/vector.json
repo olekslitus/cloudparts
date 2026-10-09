@@ -1,0 +1,167 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Vector databases",
+  "category": "data",
+  "order": 55,
+  "summary": "Store embeddings, lists of numbers that capture what text, images or users mean, and find the ones closest to a query.",
+  "howItWorks": "An embedding model turns each item (a paragraph, an image, a product) into a vector: a fixed-length list of floats placed so that similar items land close together. The database stores each vector with an id, the original document and metadata. A query is embedded with the same model, and the database returns the k nearest vectors by a distance metric: Euclidean (L2) distance, inner product, or cosine distance, which compares only the angle. Comparing the query with every vector gives exact results but reads everything, and classic tree indexes stop helping above about 10 dimensions, so large collections use approximate nearest neighbour (ANN) indexes that trade a little recall for speed. An inverted file (IVF) index clusters the vectors around centroids at build time; a query looks only at the few clusters whose centroids are nearest (the `probes` or `nprobe` setting). HNSW builds a layered graph: sparse upper layers act as highways, and a search starts at the top layer and works down to the query’s neighbourhood, with a candidate list size (`ef_search`) setting how hard it looks. Filters on metadata such as language or tenant are applied before the vector search (exact search over a small subset) or after it, in which case an approximate index may return fewer than k matches. Dedicated vector databases do this, but so do PostgreSQL with the pgvector extension and search engines such as Elasticsearch and OpenSearch, next to the rest of your data.",
+  "analogy": "A wine shop arranged by taste instead of by label. Similar wines stand next to each other, so to find something like the bottle you liked you walk to its shelf and look around, instead of reading every label in the shop. An approximate index is the floor map that gets you to the right aisle quickly, at the small risk that the best match sits one aisle over.",
+  "useWhen": [
+    "Search by meaning: “how do I get my money back” should find the page titled “Refund policy”",
+    "Retrieval for LLM apps (RAG): fetch the few chunks of your own documents most relevant to a question",
+    "Recommendations and deduplication: “more like this”, similar images, near-duplicate products",
+    "Combining similarity with filters such as tenant, language or date over millions of items"
+  ],
+  "avoidWhen": [
+    "Exact matches on ids, names or part numbers; a B-tree or a keyword search index does that better and cheaper",
+    "A few thousand vectors: a brute-force scan in your database or in NumPy is exact and fast enough",
+    "You need perfect recall from an approximate index; results change slightly once an index is added",
+    "The data already lives in PostgreSQL or a search engine that supports vectors; a separate store adds a sync job"
+  ],
+  "example": "A help centre splits its articles into 1 million chunks and embeds each as 768 32-bit floats: 1,000,000 × 768 × 4 bytes, about 3 GB of vectors. A question is embedded the same way, and an HNSW index returns the 5 nearest chunks for the chatbot to quote. The catch is filtering: with pgvector’s default `ef_search` of 40 and a `lang = 'en'` filter that matches 10% of rows, the index finds about 4 matching rows on average, fewer than the 5 asked for. Iterative index scans (pgvector 0.8.0 and later) or a partial index per language fix that.",
+  "providers": {
+    "aws": "Amazon S3 Vectors (vector buckets and vector indexes); Amazon OpenSearch Service k-NN search; pgvector on Amazon Aurora PostgreSQL and RDS for PostgreSQL",
+    "gcp": "Vector Search in Gemini Enterprise Agent Platform (formerly Vertex AI Vector Search, built on Google’s ScaNN algorithm) and Agent Retrieval (formerly Vector Search 2.0); AlloyDB for PostgreSQL with ScaNN, HNSW and IVF indexes; BigQuery `VECTOR_SEARCH` with IVF vector indexes; pgvector on Cloud SQL for PostgreSQL",
+    "azure": "Azure AI Search (exhaustive KNN or HNSW, with filters); Azure Cosmos DB for NoSQL with DiskANN vector indexes; pgvector on Azure Database for PostgreSQL",
+    "oss": "pgvector for PostgreSQL; Chroma; Elasticsearch and OpenSearch (`dense_vector` and `knn_vector` fields on HNSW); Faiss (MIT), Meta’s vector search library; Milvus, Qdrant and Weaviate, dedicated vector databases; LanceDB, an embedded retrieval library"
+  },
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "CREATE EXTENSION vector;  -- pgvector",
+      "",
+      "CREATE TABLE docs (",
+      "  id        bigint PRIMARY KEY,",
+      "  lang      text,",
+      "  body      text,",
+      "  embedding vector(3)  -- real models output hundreds of dimensions; pgvector indexes up to 2,000",
+      ");",
+      "",
+      "INSERT INTO docs VALUES",
+      "  (1, 'en', 'Refunds take 5 days',   '[0.9, 0.1, 0.0]'),",
+      "  (2, 'en', 'We ship in 2 days',     '[0.1, 0.9, 0.1]'),",
+      "  (3, 'de', 'Return within 30 days', '[0.8, 0.2, 0.1]');",
+      "",
+      "-- approximate index: an HNSW graph over cosine distance",
+      "CREATE INDEX ON docs USING hnsw (embedding vector_cosine_ops);",
+      "",
+      "-- the 2 English docs nearest to the question’s embedding",
+      "SELECT id, body, round((embedding <=> '[0.85, 0.15, 0.05]')::numeric, 3) AS distance",
+      "FROM docs",
+      "WHERE lang = 'en'",
+      "ORDER BY embedding <=> '[0.85, 0.15, 0.05]'",
+      "LIMIT 2;",
+      "",
+      "--  id |        body         | distance",
+      "-- ----+---------------------+----------",
+      "--   1 | Refunds take 5 days |    0.004",
+      "--   2 | We ship in 2 days   |    0.714"
+    ]
+  },
+  "related": ["search", "relational", "document"],
+  "diagram": {
+    "caption": "New documents and incoming questions go through the same embedding model. Documents are added to the vector index; each question becomes a vector, and the index walks its HNSW graph to the nearest neighbours that pass the filter and sends their ids back.",
+    "w": 780,
+    "h": 280,
+    "zones": [
+      { "x": 470, "y": 40, "w": 290, "h": 200, "label": "Vector database" }
+    ],
+    "nodes": [
+      {
+        "id": "docs",
+        "x": 105,
+        "y": 70,
+        "label": "Documents",
+        "sub": "new chunks + metadata",
+        "emit": { "every": 1400, "jitter": 0.4, "color": 2 },
+        "out": ["embed"]
+      },
+      {
+        "id": "user",
+        "x": 105,
+        "y": 210,
+        "label": "Question",
+        "sub": "“money back?”",
+        "emit": { "every": 700, "jitter": 0.4, "req": true, "color": 0 },
+        "out": ["embed"]
+      },
+      {
+        "id": "embed",
+        "x": 330,
+        "y": 140,
+        "kind": "pool",
+        "label": "Embedding model",
+        "sub": "text → vector",
+        "min": 1,
+        "max": 3,
+        "work": 450,
+        "out": ["idx"]
+      },
+      {
+        "id": "idx",
+        "x": 615,
+        "y": 140,
+        "label": "Vector index",
+        "sub": "HNSW · cosine · lang = en",
+        "mode": "reply",
+        "delay": 80
+      }
+    ]
+  },
+  "history": {
+    "story": [
+      "Finding the nearest points to a query is an old problem, and the classic answers, such as trees that split space with hyperplanes, work in a few dimensions but, as the Faiss authors put it, “do not scale well for dimensions above 10”. The problem became urgent when neural networks started turning data into embeddings. In 2013 Tomas Mikolov and colleagues showed word vectors learned from 1.6 billion words in less than a day, and embeddings are now made from words, text, images, and users and items for recommendation. Search by meaning then became a search for nearby vectors in hundreds of dimensions.",
+      "Two index families came out of research. Inverted files cluster vectors and scan only the nearest clusters, often with compressed codes; Facebook AI Research built them into Faiss and open-sourced it in March 2017, alongside a GPU paper that built a k-nearest-neighbour graph over 1 billion vectors in under 12 hours on four GPUs. Graph indexes went the other way: in 2016 Yury Malkov and Dmitry Yashunin described HNSW, a layered “small world” graph that gives logarithmic search and is similar in spirit to a skip list.",
+      "Large language models turned this into a database category. Retrieval-augmented generation needs to fetch relevant chunks of private data at query time, and in April 2023 Chroma raised $18 million to build an open-source database for exactly that. Existing databases answered quickly: pgvector, a PostgreSQL extension first released in April 2021, added HNSW in August 2023, and search engines, data warehouses and cloud object storage added vector indexes of their own."
+    ],
+    "choices": [
+      { "choice": "Approximate instead of exact search", "why": "Exact search compares the query with every stored vector, which is fine for thousands and too slow for millions. ANN indexes accept slightly lower recall, tunable at query time, in return for reading only a small part of the data." },
+      { "choice": "Clusters (IVF) or graphs (HNSW)", "why": "Graphs give the best speed for a given recall when memory is plentiful, typically below 1 million vectors per the Faiss authors. Beyond 10 million, graph build time becomes the limit, and compressed IVF indexes are the option when vectors don’t fit in memory." },
+      { "choice": "Choose the distance metric with the model", "why": "Each embedding model suits particular metrics (Chroma’s embedding functions each declare the spaces they support). Cosine distance ignores vector length and inner product doesn’t, and in pgvector an index is built for one operator class, such as `vector_cosine_ops`, so it only speeds up queries using that distance." },
+      { "choice": "Filter before or after the vector search", "why": "Metadata-first narrows to a small subset and searches it exactly; vector-first searches the index and drops non-matching results, which is fast but can return too few rows. The right choice depends on how many rows the filter keeps." }
+    ],
+    "timeline": [
+      { "year": "2013", "text": "Mikolov and colleagues publish word2vec-style word vectors" },
+      { "year": "2016", "text": "Malkov and Yashunin describe the HNSW graph index" },
+      { "year": "2017", "text": "Facebook AI Research open-sources Faiss in March" },
+      { "year": "2021", "text": "pgvector, a PostgreSQL extension, is first released in April" },
+      { "year": "2023", "text": "Chroma raises an $18M seed in April; pgvector adds HNSW in August" },
+      { "year": "2024", "text": "pgvector 0.8.0 adds iterative index scans for filtered queries" }
+    ],
+    "sources": [
+      { "label": "Mikolov et al.: Efficient Estimation of Word Representations in Vector Space (arXiv, 2013)", "url": "https://arxiv.org/abs/1301.3781" },
+      { "label": "Malkov and Yashunin: Efficient and robust approximate nearest neighbor search using Hierarchical Navigable Small World graphs (arXiv, 2016)", "url": "https://arxiv.org/abs/1603.09320" },
+      { "label": "Engineering at Meta: Faiss, a library for efficient similarity search (Mar 2017)", "url": "https://engineering.fb.com/2017/03/29/data-infrastructure/faiss-a-library-for-efficient-similarity-search/" },
+      { "label": "Johnson, Douze and Jégou: Billion-scale similarity search with GPUs (arXiv, 2017)", "url": "https://arxiv.org/abs/1702.08734" },
+      { "label": "Douze et al.: The Faiss library (arXiv, 2024; history, trees, IVF vs graphs, filtering)", "url": "https://arxiv.org/html/2401.08281" },
+      { "label": "pgvector changelog (0.1.0 April 2021, HNSW in 0.5.0, iterative scans in 0.8.0)", "url": "https://github.com/pgvector/pgvector/blob/master/CHANGELOG.md" },
+      { "label": "SiliconANGLE: Chroma bags $18M to speed up AI models with its embedding database (Apr 2023)", "url": "https://siliconangle.com/2023/04/06/chroma-bags-18m-speed-ai-models-embedding-database/" }
+    ]
+  },
+  "sources": [
+    { "label": "pgvector README (exact and approximate search, operators, HNSW, IVFFlat, filtering, iterative scans)", "url": "https://github.com/pgvector/pgvector/blob/master/README.md" },
+    { "label": "Douze et al.: The Faiss library (arXiv, 2024; inverted files, HNSW, vector-first and metadata-first filtering)", "url": "https://arxiv.org/html/2401.08281" },
+    { "label": "Malkov and Yashunin: Hierarchical Navigable Small World graphs (arXiv, 2016)", "url": "https://arxiv.org/abs/1603.09320" },
+    { "label": "AWS docs: Working with S3 Vectors and vector buckets", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vectors.html" },
+    { "label": "AWS docs: k-Nearest Neighbor (k-NN) search in Amazon OpenSearch Service", "url": "https://docs.aws.amazon.com/opensearch-service/latest/developerguide/knn.html" },
+    { "label": "AWS docs: Using pgvector with Aurora PostgreSQL", "url": "https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraPostgreSQL.VectorDB.html" },
+    { "label": "AWS docs: Amazon RDS for PostgreSQL extension versions (pgvector)", "url": "https://docs.aws.amazon.com/AmazonRDS/latest/PostgreSQLReleaseNotes/postgresql-extensions.html" },
+    { "label": "Google Cloud docs: Vector Search overview (ScaNN)", "url": "https://cloud.google.com/vertex-ai/docs/vector-search/overview" },
+    { "label": "Google Cloud: Gemini Enterprise Agent Platform release notes (Vertex AI naming changes, Apr 2026)", "url": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/release-notes" },
+    { "label": "Google Cloud docs: AlloyDB, create a ScaNN index", "url": "https://cloud.google.com/alloydb/docs/ai/store-index-query-vectors" },
+    { "label": "Google Cloud docs: Introduction to vector search in BigQuery (IVF, brute force)", "url": "https://cloud.google.com/bigquery/docs/vector-search-intro" },
+    { "label": "Google Cloud docs: Work with vector embeddings in Cloud SQL for PostgreSQL", "url": "https://cloud.google.com/sql/docs/postgres/work-with-vectors" },
+    { "label": "Microsoft Learn: Vector search in Azure AI Search (filtered vector search)", "url": "https://learn.microsoft.com/en-us/azure/search/vector-search-overview" },
+    { "label": "Microsoft Learn: Relevance in vector search (exhaustive KNN and HNSW)", "url": "https://learn.microsoft.com/en-us/azure/search/vector-search-ranking" },
+    { "label": "Microsoft Learn: Vector database in Azure Cosmos DB (DiskANN)", "url": "https://learn.microsoft.com/en-us/azure/cosmos-db/vector-database" },
+    { "label": "Microsoft Learn: Enable and use pgvector in Azure Database for PostgreSQL", "url": "https://learn.microsoft.com/en-us/azure/postgresql/extensions/how-to-use-pgvector" },
+    { "label": "Elasticsearch docs: kNN search (approximate and exact)", "url": "https://www.elastic.co/docs/solutions/search/vector/knn" },
+    { "label": "Elasticsearch docs: Dense vector field type (HNSW)", "url": "https://www.elastic.co/docs/reference/elasticsearch/mapping-reference/dense-vector" },
+    { "label": "Chroma docs: Configure collections (HNSW and SPANN, l2, cosine and ip spaces)", "url": "https://docs.trychroma.com/docs/collections/configure" },
+    { "label": "facebookresearch/faiss on GitHub (MIT)", "url": "https://github.com/facebookresearch/faiss" },
+    { "label": "milvus-io/milvus on GitHub", "url": "https://github.com/milvus-io/milvus" },
+    { "label": "qdrant/qdrant on GitHub", "url": "https://github.com/qdrant/qdrant" },
+    { "label": "weaviate/weaviate on GitHub", "url": "https://github.com/weaviate/weaviate" },
+    { "label": "lancedb/lancedb on GitHub", "url": "https://github.com/lancedb/lancedb" }
+  ]
+}

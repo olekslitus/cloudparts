@@ -1,0 +1,155 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Bundlers and dev servers",
+  "category": "tools",
+  "order": 60,
+  "summary": "Follow every `import` from an entry file to build a module graph, serve it quickly while you code, and pack it into a few small files for production.",
+  "howItWorks": "A bundler starts at one or more entry points, such as `index.html` or `src/main.ts`. It parses each file, follows its `import` and `require` calls, and resolves names like `react` to files in `node_modules`, which gives it the module graph: every file the app needs and who imports whom. On the way it transforms files the browser can’t run as written: TypeScript and JSX become plain JavaScript (types are stripped, not checked), CommonJS packages are wrapped so ES modules can import them, CSS and images get URLs. For production it then shrinks the graph. Tree shaking reads the static `import` and `export` statements, sees which exports nothing uses and leaves them out. Modules are hoisted into a shared scope, so the `import`/`export` glue between them disappears. Code splitting cuts the graph at each dynamic `import()` and at code shared by several pages, so each chunk downloads only when needed. A minifier shortens the result, and each file name gets a content hash so browsers can cache it for good. During development the job is different: feedback must be instant. Older dev servers bundle the whole app before serving the first page. Since browsers load ES modules natively (`<script type=\"module\">`), a dev server can instead pre-bundle the dependencies once and serve each source file as its own module when the browser asks for it. When you save a file, hot module replacement (HMR) swaps just that module in the running page, keeping its state instead of reloading. Production still gets a real bundle, because an unbundled app makes the browser fetch nested imports one round trip at a time.",
+  "analogy": "A newspaper. While reporters write, editors read loose pages and swap a corrected paragraph straight into the proof. On print night, the paper keeps only the stories the front page and sections point to, cuts what nobody referenced, and binds it into a few sections, with the weekend supplement printed separately for those who want it.",
+  "useWhen": [
+    "Shipping a web app that uses npm packages, TypeScript or JSX to browsers",
+    "Large apps where users shouldn’t download the code for pages they never open: split at each route’s `import()`",
+    "Publishing a library as ES module and CommonJS builds from one source",
+    "Wanting edits to show up in the browser at once, with app state kept, through HMR"
+  ],
+  "avoidWhen": [
+    "A small site with a few hand-written scripts: native `<script type=\"module\">` and import maps work with no build step",
+    "Counting on the bundler to type-check: dev servers and fast transforms strip TypeScript types without checking them, so run `tsc` (or another checker) separately",
+    "Marking a package `\"sideEffects\": false` when it has side effects such as CSS imports or polyfills: tree shaking will drop code you need"
+  ],
+  "example": "A dashboard imports `debounce` from `lodash-es`, a package that ships as more than 600 separate modules. Served unbundled, that one import would make the browser fire over 600 requests at once, so the dev server pre-bundles the package into a single module the first time it starts and serves the dashboard’s own files one by one as they’re requested. Editing a chart component swaps that one module through HMR and keeps the filters the developer has set. For production, tree shaking keeps `debounce` and what it uses, and the reports page, loaded with `import('./reports.js')`, becomes its own chunk that only people who open reports download.",
+  "snippet": {
+    "lang": "bash",
+    "source": [
+      "# A tiny Vite project: one unused export and one dynamic import",
+      "mkdir -p src",
+      "echo '<script type=\"module\" src=\"/src/main.js\"></script><button>Chart</button>' > index.html",
+      "cat > src/math.js <<'JS'",
+      "export const add = (a, b) => a + b",
+      "export const unused = () => 'nobody imports me'",
+      "JS",
+      "cat > src/chart.js <<'JS'",
+      "export const draw = () => 'a chart'",
+      "JS",
+      "cat > src/main.js <<'JS'",
+      "import { add } from './math.js'",
+      "console.log(add(2, 3))",
+      "// a dynamic import is a split point: chart.js loads only on click",
+      "document.querySelector('button').onclick = async () => {",
+      "  const { draw } = await import('./chart.js')",
+      "  console.log(draw())",
+      "}",
+      "JS",
+      "npm install -D vite@8 --silent",
+      "",
+      "npx vite          # dev server: serves each file as a native ES module, with HMR",
+      "npx vite build    # production bundle",
+      "# vite v8.3.4 building client environment for production...",
+      "# ✓ 7 modules transformed.",
+      "# dist/index.html                0.09 kB │ gzip: 0.11 kB",
+      "# dist/assets/chart-BrKOogcZ.js  0.03 kB │ gzip: 0.05 kB   <- its own chunk",
+      "# dist/assets/index-CvOIjSK7.js  2.37 kB │ gzip: 1.15 kB",
+      "",
+      "grep -c 'nobody imports me' dist/assets/*.js",
+      "# dist/assets/chart-BrKOogcZ.js:0",
+      "# dist/assets/index-CvOIjSK7.js:0    <- unused() was tree-shaken away"
+    ]
+  },
+  "related": ["build-tools", "package-managers", "static-analysis"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "What a production build does",
+      "intro": "Most bundlers run the same steps; they differ in speed, defaults and how much you can tune.",
+      "corner": "Step",
+      "columns": ["What happens", "Why it matters"],
+      "rows": [
+        { "label": "Resolve", "values": ["Follow each `import` from the entry points and find the file it names, using Node’s rules for packages", "Builds the module graph; the bundler finds dependencies itself instead of you listing them"] },
+        { "label": "Transform", "values": ["TypeScript, JSX and newer syntax become JavaScript the target browsers run; CommonJS is wrapped for ES module imports", "One source can target many browsers; types are stripped, not checked"] },
+        { "label": "Tree shake", "values": ["Exports that nothing imports, and code with no side effects that nothing uses, are left out", "Native ES modules download and run a whole module even when you use one export"] },
+        { "label": "Hoist scopes", "values": ["Modules are merged into a shared scope, removing the `import`/`export` glue between them", "Less code to download and parse"] },
+        { "label": "Split code", "values": ["The graph is cut at dynamic `import()` calls and at code shared by several entries", "Each page downloads only what it needs; shared code is fetched once"] },
+        { "label": "Minify and hash", "values": ["Names are shortened, whitespace removed, and each file named after a hash of its content", "Smaller files, and browsers can cache each file until its content changes"] }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Three ways to serve code during development",
+      "corner": "Approach",
+      "columns": ["How it works", "Trade-off", "Examples"],
+      "rows": [
+        { "label": "Bundle first", "values": ["The dev server bundles the whole app before it can serve the first page", "Start-up time grows with the size of the app", "webpack dev server"] },
+        { "label": "Unbundled ES modules", "values": ["Dependencies are pre-bundled once; your own files are transformed and served one by one as the browser requests them", "Starts almost at once whatever the app’s size, but a very large app makes thousands of requests on each full reload", "Vite (default), Snowpack and WMR before it"] },
+        { "label": "Bundled dev mode", "values": ["A fast native bundler bundles during development too, with HMR on top of its output", "Fewer requests and faster reloads for huge apps; newer, and some plugins don’t support it yet", "Vite 8.1’s experimental bundled dev mode"] }
+      ],
+      "notes": ["Vite’s team reports that, in a test app loading 10,000 React components, bundled dev mode started about 15 times faster and did full reloads about 10 times faster than its unbundled server (Vite 8.1, June 2026)."]
+    },
+    {
+      "type": "text",
+      "title": "The VoidZero toolchain",
+      "body": [
+        "VoidZero Inc. is the company Evan You, the creator of Vue and Vite, announced on 1 October 2024 with $4.6 million in seed funding led by Accel. Its aim is one fast toolchain for JavaScript in which parsing, transforming, linting, formatting, bundling, minifying and testing share the same syntax tree, module resolver and module interop, written in a compiled language, instead of a dozen tools that each parse the same file again. It raised a $12.5 million Series A, also led by Accel, in October 2025. On 4 June 2026 it announced that it is joining Cloudflare; the projects stay open source under the MIT licence, the same team keeps leading them, and Cloudflare added a $1 million fund for the Vite ecosystem, run by the Vite core team.",
+        "The projects stack in layers. Oxc, at the bottom, is a set of Rust crates: parser, transformer, minifier and module resolver, plus two end-user tools, the Oxlint linter and the Oxfmt formatter. Rolldown is a Rust bundler built on Oxc, which does its parsing, transforming and minifying; it keeps Rollup’s plugin API. Vite is the dev server and build tool on top: since Vite 8 (March 2026) it uses Rolldown as its single bundler, replacing the earlier pair of esbuild for development and Rollup for production. Vitest is a test runner built on Vite: it reads the app’s `vite.config` and runs tests through the same transform pipeline and plugins.",
+        "Vite+ (1.0 in September 2026, MIT) ties them together behind one command, `vp`: `vp dev` and `vp build` run Vite with Rolldown, `vp check` runs Oxfmt and Oxlint, `vp test` runs Vitest, and `vp run` is a task runner with caching, all configured from one `vite.config.ts`. VoidZero first planned Vite+ as a commercially licensed product but dropped that before release. Vite and Vitest keep team-based governance with members from several companies, while VoidZero’s 2024 announcement says it holds the copyright of, funds and directs Oxc and Rolldown."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Before bundlers, a web page loaded scripts with one `<script>` tag each, and they shared one global scope. Teams wrapped files in immediately invoked functions and used task runners such as Grunt and Gulp to concatenate them, which meant rebuilding everything on any change and no way to tell which code was actually used. Node.js and npm brought CommonJS `require`, but browsers didn’t understand it, so tools like Browserify, RequireJS and SystemJS let CommonJS modules run in a browser. webpack, whose first release came in February 2014, made the dependency graph automatic: it followed imports itself and added loaders for non-JavaScript files and code splitting.",
+      "ES2015 gave JavaScript its own `import` and `export`, and because they are static a tool can see exactly which exports are used without running the code. Rollup, an ES module bundler, built on that to drop unused exports, and popularised the name “tree shaking”. Once browsers could load ES modules natively, tools like Snowpack, the Preact team’s WMR and Vite (2020) stopped bundling during development and served source files as modules, while still bundling for production, because nested imports cost a network round trip each.",
+      "Then speed moved to native code. esbuild, written in Go by Evan Wallace, showed that a compiled, parallel bundler could be many times faster than JavaScript ones, and Vite 2 (2021) adopted it for dependency pre-bundling. Rust tools followed: SWC, Rspack, Oxc and Rolldown. By 2026 Vite ran on one Rust bundler for both development and production, and was experimenting with bundling in development again, now that bundling was fast enough."
+    ],
+    "choices": [
+      { "choice": "Static `import` and `export` instead of calls", "why": "A `require()` can be computed at run time, so a tool can’t be sure what it loads. ES2015’s static syntax lets a bundler see the whole graph and every used export before running anything, which is what makes tree shaking and reliable code splitting possible." },
+      { "choice": "Serve unbundled modules in development, bundle for production", "why": "Bundling a large app before the first page load took a long time. Serving each file on request made start-up nearly instant, but unbundled code in production costs extra round trips, so the production build stayed bundled." },
+      { "choice": "Write the bundler in a compiled language", "why": "A JavaScript bundler starts cold on every run and can’t easily share memory between threads. esbuild (Go) and later Rust bundlers parse, transform and print files in parallel on all cores." },
+      { "choice": "Keep the Rollup plugin API", "why": "Vite built its plugins on Rollup’s interface, and Rolldown kept it, so thousands of existing plugins carried over each time the engine underneath changed." }
+    ],
+    "timeline": [
+      { "year": "2014", "text": "webpack’s first release builds the dependency graph from imports" },
+      { "year": "2015", "text": "ES2015 standardises `import` and `export`, which tree shaking relies on" },
+      { "year": "2020", "text": "Vite serves source as native ES modules in development" },
+      { "year": "2021", "text": "Vite 2 pre-bundles dependencies with esbuild, written in Go, 10 to 100 times faster than before" },
+      { "year": "2024", "text": "VoidZero is founded to build Rolldown and Oxc; Rolldown’s first public release" },
+      { "year": "2026", "text": "Vite 8 ships Rolldown as its only bundler; VoidZero joins Cloudflare" }
+    ],
+    "sources": [
+      { "label": "webpack docs: Why webpack (IIFEs, task runners, CommonJS, Browserify)", "url": "https://webpack.js.org/concepts/why-webpack/" },
+      { "label": "Wikipedia: webpack (first release February 2014)", "url": "https://en.wikipedia.org/wiki/Webpack" },
+      { "label": "webpack docs: Tree shaking (term popularised by Rollup; static structure of ES2015 modules)", "url": "https://webpack.js.org/guides/tree-shaking/" },
+      { "label": "Rollup docs: Introduction (tree shaking)", "url": "https://rollupjs.org/introduction/" },
+      { "label": "Vite docs: Why Vite (origins, Snowpack, WMR, unbundled development)", "url": "https://vite.dev/guide/why" },
+      { "label": "Vite blog: Announcing Vite 2.0 (Feb 2021)", "url": "https://vite.dev/blog/announcing-vite2" },
+      { "label": "esbuild FAQ: Why is esbuild fast?", "url": "https://esbuild.github.io/faq/" },
+      { "label": "Wikipedia: esbuild (written by Evan Wallace in Go)", "url": "https://en.wikipedia.org/wiki/Esbuild" },
+      { "label": "InfoQ: Rolldown, a Rust bundler for Vite, open-sourced (May 2024)", "url": "https://www.infoq.com/news/2024/05/rolldown-open-sourced/" },
+      { "label": "VoidZero: Announcing Rolldown 1.0 (first public release April 2024, May 2026)", "url": "https://voidzero.dev/posts/announcing-rolldown-1-0" },
+      { "label": "Evan You (VoidZero): Announcing VoidZero (Oct 2024)", "url": "https://voidzero.dev/posts/announcing-voidzero-inc" },
+      { "label": "Vite blog: Vite 8.0 is out! (Mar 2026)", "url": "https://vite.dev/blog/announcing-vite8" },
+      { "label": "Evan You (VoidZero): VoidZero is joining Cloudflare (June 2026)", "url": "https://voidzero.dev/posts/voidzero-cloudflare" }
+    ]
+  },
+  "sources": [
+    { "label": "Rolldown docs: Why do we still need bundlers?", "url": "https://rolldown.rs/in-depth/why-bundlers" },
+    { "label": "Rolldown docs: Introduction (what a bundler is)", "url": "https://rolldown.rs/guide/introduction" },
+    { "label": "MDN: JavaScript modules", "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules" },
+    { "label": "webpack docs: Tree shaking (sideEffects and its pitfalls)", "url": "https://webpack.js.org/guides/tree-shaking/" },
+    { "label": "webpack docs: Code splitting", "url": "https://webpack.js.org/guides/code-splitting/" },
+    { "label": "webpack docs: Hot module replacement", "url": "https://webpack.js.org/concepts/hot-module-replacement/" },
+    { "label": "Vite docs: Why Vite (bundle-based vs native-ESM dev servers)", "url": "https://vite.dev/guide/why" },
+    { "label": "Vite docs: Dependency pre-bundling (lodash-es and its 600+ modules)", "url": "https://vite.dev/guide/dep-pre-bundling" },
+    { "label": "Vite docs: Features (HMR; TypeScript is transpiled, not type-checked)", "url": "https://vite.dev/guide/features" },
+    { "label": "Vitest docs: Why Vitest (same config and transform pipeline as the app)", "url": "https://vitest.dev/guide/why" },
+    { "label": "Vite blog: Vite 8.1 is out! (bundled dev mode, June 2026)", "url": "https://vite.dev/blog/announcing-vite8-1" },
+    { "label": "Vite blog: Vite 8.0 is out! (Rolldown and Oxc as one toolchain, Mar 2026)", "url": "https://vite.dev/blog/announcing-vite8" },
+    { "label": "Evan You (VoidZero): Announcing VoidZero, seed round and governance FAQ (Oct 2024)", "url": "https://voidzero.dev/posts/announcing-voidzero-inc" },
+    { "label": "Evan You (VoidZero): VoidZero raises $12.5M Series A (Oct 2025)", "url": "https://voidzero.dev/posts/announcing-series-a" },
+    { "label": "Evan You (VoidZero): VoidZero is joining Cloudflare (June 2026)", "url": "https://voidzero.dev/posts/voidzero-cloudflare" },
+    { "label": "Cloudflare blog: VoidZero is joining Cloudflare ($1 million Vite ecosystem fund, June 2026)", "url": "https://blog.cloudflare.com/voidzero-joins-cloudflare/" },
+    { "label": "Oxc docs: What is Oxc?", "url": "https://oxc.rs/docs/guide/what-is-oxc" },
+    { "label": "VoidZero: Announcing Rolldown 1.0 (May 2026)", "url": "https://voidzero.dev/posts/announcing-rolldown-1-0" },
+    { "label": "Evan You (VoidZero): Announcing Vite+ (Oct 2025, with the licensing update)", "url": "https://voidzero.dev/posts/announcing-vite-plus" },
+    { "label": "VoidZero: Announcing Vite+ 1.0 (Sep 2026)", "url": "https://voidzero.dev/posts/announcing-vite-plus-1-0" }
+  ]
+}

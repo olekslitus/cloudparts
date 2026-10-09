@@ -1,0 +1,198 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Automated testing",
+  "category": "tools",
+  "order": 50,
+  "summary": "Code that checks other code: a runner finds the tests, runs them and reports what failed, so every change is checked in seconds instead of by hand.",
+  "howItWorks": "A test is a small function that sets up an input, calls the code under test and asserts on the result. A test runner finds tests by naming convention (pytest collects `test_*.py` files and `test`-prefixed functions; Vitest collects `*.test.ts` and `*.spec.ts` files), runs them, and exits with a non-zero code if any assertion fails, so a CI job can block the merge. Runners usually run test files in parallel, in separate processes or worker threads so one file can’t leak state into another. Around that core sit helpers: mocks that stand in for a mailer or an API, snapshots that save an output to a file and fail when it changes, coverage reports, and a watch mode that reruns only the tests a saved file affects. Two layers build on the runner. A test environment manager such as tox or nox runs the same suite once per Python version or dependency set, each in a fresh virtual environment. A component workshop such as Storybook renders each UI component in isolation, one state per “story”, and turns those stories into tests in a real browser.",
+  "analogy": "A pilot’s pre-flight checklist. The same items, in the same order, every time, quick enough that nobody skips it. Most checks are on single parts (unit tests); only a few are full test flights (end-to-end tests), because those are slow and expensive.",
+  "useWhen": [
+    "Code that several people change, or that you’ll change again in six months",
+    "Libraries that promise to work on several language or dependency versions: run the suite once per version",
+    "A bug you just fixed: reproduce it in a low-level test first, so it stays fixed",
+    "UI components with many states (empty, loading, error, 1,000 rows) that are slow to reach by clicking through the app"
+  ],
+  "avoidWhen": [
+    "Throwaway scripts and spikes you’ll delete this week",
+    "Leaning mostly on end-to-end tests through the UI: they are brittle, expensive to write and slow to run",
+    "Snapshot tests nobody reviews: accepting a new snapshot accepts whatever changed",
+    "Living with flaky tests: once people learn to dismiss red builds as noise, they dismiss real failures too"
+  ],
+  "example": "A team maintains a Python client library that supports Python 3.10, 3.11 and 3.12, plus a React dashboard. For the library, one `tox.toml` lists the three versions and a `lint` environment. `tox run` builds the package, installs it with pytest into a fresh virtual environment per version and runs the same tests in each: about 12 seconds on a laptop for a tiny suite, almost all of it environment setup. For the dashboard, Vitest runs the logic tests in about 100 ms and, in watch mode, reruns only the files a save affects. Each component state is a Storybook story, and the Vitest addon runs every story as a test in headless Chromium. CI runs all three and blocks the merge if any exits non-zero.",
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "# test_pricing.py: run with `pytest -q`",
+      "from unittest.mock import Mock",
+      "",
+      "import pytest",
+      "",
+      "",
+      "def total(items, coupon=None):",
+      "    s = sum(price * qty for price, qty in items)",
+      "    return round(s * 0.9, 2) if coupon == \"TEN\" else s",
+      "",
+      "",
+      "# one test function, three cases: arrange the input, act, assert the result",
+      "@pytest.mark.parametrize(",
+      "    (\"items\", \"coupon\", \"expected\"),",
+      "    [",
+      "        ([(2.5, 4), (1, 3)], None, 13),",
+      "        ([(20, 1)], \"TEN\", 18),",
+      "        ([], None, 0),",
+      "    ],",
+      ")",
+      "def test_total(items, coupon, expected):",
+      "    assert total(items, coupon) == expected",
+      "",
+      "",
+      "def test_receipt_is_sent():",
+      "    send = Mock()  # a test double stands in for the real mailer",
+      "    send(total([(5, 2)]))",
+      "    send.assert_called_once_with(10)",
+      "",
+      "# $ pytest -q",
+      "# ....                                       [100%]",
+      "# 4 passed in 0.02s",
+      "# change the last case to expect 1 and the runner names it and exits non-zero:",
+      "# FAILED test_pricing.py::test_total[items2-None-1] - assert 0 == 1"
+    ]
+  },
+  "related": ["cicd", "static-analysis", "emulators"],
+  "sections": [
+    {
+      "type": "text",
+      "title": "The test pyramid",
+      "body": [
+        "For a long time, test automation meant tools that recorded clicks through an application’s user interface and played them back. Martin Fowler describes where that leads: tests that run end-to-end through the UI are brittle, expensive to write and slow to run, and a small change to the app can break many of them at once. A suite made mostly of such tests is the “ice-cream cone”.",
+        "The test pyramid turns it the other way up: many fast, focused unit tests at the bottom, fewer tests through a service or API layer in the middle, and only a few broad UI tests on top. Mike Cohn made the idea known as the “Test Automation Pyramid” in the 2009 book Succeeding with Agile, after first drawing it around 2003–2004. Fowler adds two caveats. The shape assumes broad tests are slow and brittle, so if yours are fast and reliable you need fewer low-level ones. And when a high-level test finds a bug, write a unit test that reproduces it before fixing it, so the bug stays dead.",
+        "Component tests sit between the layers. Storybook pitches them as the middle ground: the in-browser fidelity of an end-to-end test, with the scope of a unit test, since a component can still be given mocked data."
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Flaky tests",
+      "body": [
+        "A flaky test passes and fails on the same code. Common causes are concurrency, reliance on undefined or non-deterministic behaviour, flaky third-party code and infrastructure problems. Google reported in 2016 that about 1.5% of all its test runs gave a flaky result, that almost 16% of its tests showed some flakiness, and that about 84% of the pass-to-fail transitions its CI saw involved a flaky test.",
+        "The cost is trust. With 1,000 tests and a 1.5% flaky rate, about 15 fail on any run for no reason, and people start dismissing real failures as noise. Automatic retries cut the noise but encourage people to ignore flakiness, and they delay real breaks: Google’s option to report a failure only after three failures in a row means a broken 15-minute test isn’t noticed for 45 minutes."
+      ]
+    }
+  ],
+  "kinds": [
+    {
+      "id": "test-runners",
+      "name": "Test runners",
+      "summary": "Find the tests, run them (usually in parallel), and report the results with an exit code CI can act on.",
+      "body": [
+        "A runner collects tests by convention and runs them in isolation. pytest looks for `test_*.py` or `*_test.py` files and runs `test`-prefixed functions; the pytest-xdist plugin spreads them over one worker process per CPU. Vitest’s default pattern matches `*.test.*` and `*.spec.*` files, and it runs files in parallel, each in its own child process by default (or a worker thread), with tests inside a file running one after another unless marked `concurrent`.",
+        "Most runners bundle what tests need: assertions, mock functions and spies, snapshot testing (the output is saved to a file that is committed and reviewed, and the test fails when it changes), coverage, and a watch mode. Vitest’s watch mode follows the module graph and reruns only the tests that import a changed file, the way Vite’s hot module replacement updates only the changed module.",
+        "Pick the runner your ecosystem expects: pytest in Python, Vitest or Jest in JavaScript and TypeScript. Vitest keeps a Jest-compatible API, so most Jest suites run on it with few changes."
+      ],
+      "sources": [
+        { "label": "pytest docs: Good integration practices (conventions for Python test discovery)", "url": "https://docs.pytest.org/en/stable/explanation/goodpractices.html" },
+        { "label": "pytest-xdist docs: distribute tests across multiple CPUs", "url": "https://pytest-xdist.readthedocs.io/en/stable/" },
+        { "label": "Vitest docs: include (default test file pattern)", "url": "https://vitest.dev/config/include" },
+        { "label": "Vitest docs: Parallelism (file and test parallelism, pools)", "url": "https://vitest.dev/guide/parallelism" },
+        { "label": "Vitest docs: Features (watch mode, snapshots, mocking, coverage)", "url": "https://vitest.dev/guide/features" },
+        { "label": "Jest docs: Snapshot testing (commit and review snapshots)", "url": "https://jestjs.io/docs/snapshot-testing" },
+        { "label": "Vitest docs: Why Vitest (Jest-compatible API)", "url": "https://vitest.dev/guide/why" }
+      ]
+    },
+    {
+      "id": "test-environments",
+      "name": "Test environment managers",
+      "summary": "Run the same suite in several isolated environments, one per interpreter or dependency version, from one config file.",
+      "body": [
+        "A Python library usually promises to work on several Python versions and with a range of dependency versions. An environment manager turns each combination into a named environment. For each one, tox creates a fresh virtual environment for the matching interpreter, installs the dependencies, builds the project and installs it like a user would, runs the commands, and reports. It exits with 0 only if every environment passed, and it reuses environments on the next run unless the dependencies change.",
+        "Matrices keep the config short: a product of factors, such as Python 3.12, 3.13 and 3.14 times Django 4.2 and 5.0, expands to six environments. The same machinery runs non-test jobs too, such as a `lint` or `docs` environment. nox does the same job with a Python file of “sessions” instead of a declarative config, and Hatch defines a test matrix for its built-in test environment.",
+        "On a small suite, setting up environments takes most of the run time. Both tools can hand that work to uv: the tox-uv plugin replaces virtualenv and pip with uv (with, its README warns, both uv’s speed and its bugs), and nox ships a `uv` backend. An application that ships on one pinned version gains less: one environment, in CI, is often enough."
+      ],
+      "sources": [
+        { "label": "tox docs: Concepts (environment lifecycle, parallel mode, related projects)", "url": "https://tox.wiki/en/latest/explanation.html" },
+        { "label": "tox docs: Configuration (generative environment lists)", "url": "https://tox.wiki/en/latest/reference/config.html" },
+        { "label": "nox docs: Welcome to Nox (similar to tox, configured with a Python file)", "url": "https://nox.thea.codes/en/stable/" },
+        { "label": "nox docs: Command-line usage (virtualenv, uv and other backends)", "url": "https://nox.thea.codes/en/stable/usage.html" },
+        { "label": "Hatch docs: Testing overview (test environment matrix)", "url": "https://hatch.pypa.io/latest/tutorials/testing/overview/" },
+        { "label": "tox-dev/tox-uv on GitHub: replaces virtualenv and pip with uv", "url": "https://github.com/tox-dev/tox-uv" }
+      ]
+    },
+    {
+      "id": "component-workshops",
+      "name": "Component workshops",
+      "summary": "Render each UI component on its own, one state per story, then reuse the stories as documentation and as tests.",
+      "body": [
+        "Reaching an awkward UI state through the real app means logging in, navigating and faking the right data. A component workshop skips that: it renders one component in an isolated frame, and each “story” fixes its props and mocked data, so a button, a table with 1,000 rows or an error banner can each be opened directly. Storybook keeps an index of every story, and the same stories feed generated documentation.",
+        "Stories then become tests. A story can carry a play function that clicks and types like a user and then asserts on the result. Storybook’s Vitest addon turns every story into a Vitest test run in a real browser through Playwright; accessibility checks run axe-core against each story, and visual tests catch pixel-level changes through Chromatic, a cloud service from the Storybook team.",
+        "Storybook supports React, Vue, Angular, Svelte, web components and more. Ladle is a smaller, React-only alternative built on Vite. Stories in Storybook’s Component Story Format are plain ES modules, so other tools can import them as test cases."
+      ],
+      "sources": [
+        { "label": "Storybook docs: Why Storybook (isolated iframe, stories, CSF)", "url": "https://storybook.js.org/docs/get-started/why-storybook" },
+        { "label": "Storybook docs: How to test UIs with Storybook (Vitest addon, Chromatic)", "url": "https://storybook.js.org/docs/writing-tests" },
+        { "label": "Storybook docs: Interaction tests (play functions)", "url": "https://storybook.js.org/docs/writing-tests/interaction-testing" },
+        { "label": "Storybook docs: Vitest addon", "url": "https://storybook.js.org/docs/writing-tests/integrations/vitest-addon" },
+        { "label": "Storybook blog: Storybook 9 (accessibility with axe-core, visual tests with Chromatic; Jun 2025)", "url": "https://storybook.js.org/blog/storybook-9/" },
+        { "label": "Storybook docs: Component Story Format (an open standard based on ES modules)", "url": "https://storybook.js.org/docs/api/csf" },
+        { "label": "storybookjs/storybook on GitHub: supported frameworks", "url": "https://github.com/storybookjs/storybook" },
+        { "label": "Ladle docs: Introduction (React only, built on Vite)", "url": "https://ladle.dev/docs/" }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Automated unit testing as most programmers know it began in Smalltalk. Kent Beck built small frameworks so that Beck and Beck’s clients could write tests in their normal Smalltalk environment and run a subset or the whole set quickly after every change. Beck preferred each team to build its own, which took a couple of hours. In 1997, on a flight from Zurich to the OOPSLA conference in Atlanta, Beck and Erich Gamma pair-programmed the first version of JUnit, test first. JUnit spread the idea with Extreme Programming and test-driven development, and ports followed for almost every language, CppUnit perhaps first; the family became known as xUnit.",
+      "As suites grew, the question became which tests to write. Mike Cohn sketched the test automation pyramid with Lisa Crispin around 2003–2004 and published it in 2009: many unit tests, fewer service tests, very few slow UI tests.",
+      "Later tools took the same loop in new directions. tox (2010) ran a Python package’s tests across several interpreters in virtualenvs. React Storybook (2016) rendered UI components in isolation, and from 2025 ran those stories as tests through Vitest, a runner first committed in December 2021 that reuses the Vite build pipeline."
+    ],
+    "choices": [
+      {
+        "choice": "Tests written in the same language as the code",
+        "why": "Beck’s focus was making it easy for programmers to define tests in their regular environment and run a subset or the full set quickly, so Beck’s teams ran the unit tests after every change."
+      },
+      {
+        "choice": "Many small tests, few broad ones",
+        "why": "Tests driven through the UI were brittle, slow and expensive to write. Pushing most checks down to unit tests keeps the suite fast and stable enough to run on every change."
+      },
+      {
+        "choice": "A fresh environment per version",
+        "why": "A library has to install and work on every Python version it claims. tox’s first release described itself as checking that a package installs correctly with different Python versions and interpreters."
+      },
+      {
+        "choice": "Stories as test cases",
+        "why": "A component workshop already lists every state of the UI, so adding assertions to those states lets the suite cover thousands of states with little extra code."
+      }
+    ],
+    "timeline": [
+      { "year": "1997", "text": "Beck and Gamma write the first JUnit on a flight to OOPSLA" },
+      { "year": "2004", "text": "Mike Cohn describes the test automation pyramid at a Scrum gathering" },
+      { "year": "2009", "text": "Cohn’s Succeeding with Agile publishes the pyramid" },
+      { "year": "2010", "text": "tox 0.5 runs a package’s tests across Python interpreters in virtualenvs" },
+      { "year": "2016", "text": "Kadira launches React Storybook" },
+      { "year": "2021", "text": "First commit of Vitest, a test runner built on Vite" },
+      { "year": "2025", "text": "Storybook 9 runs every story as a Vitest test in a real browser" }
+    ],
+    "sources": [
+      { "label": "Martin Fowler: Xunit (Jan 2006)", "url": "https://martinfowler.com/bliki/Xunit.html" },
+      { "label": "Martin Fowler: Test Pyramid (May 2012, etymology added Nov 2017)", "url": "https://martinfowler.com/bliki/TestPyramid.html" },
+      { "label": "PyPI: tox 0.5 (July 2010), “virtualenv-based automation of test activities”", "url": "https://pypi.org/project/tox/0.5/" },
+      { "label": "Michael Shilman (Storybook blog): The Storybook story (May 2017)", "url": "https://storybook.js.org/blog/the-storybook-story/" },
+      { "label": "vitest-dev/vitest on GitHub: first commit by Anthony Fu (Dec 2021)", "url": "https://github.com/vitest-dev/vitest/commit/d1803031c7114d334f3423006864745f2751eb62" },
+      { "label": "Storybook blog: Storybook 9 (Jun 2025)", "url": "https://storybook.js.org/blog/storybook-9/" }
+    ]
+  },
+  "sources": [
+    { "label": "Martin Fowler: Test Pyramid (May 2012)", "url": "https://martinfowler.com/bliki/TestPyramid.html" },
+    { "label": "Google Testing Blog: Flaky tests at Google and how we mitigate them (May 2016)", "url": "https://testing.googleblog.com/2016/05/flaky-tests-at-google-and-how-we.html" },
+    { "label": "pytest docs: Good integration practices (conventions for Python test discovery)", "url": "https://docs.pytest.org/en/stable/explanation/goodpractices.html" },
+    { "label": "pytest docs: How to parametrize fixtures and test functions", "url": "https://docs.pytest.org/en/stable/how-to/parametrize.html" },
+    { "label": "Python docs: unittest.mock", "url": "https://docs.python.org/3/library/unittest.mock.html" },
+    { "label": "Vitest docs: include (default test file pattern)", "url": "https://vitest.dev/config/include" },
+    { "label": "Vitest docs: Features", "url": "https://vitest.dev/guide/features" },
+    { "label": "Vitest docs: Parallelism", "url": "https://vitest.dev/guide/parallelism" },
+    { "label": "Jest docs: Snapshot testing", "url": "https://jestjs.io/docs/snapshot-testing" },
+    { "label": "tox docs: Concepts", "url": "https://tox.wiki/en/latest/explanation.html" },
+    { "label": "nox docs: Welcome to Nox", "url": "https://nox.thea.codes/en/stable/" },
+    { "label": "Storybook docs: Why Storybook", "url": "https://storybook.js.org/docs/get-started/why-storybook" },
+    { "label": "Storybook docs: How to test UIs with Storybook", "url": "https://storybook.js.org/docs/writing-tests" },
+    { "label": "Storybook blog: Storybook 9 (component tests between unit and E2E; Jun 2025)", "url": "https://storybook.js.org/blog/storybook-9/" }
+  ]
+}

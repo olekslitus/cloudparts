@@ -1,0 +1,219 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Editors and terminals",
+  "category": "tools",
+  "order": 10,
+  "summary": "The editor where code is written and the terminal where it runs: two old tools that now reach language servers, debuggers and coding agents through open protocols.",
+  "howItWorks": "A modern editor is a small core plus helpers in separate processes. The core holds each open file in memory, parses it for highlighting (often with Tree-sitter, a parser that updates its syntax tree as you edit) and draws the screen. Knowledge about a language lives in a language server. The editor starts one per language and exchanges JSON-RPC messages with it under the Language Server Protocol (LSP): it reports `textDocument/didOpen` and `didChange` as you type, the server sends back diagnostics, and a `textDocument/definition` request returns a file and a position. Debugging works the same way through the Debug Adapter Protocol (DAP): one debugger UI in the editor drives any adapter that speaks it. Extensions run in a separate extension host process. Remote development splits the editor in two: the UI stays on your laptop while a small server on the remote machine, container or WSL runs the language servers, terminals and extensions next to the code. The terminal is the other half. A terminal emulator draws a grid of characters, passes your keystrokes to a shell and obeys the escape sequences programs print to move the cursor or change colour, conventions that go back to hardware terminals such as DEC’s VT100 (1978). Modern terminals add shell integration (the shell marks where each prompt, command and output starts), GPU rendering, inline images and, more and more, a built-in coding agent.",
+  "analogy": "A universal remote and a box of plug adapters. The editor is the remote, with one set of buttons (Go to Definition, Rename, Step Over). Each language brings its own adapter, a language server or debug adapter, with the standard plug, so it works with every remote that has the socket.",
+  "useWhen": [
+    "Choosing an editor for a team: pick one that speaks LSP and DAP, so the same language server and debug adapter serve everyone whatever editor they prefer",
+    "The code, data or GPUs live on another machine: remote development runs language servers, terminals and debuggers there while the UI stays local",
+    "You read a lot of command output: turn on shell integration so the terminal can jump between commands, flag failed exit codes and copy one command’s output",
+    "You want agents built into the editor: a VS Code fork such as Cursor keeps most extensions, and Zed hosts outside agents through the Agent Client Protocol"
+  ],
+  "avoidWhen": [
+    "Assuming a VS Code fork can install everything from Microsoft’s Visual Studio Marketplace: its terms limit Marketplace extensions to Microsoft’s own products, so forks use Open VSX",
+    "Expecting every feature from every language server: servers and editors announce capabilities, and a server may answer `textDocument/definition` but not `workspace/symbol`",
+    "Building on an editor whose upstream has stopped: Void paused in 2025 and was archived in 2026, and its README warned that features may stop working without maintenance"
+  ],
+  "example": "A team writes Python services that train models on a GPU server. Each developer’s editor starts a Python language server and talks LSP to it: opening `train.py` sends `didOpen`, a typo comes back as a diagnostic, and Go to Definition on `load_batch` returns line 0, column 4 of `data.py`. To work on the server, VS Code’s Remote - SSH or Zed’s remote development puts a small server process there, so the language server, terminal and debugger run beside the 40 GB dataset and only the UI runs on the laptop. In the terminal, shell integration has marked every command, so the developer jumps straight back to the `pytest` run that exited with code 1 and copies just its output.",
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "import json, subprocess",
+      "",
+      "# Start a language server (pip install python-lsp-server) and talk LSP to it over stdin/stdout.",
+      "server = subprocess.Popen([\"pylsp\"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)",
+      "",
+      "def send(msg):",
+      "    body = json.dumps({\"jsonrpc\": \"2.0\", **msg}).encode()",
+      "    server.stdin.write(b\"Content-Length: %d\\r\\n\\r\\n\" % len(body) + body)",
+      "    server.stdin.flush()",
+      "",
+      "def receive(want_id):",
+      "    while True:",
+      "        headers = {}",
+      "        while (line := server.stdout.readline().strip()):  # headers end at a blank line",
+      "            key, value = line.split(b\": \")",
+      "            headers[key] = value",
+      "        msg = json.loads(server.stdout.read(int(headers[b\"Content-Length\"])))",
+      "        if msg.get(\"id\") == want_id:",
+      "            return msg[\"result\"]",
+      "",
+      "code = \"def greet(name):\\n    return 'hi ' + name\\n\\ngreet('ada')\\n\"",
+      "uri = \"file:///tmp/demo.py\"",
+      "",
+      "send({\"id\": 1, \"method\": \"initialize\",",
+      "      \"params\": {\"processId\": None, \"rootUri\": None, \"capabilities\": {}}})",
+      "caps = receive(1)[\"capabilities\"]",
+      "print(\"definition\" in str(caps))  # True: the server says it can jump to definitions",
+      "send({\"method\": \"initialized\", \"params\": {}})",
+      "send({\"method\": \"textDocument/didOpen\", \"params\": {\"textDocument\": {",
+      "    \"uri\": uri, \"languageId\": \"python\", \"version\": 1, \"text\": code}}})",
+      "",
+      "# \"Go to Definition\" on `greet` in line 3 (lines and columns count from 0)",
+      "send({\"id\": 2, \"method\": \"textDocument/definition\", \"params\": {",
+      "    \"textDocument\": {\"uri\": uri}, \"position\": {\"line\": 3, \"character\": 1}}})",
+      "print(receive(2))",
+      "# [{'uri': 'file:///tmp/demo.py', 'range': {'start': {'line': 0, 'character': 4}, 'end': {'line': 0, 'character': 9}}}]",
+      "",
+      "send({\"id\": 3, \"method\": \"shutdown\"})",
+      "receive(3)",
+      "send({\"method\": \"exit\"})"
+    ]
+  },
+  "related": ["coding-agents", "remote-access", "build-tools"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "The protocols behind a modern editor",
+      "intro": "Each one turns an M × N integration problem (every tool times every editor) into M + N: write the server or adapter once, and every editor that speaks the protocol can use it.",
+      "corner": "Protocol",
+      "columns": ["Connects", "On the wire", "Origin"],
+      "rows": [
+        { "label": "Language Server Protocol (LSP)", "values": ["Editor and a language server", "JSON-RPC; the server runs as its own process", "Microsoft, from VS Code; announced as a shared standard with Red Hat and Codenvy in June 2016"] },
+        { "label": "Debug Adapter Protocol (DAP)", "values": ["Editor and a debug adapter wrapping a real debugger", "JSON messages with a `Content-Length` header, over stdin/stdout or a socket", "Microsoft, modelled on LSP"] },
+        { "label": "Agent Client Protocol (ACP)", "values": ["Editor and a coding agent run as a subprocess", "JSON-RPC", "Zed, August 2025, Apache licence; first agent was Gemini CLI"] },
+        { "label": "Remote server", "values": ["Local UI and a server on the remote machine", "VS Code Server, or Zed’s headless server, over SSH, WSL or a container", "VS Code Remote Development preview, May 2019"] }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "VS Code, Code - OSS and the forks",
+      "body": [
+        "Most AI editors are not new editors. Microsoft develops VS Code in the open as Code - OSS, under the MIT licence, and builds its Visual Studio Code product from it with extra code, branding and a Microsoft product licence. It keeps the closed parts separable on purpose, so that “it is always possible to fork the repo and build a functional editor”. Cursor (Anysphere), Windsurf (Codeium, now Cognition’s Devin Desktop) and Void did exactly that. Windsurf’s team said forking freed it from the limits of the VS Code extension API without rebuilding an IDE’s internals; Cursor says the VS Code base keeps editing familiar and lets users import their VS Code settings.",
+        "A fork gets the editor but not Microsoft’s services. The Visual Studio Marketplace terms say its extensions are meant only for Microsoft’s in-scope products (Visual Studio, VS Code, GitHub Codespaces, Azure DevOps) and may not be installed in anything else. Some Microsoft extensions, such as the C# debugger and the Remote Development extensions, are licensed only for the Visual Studio family. So Cursor and Windsurf install extensions from Open VSX, the Eclipse Foundation’s vendor-neutral registry, through their own proxy or mirror. Cursor publishes its own builds of some Marketplace-only extensions, and Windsurf wrote its own SSH remoting because Microsoft’s is licensed for VS Code only.",
+        "Forks carry other costs. Cursor warns that the same `publisher.extension` id can point to different code on Open VSX than on Microsoft’s Marketplace. Void shows the risk of a small team: it paused in August 2025, archived its repository in June 2026 and now points users to community forks. Zed took the opposite route: its team wrote a new editor in Rust, then created the Agent Client Protocol so agent builders could plug into an editor “rather than forking VS Code”."
+      ]
+    },
+    {
+      "type": "table",
+      "title": "The main editors at a glance (October 2026)",
+      "corner": "Editor",
+      "columns": ["Built on", "Licence", "Extensions from", "Status"],
+      "rows": [
+        { "label": "Visual Studio Code", "values": ["Code - OSS, in Electron", "MIT source; Microsoft licence for the product build", "Visual Studio Marketplace", "Active (Microsoft)"] },
+        { "label": "Cursor", "values": ["Fork of VS Code", "Proprietary", "Open VSX, through Cursor’s scanning proxy", "Active; owned by SpaceX since August 2026"] },
+        { "label": "Windsurf / Devin Desktop", "values": ["Fork of VS Code", "Proprietary", "An Open VSX mirror", "Bought by Cognition in July 2025; renamed Devin Desktop on June 2, 2026"] },
+        { "label": "Void", "values": ["Fork of VS Code", "Apache 2.0", "Microsoft Marketplace URLs in its build", "Paused August 2025; deprecated and archived June 2026"] },
+        { "label": "Zed", "values": ["Its own Rust engine and GPU UI framework (GPUI)", "GPL 3 editor, AGPL server parts, Apache 2.0 GPUI", "Zed extensions (WebAssembly)", "1.0 since April 2026"] }
+      ],
+      "notes": ["Stack Overflow Developer Survey 2026 (13,193 answers): 70.9% used VS Code regularly, 14.9% Cursor, 11.4% Zed and 3.2% Windsurf."]
+    },
+    {
+      "type": "cards",
+      "title": "What a modern terminal adds",
+      "intro": "A classic terminal only sees characters going in and out; it has no idea which program is running or where one command’s output ends.",
+      "items": [
+        { "name": "Shell integration", "tag": "OSC 133", "text": "A script in the shell prints invisible marks: `OSC 133;A` at the prompt, `OSC 133;C` before a command runs, `OSC 133;D;<exit code>` when it ends. The terminal can then jump between commands, decorate failures and copy one command’s output. VS Code adds its own `OSC 633` sequences on top." },
+        { "name": "Blocks", "tag": "Warp", "text": "Warp uses the shell’s `precmd` and `preexec` hooks to send itself metadata, then keeps each command and its output in a separate grid, so one command can’t overwrite another’s output and each block can be searched, copied or shared." },
+        { "name": "GPU rendering", "text": "Terminals such as Warp and Ghostty draw text with the GPU. Warp, built in Rust and drawn with Metal on macOS, reported rendering above 144 frames per second in 2021, with an average screen redraw of 1.9 ms." },
+        { "name": "Inline graphics", "tag": "kitty protocol", "text": "The kitty graphics protocol lets a program in the terminal draw pixel images that scroll with the text, without the terminal having to understand image formats. Ghostty supports it too." },
+        { "name": "Coding agents", "text": "Command-line agents run in the terminal, and terminals now host them: Warp has its own agent plus first-class support for Claude Code, Codex and OpenCode." }
+      ]
+    }
+  ],
+  "kinds": [
+    {
+      "id": "code-editors",
+      "name": "Code editors",
+      "summary": "Programs for writing code that pair a fast text core with language servers, debug adapters, extensions and, now, built-in agents.",
+      "body": [
+        "A code editor keeps files in memory, highlights and edits them, and leans on helpers for knowledge about each language: language servers over LSP for completion, diagnostics and navigation, and debug adapters over DAP for breakpoints and stepping. Extensions add languages, themes and tools, and remote development runs those helpers on another machine while the UI stays local.",
+        "The field splits three ways. Visual Studio Code is the default: 70.9% of the 13,193 people who answered the Stack Overflow 2026 survey question used it regularly. Cursor and Windsurf (now Devin Desktop) are forks of its open-source base with agents built in. Zed is written from scratch in Rust, draws on the GPU and hosts outside agents through the Agent Client Protocol.",
+        "Pick by ecosystem first. A VS Code fork keeps most extensions but installs them from Open VSX rather than Microsoft’s Marketplace, and loses Microsoft-only pieces such as Remote - SSH. An editor written from scratch, such as Zed, gets languages and debuggers through LSP and DAP, but needs its own extensions for everything else."
+      ],
+      "sources": [
+        { "label": "Language Server Protocol: Overview", "url": "https://microsoft.github.io/language-server-protocol/overviews/lsp/overview/" },
+        { "label": "Debug Adapter Protocol: Overview", "url": "https://microsoft.github.io/debug-adapter-protocol/overview" },
+        { "label": "VS Code docs: Remote Development overview", "url": "https://code.visualstudio.com/docs/remote/remote-overview" },
+        { "label": "Stack Overflow Developer Survey 2026: Technology, Dev IDEs", "url": "https://survey.stackoverflow.co/2026/technology/data" },
+        { "label": "Eclipse Open VSX: README", "url": "https://github.com/eclipse-openvsx/openvsx" },
+        { "label": "Zed blog: Bring Your Own Agent to Zed, introducing the Agent Client Protocol (Aug 2025)", "url": "https://zed.dev/blog/bring-your-own-agent-to-zed" },
+        { "label": "VS Code wiki: Differences between the repository and Visual Studio Code", "url": "https://github.com/microsoft/vscode/wiki/Differences-between-the-repository-and-Visual-Studio-Code" }
+      ]
+    },
+    {
+      "id": "terminals",
+      "name": "Terminals",
+      "summary": "Apps that run your shell and draw its output, now adding shell integration, GPU rendering, inline images and coding agents.",
+      "body": [
+        "A terminal emulator draws a grid of characters, passes your keystrokes to a shell and obeys the escape sequences programs print to move the cursor or change colour, conventions that go back to hardware terminals such as DEC’s VT100 (1978). Because it only sees characters, a classic terminal doesn’t know where one command’s output ends and the next begins.",
+        "Shell integration fixes that: the shell prints marks such as `OSC 133;A` (prompt start) and `OSC 133;D` (command finished, with its exit code), so the terminal can jump between commands, show failures and copy one command’s output. Warp goes further and keeps each command and its output as a separate block. Newer terminals also render on the GPU, and some, such as kitty and Ghostty, show images through the kitty graphics protocol.",
+        "Terminals are also where command-line coding agents run. Warp now ships its own agent and gives third-party CLI agents such as Claude Code and Codex first-class support, so the terminal has become a place to supervise agents as well as to run commands."
+      ],
+      "sources": [
+        { "label": "VS Code docs: Terminal shell integration (OSC 133 and OSC 633 sequences)", "url": "https://code.visualstudio.com/docs/terminal/shell-integration" },
+        { "label": "Warp blog: How Warp Works (Jul 2021)", "url": "https://www.warp.dev/blog/how-warp-works" },
+        { "label": "kitty docs: Terminal graphics protocol", "url": "https://sw.kovidgoyal.net/kitty/graphics-protocol/" },
+        { "label": "Ghostty docs: About Ghostty", "url": "https://ghostty.org/docs/about" },
+        { "label": "Warp docs: Agents overview (Warp Agent and third-party CLI agents)", "url": "https://docs.warp.dev/agents/" },
+        { "label": "Wikipedia: VT100", "url": "https://en.wikipedia.org/wiki/VT100" }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Editors and IDEs used to carry their own support for each language. Every editor needed its own plugin for every language, so supporting M languages in N editors was M × N pieces of work. Terminals had changed even less: programs still drove them with escape codes popularised by hardware terminals such as DEC’s VT100, introduced in 1978.",
+      "Microsoft’s Monaco team set out to build a browser-based code editor that felt native. Wrapped in GitHub’s Electron shell, it became Visual Studio Code, previewed at Build 2015 and open-sourced six months later. VS Code moved language support into separate server processes, and in June 2016 Microsoft, Red Hat and Codenvy announced the Language Server Protocol as a shared standard; the Debug Adapter Protocol applied the same idea to debuggers. In 2019 VS Code split itself in two for remote development, keeping the UI local and running language servers and extensions where the code lives.",
+      "Large language models brought the next wave. Instead of living inside the extension API, Anysphere (Cursor, 2023), Codeium (Windsurf, 2024) and Void forked VS Code’s open-source base to build agents into the editor itself. The Atom veterans behind Zed wrote a new editor in Rust and, in August 2025, published the Agent Client Protocol so that any agent can plug into any editor, as LSP did for languages. Terminals changed too: Warp (public beta in 2022) and Ghostty rebuilt the terminal as a GPU-rendered app, and Warp now centres its product on coding agents."
+    ],
+    "choices": [
+      { "choice": "Language support in a separate process, behind a protocol", "why": "Language analysis is heavy on CPU and memory, so a separate process keeps the editor responsive, and it can be written in any language. A shared protocol lets one server serve every editor, turning M × N integrations into M + N." },
+      { "choice": "Simple, language-neutral messages", "why": "LSP talks in document URIs and text positions, not syntax trees or compiler symbols. Those types mean the same thing in every language, which simplified the protocol a great deal and made it easier to standardize." },
+      { "choice": "Keep VS Code’s closed parts separable", "why": "Microsoft’s rule is that anything not open source must sit outside the Code - OSS repository, so anyone can fork it and build a working editor. That is what let Cursor, Windsurf and Void exist, while Microsoft kept its brand, Marketplace and some extensions to itself." },
+      { "choice": "Split the editor for remote work", "why": "Developers were running VS Code against containers and VMs that were hard to recreate locally, and lost completions, linting and debugging in the process. Running the UI locally and the tools remotely gave them both." }
+    ],
+    "timeline": [
+      { "year": "1978", "text": "DEC introduces the VT100 terminal, whose escape codes terminals still emulate" },
+      { "year": "2015", "text": "Visual Studio Code previewed at Build; open-sourced six months later" },
+      { "year": "2016", "text": "Language Server Protocol announced as a shared standard with Red Hat and Codenvy" },
+      { "year": "2019", "text": "VS Code Remote Development preview: containers, SSH and WSL" },
+      { "year": "2023", "text": "Anysphere raises a seed round for Cursor, a fork of VS Code" },
+      { "year": "2024", "text": "Codeium launches the Windsurf Editor, another VS Code fork, in November" },
+      { "year": "2025", "text": "Zed publishes the Agent Client Protocol, with Gemini CLI as the first agent" }
+    ],
+    "sources": [
+      { "label": "VS Code docs: Language Server Extension Guide (the M × N problem)", "url": "https://code.visualstudio.com/api/language-extensions/language-server-extension-guide" },
+      { "label": "VS Code blog: Visual Studio Code 1.0! (Apr 2016)", "url": "https://code.visualstudio.com/blogs/2016/04/14/vscode-1.0" },
+      { "label": "VS Code blog: A Common Protocol for Languages (Jun 2016)", "url": "https://code.visualstudio.com/blogs/2016/06/27/common-language-protocol" },
+      { "label": "VS Code blog: Remote Development with VS Code (May 2019)", "url": "https://code.visualstudio.com/blogs/2019/05/02/remote-development" },
+      { "label": "TechCrunch: Anysphere raises $8M from OpenAI to build an AI-powered IDE (Oct 2023)", "url": "https://techcrunch.com/2023/10/11/anysphere-raises-8m-from-openai-to-build-an-ai-powered-ide/" },
+      { "label": "Cognition (Windsurf) blog: Windsurf Launch (Nov 2024)", "url": "https://devin.ai/blog/windsurf-launch" },
+      { "label": "Zed blog: Bring Your Own Agent to Zed (Aug 2025)", "url": "https://zed.dev/blog/bring-your-own-agent-to-zed" },
+      { "label": "Zed blog: Zed is 1.0 (Apr 2026)", "url": "https://zed.dev/blog/zed-1-0" },
+      { "label": "Warp blog: Introducing Warp (Apr 2022)", "url": "https://www.warp.dev/blog/introducing-warp" },
+      { "label": "Wikipedia: VT100", "url": "https://en.wikipedia.org/wiki/VT100" }
+    ]
+  },
+  "sources": [
+    { "label": "Language Server Protocol: Overview", "url": "https://microsoft.github.io/language-server-protocol/overviews/lsp/overview/" },
+    { "label": "VS Code docs: Language Server Extension Guide", "url": "https://code.visualstudio.com/api/language-extensions/language-server-extension-guide" },
+    { "label": "Debug Adapter Protocol: Overview", "url": "https://microsoft.github.io/debug-adapter-protocol/overview" },
+    { "label": "Tree-sitter: Introduction", "url": "https://tree-sitter.github.io/tree-sitter/" },
+    { "label": "VS Code docs: Extension Host", "url": "https://code.visualstudio.com/api/advanced-topics/extension-host" },
+    { "label": "VS Code docs: Remote Development overview", "url": "https://code.visualstudio.com/docs/remote/remote-overview" },
+    { "label": "Zed docs: Remote Development", "url": "https://zed.dev/docs/remote-development" },
+    { "label": "VS Code wiki: Differences between the repository and Visual Studio Code", "url": "https://github.com/microsoft/vscode/wiki/Differences-between-the-repository-and-Visual-Studio-Code" },
+    { "label": "Visual Studio Marketplace Terms of Use (Sep 2025)", "url": "https://aka.ms/vsmarketplace-ToU" },
+    { "label": "Eclipse Open VSX: README", "url": "https://github.com/eclipse-openvsx/openvsx" },
+    { "label": "Cursor docs: Extensions (Open VSX and the marketplace proxy)", "url": "https://cursor.com/docs/configuration/extensions" },
+    { "label": "Cursor docs: VS Code migration", "url": "https://cursor.com/docs/configuration/migrations/vscode" },
+    { "label": "Devin Desktop docs: Advanced configuration (own SSH support, Open VSX mirror)", "url": "https://docs.devin.ai/desktop/advanced" },
+    { "label": "Cognition (Windsurf) blog: Innovation, not Productivity: Why we Built Windsurf (Dec 2024)", "url": "https://devin.ai/blog/why-we-built-windsurf" },
+    { "label": "Void: README on GitHub (deprecated, archived)", "url": "https://github.com/voideditor/void" },
+    { "label": "Void: product.json (extension gallery URLs)", "url": "https://github.com/voideditor/void/blob/main/product.json" },
+    { "label": "Zed blog: Zed is now open source (Jan 2024)", "url": "https://zed.dev/blog/zed-is-now-open-source" },
+    { "label": "Zed blog: Zed is 1.0 (Apr 2026)", "url": "https://zed.dev/blog/zed-1-0" },
+    { "label": "Zed blog: Bring Your Own Agent to Zed (Aug 2025)", "url": "https://zed.dev/blog/bring-your-own-agent-to-zed" },
+    { "label": "Cursor blog: Cursor is now a part of SpaceX (Aug 2026)", "url": "https://cursor.com/blog/joining-spacex" },
+    { "label": "Devin Desktop docs: FAQ (Windsurf becomes Devin Desktop on June 2, 2026)", "url": "https://docs.devin.ai/desktop/devin-desktop-faq" },
+    { "label": "Stack Overflow Developer Survey 2026: Technology, Dev IDEs", "url": "https://survey.stackoverflow.co/2026/technology/data" },
+    { "label": "VS Code docs: Terminal shell integration", "url": "https://code.visualstudio.com/docs/terminal/shell-integration" },
+    { "label": "Warp blog: How Warp Works (Jul 2021)", "url": "https://www.warp.dev/blog/how-warp-works" },
+    { "label": "kitty docs: Terminal graphics protocol", "url": "https://sw.kovidgoyal.net/kitty/graphics-protocol/" },
+    { "label": "Ghostty docs: About Ghostty", "url": "https://ghostty.org/docs/about" },
+    { "label": "Warp docs: Agents overview", "url": "https://docs.warp.dev/agents/" }
+  ]
+}

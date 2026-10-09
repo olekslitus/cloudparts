@@ -1,0 +1,319 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Linters, formatters and type checkers",
+  "category": "tools",
+  "order": 40,
+  "summary": "Tools that read source code without running it: linters flag likely bugs, formatters reprint the layout, and type checkers check that values have the types the code claims.",
+  "howItWorks": "All three start the same way: they parse each file into a syntax tree, without running anything. A linter walks that tree and applies rules, each a small check such as “this import is never used” or “this comparison is always true”; many rules come with an automatic fix. Ruff has over 900 rules for Python, Clippy over 800 lints for Rust, and ESLint hundreds for JavaScript. A formatter ignores how the code was laid out and prints the tree again in one canonical style, so spacing, quotes and line breaks stop being a matter of taste; Black even checks that the reformatted code still parses to an equivalent tree. A type checker works out the type of every expression, from annotations where they exist and by inference where they don’t, and reports where a value can’t have the type the code needs, such as an `int` passed where a `str` is expected. In Python and with TypeScript’s `tsc`, this happens entirely before the program runs, and Python ignores annotations at runtime. The three overlap little: a linter sees an unused import that a type checker skips, and a type checker sees a wrong argument type that a linter misses. Teams usually run all three on save in the editor (through a language server), again before commit, and in CI with a check-only flag so the build fails on problems but never rewrites code.",
+  "analogy": "A manuscript before printing. The typesetter (formatter) fixes spacing and margins without touching the words. The copy editor (linter) works through a checklist of common mistakes and corrects most of them. The fact-checker (type checker) checks every claim against the references and only reports what doesn’t match.",
+  "useWhen": [
+    "Any codebase with more than one author: a formatter ends style debates in review because there is nothing left to decide",
+    "In CI, with check-only flags (`ruff format --check`, `ruff check`, a type checker’s exit code) so a pull request can’t merge with findings",
+    "Dynamically typed code (Python, JavaScript through TypeScript) where a wrong type would otherwise only show up at runtime"
+  ],
+  "avoidWhen": [
+    "Switching on every rule in an old codebase at once; the thousands of findings get ignored. Start small, or record existing errors as a baseline (`basedpyright --writebaseline`, `pyrefly suppress`)",
+    "Treating a clean type check as proof the program works: Python doesn’t enforce annotations at runtime, and untyped libraries or `Any` hide errors",
+    "Alternating two formatters on the same files: Ruff, for one, says its formatter isn’t meant to be used interchangeably with Black"
+  ],
+  "example": "A small Python service has a 17-line module with three issues and a bug. `ruff check` reports three findings in milliseconds (unsorted imports, an unused `import os`, an old-style `Optional[str]`), and `ruff check --fix` repairs all three. `ruff format` changes one line, `orders=[...]` to `orders = [...]`. Neither notices that `report()` assigns the `int` returned by `total()` to a variable declared `str`; the type checker does, at line 16, column 18. After the fix, CI runs `uv sync --locked`, `ruff check`, `ruff format --check` and `basedpyright` in sequence, and all four exit with code 0.",
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "import os  # linter: F401, `os` imported but unused",
+      "",
+      "",
+      "# formatter: reprints the next line as `def total(prices: list[int]) -> int:`",
+      "def total(prices:list[int])->int:",
+      "    return sum(prices)",
+      "",
+      "",
+      "# type checker: \"int\" is not assignable to \"str\"",
+      "label: str = total([1299, 450])",
+      "",
+      "# linter: E711, comparison to `None` should be `is None`",
+      "if label == None:",
+      "    print(\"empty\")",
+      "",
+      "print(label)  # runs anyway and prints 1749: Python doesn't check annotations"
+    ]
+  },
+  "related": ["package-managers", "testing", "build-tools", "cicd"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "Three tools, three questions",
+      "intro": "They read the same syntax tree and answer different questions, which is why projects run all three.",
+      "corner": "Kind",
+      "columns": ["Question it answers", "Changes your code?", "Examples"],
+      "rows": [
+        { "label": "Linter", "values": ["Is this code probably wrong, risky or outdated?", "Only fixes you ask for (`--fix`)", "Ruff, ESLint, Clippy, `go vet`"] },
+        { "label": "Formatter", "values": ["Is it laid out the canonical way?", "Yes, that is its job; `--check` only reports", "gofmt, Prettier, Black, `ruff format`"] },
+        { "label": "Type checker", "values": ["Can every value have the type the code needs?", "No, it only reports", "TypeScript’s `tsc`, mypy, Pyright, basedpyright, Pyrefly, ty"] }
+      ]
+    },
+    {
+      "type": "code",
+      "title": "One Python project, step 1: uv creates it and adds the tools",
+      "intro": "uv (0.13.0 here) creates the project, records Pydantic as a dependency and Ruff plus basedpyright as development dependencies in `[dependency-groups]`, and pins all of them in `uv.lock`. Everyone who runs `uv sync` gets the same tool versions, so the editor, a teammate’s laptop and CI report the same findings. Output trimmed where marked.",
+      "lang": "bash",
+      "source": [
+        "uv init shop && cd shop          # pyproject.toml, .python-version, src/shop/__init__.py",
+        "uv add pydantic",
+        "# Using CPython 3.12.13",
+        "# Creating virtual environment at: .venv",
+        "# Resolved 6 packages in 12ms",
+        "#  + pydantic==2.14.0             (plus its 4 dependencies and the project itself)",
+        "",
+        "uv add --dev ruff basedpyright",
+        "# Resolved 9 packages in 6ms",
+        "#  + basedpyright==1.40.2",
+        "#  + nodejs-wheel-binaries==24.19.0   (basedpyright bundles Node.js, so no npm is needed)",
+        "#  + ruff==0.17.0"
+      ]
+    },
+    {
+      "type": "code",
+      "title": "Step 2: one pyproject.toml configures all three",
+      "intro": "`uv init` wrote the first four tables and `uv add` filled in the dependencies; the `[tool.*]` tables at the end are added by hand. Ruff reads `[tool.ruff]`; basedpyright reads `[tool.basedpyright]` and finds the `.venv` uv created without being told. Its own default mode, `recommended`, turns on every rule, so this project starts from Pyright’s `standard` set.",
+      "lang": "text",
+      "source": [
+        "[project]",
+        "name = \"shop\"",
+        "version = \"0.1.0\"",
+        "requires-python = \">=3.12\"",
+        "dependencies = [",
+        "    \"pydantic>=2.14.0\",",
+        "]",
+        "",
+        "[project.scripts]",
+        "shop = \"shop:main\"",
+        "",
+        "[build-system]",
+        "requires = [\"uv_build>=0.13.0,<0.14.0\"]",
+        "build-backend = \"uv_build\"",
+        "",
+        "[dependency-groups]",
+        "dev = [",
+        "    \"basedpyright>=1.40.2\",",
+        "    \"ruff>=0.17.0\",",
+        "]",
+        "",
+        "[tool.ruff]",
+        "line-length = 100",
+        "",
+        "[tool.ruff.lint]",
+        "select = [\"E\", \"F\", \"I\", \"B\", \"UP\"]   # pycodestyle, Pyflakes, isort, bugbear, pyupgrade",
+        "",
+        "[tool.basedpyright]",
+        "typeCheckingMode = \"standard\""
+      ]
+    },
+    {
+      "type": "code",
+      "title": "Step 3: a module with three lint findings, one layout slip and one bug",
+      "intro": "`src/shop/orders.py`. The bug is in `report()`: `total()` returns an `int`, but the result is assigned to a variable declared `str`. Python would run this without complaint.",
+      "lang": "python",
+      "source": [
+        "import os",
+        "from typing import Optional",
+        "from pydantic import BaseModel",
+        "",
+        "",
+        "class Order(BaseModel):",
+        "    id: int",
+        "    total_cents: int",
+        "    note: Optional[str] = None",
+        "",
+        "",
+        "def total(orders: list[Order]) -> int:",
+        "    return sum(o.total_cents for o in orders)",
+        "",
+        "",
+        "def report() -> str:",
+        "    orders=[Order(id=1, total_cents=1299), Order(id=2, total_cents=450)]",
+        "    label: str = total(orders)",
+        "    return label"
+      ]
+    },
+    {
+      "type": "code",
+      "title": "Step 4: lint, fix, format, type-check",
+      "intro": "Real output from Ruff 0.17.0 and basedpyright 1.40.2 (based on Pyright 1.1.414); long paths shortened to `…/shop`. Each tool exits with code 1 when it finds something, which is what fails a CI job.",
+      "lang": "bash",
+      "source": [
+        "uv run ruff check --output-format concise",
+        "# src/shop/orders.py:1:1: I001 [*] Import block is un-sorted or un-formatted",
+        "# src/shop/orders.py:1:8: F401 [*] `os` imported but unused",
+        "# src/shop/orders.py:9:11: UP045 [*] Use `X | None` for type annotations",
+        "# Found 3 errors.",
+        "# [*] 3 fixable with `--fix`.",
+        "",
+        "uv run ruff check --fix          # sorts imports, drops os and Optional, writes str | None",
+        "# Found 3 errors (3 fixed, 0 remaining).",
+        "",
+        "uv run ruff format               # one change: orders=[...] becomes orders = [...]",
+        "# 1 file reformatted, 2 files left unchanged",
+        "",
+        "uv run basedpyright              # the bug Ruff can’t see",
+        "# …/shop/src/shop/orders.py",
+        "#   …/shop/src/shop/orders.py:16:18 - error: Type \"int\" is not assignable to declared type \"str\"",
+        "#     \"int\" is not assignable to \"str\" (reportAssignmentType)",
+        "# 1 error, 0 warnings, 0 notes"
+      ]
+    },
+    {
+      "type": "code",
+      "title": "Step 5: fix the bug, then run what CI runs",
+      "intro": "With `report()` changed to `return f\"{total(orders) / 100:.2f} EUR\"`, the whole gate passes. `--locked` makes `uv sync` fail if `uv.lock` is stale instead of updating it.",
+      "lang": "bash",
+      "source": [
+        "uv sync --locked && uv run ruff check && uv run ruff format --check && uv run basedpyright",
+        "# Resolved 9 packages in 5ms",
+        "# Checked 9 packages in 1ms",
+        "# All checks passed!",
+        "# 3 files already formatted",
+        "# 0 errors, 0 warnings, 0 notes",
+        "",
+        "uv run python -c \"from shop.orders import report; print(report())\"",
+        "# 17.49 EUR"
+      ]
+    },
+    {
+      "type": "code",
+      "title": "Swapping the type checker: Pyright and Pyrefly",
+      "intro": "The checkers are interchangeable at this level, with two traps worth knowing. A checker started outside the project environment can’t see its dependencies. And Pyrefly 1.3, finding no `[tool.pyrefly]` table, chose its low-noise `basic` preset, which skips assignment checks; asking for the `default` preset (or adding the table) finds the bug. Run on the file from step 4, before the fix.",
+      "lang": "bash",
+      "source": [
+        "uvx pyright                      # runs in uvx’s own environment, not the project’s .venv",
+        "#   …/shop/src/shop/orders.py:1:6 - error: Import \"pydantic\" could not be resolved (reportMissingImports)",
+        "uv run --with pyright pyright    # same checker inside the project environment",
+        "#   …/shop/src/shop/orders.py:16:18 - error: Type \"int\" is not assignable to declared type \"str\"",
+        "",
+        "uvx pyrefly check",
+        "#  INFO 0 errors",
+        "# No `pyrefly.toml` found — using preset `basic`.",
+        "uvx pyrefly check --preset default",
+        "# ERROR `int` is not assignable to `str` [bad-assignment]",
+        "#   --> src/shop/orders.py:16:18",
+        "#  INFO 1 error"
+      ]
+    }
+  ],
+  "kinds": [
+    {
+      "id": "linters",
+      "name": "Linters",
+      "summary": "Rule engines that flag likely bugs, unused code and risky or outdated patterns, and fix many of them automatically.",
+      "body": [
+        "A linter is a list of rules run over the syntax tree. Each rule looks for one pattern: an unused variable, a mutable default argument, a `Printf` whose arguments don’t match its format string. Rules are switched on by code or category, findings point to a file, line and column, and many rules carry a fix that `--fix` applies. Go’s `vet` is frank about the trade-off: its heuristics find real bugs the compiler misses, but not every report is a genuine problem.",
+        "Linters differ most in how they grow. ESLint lets anyone write custom rules and share them as plugins. Clippy groups its 800-plus Rust lints into categories with a default level each. Ruff re-implements Flake8, isort, pyupgrade and dozens of plugins natively in Rust, which makes it 10 to 100 times faster but means it has no custom rules.",
+        "The name comes from `lint`, a C checker Stephen C. Johnson wrote at Bell Labs in 1978 while porting Unix to a 32-bit machine. Like a clothes dryer’s lint trap, it was meant to catch the fluff and leave the fabric intact."
+      ],
+      "sources": [
+        { "label": "ESLint docs: Core concepts (rules, fixes, plugins)", "url": "https://eslint.org/docs/latest/use/core-concepts/" },
+        { "label": "Clippy documentation: Introduction", "url": "https://doc.rust-lang.org/clippy/" },
+        { "label": "Go docs: cmd/vet", "url": "https://pkg.go.dev/cmd/vet" },
+        { "label": "Ruff README (rules, speed, tools it replaces)", "url": "https://github.com/astral-sh/ruff" },
+        { "label": "Ruff FAQ (custom rules, Flake8 and Pylint comparison)", "url": "https://docs.astral.sh/ruff/faq/" },
+        { "label": "Wikipedia: Lint (software)", "url": "https://en.wikipedia.org/wiki/Lint_(software)" }
+      ]
+    },
+    {
+      "id": "formatters",
+      "name": "Formatters",
+      "summary": "Tools that reprint code in one canonical layout, so style never comes up in review.",
+      "body": [
+        "A formatter parses the code and prints the tree again from scratch, wrapping lines at a set width. Because it reprints everything, it replaces the whole family of formatting rules linters used to carry (line length, spacing, comma style) and leaves linters the rules that catch bugs. Black adds a safety check that the reformatted code still parses to an equivalent tree.",
+        "The point is to stop arguing. Go’s gofmt formats code automatically, and a 2013 survey found about 70% of Go packages already formatted with it. Prettier (JavaScript, 2017) keeps options to a minimum on purpose: more options would turn style debates into debates about options. Black calls itself “uncompromising” and picks 88 columns by default.",
+        "Formatters in one language tend to converge on the same output. Ruff’s formatter targets Black compatibility and formats more than 99.9% of lines identically on Black-formatted projects such as Django and Zulip, so teams can switch without a noisy diff."
+      ],
+      "sources": [
+        { "label": "Prettier docs: Prettier vs. linters", "url": "https://prettier.io/docs/comparison" },
+        { "label": "Prettier docs: Option philosophy", "url": "https://prettier.io/docs/option-philosophy" },
+        { "label": "Prettier blog: Prettier 1.0 (Apr 2017)", "url": "https://prettier.io/blog/2017/04/13/1.0.0.html" },
+        { "label": "Go blog: go fmt your code (Jan 2013)", "url": "https://go.dev/blog/gofmt" },
+        { "label": "Black docs: The uncompromising code formatter", "url": "https://black.readthedocs.io/en/stable/" },
+        { "label": "Black docs: The Black code style (line length)", "url": "https://black.readthedocs.io/en/stable/the_black_code_style/current_style.html" },
+        { "label": "Ruff docs: The Ruff formatter", "url": "https://docs.astral.sh/ruff/formatter/" }
+      ]
+    },
+    {
+      "id": "type-checkers",
+      "name": "Type checkers",
+      "summary": "Tools that infer and check the type of every value without running the program.",
+      "body": [
+        "A type checker reads annotations, infers types where there are none, and reports any place a value can’t have the type the code needs. TypeScript’s `tsc` does this for JavaScript. In Python, PEP 484 (2014) standardised the annotation syntax but deliberately left checking to separate tools; the interpreter stores annotations and ignores them.",
+        "Python therefore has several checkers that agree on the typing specification and differ where it is silent. mypy, started by Jukka Lehtosalo in 2012, was the reference implementation. Microsoft’s Pyright, written in TypeScript, evaluates types lazily so it can power an editor and is often 3 to 5 times faster than mypy on large codebases; basedpyright is a stricter community fork. Two Rust checkers arrived in 2025: Meta’s Pyrefly and Astral’s ty.",
+        "Each lets you pick how strict to be (Pyright’s `basic`, `standard` and `strict` modes; Pyrefly’s presets from `basic` to `strict`), and each runs as a language server, so the errors CI reports appear in the editor as you type."
+      ],
+      "sources": [
+        { "label": "TypeScript handbook: The basics (static type-checking, tsc)", "url": "https://www.typescriptlang.org/docs/handbook/2/basic-types.html" },
+        { "label": "PEP 484: Type hints (created Sep 2014)", "url": "https://peps.python.org/pep-0484/" },
+        { "label": "mypy: About (started 2012)", "url": "https://mypy-lang.org/about.html" },
+        { "label": "Pyright docs: Differences between Pyright and mypy", "url": "https://github.com/microsoft/pyright/blob/main/docs/mypy-comparison.md" },
+        { "label": "Pyright docs: Configuration (typeCheckingMode)", "url": "https://github.com/microsoft/pyright/blob/main/docs/configuration.md" },
+        { "label": "Pyrefly docs: Configuration (presets)", "url": "https://pyrefly.org/en/docs/configuration/" },
+        { "label": "Pyrefly blog: Introducing Pyrefly (May 2025)", "url": "https://pyrefly.org/blog/introducing-pyrefly/" },
+        { "label": "Astral blog: ty, an extremely fast Python type checker and language server (Dec 2025)", "url": "https://astral.sh/blog/ty" },
+        { "label": "basedpyright README", "url": "https://github.com/DetachHead/basedpyright" }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In 1978 Stephen C. Johnson at Bell Labs was writing a yacc grammar for C and dealing with portability problems from porting Unix to a 32-bit machine. The checker Johnson wrote, `lint`, shipped outside Bell Labs with Unix V7 in 1979 and gave its name to a whole category of tools, even though the original did static analysis rather than style checks.",
+      "Formatters took longer to win. Go’s 2013 blog post on gofmt could already report that about 70% of Go packages in the wild were formatted with it. JavaScript followed with Prettier in 2017 and Python with Black, both selling the same deal: give up control over layout and never discuss it again.",
+      "Optional types for dynamic languages grew alongside. Jukka Lehtosalo started mypy in 2012, and PEP 484 (2014) turned its annotation style into standard Python syntax while leaving checking to outside tools, which is why Python now has several competing checkers. Since 2022 a wave of tools rewritten in Rust has made all three kinds much faster: Ruff for linting and formatting, then Pyrefly and ty for types."
+    ],
+    "choices": [
+      { "choice": "Reprint everything instead of flagging style", "why": "A formatter that rebuilds the layout from the syntax tree leaves nothing to argue about, and frees linters to focus on rules that catch real bugs." },
+      { "choice": "Few options, on purpose", "why": "Prettier’s maintainers found that every option reopened the style debate as a debate about options; Black asks users to cede control in return for speed and determinism." },
+      { "choice": "Optional types, checked by a separate tool", "why": "PEP 484 kept annotations out of the runtime so existing code kept working and checking stayed voluntary, letting projects add types gradually." },
+      { "choice": "Rewrite the tools in a compiled language", "why": "Ruff’s author argued Python tooling could be much faster, as esbuild and swc had shown for JavaScript: linting CPython, Ruff’s first release was about 150 times faster than Flake8 on macOS (about 25 times with Flake8 hacked to use multiprocessing)." }
+    ],
+    "timeline": [
+      { "year": "1978", "text": "Stephen C. Johnson writes `lint` for C at Bell Labs" },
+      { "year": "2012", "text": "Jukka Lehtosalo starts mypy" },
+      { "year": "2013", "text": "About 70% of Go packages already use gofmt" },
+      { "year": "2014", "text": "PEP 484 proposes standard type hints for Python 3.5" },
+      { "year": "2017", "text": "Prettier 1.0 for JavaScript" },
+      { "year": "2022", "text": "Ruff, a Python linter written in Rust" },
+      { "year": "2025", "text": "Rust-based Python type checkers: Pyrefly (alpha, May) and ty (beta, December)" }
+    ],
+    "sources": [
+      { "label": "Wikipedia: Lint (software)", "url": "https://en.wikipedia.org/wiki/Lint_(software)" },
+      { "label": "Go blog: go fmt your code (Jan 2013)", "url": "https://go.dev/blog/gofmt" },
+      { "label": "Prettier blog: Prettier 1.0 (Apr 2017)", "url": "https://prettier.io/blog/2017/04/13/1.0.0.html" },
+      { "label": "Prettier docs: Option philosophy", "url": "https://prettier.io/docs/option-philosophy" },
+      { "label": "Black docs: The uncompromising code formatter", "url": "https://black.readthedocs.io/en/stable/" },
+      { "label": "mypy: About (started 2012)", "url": "https://mypy-lang.org/about.html" },
+      { "label": "PEP 484: Type hints (created Sep 2014)", "url": "https://peps.python.org/pep-0484/" },
+      { "label": "Charlie Marsh: Python tooling could be much, much faster (Aug 2022)", "url": "https://notes.crmarsh.com/python-tooling-could-be-much-much-faster" },
+      { "label": "Pyrefly blog: Introducing Pyrefly (May 2025)", "url": "https://pyrefly.org/blog/introducing-pyrefly/" },
+      { "label": "Astral blog: ty (Dec 2025)", "url": "https://astral.sh/blog/ty" }
+    ]
+  },
+  "sources": [
+    { "label": "Ruff FAQ: How does Ruff compare to ty, Mypy, Pyright or Pyre?", "url": "https://docs.astral.sh/ruff/faq/" },
+    { "label": "Ruff README", "url": "https://github.com/astral-sh/ruff" },
+    { "label": "Ruff docs: The Ruff formatter (Black compatibility, interchangeability)", "url": "https://docs.astral.sh/ruff/formatter/" },
+    { "label": "Ruff docs: Configuring Ruff", "url": "https://docs.astral.sh/ruff/configuration/" },
+    { "label": "Ruff v0.17.0 release notes (Oct 2026)", "url": "https://github.com/astral-sh/ruff/releases/tag/0.17.0" },
+    { "label": "Clippy documentation: Introduction", "url": "https://doc.rust-lang.org/clippy/" },
+    { "label": "ESLint docs: Core concepts", "url": "https://eslint.org/docs/latest/use/core-concepts/" },
+    { "label": "Black docs: The uncompromising code formatter", "url": "https://black.readthedocs.io/en/stable/" },
+    { "label": "Prettier docs: Prettier vs. linters", "url": "https://prettier.io/docs/comparison" },
+    { "label": "PEP 484: Type hints", "url": "https://peps.python.org/pep-0484/" },
+    { "label": "TypeScript handbook: The basics", "url": "https://www.typescriptlang.org/docs/handbook/2/basic-types.html" },
+    { "label": "uv docs: Managing dependencies (dependency groups)", "url": "https://docs.astral.sh/uv/concepts/projects/dependencies/" },
+    { "label": "uv docs: Locking and syncing (--locked)", "url": "https://docs.astral.sh/uv/concepts/projects/sync/" },
+    { "label": "uv 0.13.0 release notes (Oct 2026)", "url": "https://github.com/astral-sh/uv/releases/tag/0.13.0" },
+    { "label": "basedpyright docs: Better defaults (recommended mode, .venv detection)", "url": "https://docs.basedpyright.com/latest/benefits-over-pyright/better-defaults/" },
+    { "label": "basedpyright docs: Baseline", "url": "https://docs.basedpyright.com/latest/benefits-over-pyright/baseline/" },
+    { "label": "basedpyright docs: PyPI package (bundled Node.js)", "url": "https://docs.basedpyright.com/latest/benefits-over-pyright/pypi-package-vscode-pinning/" },
+    { "label": "Pyright docs: Configuration (typeCheckingMode)", "url": "https://github.com/microsoft/pyright/blob/main/docs/configuration.md" },
+    { "label": "Pyrefly docs: Configuration (presets, automatic configuration)", "url": "https://pyrefly.org/en/docs/configuration/" },
+    { "label": "Pyrefly README (pyrefly suppress)", "url": "https://github.com/facebook/pyrefly" }
+  ]
+}
