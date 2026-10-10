@@ -1,0 +1,800 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Database indexes",
+  "category": "data",
+  "order": 65,
+  "summary": "A second structure, kept in step with a table, that lets the database find matching rows without reading the whole table, paid for on every write.",
+  "howItWorks": "Without an index, a query that filters on a column reads every page of the table: a sequential scan. An index is a separate structure that maps values to where their rows are, and the database updates it with every insert, delete and update that touches an indexed column. The default almost everywhere is a B-tree: keys kept sorted in pages a few levels deep, so finding one key or a range of keys reads a handful of pages instead of the whole table. Other kinds give up generality for size or answer new questions. A hash index answers only equality. An inverted index (GIN in PostgreSQL) lists, for each word, array element or JSON key, the rows that contain it. Spatial trees (R-trees, GiST, SP-GiST) search by overlap and distance. A block-range index (BRIN) keeps only the minimum and maximum of each run of 128 pages, which makes it tiny but useful only when the table’s physical order follows the column. Bloom filter indexes keep a small lossy signature per row or per block. The planner uses an index only when it estimates that reading the index and then the matching rows beats scanning the table, and that depends on statistics from `ANALYZE`.",
+  "analogy": "The index at the back of a book: look up “vacuum” on a few alphabetised pages and jump straight to pages 212 and 340 instead of reading the book. A BRIN index is more like the date labels on a shelf of binders. “January to March” tells you which binder to open, but only because the binders were shelved in date order.",
+  "useWhen": [
+    "Queries that pick out a small share of a big table: `WHERE customer_id = ?`, a date range, a join key, `ORDER BY ... LIMIT 10`",
+    "Enforcing uniqueness: a primary key or `UNIQUE` constraint is backed by a unique B-tree index",
+    "Huge append-only tables filtered by time, where a BRIN index costs kilobytes instead of hundreds of megabytes",
+    "Searching inside values (words, JSON keys, array elements, substrings) or by location, with GIN, trigram or GiST indexes"
+  ],
+  "avoidWhen": [
+    "Queries that return more than a few percent of the rows: the planner scans the table anyway",
+    "Indexes nobody queries on write-heavy tables: each one slows every insert, and in PostgreSQL an indexed column changed by an update rules out the cheaper heap-only (HOT) update",
+    "Small tables that fit in a few pages, where reading them all beats any index",
+    "Conditions that wrap the column in a function, such as `lower(email) = ?`, unless the index is built on that same expression"
+  ],
+  "example": "A table of 10 million sensor readings, one per second, takes 498 MB in PostgreSQL 18. A B-tree on the timestamp takes 214 MB; a BRIN index on the same column takes 32 kB, because it keeps one minimum and maximum per 128 pages. Asked for one hour (3,600 rows), the B-tree reads 37 pages in 0.9 ms. The BRIN index reads its 6 pages and one 128-page block range, throwing away 16,496 rows that don’t match, in 2.6 ms. Copy the same rows into a randomly ordered table and the BRIN index stops helping: every block range now spans the whole year, so the same query reads all 63,744 pages and takes 930 ms.",
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "-- PostgreSQL 18. Numbers are from one run on a laptop; yours will differ.",
+      "-- 10 million sensor readings, one per second, written in time order",
+      "CREATE TABLE readings (ts timestamptz NOT NULL, sensor int, value float8);",
+      "INSERT INTO readings",
+      "SELECT timestamptz '2026-01-01 00:00Z' + i * interval '1 second', i % 100, random()",
+      "FROM generate_series(1, 10000000) AS i;",
+      "",
+      "CREATE INDEX readings_btree ON readings USING btree (ts);",
+      "CREATE INDEX readings_brin  ON readings USING brin (ts);  -- pages_per_range = 128",
+      "VACUUM ANALYZE readings;",
+      "",
+      "SELECT relname, pg_size_pretty(pg_relation_size(oid)) AS size",
+      "FROM pg_class WHERE relname LIKE 'readings%' ORDER BY relname;",
+      "-- readings 498 MB | readings_brin 32 kB | readings_btree 214 MB",
+      "",
+      "SET max_parallel_workers_per_gather = 0;  -- simpler plans",
+      "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)",
+      "SELECT avg(value) FROM readings",
+      "WHERE ts >= '2026-03-01 00:00Z' AND ts < '2026-03-01 01:00Z';",
+      "-- Index Scan using readings_btree on readings (rows=3600)",
+      "--   Buffers: shared read=37",
+      "-- Execution Time: 0.903 ms",
+      "",
+      "DROP INDEX readings_btree;  -- leave the planner only the BRIN index",
+      "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)",
+      "SELECT avg(value) FROM readings",
+      "WHERE ts >= '2026-03-01 00:00Z' AND ts < '2026-03-01 01:00Z';",
+      "-- Bitmap Heap Scan on readings (rows=3600)",
+      "--   Rows Removed by Index Recheck: 16496",
+      "--   Heap Blocks: lossy=128                  <- one 128-page block range",
+      "--   ->  Bitmap Index Scan on readings_brin",
+      "--         Buffers: shared hit=6             <- the whole index",
+      "-- Execution Time: 2.626 ms",
+      "",
+      "-- the same rows in random physical order: every block range spans the year",
+      "CREATE TABLE shuffled AS SELECT * FROM readings ORDER BY random();",
+      "CREATE INDEX shuffled_brin ON shuffled USING brin (ts);",
+      "VACUUM ANALYZE shuffled;",
+      "SELECT tablename, correlation FROM pg_stats WHERE attname = 'ts';",
+      "-- readings 1 | shuffled -0.004444684",
+      "",
+      "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)",
+      "SELECT avg(value) FROM shuffled",
+      "WHERE ts >= '2026-03-01 00:00Z' AND ts < '2026-03-01 01:00Z';",
+      "-- Bitmap Heap Scan on shuffled (rows=3600)",
+      "--   Rows Removed by Index Recheck: 9996400",
+      "--   Heap Blocks: lossy=63744                <- every page of the table",
+      "-- Execution Time: 930.778 ms"
+    ]
+  },
+  "related": [
+    "relational",
+    "search",
+    "vector",
+    "data-structures",
+    "unbounded-queries",
+    "file-formats"
+  ],
+  "sections": [
+    {
+      "type": "table",
+      "title": "The kinds compared",
+      "intro": "Sizes come from the PostgreSQL 18 runs on this page and change with the data. Vector indexes such as HNSW and IVFFlat, which find approximate nearest neighbours of embeddings, are covered under vector databases.",
+      "corner": "Kind",
+      "columns": [
+        "Answers",
+        "Size",
+        "Write cost",
+        "Typical use"
+      ],
+      "rows": [
+        {
+          "label": "B-tree",
+          "values": [
+            "`=`, `<`, `>`, `BETWEEN`, `IN`, `IS NULL`, `LIKE 'foo%'`, sorted output",
+            "One entry per row: 214 MB for 10 million timestamps in a 498 MB table",
+            "An entry per row in every index; full pages split",
+            "The default: primary keys, foreign keys, unique constraints, most filters"
+          ]
+        },
+        {
+          "label": "Hash",
+          "values": [
+            "`=` only",
+            "A 4-byte hash per row: 32 MB against a 119 MB B-tree on 1 million URLs",
+            "Buckets split in the foreground as the table grows",
+            "Equality lookups on long keys such as URLs and UUIDs"
+          ]
+        },
+        {
+          "label": "BRIN (block range)",
+          "values": [
+            "`=`, `<`, `>` with min/max; other classes add Bloom filters and bounding boxes",
+            "One summary per 128 pages: 32 kB for 10 million rows",
+            "Very low; new ranges are summarised by vacuum; HOT updates still work",
+            "Append-only logs and time series, IDs that grow with insert order"
+          ]
+        },
+        {
+          "label": "GIN (inverted)",
+          "values": [
+            "Contains: array `@>` and `&&`, jsonb `@>`, full-text `@@`, trigram `LIKE '%foo%'`",
+            "Can near the table: 114 MB of trigrams for a 135 MB table",
+            "High: one entry per extracted key; a pending list batches them",
+            "Tags, JSON documents, text search, substring search"
+          ]
+        },
+        {
+          "label": "GiST and SP-GiST (spatial)",
+          "values": [
+            "Overlap `&&`, containment, nearest neighbour `<->`, exclusion constraints",
+            "One key per row, often a bounding box that needs a recheck",
+            "Like a B-tree, plus choosing where each new key fits",
+            "Maps (PostGIS), time ranges, no-overlap bookings"
+          ]
+        },
+        {
+          "label": "Bitmap (Oracle)",
+          "values": [
+            "`=`, combined with AND and OR across columns",
+            "A bitmap per distinct value, each with a bit per row",
+            "Changing one row locks every row with the same value",
+            "Read-mostly warehouse tables with low-cardinality columns"
+          ]
+        },
+        {
+          "label": "Bloom filter",
+          "values": [
+            "`=` on any combination of the indexed columns",
+            "An 80-bit signature per row: 153 MB against a 386 MB six-column B-tree",
+            "Low; matches are rechecked because of false positives",
+            "Wide tables filtered on arbitrary column combinations"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "What an index costs",
+      "body": [
+        "Writes. Each index is another structure to change with the table. An insert adds an entry to every B-tree on the table, and to a GIN index one entry for every key it extracts. In PostgreSQL an update normally writes new entries in every index too; the cheaper heap-only tuple (HOT) update, which skips them, is possible only when no indexed column changes (BRIN aside) and the page has room. PostgreSQL’s docs advise dropping indexes that are seldom or never used.",
+        "Disk and memory. In the run above, the B-tree on one timestamp column was 43% of the table’s size and took 6.5 seconds to build, against 0.45 seconds for the BRIN index. Indexes compete with the table for cache, and a plain `CREATE INDEX` blocks writes, though not reads, until it finishes; `CREATE INDEX CONCURRENTLY` keeps writes flowing but has caveats.",
+        "Selectivity. An index pays off when it lets the database skip most of the table. Each row found through a B-tree means a visit to wherever that row sits in the table, so once a query matches more than a few percent of the rows, the planner chooses a sequential scan even though the index exists. Bitmap scans sit in between: they collect matching row locations from one or more indexes, then read the table’s pages in physical order. The planner’s choice rests on statistics, so run `ANALYZE` and test with realistic data before deciding an index is useless."
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Index options",
+      "body": [
+        "Composite indexes and column order: a B-tree on `(a, b)` is sorted by `a`, then by `b` within each `a`. Equality on the leading columns plus a range on the next one narrows the scan; a condition on `b` alone used to mean reading the whole index, and PostgreSQL 18 added skip scan, which jumps from one `a` value to the next when there are few of them. Unique indexes (B-tree only in PostgreSQL) enforce a key, treat NULLs as distinct unless declared `NULLS NOT DISTINCT`, and are created automatically for primary keys and `UNIQUE` constraints. Expression indexes store a computed value, such as `lower(email)`, so a query that filters on the same expression can use them.",
+        "Partial and covering indexes: a partial index has a `WHERE` clause and holds only the rows that match it, so an index of pending orders stays small and cheap to maintain. A covering index adds payload columns with `INCLUDE` (PostgreSQL 11 and later) so a query can be answered from the index alone. Such an index-only scan still has to know that each row is visible to the transaction; PostgreSQL keeps that in the visibility map, set by vacuum, and falls back to reading the table for pages that changed recently.",
+        "Clustered and heap tables: in MySQL’s InnoDB the table is stored inside its primary-key B-tree (the clustered index), and every secondary index entry carries the primary key to find the row, so a long primary key makes every other index bigger. SQLite stores rowid tables the same way, with all data in the B-tree’s leaves, and Oracle offers index-organized tables. PostgreSQL keeps rows in an unordered heap, and every index, the primary key included, is secondary. Its `CLUSTER` command sorts the table by an index once, but later writes don’t keep that order."
+      ]
+    },
+    {
+      "type": "code",
+      "title": "Partial and covering indexes in PostgreSQL",
+      "intro": "The partial index holds only pending orders, so it is about 30 times smaller than an index over every row’s status. The covering index answers a sum straight from the index, reading 4 pages and none of the table.",
+      "lang": "sql",
+      "source": [
+        "-- PostgreSQL 18: 1 million orders from 20,000 customers; about 1% are still pending",
+        "CREATE TABLE orders (id bigint PRIMARY KEY, customer int, status text, total numeric);",
+        "INSERT INTO orders",
+        "SELECT i, i % 20000, CASE WHEN i % 97 = 0 THEN 'pending' ELSE 'shipped' END, i % 500",
+        "FROM generate_series(1, 1000000) AS i;",
+        "",
+        "-- partial: index only the rows the app asks about",
+        "CREATE INDEX orders_status_all ON orders (status, customer);",
+        "CREATE INDEX orders_pending ON orders (customer) WHERE status = 'pending';",
+        "",
+        "-- covering: the key to search on, plus a column to read without visiting the table",
+        "CREATE INDEX orders_customer ON orders (customer) INCLUDE (total);",
+        "VACUUM ANALYZE orders;  -- sets the visibility map, which index-only scans rely on",
+        "",
+        "SELECT relname, pg_size_pretty(pg_relation_size(oid)) AS size",
+        "FROM pg_class WHERE relname LIKE 'orders%' ORDER BY relname;",
+        "-- orders 57 MB | orders_customer 30 MB | orders_pending 248 kB",
+        "-- orders_pkey 21 MB | orders_status_all 7328 kB",
+        "",
+        "SET max_parallel_workers_per_gather = 0;",
+        "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)",
+        "SELECT id FROM orders WHERE status = 'pending' AND customer = 97;",
+        "-- Index Scan using orders_pending on orders (rows=1)",
+        "--   Index Cond: (customer = 97)",
+        "--   Buffers: shared hit=1 read=2",
+        "",
+        "EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)",
+        "SELECT sum(total) FROM orders WHERE customer = 97;",
+        "-- Index Only Scan using orders_customer on orders (rows=50)",
+        "--   Heap Fetches: 0                         <- the table was never read",
+        "--   Buffers: shared hit=1 read=3"
+      ]
+    },
+    {
+      "type": "code",
+      "title": "GIN for JSON and substring search",
+      "intro": "Two inverted indexes on the same table. The sequential-scan times in the comments were measured with bitmap scans turned off.",
+      "lang": "sql",
+      "source": [
+        "-- PostgreSQL 18: 1 million products with a name and a jsonb attributes column",
+        "CREATE EXTENSION pg_trgm;",
+        "CREATE TABLE products (id bigint PRIMARY KEY, name text, attrs jsonb);",
+        "INSERT INTO products",
+        "SELECT i, 'Widget ' || md5(i::text),",
+        "       jsonb_build_object('color', (ARRAY['red','green','blue','black'])[1 + i % 4],",
+        "                          'tags', jsonb_build_array('tag' || i % 1000, 'tag' || i % 7))",
+        "FROM generate_series(1, 1000000) AS i;",
+        "",
+        "-- one entry per key and value, listing every row that contains it",
+        "CREATE INDEX products_attrs ON products USING gin (attrs jsonb_path_ops);",
+        "-- one entry per three-letter piece of the name",
+        "CREATE INDEX products_name_trgm ON products USING gin (name gin_trgm_ops);",
+        "VACUUM ANALYZE products;",
+        "",
+        "SELECT relname, pg_size_pretty(pg_relation_size(oid)) AS size",
+        "FROM pg_class WHERE relname LIKE 'products%' ORDER BY relname;",
+        "-- products 135 MB | products_attrs 10 MB | products_name_trgm 114 MB | products_pkey 21 MB",
+        "",
+        "SET max_parallel_workers_per_gather = 0;",
+        "EXPLAIN (ANALYZE, COSTS OFF)",
+        "SELECT count(*) FROM products WHERE attrs @> '{\"tags\": [\"tag42\"]}';",
+        "-- Bitmap Index Scan on products_attrs (rows=1000)",
+        "-- Execution Time: 18.717 ms      (sequential scan: 161.765 ms)",
+        "",
+        "EXPLAIN (ANALYZE, COSTS OFF)",
+        "SELECT id, name FROM products WHERE name ILIKE '%c4ca42%';",
+        "-- Bitmap Index Scan on products_name_trgm (rows=4)",
+        "-- Bitmap Heap Scan on products (rows=2), Rows Removed by Index Recheck: 2",
+        "-- Execution Time: 0.940 ms       (sequential scan: 669.450 ms)"
+      ]
+    }
+  ],
+  "kinds": [
+    {
+      "id": "btree-indexes",
+      "name": "B-tree indexes",
+      "summary": "Keys kept in sorted order in a shallow, balanced tree of pages: the default index almost everywhere, good for equality, ranges and sorting.",
+      "body": [
+        "A B-tree keeps index entries sorted inside fixed-size pages. Internal pages point down to the next level; leaf pages hold the keys with pointers to rows, and each level is linked to its neighbours, so a range scan finds its first key and then walks along the leaves. When a leaf is full it splits and adds a pointer to its parent, which may split in turn, so the tree stays balanced; in PostgreSQL over 99% of pages are leaves. One structure answers `=`, `<`, `>`, `BETWEEN`, `IN`, `IS NULL` and patterns anchored at the start such as `LIKE 'foo%'`, and returns rows already sorted for `ORDER BY`.",
+        "A composite index on `(a, b)` sorts by `a`, then by `b`, so conditions on the leading columns narrow the search. PostgreSQL 18 added skip scan, which uses such an index for a condition on `b` alone when `a` has few distinct values. PostgreSQL 13 began storing duplicate keys once with a list of row pointers, which shrinks indexes on columns with many repeated values.",
+        "Where rows live depends on the engine. MySQL’s InnoDB stores each table inside its primary-key B-tree and makes secondary indexes carry the primary key; SQLite’s rowid tables also keep all data in the tree’s leaves. PostgreSQL keeps rows in a separate heap, and all of its indexes, the primary key included, point into it."
+      ],
+      "sources": [
+        {
+          "label": "PostgreSQL docs: B-tree structure, page splits and deduplication",
+          "url": "https://www.postgresql.org/docs/current/btree.html"
+        },
+        {
+          "label": "PostgreSQL docs: Index types (B-tree, hash, GiST, SP-GiST, GIN, BRIN and the operators each serves)",
+          "url": "https://www.postgresql.org/docs/current/indexes-types.html"
+        },
+        {
+          "label": "PostgreSQL docs: Multicolumn indexes (leading columns, skip scan)",
+          "url": "https://www.postgresql.org/docs/current/indexes-multicolumn.html"
+        },
+        {
+          "label": "PostgreSQL 18 release notes: B-tree skip scan (September 2025)",
+          "url": "https://www.postgresql.org/docs/release/18.0/"
+        },
+        {
+          "label": "PostgreSQL 13 release notes: B-tree deduplication (September 2020)",
+          "url": "https://www.postgresql.org/docs/release/13.0/"
+        },
+        {
+          "label": "MySQL 8.4 Reference Manual: Clustered and secondary indexes (InnoDB)",
+          "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-index-types.html"
+        },
+        {
+          "label": "SQLite: Database file format (table b-trees keep all data in the leaves)",
+          "url": "https://www.sqlite.org/fileformat2.html"
+        },
+        {
+          "label": "PostgreSQL docs: Index-only scans and covering indexes (secondary indexes, visibility map, INCLUDE)",
+          "url": "https://www.postgresql.org/docs/current/indexes-index-only-scans.html"
+        }
+      ]
+    },
+    {
+      "id": "hash-indexes",
+      "name": "Hash indexes",
+      "summary": "A hash of each key, filed into buckets: answers only `=`, but can be much smaller than a B-tree for long keys.",
+      "body": [
+        "A PostgreSQL hash index stores a 32-bit hash code of each value, not the value, in bucket pages. A lookup hashes the search value and goes straight to its bucket instead of walking down a tree. Because the order of values is gone it answers only equality: no ranges, no sorting, no prefix matches. It covers a single column, can’t enforce uniqueness, and every match is rechecked against the table. Storing 4 bytes instead of the key pays off for long values: on 1 million 94-character URLs in PostgreSQL 18, the hash index took 32 MB and a B-tree 119 MB.",
+        "Until PostgreSQL 10 (October 2017) hash indexes weren’t written to the write-ahead log, so they weren’t crash-safe or replicated and PostgreSQL warned when you created one. Buckets still split in the foreground while inserts wait, and many duplicates of one value pile up in overflow pages, so they suit unique or nearly unique keys.",
+        "MySQL uses hashing in two places. `MEMORY` tables use hash indexes by default. InnoDB can build an adaptive hash index in memory, keyed on a prefix of the index key, for B-tree pages it sees searched often; MySQL 8.4 turned it off by default (`innodb_adaptive_hash_index`)."
+      ],
+      "sources": [
+        {
+          "label": "PostgreSQL docs: Hash indexes (4-byte hash codes, equality only, buckets and overflow pages)",
+          "url": "https://www.postgresql.org/docs/current/hash-index.html"
+        },
+        {
+          "label": "PostgreSQL docs: Index types (B-tree, hash, GiST, SP-GiST, GIN, BRIN and the operators each serves)",
+          "url": "https://www.postgresql.org/docs/current/indexes-types.html"
+        },
+        {
+          "label": "PostgreSQL 10 release notes: write-ahead logging for hash indexes (October 2017)",
+          "url": "https://www.postgresql.org/docs/release/10.0/"
+        },
+        {
+          "label": "MySQL 8.4 Reference Manual: Comparison of B-tree and hash indexes",
+          "url": "https://dev.mysql.com/doc/refman/8.4/en/index-btree-hash.html"
+        },
+        {
+          "label": "MySQL 8.4 Reference Manual: The MEMORY storage engine (hash indexes by default)",
+          "url": "https://dev.mysql.com/doc/refman/8.4/en/memory-storage-engine.html"
+        },
+        {
+          "label": "MySQL 8.4 Reference Manual: Adaptive hash index",
+          "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-adaptive-hash.html"
+        },
+        {
+          "label": "MySQL 8.4 Reference Manual: What is new in MySQL 8.4 (innodb_adaptive_hash_index now OFF by default)",
+          "url": "https://dev.mysql.com/doc/refman/8.4/en/mysql-nutshell.html"
+        }
+      ]
+    },
+    {
+      "id": "block-range-indexes",
+      "name": "Block-range indexes (BRIN and zone maps)",
+      "summary": "A minimum and maximum, or another summary, for each run of adjacent pages, so a scan skips runs that can’t match: tiny, but only as good as the table’s physical order.",
+      "body": [
+        "PostgreSQL’s BRIN (block range index) divides the table into ranges of `pages_per_range` pages, 128 by default, and stores one summary per range, for sortable types the minimum and maximum. A query reads the small index, marks every range whose summary could match, then reads every row in those ranges and rechecks it: the index is lossy by design. New ranges at the end of the table stay unsummarized until vacuum runs, `brin_summarize_new_values()` is called, or the index has `autosummarize` on. Since PostgreSQL 14, `minmax-multi` classes keep several intervals per range and `bloom` classes keep a Bloom filter, for data that isn’t neatly ordered; `inclusion` classes store a containing value such as a bounding box.",
+        "It works when a column follows the physical order of the rows: timestamps in an append-only table, IDs that grow with each insert. On 10 million time-ordered rows a BRIN index took 32 kB against 214 MB for a B-tree, and an hour’s query read one 128-page range. After the rows were shuffled (correlation near 0) the same query matched every range and read all 63,744 pages. BRIN is also the only core PostgreSQL index that doesn’t rule out heap-only (HOT) updates.",
+        "Analytic systems use the same idea under other names. ClickHouse has no row-level secondary indexes; its data skipping indexes keep, for example, a `minmax` per block of granules and help only when the indexed column correlates with the table’s sort key. Parquet files carry min/max statistics per column chunk and, with the page index, per page. Oracle Exadata storage servers keep in-memory storage indexes of each region’s column minimums and maximums and skip the I/O for regions a predicate rules out."
+      ],
+      "sources": [
+        {
+          "label": "PostgreSQL docs: BRIN indexes (block ranges, summarization, minmax, minmax-multi, bloom and inclusion operator classes)",
+          "url": "https://www.postgresql.org/docs/current/brin.html"
+        },
+        {
+          "label": "PostgreSQL docs: CREATE INDEX (CONCURRENTLY, pages_per_range default 128, autosummarize, fastupdate)",
+          "url": "https://www.postgresql.org/docs/current/sql-createindex.html"
+        },
+        {
+          "label": "PostgreSQL 14 release notes: BRIN minmax-multi and bloom operator classes (September 2021)",
+          "url": "https://www.postgresql.org/docs/release/14.0/"
+        },
+        {
+          "label": "PostgreSQL docs: Heap-only tuples (HOT); BRIN is the only summarizing index",
+          "url": "https://www.postgresql.org/docs/current/storage-hot.html"
+        },
+        {
+          "label": "PostgreSQL 9.5 release notes: Block Range Indexes (BRIN) by Álvaro Herrera (January 2016)",
+          "url": "https://www.postgresql.org/docs/release/9.5.0/"
+        },
+        {
+          "label": "ClickHouse docs: Data skipping indexes (no row-based secondary indexes, minmax, bloom_filter, GRANULARITY, correlation)",
+          "url": "https://clickhouse.com/docs/optimize/skipping-indexes"
+        },
+        {
+          "label": "Apache Parquet docs: Bloom filter (min/max statistics and dictionaries, split block Bloom filters)",
+          "url": "https://parquet.apache.org/docs/file-format/bloomfilter/"
+        },
+        {
+          "label": "Apache Parquet docs: Page index (statistics to skip pages)",
+          "url": "https://parquet.apache.org/docs/file-format/pageindex/"
+        },
+        {
+          "label": "Oracle: Exadata storage indexes (in-memory min/max per storage region)",
+          "url": "https://www.oracle.com/database/technologies/exadata/software/storageindexes/"
+        }
+      ]
+    },
+    {
+      "id": "inverted-indexes",
+      "name": "Inverted indexes (GIN)",
+      "summary": "One entry per word, element or key, each listing the rows that contain it: for searching inside arrays, JSON documents and text.",
+      "body": [
+        "An inverted index turns the table around: instead of row to values, it stores value to rows. PostgreSQL’s GIN (generalized inverted index) pulls keys out of each composite value (array elements, JSON keys and values, text-search lexemes or, with `pg_trgm`, three-letter pieces of a string) and stores each key once with a posting list of row IDs, or a posting tree when the list grows large. That serves “contains” questions: `tags @> ARRAY['red']`, `attrs @> '{\"color\": \"red\"}'`, `tsv @@ query`, and `name ILIKE '%c4ca42%'` through trigrams. On 1 million rows, a jsonb containment query took 18.7 ms with GIN against 162 ms for a sequential scan, and a substring search 0.9 ms against 669 ms.",
+        "The price is paid on writes and disk. One row can add many entries, one per key, so by default (`fastupdate`) GIN puts new entries in an unsorted pending list and merges them in bulk when vacuum runs or the list passes `gin_pending_list_limit`. Searches must scan that list too, and the insert that overflows it pays for the merge. GIN can’t do index-only scans, because entries hold only parts of values. The trigram index in the example took 114 MB for a 135 MB table; for jsonb, `jsonb_path_ops` is usually much smaller than the default `jsonb_ops` but supports fewer operators.",
+        "Search engines rest on the same structure. The Lucene library keeps for each term the documents that contain it, with frequencies and positions for ranking; the search concept covers analyzers, ranking and when a separate engine beats an index inside the database."
+      ],
+      "sources": [
+        {
+          "label": "PostgreSQL docs: GIN indexes (key and posting list pairs, posting trees, pending list)",
+          "url": "https://www.postgresql.org/docs/current/gin.html"
+        },
+        {
+          "label": "PostgreSQL docs: Index types (B-tree, hash, GiST, SP-GiST, GIN, BRIN and the operators each serves)",
+          "url": "https://www.postgresql.org/docs/current/indexes-types.html"
+        },
+        {
+          "label": "PostgreSQL docs: JSON types, jsonb indexing (jsonb_ops and jsonb_path_ops)",
+          "url": "https://www.postgresql.org/docs/current/datatype-json.html"
+        },
+        {
+          "label": "PostgreSQL docs: pg_trgm (gin_trgm_ops and gist_trgm_ops)",
+          "url": "https://www.postgresql.org/docs/current/pgtrgm.html"
+        },
+        {
+          "label": "PostgreSQL docs: CREATE INDEX (CONCURRENTLY, pages_per_range default 128, autosummarize, fastupdate)",
+          "url": "https://www.postgresql.org/docs/current/sql-createindex.html"
+        },
+        {
+          "label": "PostgreSQL docs: Index-only scans and covering indexes (secondary indexes, visibility map, INCLUDE)",
+          "url": "https://www.postgresql.org/docs/current/indexes-index-only-scans.html"
+        },
+        {
+          "label": "Apache Lucene 10 docs: index file formats (inverted index, term frequencies and positions)",
+          "url": "https://lucene.apache.org/core/10_0_0/core/org/apache/lucene/codecs/lucene100/package-summary.html"
+        }
+      ]
+    },
+    {
+      "id": "spatial-indexes",
+      "name": "Spatial indexes (R-tree, GiST, SP-GiST)",
+      "summary": "Balanced trees of bounding boxes and space-partitioning trees, for questions like “what overlaps this?” and “what’s nearest?”.",
+      "body": [
+        "A B-tree needs one sort order, which maps, shapes and time ranges don’t have. Antonin Guttman’s R-tree (1984) is a height-balanced tree like a B-tree in which each entry holds the smallest rectangle containing its object or child node, so a search only descends into nodes whose rectangles overlap the query. PostGIS indexes geometries the same way: the index stores bounding boxes, and each candidate it returns is then tested against the exact shape.",
+        "PostgreSQL generalises this as GiST (generalized search tree), a balanced tree framework from Hellerstein, Naughton and Pfeffer’s 1995 paper, in which an operator class defines what the keys are; PostgreSQL 8.2 replaced its separate R-tree with one built on GiST. GiST can return nearest neighbours in distance order (`ORDER BY location <-> point '(101,456)' LIMIT 10`, since 9.1) and backs exclusion constraints such as `EXCLUDE USING gist (c WITH &&)`, which reject overlapping rows.",
+        "SP-GiST (space-partitioned GiST, PostgreSQL 9.2) hosts unbalanced structures that keep dividing the space, such as quad-trees, k-d trees and radix trees (tries), and maps their nodes onto disk pages so a search reads few pages. SQLite offers an R*Tree module for the same kind of range query."
+      ],
+      "sources": [
+        {
+          "label": "Antonin Guttman: R-Trees, A Dynamic Index Structure for Spatial Searching (1984)",
+          "url": "http://www-db.deis.unibo.it/courses/SI-LS/papers/Gut84.pdf"
+        },
+        {
+          "label": "PostGIS workshop: Spatial indexing (bounding boxes, R-tree on GiST)",
+          "url": "https://postgis.net/workshops/postgis-intro/indexing.html"
+        },
+        {
+          "label": "PostgreSQL docs: GiST indexes (a balanced tree framework; B-trees and R-trees can be built on it)",
+          "url": "https://www.postgresql.org/docs/current/gist.html"
+        },
+        {
+          "label": "Hellerstein, Naughton and Pfeffer: Generalized Search Trees for Database Systems (VLDB 1995)",
+          "url": "https://dsf.berkeley.edu/papers/vldb95-gist.pdf"
+        },
+        {
+          "label": "PostgreSQL 8.2 release notes: GIN added, R-tree reimplemented on GiST (December 2006)",
+          "url": "https://www.postgresql.org/docs/release/8.2.0/"
+        },
+        {
+          "label": "PostgreSQL docs: Index types (B-tree, hash, GiST, SP-GiST, GIN, BRIN and the operators each serves)",
+          "url": "https://www.postgresql.org/docs/current/indexes-types.html"
+        },
+        {
+          "label": "PostgreSQL 9.1 release notes: nearest-neighbour searches with GiST (September 2011)",
+          "url": "https://www.postgresql.org/docs/release/9.1.0/"
+        },
+        {
+          "label": "PostgreSQL docs: Constraints (exclusion constraints with EXCLUDE USING gist)",
+          "url": "https://www.postgresql.org/docs/current/ddl-constraints.html"
+        },
+        {
+          "label": "PostgreSQL docs: SP-GiST indexes (quad-trees, k-d trees, radix trees)",
+          "url": "https://www.postgresql.org/docs/current/spgist.html"
+        },
+        {
+          "label": "PostgreSQL 9.2 release notes: SP-GiST and index-only scans (September 2012)",
+          "url": "https://www.postgresql.org/docs/release/9.2.0/"
+        },
+        {
+          "label": "SQLite: The R*Tree module",
+          "url": "https://www.sqlite.org/rtree.html"
+        }
+      ]
+    },
+    {
+      "id": "bitmap-indexes",
+      "name": "Bitmap indexes",
+      "summary": "One bitmap per distinct value, with a bit per row, so filters on several low-cardinality columns combine with fast AND and OR.",
+      "body": [
+        "In an Oracle bitmap index each key value has a bitmap with one bit per possible row; a set bit means that row holds the value, and a mapping function turns bit positions into row IDs. Oracle aims them at data warehouses where queries combine many columns ad hoc, on columns with few distinct values compared with the number of rows, in tables that are read-only or rarely changed. Updating one row locks the whole key entry, and with it every row sharing the value, which is why Oracle calls them unsuitable for many OLTP applications.",
+        "PostgreSQL has no bitmap index type, but its plans often show a related step. A bitmap index scan collects the locations of matching rows from any index (B-tree, GIN, BRIN) into an in-memory bitmap, can AND and OR bitmaps from several indexes, then reads the table pages in physical order. It is a way of running one query rather than a stored index, and it loses the index’s order, so an `ORDER BY` needs a separate sort."
+      ],
+      "sources": [
+        {
+          "label": "Oracle Database 23ai Concepts: Indexes and index-organized tables (bitmap indexes, locking, IOTs)",
+          "url": "https://docs.oracle.com/en/database/oracle/oracle-database/23/cncpt/indexes-and-index-organized-tables.html"
+        },
+        {
+          "label": "PostgreSQL docs: Combining multiple indexes (bitmap scans)",
+          "url": "https://www.postgresql.org/docs/current/indexes-bitmap-scans.html"
+        }
+      ]
+    },
+    {
+      "id": "bloom-indexes",
+      "name": "Bloom filter indexes",
+      "summary": "A compact, lossy signature that answers “definitely not here” or “maybe here”, used to skip rows, pages or whole files on equality lookups.",
+      "body": [
+        "A Bloom filter sets a few bits per value, chosen by hash functions. If any of a value’s bits is unset the value is absent; if all are set it is probably present, so every hit is rechecked. PostgreSQL’s `bloom` extension stores one signature per row, 80 bits by default with 2 bits per column, over up to 32 columns, so one index serves equality on any combination of them. Rerunning its documentation example on PostgreSQL 18 (10 million rows, six integer columns): the bloom index took 153 MB and a six-column B-tree 386 MB, and `WHERE i2 = 898732 AND i5 = 123451` took 155 ms through bloom, rechecking 2,363 false positives, against 468 ms for the sequential scan the planner chose over the B-tree. It ships operator classes only for `int4` and `text`, supports only `=`, and can’t enforce uniqueness or find NULLs.",
+        "Elsewhere Bloom filters skip bigger units. RocksDB puts a filter in every SST file so a point lookup skips files that can’t hold the key; about 10 bits per key gives a false-positive rate near 1%. ClickHouse’s `bloom_filter` skipping index defaults to a 0.025 false-positive rate per block of granules. Parquet defines split block Bloom filters per column chunk for high-cardinality columns that min/max statistics and dictionaries can’t rule out, and PostgreSQL 14’s BRIN `bloom` classes keep one filter per block range."
+      ],
+      "sources": [
+        {
+          "label": "PostgreSQL docs: bloom extension (signatures, parameters, example, limitations)",
+          "url": "https://www.postgresql.org/docs/current/bloom.html"
+        },
+        {
+          "label": "RocksDB wiki: RocksDB Bloom filter (a filter per SST file, bits per key and false-positive rates)",
+          "url": "https://github.com/facebook/rocksdb/wiki/RocksDB-Bloom-Filter"
+        },
+        {
+          "label": "ClickHouse docs: Data skipping indexes (no row-based secondary indexes, minmax, bloom_filter, GRANULARITY, correlation)",
+          "url": "https://clickhouse.com/docs/optimize/skipping-indexes"
+        },
+        {
+          "label": "Apache Parquet docs: Bloom filter (min/max statistics and dictionaries, split block Bloom filters)",
+          "url": "https://parquet.apache.org/docs/file-format/bloomfilter/"
+        },
+        {
+          "label": "PostgreSQL 14 release notes: BRIN minmax-multi and bloom operator classes (September 2021)",
+          "url": "https://www.postgresql.org/docs/release/14.0/"
+        }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "B-trees began as a way to keep the index of a file too big for memory. In July 1970, Rudolf Bayer and Edward McCreight at Boeing Scientific Research Laboratories described B-trees, pages of keys organised so that finding, inserting and deleting a key takes time proportional to the logarithm of the index size, with every page at least half full. They tested indexes of up to 100,000 keys on an IBM 360/44 with a disc. The journal version appeared in Acta Informatica in September 1972, and in 1979 Douglas Comer’s survey was titled “The Ubiquitous B-Tree”.",
+      "B-trees need one sort order, and spatial data has none. In 1984 Antonin Guttman at Berkeley published the R-tree for CAD and geographic data, a balanced tree of bounding rectangles. As each new data type seemed to need its own tree, Joseph Hellerstein, Jeffrey Naughton and Avi Pfeffer proposed GiST in 1995: one search tree that behaves like a B+-tree, an R-tree or something new, depending on a few methods written for the type. PostgreSQL rebuilt its R-tree on GiST and added the GIN inverted index in 8.2 (2006), then SP-GiST in 9.2 (2012).",
+      "The newest idea is to index less. BRIN, added to PostgreSQL 9.5 in January 2016 by Álvaro Herrera, stores only summaries such as the minimum and maximum for ranges of blocks, so it is very compact and cheap to update yet still speeds up searches when data is naturally clustered. It is the same skipping principle as ClickHouse’s data skipping indexes, Parquet statistics and Exadata storage indexes. PostgreSQL 14 (2021) gave BRIN multiple min/max ranges and Bloom filters for data that isn’t well localised, and PostgreSQL 18 (2025) let B-trees skip scan."
+    ],
+    "choices": [
+      {
+        "choice": "Pages that stay at least half full and split when they overflow",
+        "why": "Bayer and McCreight designed for discs and drums with long access times but fast transfer once reading starts, so the index moves a page at a time. Guaranteeing at least 50% use per page keeps the tree shallow and the cost of each operation logarithmic."
+      },
+      {
+        "choice": "Bounding rectangles instead of a sort order",
+        "why": "Guttman noted that hash tables only match exact values and B-trees and ISAM rely on a one-dimensional ordering, so neither can answer range searches over objects that cover an area in several dimensions."
+      },
+      {
+        "choice": "One extensible tree instead of a tree per data type",
+        "why": "Earlier extensible trees supported only equality and range predicates. GiST put the search tree logic in one piece of code and let an expert in a data type supply its methods, without being a database expert."
+      },
+      {
+        "choice": "Summaries of block ranges instead of an entry per row",
+        "why": "On very large tables whose order follows a column, a min and max per range is enough to skip most of the table at a tiny fraction of a B-tree’s size and update cost. The price is a lossy index that needs a recheck and loses its value when the order breaks."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "1970",
+        "text": "Bayer and McCreight describe B-trees in a Boeing Scientific Research Laboratories report"
+      },
+      {
+        "year": "1984",
+        "text": "Guttman publishes the R-tree for spatial searching"
+      },
+      {
+        "year": "1995",
+        "text": "Hellerstein, Naughton and Pfeffer present GiST at VLDB"
+      },
+      {
+        "year": "2006",
+        "text": "PostgreSQL 8.2 adds GIN and rebuilds its R-tree on GiST"
+      },
+      {
+        "year": "2016",
+        "text": "PostgreSQL 9.5 adds BRIN"
+      },
+      {
+        "year": "2021",
+        "text": "PostgreSQL 14 adds minmax-multi and Bloom filter classes for BRIN"
+      },
+      {
+        "year": "2025",
+        "text": "PostgreSQL 18 adds skip scan to multicolumn B-tree indexes"
+      }
+    ],
+    "sources": [
+      {
+        "label": "Rudolf Bayer and Edward McCreight: Organization and Maintenance of Large Ordered Indices (Boeing Scientific Research Laboratories report, July 1970)",
+        "url": "https://infolab.usc.edu/csci585/Spring2010/den_ar/indexing.pdf"
+      },
+      {
+        "label": "Springer: Acta Informatica volume 1, issue 3 (September 1972), with Bayer and McCreight’s “Organization and maintenance of large ordered indexes”",
+        "url": "https://www.springer.com/journal/236/volumes-and-issues/1-3"
+      },
+      {
+        "label": "Hellerstein, Naughton and Pfeffer: Generalized Search Trees for Database Systems (VLDB 1995)",
+        "url": "https://dsf.berkeley.edu/papers/vldb95-gist.pdf"
+      },
+      {
+        "label": "Antonin Guttman: R-Trees, A Dynamic Index Structure for Spatial Searching (1984)",
+        "url": "http://www-db.deis.unibo.it/courses/SI-LS/papers/Gut84.pdf"
+      },
+      {
+        "label": "PostgreSQL 8.2 release notes: GIN added, R-tree reimplemented on GiST (December 2006)",
+        "url": "https://www.postgresql.org/docs/release/8.2.0/"
+      },
+      {
+        "label": "PostgreSQL 9.2 release notes: SP-GiST and index-only scans (September 2012)",
+        "url": "https://www.postgresql.org/docs/release/9.2.0/"
+      },
+      {
+        "label": "PostgreSQL 9.5 release notes: Block Range Indexes (BRIN) by Álvaro Herrera (January 2016)",
+        "url": "https://www.postgresql.org/docs/release/9.5.0/"
+      },
+      {
+        "label": "PostgreSQL 14 release notes: BRIN minmax-multi and bloom operator classes (September 2021)",
+        "url": "https://www.postgresql.org/docs/release/14.0/"
+      },
+      {
+        "label": "PostgreSQL 18 release notes: B-tree skip scan (September 2025)",
+        "url": "https://www.postgresql.org/docs/release/18.0/"
+      },
+      {
+        "label": "PostgreSQL docs: GiST indexes (a balanced tree framework; B-trees and R-trees can be built on it)",
+        "url": "https://www.postgresql.org/docs/current/gist.html"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "PostgreSQL docs: Indexes, introduction (a few levels of a search tree; indexes add overhead to writes and can prevent HOT updates)",
+      "url": "https://www.postgresql.org/docs/current/indexes-intro.html"
+    },
+    {
+      "label": "PostgreSQL docs: Index types (B-tree, hash, GiST, SP-GiST, GIN, BRIN and the operators each serves)",
+      "url": "https://www.postgresql.org/docs/current/indexes-types.html"
+    },
+    {
+      "label": "PostgreSQL docs: B-tree structure, page splits and deduplication",
+      "url": "https://www.postgresql.org/docs/current/btree.html"
+    },
+    {
+      "label": "PostgreSQL docs: Multicolumn indexes (leading columns, skip scan)",
+      "url": "https://www.postgresql.org/docs/current/indexes-multicolumn.html"
+    },
+    {
+      "label": "PostgreSQL docs: Index-only scans and covering indexes (secondary indexes, visibility map, INCLUDE)",
+      "url": "https://www.postgresql.org/docs/current/indexes-index-only-scans.html"
+    },
+    {
+      "label": "PostgreSQL docs: Partial indexes (common values that are more than a few percent of rows won’t use an index)",
+      "url": "https://www.postgresql.org/docs/current/indexes-partial.html"
+    },
+    {
+      "label": "PostgreSQL docs: Indexes on expressions",
+      "url": "https://www.postgresql.org/docs/current/indexes-expressional.html"
+    },
+    {
+      "label": "PostgreSQL docs: Unique indexes (only B-tree; NULLS NOT DISTINCT)",
+      "url": "https://www.postgresql.org/docs/current/indexes-unique.html"
+    },
+    {
+      "label": "PostgreSQL docs: Combining multiple indexes (bitmap scans)",
+      "url": "https://www.postgresql.org/docs/current/indexes-bitmap-scans.html"
+    },
+    {
+      "label": "PostgreSQL docs: Examining index usage (ANALYZE, small tables, forcing plans)",
+      "url": "https://www.postgresql.org/docs/current/indexes-examine.html"
+    },
+    {
+      "label": "PostgreSQL docs: Heap-only tuples (HOT); BRIN is the only summarizing index",
+      "url": "https://www.postgresql.org/docs/current/storage-hot.html"
+    },
+    {
+      "label": "PostgreSQL docs: CREATE INDEX (CONCURRENTLY, pages_per_range default 128, autosummarize, fastupdate)",
+      "url": "https://www.postgresql.org/docs/current/sql-createindex.html"
+    },
+    {
+      "label": "PostgreSQL docs: CLUSTER (a one-time physical reorder)",
+      "url": "https://www.postgresql.org/docs/current/sql-cluster.html"
+    },
+    {
+      "label": "PostgreSQL docs: BRIN indexes (block ranges, summarization, minmax, minmax-multi, bloom and inclusion operator classes)",
+      "url": "https://www.postgresql.org/docs/current/brin.html"
+    },
+    {
+      "label": "PostgreSQL docs: GIN indexes (key and posting list pairs, posting trees, pending list)",
+      "url": "https://www.postgresql.org/docs/current/gin.html"
+    },
+    {
+      "label": "PostgreSQL docs: GiST indexes (a balanced tree framework; B-trees and R-trees can be built on it)",
+      "url": "https://www.postgresql.org/docs/current/gist.html"
+    },
+    {
+      "label": "PostgreSQL docs: SP-GiST indexes (quad-trees, k-d trees, radix trees)",
+      "url": "https://www.postgresql.org/docs/current/spgist.html"
+    },
+    {
+      "label": "PostgreSQL docs: Hash indexes (4-byte hash codes, equality only, buckets and overflow pages)",
+      "url": "https://www.postgresql.org/docs/current/hash-index.html"
+    },
+    {
+      "label": "PostgreSQL docs: bloom extension (signatures, parameters, example, limitations)",
+      "url": "https://www.postgresql.org/docs/current/bloom.html"
+    },
+    {
+      "label": "PostgreSQL docs: JSON types, jsonb indexing (jsonb_ops and jsonb_path_ops)",
+      "url": "https://www.postgresql.org/docs/current/datatype-json.html"
+    },
+    {
+      "label": "PostgreSQL docs: pg_trgm (gin_trgm_ops and gist_trgm_ops)",
+      "url": "https://www.postgresql.org/docs/current/pgtrgm.html"
+    },
+    {
+      "label": "PostgreSQL docs: Constraints (exclusion constraints with EXCLUDE USING gist)",
+      "url": "https://www.postgresql.org/docs/current/ddl-constraints.html"
+    },
+    {
+      "label": "PostgreSQL 10 release notes: write-ahead logging for hash indexes (October 2017)",
+      "url": "https://www.postgresql.org/docs/release/10.0/"
+    },
+    {
+      "label": "PostgreSQL 11 release notes: covering indexes with INCLUDE (October 2018)",
+      "url": "https://www.postgresql.org/docs/release/11.0/"
+    },
+    {
+      "label": "PostgreSQL 13 release notes: B-tree deduplication (September 2020)",
+      "url": "https://www.postgresql.org/docs/release/13.0/"
+    },
+    {
+      "label": "PostgreSQL 14 release notes: BRIN minmax-multi and bloom operator classes (September 2021)",
+      "url": "https://www.postgresql.org/docs/release/14.0/"
+    },
+    {
+      "label": "PostgreSQL 18 release notes: B-tree skip scan (September 2025)",
+      "url": "https://www.postgresql.org/docs/release/18.0/"
+    },
+    {
+      "label": "MySQL 8.4 Reference Manual: Clustered and secondary indexes (InnoDB)",
+      "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-index-types.html"
+    },
+    {
+      "label": "MySQL 8.4 Reference Manual: Comparison of B-tree and hash indexes",
+      "url": "https://dev.mysql.com/doc/refman/8.4/en/index-btree-hash.html"
+    },
+    {
+      "label": "MySQL 8.4 Reference Manual: Adaptive hash index",
+      "url": "https://dev.mysql.com/doc/refman/8.4/en/innodb-adaptive-hash.html"
+    },
+    {
+      "label": "MySQL 8.4 Reference Manual: What is new in MySQL 8.4 (innodb_adaptive_hash_index now OFF by default)",
+      "url": "https://dev.mysql.com/doc/refman/8.4/en/mysql-nutshell.html"
+    },
+    {
+      "label": "MySQL 8.4 Reference Manual: The MEMORY storage engine (hash indexes by default)",
+      "url": "https://dev.mysql.com/doc/refman/8.4/en/memory-storage-engine.html"
+    },
+    {
+      "label": "SQLite: Database file format (table b-trees keep all data in the leaves)",
+      "url": "https://www.sqlite.org/fileformat2.html"
+    },
+    {
+      "label": "Oracle Database 23ai Concepts: Indexes and index-organized tables (bitmap indexes, locking, IOTs)",
+      "url": "https://docs.oracle.com/en/database/oracle/oracle-database/23/cncpt/indexes-and-index-organized-tables.html"
+    },
+    {
+      "label": "ClickHouse docs: Data skipping indexes (no row-based secondary indexes, minmax, bloom_filter, GRANULARITY, correlation)",
+      "url": "https://clickhouse.com/docs/optimize/skipping-indexes"
+    },
+    {
+      "label": "Apache Parquet docs: Bloom filter (min/max statistics and dictionaries, split block Bloom filters)",
+      "url": "https://parquet.apache.org/docs/file-format/bloomfilter/"
+    },
+    {
+      "label": "Apache Parquet docs: Page index (statistics to skip pages)",
+      "url": "https://parquet.apache.org/docs/file-format/pageindex/"
+    },
+    {
+      "label": "Oracle: Exadata storage indexes (in-memory min/max per storage region)",
+      "url": "https://www.oracle.com/database/technologies/exadata/software/storageindexes/"
+    },
+    {
+      "label": "RocksDB wiki: RocksDB Bloom filter (a filter per SST file, bits per key and false-positive rates)",
+      "url": "https://github.com/facebook/rocksdb/wiki/RocksDB-Bloom-Filter"
+    },
+    {
+      "label": "pgvector on GitHub: HNSW and IVFFlat indexes for approximate nearest-neighbour search",
+      "url": "https://github.com/pgvector/pgvector"
+    },
+    {
+      "label": "PostGIS workshop: Spatial indexing (bounding boxes, R-tree on GiST)",
+      "url": "https://postgis.net/workshops/postgis-intro/indexing.html"
+    }
+  ]
+}
