@@ -1,0 +1,189 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Lakekeeper",
+  "concepts": ["catalogs", "lakehouse"],
+  "provider": "oss",
+  "vendor": "Vakamo",
+  "license": "Apache 2.0",
+  "website": "https://docs.lakekeeper.io/",
+  "repo": "https://github.com/lakekeeper/lakekeeper",
+  "summary": "An open-source Apache Iceberg REST catalog written in Rust: a stateless server, backed by PostgreSQL, that tells every engine where each table’s current metadata is, checks permissions, and hands out short-lived storage credentials.",
+  "intro": [
+    "Lakekeeper is one Rust binary, built on the `iceberg-rust` library, that serves the Iceberg REST catalog API at `/catalog` and its own management API at `/management` for everything the spec leaves out: projects, warehouses, users, roles and permissions. It keeps no local state. Catalog state lives in PostgreSQL 15 or newer, so you can run several instances behind a load balancer. Objects nest as server, projects, warehouses, then nested namespaces holding tables and views. Each warehouse points at one storage location through a storage profile (AWS S3 or an S3-compatible store such as Cloudflare R2 or Alibaba Cloud OSS, STACKIT, Azure Data Lake Storage Gen2, Microsoft OneLake or Google Cloud Storage) plus a storage credential. Lakekeeper keeps that credential encrypted in PostgreSQL or in a Vault-style KV2 store. An engine needs only the catalog URL and a warehouse name. When it loads a table, Lakekeeper either vends temporary credentials scoped to that table’s location (STS for S3, SAS tokens for Azure, downscoped tokens for GCS) or, on S3, signs each request itself (remote signing). It refuses table locations that overlap, so one table’s credentials can’t reach another table’s files. Each change can also go out as a CloudEvent to NATS or Kafka.",
+    "Users sign in through any OpenID Connect provider or as Kubernetes service accounts. Every access decision goes to one authorizer. In the open-source build that is OpenFGA, a separate service that stores grants such as ownership, `select` and `modify` and inherits them down the namespace tree. A bridge for Open Policy Agent lets Trino enforce the same permissions. You can also write your own authorizer as a Rust trait. Neither engine does row filters or column masks. Beyond Iceberg, generic tables register Lance, Parquet or CSV data under the same permissions and credentials, but Lakekeeper doesn’t coordinate their writes. A HANSETAG team in Germany started the project in 2024 as “TIP” and renamed it Lakekeeper in October 2024. It is now built by Vakamo, founded by Viktor Kessler and Christian Thiel. Vakamo sells Lakekeeper+, which adds Cedar policies, automatic snapshot expiry and orphan-file removal, LDAP, Okta and Entra ID role providers, support and long-term-support releases. A managed Lakekeeper Cloud is in private beta. The latest release is 0.14.0 (7 October 2026), and versions are still 0.x."
+  ],
+  "strengths": [
+    "One Rust binary with no local state: PostgreSQL is the only required dependency, instances scale horizontally, and each `lakekeeper migrate` runs in a single transaction",
+    "Credential vending or remote signing on AWS S3, S3-compatible stores (it is tested with Silo and SeaweedFS), Cloudflare R2, STACKIT, ADLS Gen2, OneLake and GCS, so on-premise lakes get the same protection as cloud ones",
+    "Fine-grained permissions in the free build: OpenFGA grants with owners who can share their own objects, an OPA bridge for Trino, and OAuth2 token exchange for shared engines",
+    "Table names are case-insensitive but keep their case, so a table PyIceberg creates as `Monthly Revenue` is still found by Spark (which lowercases) and Snowflake (which uppercases)",
+    "Soft deletion, deletion protection, change events to NATS or Kafka, and an open-source web console that queries tables in the browser with DuckDB WASM"
+  ],
+  "limits": [
+    "Still 0.x, and minor releases break things: 0.10.0 changed the OpenFGA schema, 0.11.0 switched S3 to vended credentials by default, and 0.12.0 changed the log format. Every upgrade needs `lakekeeper migrate` before `serve`",
+    "Open core: Cedar policies, automatic snapshot expiry and orphan-file removal, and LDAP, Okta or Entra ID role providers are Lakekeeper+ only. The free build only deletes old metadata files, and neither edition compacts data files",
+    "Permissions in the free build need OpenFGA 1.11 or newer as an extra service with its own database, ideally on the same node as Lakekeeper; without it, the only other built-in authorizer is AllowAll, which enforces nothing",
+    "Every table is managed: external tables aren’t supported yet, and a drop purges the files unless the client sends `purgeRequested=false`. Spark’s `DROP TABLE … PURGE` deletes files itself and gets around soft deletion",
+    "One young company, Vakamo, maintains it, with no foundation behind it, and PostgreSQL is the only supported database"
+  ],
+  "worksWith": [
+    { "id": "iceberg", "how": "tracks and commits tables in" },
+    { "id": "rust", "how": "is written in" },
+    { "id": "postgresql", "how": "keeps catalog state and secrets in" },
+    { "id": "s3", "how": "vends scoped STS credentials for" },
+    { "id": "r2", "how": "vends temporary credentials for" },
+    { "id": "silo", "how": "vends STS credentials for" },
+    { "id": "azure-blob", "how": "vends SAS tokens for ADLS Gen2 on" },
+    { "id": "gcs", "how": "vends downscoped tokens for" },
+    { "id": "spark", "how": "serves Iceberg tables to" },
+    { "id": "trino", "how": "serves tables and OPA permissions to" },
+    { "id": "duckdb", "how": "serves Iceberg tables to" },
+    { "id": "starrocks", "how": "serves Iceberg tables to" },
+    { "id": "kafka", "how": "publishes change events to" },
+    { "id": "vault", "how": "can keep warehouse credentials in" },
+    { "id": "kubernetes", "how": "is deployed with a Helm chart on" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Bootstrap Lakekeeper, create a warehouse, then write with PyIceberg and read with DuckDB",
+    "source": [
+      "# pip install \"pyiceberg[pyarrow]\" duckdb   (pyiceberg 0.12, duckdb 1.5)",
+      "# Fresh, unsecured Lakekeeper 0.14 at lakekeeper:8181; Silo (S3 with STS) at silo:9000",
+      "import json, urllib.request",
+      "import duckdb, pyarrow as pa",
+      "from pyiceberg.catalog.rest import RestCatalog",
+      "",
+      "LK = \"http://lakekeeper:8181\"",
+      "",
+      "def post(path, body):",
+      "    req = urllib.request.Request(LK + path, json.dumps(body).encode(),",
+      "                                 {\"Content-Type\": \"application/json\"})",
+      "    with urllib.request.urlopen(req) as r:",
+      "        return r.status, r.read()",
+      "",
+      "# 1. Management API: bootstrap once, then create a warehouse on a bucket",
+      "print(post(\"/management/v1/bootstrap\", {\"accept-terms-of-use\": True})[0])  # 204",
+      "status, body = post(\"/management/v1/warehouse\", {",
+      "    \"warehouse-name\": \"lake\",",
+      "    \"storage-profile\": {\"type\": \"s3\", \"flavor\": \"s3-compat\", \"bucket\": \"lake\",",
+      "                        \"region\": \"local-01\", \"endpoint\": \"http://silo:9000\",",
+      "                        \"path-style-access\": True, \"sts-enabled\": True},",
+      "    \"storage-credential\": {\"type\": \"s3\", \"credential-type\": \"access-key\",",
+      "                           \"access-key-id\": \"silo-root-user\",",
+      "                           \"secret-access-key\": \"silo-root-password\"},",
+      "})",
+      "print(status)  # 201",
+      "",
+      "# 2. Iceberg REST API: the client knows only the URL and the warehouse name",
+      "catalog = RestCatalog(\"lakekeeper\", uri=LK + \"/catalog\", warehouse=\"lake\")",
+      "catalog.create_namespace(\"sales\")",
+      "orders = catalog.create_table(\"sales.orders\",",
+      "                              pa.schema([(\"id\", pa.int64()), (\"amount\", pa.float64())]))",
+      "orders.append(pa.table({\"id\": [1, 2], \"amount\": [9.5, 20.0]}))",
+      "orders.append(pa.table({\"id\": [3], \"amount\": [4.25]}))",
+      "print(orders.metadata_location.split(\"/\")[-1][:5])  # 00002: two commits after create",
+      "",
+      "# The S3 key PyIceberg wrote with is a temporary one vended by Lakekeeper",
+      "print(orders.io.properties[\"s3.access-key-id\"] != \"silo-root-user\")  # True",
+      "",
+      "# 3. A second engine reads the same table through the same catalog",
+      "duckdb.sql(\"INSTALL iceberg; LOAD iceberg;\")",
+      "duckdb.sql(\"CREATE SECRET lk (TYPE iceberg, TOKEN 'dummy')\")  # no auth configured",
+      "duckdb.sql(f\"ATTACH 'lake' AS lake (TYPE iceberg, ENDPOINT '{LK}/catalog', SECRET lk)\")",
+      "print(duckdb.sql(\"SELECT count(*), sum(amount) FROM lake.sales.orders\").fetchall())",
+      "# [(3, 33.75)]"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Lakekeeper and Lakekeeper+",
+      "intro": "The open-source catalog and Vakamo’s commercial editions, checked 2026-10-09.",
+      "corner": "",
+      "columns": ["Lakekeeper", "Lakekeeper+", "Lakekeeper Cloud"],
+      "rows": [
+        {
+          "label": "Who runs it",
+          "values": ["You: binary, Docker image or Helm chart", "You, on your cloud or on premises", "Vakamo, fully managed (private beta)"]
+        },
+        {
+          "label": "Licence",
+          "values": ["Apache 2.0", "Commercial, built on the open-source release of the same version", "Commercial service"]
+        },
+        {
+          "label": "Authorization",
+          "values": ["OpenFGA, AllowAll, or your own Rust authorizer; OPA bridge for Trino", "Adds Cedar policies with per-decision traces", "As Lakekeeper+"]
+        },
+        {
+          "label": "Identity",
+          "values": ["OpenID Connect and Kubernetes service accounts", "Adds roles from Okta, Entra ID and LDAP, and an external admission check", "As Lakekeeper+"]
+        },
+        {
+          "label": "Table maintenance",
+          "values": ["Deletes old metadata files on commit", "Adds automatic snapshot expiry and orphan-file removal", "As Lakekeeper+"]
+        },
+        {
+          "label": "Price",
+          "values": ["Free; you pay for servers, PostgreSQL and OpenFGA", "Quote, by reserved capacity and data volume", "Quote, by API calls and processed data volume"]
+        }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "By 2024 the Iceberg REST protocol had become, in the words of TIP’s first README, “the standard for catalogs in open Lakehouses”. A team at HANSETAG, a company in Germany, began its own implementation in Rust on top of `iceberg-rust` and called it TIP, for “The Iceberg Protocol” and “the tip of the Iceberg”. Its first README said they started it because existing catalogs lacked customizability, support for on-premise deployments and other features they needed. The repository was created in April 2024 and 0.1.0 shipped in June 2024.",
+      "The early design made everything a company might swap into a Rust trait: the database, the secret store, the authorizer, event publishing and a hook that can veto changes that break data contracts. Clients got S3 access through remote signing instead of shared bucket keys, and every change could be emitted as a CloudEvent. Release 0.4.0 in October 2024 renamed TIP to Lakekeeper. 0.5.0 in December 2024 added OpenFGA permissions, an embedded web UI, projects, nested namespaces and Kafka events, and moved the default port to 8181.",
+      "Vakamo, co-founded by Viktor Kessler and Christian Thiel, now builds and maintains Lakekeeper and sells Lakekeeper+ on top of it; the published Lakekeeper+ release notes begin with 0.12.0 in April 2026. Release 0.11.0 in January 2026 made vended credentials, not remote signing, the S3 default. 0.14.0 in October 2026 added a Grants API that works with every authorizer, governance tags and namespace moves."
+    ],
+    "choices": [
+      { "choice": "Rust, as one binary with no local state", "why": "The first README promised a single 30 MB binary with no JVM or Python environment, which could be scaled horizontally and updated without downtime because all state sits in PostgreSQL." },
+      { "choice": "Extension points as Rust traits", "why": "The authors wanted a catalog companies could adapt: plug in their own access management, secret store or event stream, or block changes that would break a data contract, by implementing a handful of methods." },
+      { "choice": "Never hand clients the bucket keys", "why": "S3 remote signing came first, then vended credentials scoped to one table. Lakekeeper also refuses overlapping table locations, because a credential for one table must not reach another table’s files." },
+      { "choice": "OpenFGA instead of plain roles", "why": "The README said simple role-based access wasn’t enough. OpenFGA, based on Google’s Zanzibar paper, stores grants as relationships and inherits them both ways through nested namespaces." }
+    ],
+    "timeline": [
+      { "year": "2024", "text": "HANSETAG releases TIP 0.1.0, a Rust Iceberg REST catalog, in June" },
+      { "year": "2024", "text": "0.4.0 renames TIP to Lakekeeper in October and adds GCS and soft deletion" },
+      { "year": "2024", "text": "0.5.0 in December adds OpenFGA permissions, an embedded UI and projects" },
+      { "year": "2026", "text": "0.11.0 in January makes vended credentials the S3 default" },
+      { "year": "2026", "text": "Vakamo’s first published Lakekeeper+ release, 0.12.0, in April" },
+      { "year": "2026", "text": "0.14.0 in October adds the Grants API, governance tags and namespace moves" }
+    ],
+    "sources": [
+      { "label": "GitHub: Lakekeeper README at v0.1.0, “The TIP of the Iceberg” (June 2024)", "url": "https://github.com/lakekeeper/lakekeeper/blob/v0.1.0/README.md" },
+      { "label": "GitHub: Lakekeeper releases (0.0.1 June 2024 to 0.14.0 October 2026)", "url": "https://github.com/lakekeeper/lakekeeper/releases" },
+      { "label": "GitHub: Lakekeeper v0.4.0 release, Rename TIP to Lakekeeper (3 October 2024)", "url": "https://github.com/lakekeeper/lakekeeper/releases/tag/v0.4.0" },
+      { "label": "GitHub: Lakekeeper v0.5.0 release, OpenFGA, embedded UI, port 8181 (6 December 2024)", "url": "https://github.com/lakekeeper/lakekeeper/releases/tag/v0.5.0" },
+      { "label": "GitHub: Lakekeeper v0.11.0 release, vended credentials by default (1 January 2026)", "url": "https://github.com/lakekeeper/lakekeeper/releases/tag/v0.11.0" },
+      { "label": "GitHub: HANSETAG organization (Germany)", "url": "https://github.com/hansetag" },
+      { "label": "Vakamo: About (founders, Lakekeeper+, Lakekeeper Cloud)", "url": "https://vakamo.com/about/" },
+      { "label": "Lakekeeper docs: Lakekeeper+ release notes (0.12.0, April 2026, to 0.14.0)", "url": "https://docs.lakekeeper.io/about/enterprise-release-notes/" },
+      { "label": "Lakekeeper docs: Release notes (0.14.0, 7 October 2026)", "url": "https://docs.lakekeeper.io/about/release-notes/" }
+    ]
+  },
+  "sources": [
+    { "label": "Lakekeeper docs: Getting started (deployment options, Postgres 15+, endpoints, creating a warehouse)", "url": "https://docs.lakekeeper.io/getting-started/" },
+    { "label": "Lakekeeper docs: Concepts (architecture, entity hierarchy, managed tables, purge, soft deletion, case-insensitive names, migrations)", "url": "https://docs.lakekeeper.io/docs/latest/concepts/" },
+    { "label": "Lakekeeper docs: Bootstrap", "url": "https://docs.lakekeeper.io/docs/latest/bootstrap/" },
+    { "label": "Lakekeeper docs: Storage (vended credentials, remote signing, supported stores)", "url": "https://docs.lakekeeper.io/docs/latest/storage/" },
+    { "label": "Lakekeeper docs: S3 storage profile (STS, tested with Silo and SeaweedFS)", "url": "https://docs.lakekeeper.io/docs/latest/storage-s3/" },
+    { "label": "Lakekeeper docs: Authorization (OpenFGA vs Cedar, AllowAll, no row filters or column masks)", "url": "https://docs.lakekeeper.io/docs/latest/authorization/" },
+    { "label": "Lakekeeper docs: Authorization with OpenFGA (grants, ownership, OpenFGA 1.11+)", "url": "https://docs.lakekeeper.io/docs/latest/authorization-openfga/" },
+    { "label": "Lakekeeper docs: Authorization with Cedar (Lakekeeper Plus)", "url": "https://docs.lakekeeper.io/docs/latest/authorization-cedar/" },
+    { "label": "Lakekeeper docs: Open Policy Agent bridge for Trino", "url": "https://docs.lakekeeper.io/docs/latest/opa/" },
+    { "label": "Lakekeeper docs: Configuration (NATS, Kafka, CloudEvents, authentication)", "url": "https://docs.lakekeeper.io/docs/latest/configuration/" },
+    { "label": "Lakekeeper docs: Table maintenance (metadata cleanup; snapshot expiry and orphan files in Plus)", "url": "https://docs.lakekeeper.io/docs/latest/table-maintenance/" },
+    { "label": "Lakekeeper docs: Generic tables (Lance, Parquet, CSV; no commit coordination)", "url": "https://docs.lakekeeper.io/docs/latest/generic-tables/" },
+    { "label": "Lakekeeper docs: Query engines (LoQE with DuckDB WASM, DuckDB, Trino, Spark, StarRocks, token exchange)", "url": "https://docs.lakekeeper.io/docs/latest/engines/" },
+    { "label": "Lakekeeper docs: Production checklist (HA Postgres, OpenFGA placement, TLS at a proxy)", "url": "https://docs.lakekeeper.io/docs/latest/production/" },
+    { "label": "Lakekeeper docs: Running Lakekeeper in production, Lakekeeper+", "url": "https://docs.lakekeeper.io/production/" },
+    { "label": "Lakekeeper docs: Release notes (0.14.0, 7 October 2026; 0.12.0 log format change)", "url": "https://docs.lakekeeper.io/about/release-notes/" },
+    { "label": "Lakekeeper docs: Lakekeeper+ release notes", "url": "https://docs.lakekeeper.io/about/enterprise-release-notes/" },
+    { "label": "GitHub: lakekeeper/lakekeeper README (storage, secret and event stores, Apache 2.0)", "url": "https://github.com/lakekeeper/lakekeeper" },
+    { "label": "GitHub: Lakekeeper v0.10.0 release, OpenFGA schema v4 (29 September 2025)", "url": "https://github.com/lakekeeper/lakekeeper/releases/tag/v0.10.0" },
+    { "label": "GitHub: Lakekeeper v0.14.0 release (7 October 2026)", "url": "https://github.com/lakekeeper/lakekeeper/releases/tag/v0.14.0" },
+    { "label": "Vakamo: About (the company behind Lakekeeper)", "url": "https://vakamo.com/about/" },
+    { "label": "Vakamo: Lakekeeper pricing (Lakekeeper+ self-managed, Lakekeeper Cloud)", "url": "https://vakamo.com/pricing/" }
+  ],
+  "checked": "2026-10-09"
+}

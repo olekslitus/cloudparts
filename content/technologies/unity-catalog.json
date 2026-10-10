@@ -1,0 +1,194 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Unity Catalog",
+  "concepts": ["catalogs", "lakehouse"],
+  "provider": "vendor",
+  "vendor": "Databricks, Inc.",
+  "license": "Proprietary as a Databricks service; the open-source Unity Catalog server is Apache 2.0",
+  "website": "https://www.databricks.com/product/unity-catalog",
+  "repo": "https://github.com/unitycatalog/unitycatalog",
+  "summary": "Databricks’ catalog and governance layer for tables, files, functions and models, with managed and external tables, an Iceberg REST endpoint and credential vending; a separate Apache 2.0 open-source server lives at LF AI & Data.",
+  "intro": [
+    "The name covers two things. Most people meet Unity Catalog as the governance layer built into Databricks, on by default for workspaces created after 8 November 2023. There, one metastore per cloud region is shared by the workspaces attached to it, so a grant made in one workspace applies in all of them. Everything you govern is a securable object in a three-level namespace, `catalog.schema.object`: tables, views, volumes (governed folders of non-tabular files under `/Volumes/<catalog>/<schema>/<volume>/`), functions, models and services. Storage credentials, external locations, connections and shares sit directly under the metastore. Access is controlled with `GRANT` and ownership, attribute-based policies on governed tags, per-table row filters and column masks, and workspace bindings, and Unity Catalog records lineage and an audit log as data is used.",
+    "Tables and volumes come in two kinds. Managed tables are Databricks’ default and recommendation: Unity Catalog picks where the files go inside a managed storage location in your own cloud account (set on the metastore, catalog or schema), stores them as Delta Lake or, with `USING iceberg`, as Iceberg, and looks after them. Predictive optimization runs `OPTIMIZE`, `VACUUM` and `ANALYZE` on serverless compute, automatic liquid clustering picks clustering keys from your queries, and a dropped managed table’s files are deleted after a recovery period of 7 days by default, during which `UNDROP` brings it back. External tables point at a path you choose inside a registered external location, can also be CSV, JSON, Avro, Parquet, ORC or text, get no automatic optimization, and keep their files when dropped. Foreign tables mirror tables that another catalog, such as a Hive Metastore, AWS Glue or Snowflake Horizon Catalog, still owns, and are read-only. Other engines connect through two open APIs, the Unity REST API for Delta clients and an Iceberg REST catalog at `/api/2.1/unity-catalog/iceberg-rest`, which can read and write managed Iceberg tables and read Delta tables that have Iceberg reads enabled. Both vend short-lived storage credentials that carry the requesting principal’s privileges.",
+    "The open-source Unity Catalog is a separate, much smaller implementation. Databricks published it on 12 June 2024 under Apache 2.0 and gave it to the LF AI & Data Foundation, where it is still a sandbox project. It is a Java 17 server with a REST API, a CLI and a web UI that keeps its metadata in H2 by default, with PostgreSQL as an option, and it models the same catalogs, schemas, tables, volumes, functions and models. It added OAuth sign-in, privileges and credential vending for S3, Azure and Google Cloud Storage in 0.2 (September 2024), managed storage locations with experimental managed Delta tables in 0.4 (February 2026), a REST API for catalog-managed Delta commits in 0.5, and views in 0.6 (August 2026). Its Iceberg REST endpoint serves Delta tables with UniForm to Iceberg readers, and its README warns that the APIs are still evolving."
+  ],
+  "strengths": [
+    "One permission model for tables, views, volumes, functions and models, with tag-based policies, row filters, column masks, lineage and audit logs, shared by every workspace on the metastore",
+    "Managed tables look after themselves: predictive optimization compacts, vacuums and collects statistics, automatic liquid clustering picks keys, and `UNDROP` recovers a dropped table within the recovery period",
+    "Open to other engines: Spark, Flink, Trino, DuckDB and other Iceberg REST or Delta clients can read and write managed tables with vended credentials, instead of only reading copies",
+    "Governs tables it doesn’t own: catalog federation brings Hive Metastore, Glue and Snowflake Horizon tables under the same grants without moving them, and `SET MANAGED` converts external Delta tables in place",
+    "An Apache 2.0 server you can run yourself in Docker, with the same namespace and API shape"
+  ],
+  "limits": [
+    "Most of the features above are Databricks-only. The open-source server is at 0.x as a sandbox project: its README says the APIs shouldn’t be assumed stable, managed Delta tables are experimental, authorization is off in the default config, and its Iceberg endpoint only serves UniForm tables for reading",
+    "Managed tables must be used by name: path-based access isn’t supported (except through Compatibility Mode), creating and writing managed Delta tables from outside Delta clients is in Public Preview, and external Iceberg engines can’t read Unity Catalog views",
+    "The automation costs money and setup: predictive optimization needs the Premium plan and bills its runs as serverless jobs, and managed Iceberg tables need serverless compute that can reach your storage",
+    "External tables are only governed through Unity Catalog: its grants don’t apply to direct file access, and metadata changed by another client must be synced back with `MSCK REPAIR TABLE … SYNC METADATA`",
+    "Foreign tables are read-only (except an internal federated Hive Metastore) and don’t get managed tables’ transactional guarantees or most optimizations"
+  ],
+  "worksWith": [
+    { "id": "delta-lake", "how": "manages tables in" },
+    { "id": "iceberg", "how": "manages and serves tables in" },
+    { "id": "s3", "how": "keeps managed tables on AWS in" },
+    { "id": "azure-blob", "how": "keeps managed tables on Azure in" },
+    { "id": "gcs", "how": "vends scoped credentials for" },
+    { "id": "spark", "how": "serves tables over open APIs to" },
+    { "id": "trino", "how": "serves Iceberg tables to" },
+    { "id": "duckdb", "how": "serves tables to" },
+    { "id": "hive", "how": "federates the metastore of" },
+    { "id": "snowflake", "how": "federates Horizon Catalog tables from" },
+    { "id": "postgresql", "how": "keeps open-source server metadata in" },
+    { "id": "kubernetes", "how": "runs the open-source server, via Helm, on" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "The open-source server in Docker: an external table outlives its catalog entry",
+    "source": [
+      "docker run -d --name uc -p 8080:8080 unitycatalog/unitycatalog:v0.6.0",
+      "docker exec -it uc bash          # the CLI ships in the image",
+      "",
+      "bin/uc catalog create --name lake",
+      "bin/uc schema create --catalog lake --name sales",
+      "bin/uc table create --full_name lake.sales.events \\",
+      "  --columns \"id INT, name STRING\" --storage_location /tmp/ext/events",
+      "bin/uc table write --full_name lake.sales.events   # sample rows, as a Delta table",
+      "bin/uc table get --full_name lake.sales.events --output jsonPretty",
+      "#   \"table_type\" : \"EXTERNAL\",",
+      "#   \"data_source_format\" : \"DELTA\",",
+      "#   \"storage_location\" : \"file:///tmp/ext/events\",",
+      "bin/uc table read --full_name lake.sales.events --max_results 2",
+      "",
+      "bin/uc table delete --full_name lake.sales.events",
+      "ls /tmp/ext/events       # _delta_log  e96fb6de-…-000.parquet  (files are still there)",
+      "exit",
+      "",
+      "# The same server answers Iceberg REST clients",
+      "curl -s localhost:8080/api/2.1/unity-catalog/iceberg/v1/catalogs/unity/namespaces",
+      "# {\"namespaces\":[[\"commerce\"],[\"consumer\"],[\"default\"]],\"next-page-token\":null}"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Table types in Databricks Unity Catalog",
+      "intro": "From Databricks’ documentation, checked 2026-10-09. Volumes split into managed and external the same way.",
+      "corner": "",
+      "columns": ["Managed", "External", "Foreign"],
+      "rows": [
+        { "label": "Where the files live", "values": ["A managed storage location in your cloud account, chosen by Unity Catalog", "A path you give, inside a registered external location", "Wherever the other catalog keeps them"] },
+        { "label": "Who owns the metadata", "values": ["Unity Catalog", "Unity Catalog", "The other catalog: Hive Metastore, Glue, Snowflake Horizon or a database reached by query federation"] },
+        { "label": "Formats", "values": ["Delta Lake or Iceberg", "Delta, CSV, JSON, Avro, Parquet, ORC, text", "Whatever the source holds"] },
+        { "label": "Writes", "values": ["Databricks, and outside engines through the Iceberg REST and Unity REST APIs", "Databricks and Delta clients; direct file writes bypass Unity Catalog", "Read-only, except an internal federated Hive Metastore"] },
+        { "label": "Automatic maintenance", "values": ["Predictive optimization, automatic liquid clustering, metadata caching", "None", "None"] },
+        { "label": "`DROP TABLE`", "values": ["Files deleted after the recovery period (7 days by default; 0 or 7 to 30 days configurable); `UNDROP` restores", "Removes the entry; files stay", "Data and metadata stay with the external system that manages them"] }
+      ],
+      "notes": [
+        "Databricks recommends managed tables, and `ALTER TABLE … SET MANAGED` converts external or foreign Delta tables to managed ones while keeping their history and permissions.",
+        "Another Databricks page gives the drop retention for managed tables and volumes as 8 days; the managed-tables page says 7."
+      ]
+    },
+    {
+      "type": "code",
+      "title": "Managed and external tables in Databricks SQL",
+      "intro": "The table lifecycle from Databricks’ documentation. This needs a Databricks workspace, so unlike the snippet above it wasn’t run for this page.",
+      "lang": "sql",
+      "source": [
+        "-- Managed: Unity Catalog chooses the location and maintains the files",
+        "CREATE OR REPLACE TABLE main.sales.orders (id BIGINT, amount DECIMAL(10,2))",
+        "CLUSTER BY AUTO;",
+        "CREATE TABLE main.sales.refunds (id BIGINT, amount DECIMAL(10,2)) USING iceberg;",
+        "",
+        "-- External: you choose the location, inside a registered external location",
+        "CREATE TABLE main.raw.clicks (id BIGINT, url STRING)",
+        "LOCATION 's3://acme-raw/clicks';",
+        "",
+        "DROP TABLE main.raw.clicks;     -- the files in s3://acme-raw/clicks stay",
+        "DROP TABLE main.sales.orders;   -- the files go after the recovery period",
+        "UNDROP TABLE main.sales.orders; -- ...unless you undo it in time",
+        "",
+        "ALTER SCHEMA main.sales RETAIN DROPPED TO 30 DAYS;",
+        "ALTER TABLE main.raw.events SET MANAGED;  -- convert an external Delta table"
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Databricks Unity Catalog and Unity Catalog OSS",
+      "intro": "Same name and namespace, different software. Checked 2026-10-09.",
+      "corner": "",
+      "columns": ["In Databricks", "Open source"],
+      "rows": [
+        { "label": "Who runs it", "values": ["Databricks, inside every Unity Catalog-enabled Databricks workspace", "You: Docker image, tarball or Helm chart"] },
+        { "label": "Status", "values": ["Generally available since 2022; managed Iceberg tables GA since May 2026", "0.6.0 (August 2026), a sandbox project at LF AI & Data"] },
+        { "label": "Managed tables", "values": ["Delta Lake and Iceberg, with predictive optimization", "Experimental managed Delta tables since 0.4"] },
+        { "label": "Iceberg REST", "values": ["Reads and writes managed Iceberg tables; reads Delta with Iceberg reads enabled", "Reads Delta tables with UniForm"] },
+        { "label": "Access control", "values": ["Privileges, tag-based policies, row filters, column masks, workspace bindings", "Users and privileges with an external identity provider; off by default"] },
+        { "label": "Credential vending", "values": ["Tables and paths, through the Unity REST and Iceberg REST APIs", "S3, Azure and Google Cloud Storage; AWS storage credentials and external locations since 0.4"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Before Unity Catalog, each Databricks workspace had its own Hive metastore and a separate service for table access controls. Companies with many workspaces had to copy table definitions, views and permissions between them by hand, and the copies drifted. Databricks announced Unity Catalog at its Data and AI Summit in 2021 as one governance layer for data and AI, opened a gated public preview on AWS and Azure in April 2022, and made it generally available later that year (on 25 August 2022 in Azure Databricks). It added a catalog level above Hive’s `database.table`, so the old metastore could show up as one catalog, `hive_metastore`, next to the new ones. From November 2023, new workspaces got Unity Catalog automatically.",
+      "In June 2024, about a week after agreeing to buy Tabular, the company founded by Iceberg’s creators, Databricks open-sourced Unity Catalog. It released version 0.1 under Apache 2.0, hosted at the Linux Foundation’s LF AI & Data, with the Iceberg REST catalog API built with Tabular’s expertise and credential vending to gate access to storage. Databricks argued that most platforms were walled gardens and promised that its hosted service implemented the same open APIs.",
+      "On the Databricks side, Unity Catalog then took on Iceberg as a first-class format: managed Iceberg tables that outside engines can write through the Iceberg REST API went into public preview in June 2025 and became generally available in May 2026, along with Iceberg v3 and governed access to Iceberg tables in other catalogs. The open-source server has grown more slowly, through 0.x releases that added authentication, storage credentials, managed storage and views."
+    ],
+    "choices": [
+      { "choice": "Three levels: catalog, schema, object", "why": "Hive had only databases and tables. A level on top gave data owners more room to organize data and let the existing Hive metastore appear as one catalog, so customers could adopt Unity Catalog alongside it." },
+      { "choice": "One metastore per region, shared by workspaces", "why": "Per-workspace metastores meant hand-synchronised definitions and permissions. A shared metastore makes a grant in one workspace effective in all workspaces attached to it." },
+      { "choice": "Managed tables in the customer’s own account", "why": "Unity Catalog decides where managed files go and maintains them, but they stay in the customer’s cloud storage, not Databricks’. That lets Databricks automate layout and cleanup without taking custody of the data." },
+      { "choice": "Open APIs and credential vending", "why": "Other engines can’t be trusted to apply Databricks’ grants, so the catalog checks them and returns short-lived credentials scoped to the table. The same idea underpins the open-source release." }
+    ],
+    "timeline": [
+      { "year": "2021", "text": "Announced at Data and AI Summit" },
+      { "year": "2022", "text": "Gated public preview in April; generally available by August (Azure Databricks: 25 August)" },
+      { "year": "2023", "text": "Enabled automatically for new workspaces from 8 November" },
+      { "year": "2024", "text": "Open-sourced at LF AI & Data in June; OSS 0.1 in July" },
+      { "year": "2025", "text": "Managed Iceberg tables and Iceberg REST writes in public preview (June)" },
+      { "year": "2026", "text": "Managed Iceberg GA in May; OSS 0.6 adds views in August" }
+    ],
+    "sources": [
+      { "label": "Databricks blog: Gated public preview of Unity Catalog on AWS and Azure (April 2022; per-workspace Hive metastores, three-level namespace)", "url": "https://www.databricks.com/blog/2022/04/20/announcing-gated-public-preview-of-unity-catalog-on-aws-and-azure.html" },
+      { "label": "Azure Databricks archive: Unity Catalog GA, 25 August 2022", "url": "https://docs.azure.cn/en-us/databricks/archive/unity-catalog/20220825" },
+      { "label": "Databricks docs: What is Unity Catalog? (enabled automatically after 8 November 2023)", "url": "https://docs.databricks.com/aws/en/data-governance/unity-catalog/" },
+      { "label": "Databricks press release: Databricks open sources Unity Catalog (12 June 2024; introduced in 2021)", "url": "https://www.databricks.com/company/newsroom/press-releases/databricks-open-sources-unity-catalog-creating-industrys-only-open" },
+      { "label": "Databricks blog: Open sourcing Unity Catalog (13 June 2024)", "url": "https://www.databricks.com/blog/open-sourcing-unity-catalog" },
+      { "label": "Databricks press release: Databricks agrees to acquire Tabular (June 2024)", "url": "https://www.databricks.com/company/newsroom/press-releases/databricks-agrees-acquire-tabular-company-founded-original-creators" },
+      { "label": "GitHub: Unity Catalog 0.1 release (9 July 2024)", "url": "https://github.com/unitycatalog/unitycatalog/releases/tag/v0.1.0" },
+      { "label": "Databricks press release: Unity Catalog adds full Apache Iceberg support in Public Preview (11 June 2025)", "url": "https://www.databricks.com/company/newsroom/press-releases/databricks-eliminates-table-format-lock-and-adds-capabilities" },
+      { "label": "Databricks blog: Iceberg v3 GA, Managed Iceberg GA (28 May 2026)", "url": "https://www.databricks.com/blog/unity-catalog-and-next-era-apache-icebergtm" },
+      { "label": "GitHub: Unity Catalog 0.6.0 release (20 August 2026)", "url": "https://github.com/unitycatalog/unitycatalog/releases/tag/v0.6.0" }
+    ]
+  },
+  "sources": [
+    { "label": "Databricks docs: What is Unity Catalog? (object model, three-level namespace)", "url": "https://docs.databricks.com/aws/en/data-governance/unity-catalog/" },
+    { "label": "Databricks docs: Securable objects (one metastore per region, shared grants)", "url": "https://docs.databricks.com/aws/en/data-governance/unity-catalog/securable-objects" },
+    { "label": "Databricks docs: Access control in Unity Catalog (privileges, ABAC, row filters, workspace bindings)", "url": "https://docs.databricks.com/aws/en/data-governance/unity-catalog/access-control/" },
+    { "label": "Databricks docs: Managed versus external assets in Unity Catalog", "url": "https://docs.databricks.com/aws/en/data-governance/unity-catalog/managed-versus-external" },
+    { "label": "Databricks docs: Unity Catalog managed tables for Delta Lake and Apache Iceberg", "url": "https://docs.databricks.com/aws/en/tables/managed" },
+    { "label": "Databricks docs: Work with external tables", "url": "https://docs.databricks.com/aws/en/tables/external" },
+    { "label": "Databricks docs: Work with foreign tables", "url": "https://docs.databricks.com/aws/en/tables/foreign" },
+    { "label": "Databricks docs: Specify a managed storage location", "url": "https://docs.databricks.com/aws/en/connect/unity-catalog/cloud-storage/managed-storage" },
+    { "label": "Databricks docs: What are Unity Catalog volumes?", "url": "https://docs.databricks.com/aws/en/volumes/" },
+    { "label": "Databricks docs: Predictive optimization (Premium plan, serverless jobs billing, default since 11 November 2024)", "url": "https://docs.databricks.com/aws/en/optimizations/predictive-optimization" },
+    { "label": "Databricks docs: Use liquid clustering for tables (CLUSTER BY AUTO)", "url": "https://docs.databricks.com/aws/en/delta/clustering" },
+    { "label": "Databricks docs: Catalog commits (Beta)", "url": "https://docs.databricks.com/aws/en/tables/features/catalog-commits" },
+    { "label": "Databricks docs: Convert external or foreign Delta tables to managed tables", "url": "https://docs.databricks.com/aws/en/tables/convert-to-managed" },
+    { "label": "Databricks docs: UNDROP TABLE", "url": "https://docs.databricks.com/aws/en/sql/language-manual/sql-ref-syntax-ddl-undrop-table" },
+    { "label": "Databricks docs: What is Apache Iceberg in Databricks? (managed and foreign Iceberg tables, serverless requirement)", "url": "https://docs.databricks.com/aws/en/iceberg/" },
+    { "label": "Databricks docs: Access Databricks tables from Apache Iceberg clients (iceberg-rest endpoint, read and write matrix)", "url": "https://docs.databricks.com/aws/en/external-access/iceberg" },
+    { "label": "Databricks docs: Unity Catalog credential vending for external system access", "url": "https://docs.databricks.com/aws/en/external-access/credential-vending" },
+    { "label": "GitHub: Unity Catalog README (Apache 2.0, LF AI & Data sandbox, APIs evolving, Java 17)", "url": "https://github.com/unitycatalog/unitycatalog" },
+    { "label": "LF AI & Data: Unity Catalog project page (sandbox, contributed by Databricks in June 2024)", "url": "https://lfaidata.foundation/projects/unity-catalog/" },
+    { "label": "Unity Catalog OSS docs: Server configuration (H2 metadata store, credential vending settings)", "url": "https://docs.unitycatalog.io/server/configuration/" },
+    { "label": "Unity Catalog OSS docs: Docker Compose (Postgres via the deployment guide)", "url": "https://docs.unitycatalog.io/docker_compose/" },
+    { "label": "Unity Catalog OSS docs: Users and privileges", "url": "https://docs.unitycatalog.io/server/users-privileges/" },
+    { "label": "Unity Catalog OSS docs: UniForm tables through the Iceberg REST catalog", "url": "https://docs.unitycatalog.io/usage/tables/uniform/" },
+    { "label": "GitHub: Unity Catalog 0.2.0 release (September 2024; OAuth, privileges, credential vending)", "url": "https://github.com/unitycatalog/unitycatalog/releases/tag/v0.2.0" },
+    { "label": "GitHub: Unity Catalog 0.3.0 release (July 2025; Helm chart)", "url": "https://github.com/unitycatalog/unitycatalog/releases/tag/v0.3.0" },
+    { "label": "GitHub: Unity Catalog 0.4.0 release (February 2026; storage credentials, managed storage, experimental managed Delta tables)", "url": "https://github.com/unitycatalog/unitycatalog/releases/tag/v0.4.0" },
+    { "label": "GitHub: Unity Catalog 0.5.0 release (June 2026; UC Delta API)", "url": "https://github.com/unitycatalog/unitycatalog/releases/tag/v0.5.0" },
+    { "label": "GitHub: Unity Catalog 0.6.0 release (August 2026; views, PostgreSQL fix, expiring tokens)", "url": "https://github.com/unitycatalog/unitycatalog/releases/tag/v0.6.0" }
+  ],
+  "checked": "2026-10-09"
+}

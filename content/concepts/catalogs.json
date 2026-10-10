@@ -1,0 +1,187 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Lakehouse catalogs",
+  "category": "analytics",
+  "order": 25,
+  "summary": "The service every engine asks “where is this table right now?”: it maps table names to their current metadata, makes commits atomic, and decides who may read which files.",
+  "howItWorks": "An Iceberg table is a pile of immutable files plus a chain of metadata files, and only one of those metadata files is current. The catalog stores that pointer for each name, such as `sales.orders` → `s3://lake/…/00042-….metadata.json`, grouped into namespaces (also called databases or schemas). To commit, a writer writes new data and a new metadata file, then asks the catalog to swap the pointer from the version it started on to its new one. The swap is a compare-and-swap: if another writer got there first, the catalog refuses, and the writer rebuilds its commit on top of the newer version and tries again. Readers just load whatever the pointer says. Most catalogs now speak the same Iceberg REST protocol, so Spark, Trino, Flink, DuckDB and PyIceberg can share one catalog. A REST catalog can also hand each client short-lived storage credentials scoped to one table’s folder (credential vending), so the catalog’s grants decide who can read the files and engines never hold bucket-wide keys. Catalogs differ in how much they own: for an external table the catalog only records a location you chose, and dropping it leaves the files; for a managed table the catalog picks the location, maintains the files and deletes them when the table is dropped.",
+  "analogy": "A library’s front desk. The books sit on open shelves, but the desk knows which edition of each title is the current one, stamps a new edition in only if nobody beat you to it, and gives each reader a pass that opens just the shelves they’re allowed to browse.",
+  "useWhen": [
+    "More than one engine reads or writes the same open-format tables, such as Spark for ETL, Trino for dashboards and DuckDB in notebooks",
+    "You want one place to grant and revoke table access, enforced by vended credentials instead of per-engine copies of the rules and bucket keys",
+    "Several writers commit to the same tables and need conflicts caught instead of silently overwriting each other",
+    "You’d rather let the platform choose file locations, compact files and clean up after drops (managed tables)"
+  ],
+  "avoidWhen": [
+    "One tool reads a few Parquet files; a catalog adds a service, a database behind it and an auth setup for nothing",
+    "Engines that bypass the catalog with their own bucket credentials; its grants then protect nothing, so lock down the storage first",
+    "Expecting the catalog to keep tables tidy: Polaris runs no maintenance, Lakekeeper’s snapshot expiry and orphan-file removal come only in its paid Lakekeeper+ edition and are off by default, and neither compacts files, so plan your own jobs"
+  ],
+  "example": "A retailer keeps 400 Iceberg tables in one S3 bucket. Spark jobs write them every 15 minutes, analysts query them from Trino, and data scientists open them in DuckDB. All three point at one REST catalog. When an analyst runs a query on `sales.orders`, Trino asks the catalog for the table, gets the location of its current metadata file plus S3 credentials that only cover that table’s prefix and expire within an hour, and reads the files directly. Two Spark jobs that try to commit to the same table in the same second can’t both win: the catalog accepts one and the other retries on top of it. Revoking the analysts’ grant stops their next table load in every engine at once; credentials already handed out keep working until they expire.",
+  "providers": {
+    "aws": "AWS Glue Data Catalog (Iceberg REST endpoint), Amazon S3 Tables (table buckets), AWS Lake Formation for grants and credential vending",
+    "gcp": "Lakehouse runtime catalog (formerly BigLake metastore), with an Iceberg REST endpoint",
+    "azure": "Unity Catalog in Azure Databricks; OneLake table APIs in Microsoft Fabric (Iceberg REST, read-only)",
+    "oss": "Apache Polaris, Lakekeeper, Unity Catalog OSS, Project Nessie, Apache Gravitino, Hive Metastore"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "# pip install \"pyiceberg[pyarrow]\"; a Lakekeeper catalog on localhost:8181 with a warehouse \"demo\"",
+      "import pyarrow as pa",
+      "from pyiceberg.catalog import load_catalog",
+      "",
+      "catalog = load_catalog(\"lake\", type=\"rest\",",
+      "                       uri=\"http://localhost:8181/catalog\", warehouse=\"demo\")",
+      "catalog.create_namespace(\"sales\")",
+      "",
+      "schema = pa.schema([(\"id\", pa.int64()), (\"amount\", pa.float64())])",
+      "orders = catalog.create_table(\"sales.orders\", schema=schema)",
+      "",
+      "def pointer(table):  # the metadata file the catalog says is current",
+      "    return table.metadata_location.rsplit(\"/\", 1)[-1][:5]",
+      "",
+      "print(pointer(orders))                      # 00000",
+      "orders.append(pa.table({\"id\": [1, 2], \"amount\": [9.5, 20.0]}, schema=schema))",
+      "print(pointer(orders))                      # 00001",
+      "",
+      "# The catalog handed out short-lived storage credentials with the table",
+      "print(\"s3.session-token\" in orders.io.properties)   # True",
+      "",
+      "# Two writers start from version 00001; the catalog accepts one commit at a time",
+      "other = catalog.load_table(\"sales.orders\")",
+      "orders.append(pa.table({\"id\": [3], \"amount\": [5.0]}, schema=schema))",
+      "print(pointer(orders))                      # 00002",
+      "other.append(pa.table({\"id\": [4], \"amount\": [7.0]}, schema=schema))",
+      "# logs: Commit failed due to a concurrent update, retrying (1/4) in 109 ms",
+      "print(pointer(other))                       # 00003: rebuilt on top of 00002",
+      "",
+      "print(catalog.load_table(\"sales.orders\").scan().to_arrow().num_rows)  # 4"
+    ]
+  },
+  "related": ["table-formats", "lakehouse", "query-engines", "iam"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "Managed and external tables",
+      "intro": "The same split exists in Hive, Unity Catalog and most other catalogs. The question is who owns the files’ location and lifecycle; the files stay in your storage either way.",
+      "corner": "",
+      "columns": ["Managed table", "External table"],
+      "rows": [
+        { "label": "Who picks the location", "values": ["The catalog, under a storage root set on the catalog, schema or warehouse", "You, with a `LOCATION` clause or path that the catalog records"] },
+        { "label": "Who may change the files", "values": ["Only the catalog’s own write path; Hive warns that changing them behind its back can cause undefined behavior, and Unity Catalog doesn’t allow path-based access", "You and any tool with access to the path; Unity Catalog doesn’t enforce its grants on direct file access"] },
+        { "label": "What `DROP TABLE` does", "values": ["Deletes the data too. Hive moves it to the trash unless you add `PURGE`; Databricks deletes the files after a recovery period (7 days by default) during which `UNDROP` brings the table back", "Removes only the catalog entry; the files stay until you delete them"] },
+        { "label": "Maintenance", "values": ["The platform can do it: Databricks’ predictive optimization runs `OPTIMIZE`, `VACUUM` and `ANALYZE`; S3 Tables compacts and expires snapshots by default", "Yours: compaction, snapshot expiry and orphan-file cleanup are your jobs"] },
+        { "label": "Formats", "values": ["What the catalog can manage: Delta Lake or Iceberg in Unity Catalog, Iceberg in S3 Tables", "Anything the engines can read: in Unity Catalog also CSV, JSON, Avro, Parquet, ORC and text"] },
+        { "label": "Pick it when", "values": ["The catalog’s engines are the main writers and you want optimization and cleanup handled", "Other systems already write the files at a fixed path, or the format isn’t one the catalog manages"] }
+      ],
+      "notes": [
+        "Databricks recommends managed tables by default and offers `ALTER TABLE … SET MANAGED` to convert external Delta tables in place. Its other docs page gives the drop retention as 8 days; the managed-tables page says 7 days, configurable to 0 or 7 to 30 days."
+      ]
+    },
+    {
+      "type": "code",
+      "title": "The compare-and-swap on the wire",
+      "intro": "An Iceberg REST commit carries requirements and updates. Here a writer asserts that `main` still points at the snapshot it started from, after another writer has already moved it. Run against Lakekeeper 0.14.0; the catalog refuses with 409, which tells the client to reload and retry.",
+      "lang": "http",
+      "source": [
+        "POST /catalog/v1/{warehouse-id}/namespaces/sales/tables/orders HTTP/1.1",
+        "Content-Type: application/json",
+        "",
+        "{\"requirements\": [{\"type\": \"assert-ref-snapshot-id\", \"ref\": \"main\",",
+        "                   \"snapshot-id\": 2973954185555930408}],",
+        " \"updates\": [{\"action\": \"set-properties\", \"updates\": {\"owner\": \"finance\"}}]}",
+        "",
+        "HTTP/1.1 409 Conflict",
+        "Content-Type: application/json",
+        "",
+        "{\"error\": {\"type\": \"CatalogCommitConflicts\", \"code\": 409,",
+        "  \"message\": \"CatalogCommitConflicts, context: { expected: 2973954185555930408, found: 2919499479758239524 } => Requirement failed: Branch or tag `main`'s snapshot has changed\"}}"
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Catalogs you’ll meet",
+      "intro": "Most of these answer the Iceberg REST protocol, so an engine configured for one can usually talk to another.",
+      "items": [
+        { "name": "Hive Metastore", "tag": "the ancestor", "text": "Hive’s system catalog, described in 2009: databases as namespaces, and for each table its columns, location and format, usually kept in a relational database. Iceberg’s `HiveCatalog` stores the current metadata file as the table property `metadata_location`, and many catalogs still offer a Hive-compatible API." },
+        { "name": "AWS Glue Data Catalog", "tag": "AWS", "text": "AWS’s central metadata store for Athena, EMR and Glue, with an Iceberg REST endpoint at `https://glue.<region>.amazonaws.com/iceberg`. Lake Formation adds grants and vends temporary S3 credentials." },
+        { "name": "Amazon S3 Tables", "tag": "AWS, managed", "text": "A bucket type that is its own Iceberg catalog: S3 picks the file locations and runs compaction, snapshot management and unreferenced-file removal." },
+        { "name": "Lakehouse runtime catalog", "tag": "Google Cloud", "text": "A serverless metastore for Iceberg tables in Cloud Storage, called BigLake metastore until 20 April 2026. It speaks Iceberg REST and vends short-lived tokens." },
+        { "name": "Unity Catalog", "tag": "Databricks and LF AI & Data", "text": "Databricks’ governance layer, with managed and external tables and volumes, an Iceberg REST endpoint and credential vending. An Apache 2.0 open-source version is a sandbox project at LF AI & Data." },
+        { "name": "Apache Polaris", "tag": "Apache, Java", "text": "A full Iceberg REST catalog with role-based access control and credential vending, built by Snowflake and a top-level Apache project since February 2026." },
+        { "name": "Lakekeeper", "tag": "Apache 2.0, Rust", "text": "An Iceberg REST catalog shipped as a single Rust binary, with OpenFGA authorization, credential vending or remote signing, and change events. Maintained by Vakamo." },
+        { "name": "Project Nessie and Apache Gravitino", "tag": "open source", "text": "Nessie is a transactional catalog with Git-like branches. Gravitino federates metadata from many sources and runs an Iceberg REST service; it became a top-level Apache project in June 2025." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Hive, built at Facebook and described in a 2009 VLDB paper, brought a system catalog to Hadoop. Its metastore held each table’s columns, format and directory, with databases as namespaces, and lived in a relational database such as MySQL, or a local file system, because HDFS was built for sequential scans, not small random updates. The catalog said where a table lived, but the files in its directories were the truth, and Hive’s paper admitted it had to keep metadata and data consistent by hand. Hive also splits tables into managed ones, whose files it owns and deletes on `DROP`, and external ones, whose files it only points at.",
+      "Iceberg turned the catalog into the commit point. Its spec keeps a table’s whole state in metadata files and makes a commit one atomic swap of a pointer from the old metadata file to the new one, implemented with a check-and-put in a metastore or database. Any store that could do that worked: the Hive Metastore, AWS Glue, a JDBC database, Nessie. Every engine then needed a client for every catalog, so in July 2022 Iceberg 0.14 added a common REST catalog client, with commits sent as changes that the service checks for conflicts.",
+      "The REST protocol became the common interface. In June and July 2024 Databricks open-sourced Unity Catalog and Snowflake open-sourced Polaris, and Gravitino entered the Apache Incubator the same June; all three speak Iceberg REST. The clouds offer their own Iceberg REST endpoints too: AWS Glue and S3 Tables, Google’s BigLake metastore (renamed the Lakehouse runtime catalog in April 2026) and Microsoft’s OneLake. With the formats open, the fight moved to the catalog: who governs access, who maintains the files, and whose engines can write."
+    ],
+    "choices": [
+      { "choice": "Keep the catalog small: one pointer per table", "why": "Object stores can’t atomically replace a file or list a directory consistently, but a database can update one row with a check. Putting only the pointer in the catalog keeps the data and the full metadata in open files that any engine can read." },
+      { "choice": "Optimistic commits instead of locks", "why": "Writers prepare everything first and only ask the catalog to swap at the end. A conflict costs a retry, not a lock that a crashed job could hold forever, and readers are never blocked." },
+      { "choice": "A REST protocol instead of a client per catalog", "why": "The Hive, Glue, JDBC and Nessie catalogs each needed their own client code in every engine. One HTTP protocol means one client per engine, with commits sent as changes and conflicts resolved on the service side." },
+      { "choice": "Vend credentials from the catalog", "why": "Grants in a catalog mean little if every engine holds keys to the whole bucket. Returning short-lived credentials scoped to one table with each load lets one set of rules govern every engine." }
+    ],
+    "timeline": [
+      { "year": "2009", "text": "Hive paper describes the metastore: databases, tables, locations in a relational database" },
+      { "year": "2018", "text": "Iceberg enters the Apache Incubator; commits swap a metadata pointer in a catalog" },
+      { "year": "2021", "text": "Databricks announces Unity Catalog to replace per-workspace Hive metastores" },
+      { "year": "2022", "text": "Iceberg 0.14 adds a common REST catalog client in July" },
+      { "year": "2024", "text": "Unity Catalog open-sourced in June, Polaris in July; Gravitino enters the Apache Incubator" },
+      { "year": "2025", "text": "Gravitino becomes a top-level Apache project; Databricks previews managed Iceberg tables" },
+      { "year": "2026", "text": "Polaris graduates in February; BigLake metastore becomes the Lakehouse runtime catalog in April" }
+    ],
+    "sources": [
+      { "label": "Thusoo et al.: Hive, A Warehousing Solution Over a Map-Reduce Framework (VLDB 2009; the metastore)", "url": "https://www.vldb.org/pvldb/vol2/vldb09-938.pdf" },
+      { "label": "Apache Hive wiki: Managed vs. External Tables", "url": "https://cwiki.apache.org/confluence/display/Hive/Managed+vs.+External+Tables" },
+      { "label": "Iceberg table spec: optimistic concurrency and metastore tables (check-and-put pointer swap)", "url": "https://iceberg.apache.org/spec/" },
+      { "label": "Apache Incubator: Iceberg proposal (atomic changes on object stores without renames or consistent listings)", "url": "https://cwiki.apache.org/confluence/display/INCUBATOR/IcebergProposal" },
+      { "label": "Apache Incubator: Iceberg incubation status (entered November 2018)", "url": "https://incubator.apache.org/projects/iceberg.html" },
+      { "label": "Iceberg releases: 0.14.0, 16 July 2022 (common REST catalog client with change-based commits)", "url": "https://iceberg.apache.org/releases/" },
+      { "label": "Databricks blog: Gated public preview of Unity Catalog (April 2022; announced at Data and AI Summit 2021)", "url": "https://www.databricks.com/blog/2022/04/20/announcing-gated-public-preview-of-unity-catalog-on-aws-and-azure.html" },
+      { "label": "Databricks press release: Databricks open sources Unity Catalog (12 June 2024)", "url": "https://www.databricks.com/company/newsroom/press-releases/databricks-open-sources-unity-catalog-creating-industrys-only-open" },
+      { "label": "Snowflake blog: Polaris Catalog is now open source (July 2024)", "url": "https://www.snowflake.com/en/blog/polaris-catalog-open-source/", "archive": "https://web.archive.org/web/20250101165247/https://www.snowflake.com/en/blog/polaris-catalog-open-source/" },
+      { "label": "ASF: Apache Gravitino and Apache StormCrawler become top-level projects (3 June 2025)", "url": "https://news.apache.org/foundation/entry/the-apache-software-foundation-announces-two-new-top-level-projects" },
+      { "label": "Databricks press release: Unity Catalog adds full Apache Iceberg support in Public Preview (11 June 2025)", "url": "https://www.databricks.com/company/newsroom/press-releases/databricks-eliminates-table-format-lock-and-adds-capabilities" },
+      { "label": "Polaris blog: Apache Polaris graduates to top-level project (19 February 2026)", "url": "https://polaris.apache.org/blog/2026/02/19/apache-polaris-graduates-to-top-level-project/" },
+      { "label": "Google Cloud docs: About the Lakehouse runtime catalog (BigLake renamed Lakehouse, 20 April 2026)", "url": "https://docs.cloud.google.com/lakehouse/docs/about-lakehouse-catalogs" }
+    ]
+  },
+  "sources": [
+    { "label": "Iceberg table spec: atomic swap of metadata files, optimistic concurrency, metastore tables", "url": "https://iceberg.apache.org/spec/" },
+    { "label": "Iceberg REST catalog OpenAPI spec (commits with requirements, 409 CommitFailedException, X-Iceberg-Access-Delegation, storage-credentials, purgeRequested)", "url": "https://github.com/apache/iceberg/blob/main/open-api/rest-catalog-open-api.yaml" },
+    { "label": "Iceberg docs: Hive (metadata_location table property)", "url": "https://iceberg.apache.org/docs/latest/hive/" },
+    { "label": "Iceberg docs: Custom catalog (updating the metadata location atomically)", "url": "https://iceberg.apache.org/docs/latest/custom-catalog/" },
+    { "label": "Thusoo et al.: Hive, A Warehousing Solution Over a Map-Reduce Framework (VLDB 2009)", "url": "https://www.vldb.org/pvldb/vol2/vldb09-938.pdf" },
+    { "label": "Apache Hive wiki: Managed vs. External Tables (DROP, PURGE, ownership)", "url": "https://cwiki.apache.org/confluence/display/Hive/Managed+vs.+External+Tables" },
+    { "label": "Databricks docs: Unity Catalog managed tables for Delta Lake and Apache Iceberg", "url": "https://docs.databricks.com/aws/en/tables/managed" },
+    { "label": "Databricks docs: Work with external tables", "url": "https://docs.databricks.com/aws/en/tables/external" },
+    { "label": "Databricks docs: Managed versus external assets in Unity Catalog (8-day retention)", "url": "https://docs.databricks.com/aws/en/data-governance/unity-catalog/managed-versus-external" },
+    { "label": "Databricks docs: Predictive optimization for Unity Catalog managed tables", "url": "https://docs.databricks.com/aws/en/optimizations/predictive-optimization" },
+    { "label": "Databricks docs: Use liquid clustering for tables (automatic liquid clustering)", "url": "https://docs.databricks.com/aws/en/delta/clustering" },
+    { "label": "Databricks docs: Convert external or foreign Delta Lake tables to managed tables (SET MANAGED)", "url": "https://docs.databricks.com/aws/en/tables/convert-to-managed" },
+    { "label": "Databricks docs: Unity Catalog credential vending for external system access", "url": "https://docs.databricks.com/aws/en/external-access/credential-vending" },
+    { "label": "AWS Glue docs: Data discovery and cataloging (the Data Catalog)", "url": "https://docs.aws.amazon.com/glue/latest/dg/catalog-and-crawler.html" },
+    { "label": "AWS Glue docs: Connecting through the Glue Iceberg REST endpoint", "url": "https://docs.aws.amazon.com/glue/latest/dg/connect-glu-iceberg-rest.html" },
+    { "label": "Lake Formation docs: Credential vending for third-party services", "url": "https://docs.aws.amazon.com/lake-formation/latest/dg/using-cred-vending.html" },
+    { "label": "Amazon S3 docs: Working with S3 Tables and table buckets (maintenance)", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html" },
+    { "label": "Google Cloud docs: About the Lakehouse runtime catalog (pointer, commits, credential vending; formerly BigLake metastore)", "url": "https://docs.cloud.google.com/lakehouse/docs/about-lakehouse-catalogs" },
+    { "label": "Azure Databricks docs: What is Unity Catalog?", "url": "https://learn.microsoft.com/en-us/azure/databricks/data-governance/unity-catalog/" },
+    { "label": "Microsoft Fabric docs: OneLake Iceberg metadata API (read operations only)", "url": "https://learn.microsoft.com/en-us/fabric/onelake/table-apis/iceberg-table-apis-overview" },
+    { "label": "Lakekeeper docs: Getting started (REST endpoints, warehouses)", "url": "https://docs.lakekeeper.io/getting-started/" },
+    { "label": "Lakekeeper docs: Storage (vended credentials, remote signing, X-Iceberg-Access-Delegation)", "url": "https://docs.lakekeeper.io/docs/latest/storage/" },
+    { "label": "Lakekeeper docs: Table maintenance (snapshot expiry and orphan-file removal marked Lakekeeper+, off by default)", "url": "https://docs.lakekeeper.io/docs/latest/table-maintenance/" },
+    { "label": "Polaris blog: Floe and Apache Polaris (Polaris does not execute maintenance; February 2026)", "url": "https://polaris.apache.org/blog/2026/02/04/floe-and-apache-polaris-policy-driven-table-maintenance-for-apache-iceberg/" },
+    { "label": "Lakekeeper docs: S3 storage (sts-token-validity-seconds defaults to 3600)", "url": "https://docs.lakekeeper.io/docs/0.14.x/storage-s3/" },
+    { "label": "GitHub: Lakekeeper README (Rust, OpenFGA, change events, Vakamo)", "url": "https://github.com/lakekeeper/lakekeeper" },
+    { "label": "GitHub: Unity Catalog README (Apache 2.0, LF AI & Data sandbox, Iceberg REST and Hive metastore APIs)", "url": "https://github.com/unitycatalog/unitycatalog" },
+    { "label": "GitHub: Project Nessie README (transactional catalog with Git-like semantics)", "url": "https://github.com/projectnessie/nessie" },
+    { "label": "GitHub: Apache Gravitino README (federated metadata lake, Iceberg REST service)", "url": "https://github.com/apache/gravitino" },
+    { "label": "PyIceberg docs: Configuration (automatic commit retries on conflicts)", "url": "https://py.iceberg.apache.org/configuration/" }
+  ]
+}
