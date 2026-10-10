@@ -1,0 +1,353 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Data notebooks",
+  "category": "analytics",
+  "order": 80,
+  "summary": "A document of code cells, their outputs and notes, backed by a live process that keeps variables in memory, so you can explore data a step at a time and keep the results next to the code that made them.",
+  "howItWorks": "A notebook is a list of cells: code cells and text cells in Markdown. Code runs in a kernel, a separate process that holds one shared set of variables for as long as it lives. The editor sends a cell’s code to the kernel, and the kernel replies with its output and an execution count, a counter that goes up by one with every run. Outputs such as tables, charts and errors are saved inside the document: a Jupyter `.ipynb` file is JSON holding each cell’s source, its outputs and that counter. Because you can run cells in any order, re-run one after editing it, or delete one whose variables stay in memory, the page can drift away from what the kernel actually holds. That gap is called hidden state. Reactive notebooks close it: they read which variables each cell defines and which it uses, build a dependency graph, and when a cell changes they re-run (or mark as stale) every cell downstream of it, in dependency order. Managed notebooks add hosted compute, sharing, scheduled runs and a way to publish chosen cells as an app.",
+  "analogy": "A lab notebook kept next to a workbench. Each page records a step, its result and a note, but the bench keeps whatever you left on it, so the pages and the bench can disagree. A reactive notebook works more like a spreadsheet: change one cell and everything that depends on it recalculates.",
+  "useWhen": [
+    "Exploring data you don’t know yet: query, look, adjust and chart in short loops",
+    "An analysis that should show its working, with code, results and explanation in one document that others can rerun",
+    "Prototyping a model or a transformation before moving the stable parts into tested code",
+    "Turning an analysis into a parameterized report or small app for people who don’t code"
+  ],
+  "avoidWhen": [
+    "Production pipelines and services: keep the logic in modules with tests, and let an orchestrator run them",
+    "Dashboards that many people open every day over agreed metrics: a BI tool on a semantic layer fits better",
+    "Code that many engineers change together in git, where `.ipynb` JSON with embedded outputs makes diffs and reviews noisy"
+  ],
+  "example": "Weekly sign-ups drop 6% and an analyst opens a notebook. A SQL cell pulls 90 days of sign-ups by channel from the warehouse, a Python cell plots them, and a third cell compares channels: the drop comes from one ad network. In a classic notebook, the analyst narrows the date filter to 30 days in the first cell, forgets to re-run the chart, and the chart still shows 90 days. In a reactive notebook the chart and the comparison re-run as soon as the filter changes. The analyst then publishes the two charts with a channel dropdown as an app and schedules it for 07:00 every Monday, so marketing sees fresh numbers without asking.",
+  "providers": {
+    "aws": "SageMaker Unified Studio notebooks, SageMaker AI Studio (JupyterLab spaces)",
+    "gcp": "Colab Enterprise (also inside BigQuery Studio), Agent Platform Workbench (formerly Vertex AI Workbench)",
+    "azure": "Microsoft Fabric notebooks, Azure Machine Learning notebooks",
+    "oss": "Jupyter (JupyterLab, Jupyter Notebook, JupyterHub), marimo, Apache Zeppelin, Voilà (notebooks as apps), papermill (parameterized runs); hosted: Hex, Databricks notebooks, Observable"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "import ast",
+      "from graphlib import TopologicalSorter",
+      "",
+      "cells = {",
+      "    \"load\":  \"prices = [12, 15, 9]\",",
+      "    \"tax\":   \"rate = 0.2\",",
+      "    \"total\": \"total = round(sum(prices) * (1 + rate), 2)\",",
+      "}",
+      "",
+      "# 1. A classic kernel: one shared namespace, cells run in the order you click",
+      "kernel = {}",
+      "for name in [\"load\", \"tax\", \"total\"]:",
+      "    exec(cells[name], kernel)",
+      "print(kernel[\"total\"])                      # 43.2",
+      "",
+      "cells[\"tax\"] = \"rate = 0.1\"                 # edit the tax cell",
+      "exec(cells[\"tax\"], kernel)                  # and re-run only that cell",
+      "print(kernel[\"total\"])                      # still 43.2, though the cells now give 39.6",
+      "",
+      "# 2. A reactive notebook: read each cell's definitions and references,",
+      "#    build a graph, and re-run everything downstream of a change",
+      "def defs_refs(src):",
+      "    names = [n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.Name)]",
+      "    defs = {n.id for n in names if isinstance(n.ctx, ast.Store)}",
+      "    return defs, {n.id for n in names if isinstance(n.ctx, ast.Load)} - defs",
+      "",
+      "def run(changed, ns):                        # changed: names of edited cells",
+      "    owner = {v: c for c, s in cells.items() for v in defs_refs(s)[0]}",
+      "    graph = {c: {owner[r] for r in defs_refs(s)[1] if r in owner}",
+      "             for c, s in cells.items()}",
+      "    dirty = set(changed)",
+      "    for c in TopologicalSorter(graph).static_order():",
+      "        if c in dirty or graph[c] & dirty:",
+      "            exec(cells[c], ns)",
+      "            dirty.add(c)",
+      "    return sorted(dirty)",
+      "",
+      "ns = {}",
+      "run(cells, ns)                              # first run: every cell",
+      "print(ns[\"total\"])                          # 39.6",
+      "cells[\"tax\"] = \"rate = 0.25\"                # edit the tax cell again",
+      "print(run([\"tax\"], ns), ns[\"total\"])        # ['tax', 'total'] 45.0"
+    ]
+  },
+  "related": [
+    "dev-environments",
+    "semantic-layer",
+    "static-read-models",
+    "query-engines"
+  ],
+  "sections": [
+    {
+      "type": "table",
+      "title": "Notebook, BI dashboard or script?",
+      "intro": "All three can answer the same question from the same data. They differ in who works in them, how state is kept and how they run without a person.",
+      "columns": [
+        "Data notebook",
+        "BI dashboard",
+        "Script or pipeline"
+      ],
+      "rows": [
+        {
+          "label": "Best for",
+          "values": [
+            "Exploring, explaining and prototyping",
+            "Agreed metrics that many people check often",
+            "Repeatable jobs that must not break"
+          ]
+        },
+        {
+          "label": "Who works in it",
+          "values": [
+            "Analysts and data scientists who write SQL or Python",
+            "Viewers who filter and drill; a few authors build it",
+            "Engineers"
+          ]
+        },
+        {
+          "label": "State",
+          "values": [
+            "A live kernel; outputs saved in the document",
+            "Queries against the warehouse or a semantic layer, often cached",
+            "Starts fresh on every run"
+          ]
+        },
+        {
+          "label": "Running unattended",
+          "values": [
+            "Scheduled runs and parameters (papermill, the cloud notebook’s scheduler)",
+            "Refresh schedules",
+            "An orchestrator or cron"
+          ]
+        },
+        {
+          "label": "Version control",
+          "values": [
+            "Awkward for `.ipynb` JSON; easy for notebooks stored as `.py` files",
+            "Depends on the tool; often lives only inside it",
+            "Plain files in git, with tests"
+          ]
+        }
+      ],
+      "notes": [
+        "The lines blur: notebooks publish apps and dashboards, BI tools add SQL and Python, and marimo notebooks run as scripts. Move work from left to right as it becomes something people depend on."
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Hidden state, and how reactive notebooks remove it",
+      "body": [
+        "A classic kernel never forgets. Edit a cell and re-run only that one, and every cell below it still shows output computed from the old value. Delete a cell, and the variables it made stay in memory, so the notebook keeps working until someone restarts it and runs it top to bottom. A 2019 study by Pimentel, Murta, Braganholo and Freire collected 1.4 million notebooks from GitHub and tried to re-run 863,878 of them: only 24.11% ran without errors, and only 4.03% produced the same results as the saved outputs. The authors point to out-of-order execution, hidden state, undeclared library versions and hard-coded file paths.",
+        "Reactive notebooks make execution order a property of the code instead of a habit. marimo analyses each cell without running it, finds the global variables it defines and the ones it reads, and forms a directed acyclic graph; running a cell runs every cell that reads what it defines, and deleting a cell deletes its variables. The price is a few rules: each global name may be defined by only one cell, and mutations such as `df[\"col\"] = ...` in another cell aren’t tracked. For expensive notebooks it can mark cells stale instead of running them. Observable’s runtime treats each cell as a variable “akin to a cell in a spreadsheet” and rejects circular inputs. Hex builds the same kind of graph from variable references in its Python and SQL cells, and its run modes let you choose between automatic re-runs and running a single cell, which leaves downstream cells marked stale."
+      ]
+    },
+    {
+      "type": "text",
+      "title": "From notebook to app and schedule",
+      "body": [
+        "Sharing a notebook used to mean sending the file or a static HTML export. Now the same document can become an app: Voilà serves a Jupyter notebook as a web application with the code stripped out, gives each visitor their own kernel, and by default refuses requests to run arbitrary code. `marimo run notebook.py` lays a marimo notebook out as an app with the code hidden. Hosted tools publish results as dashboards: Databricks builds them from notebook results, and in a Hex app an input such as a dropdown re-runs only the cells downstream of it.",
+        "Scheduling turns an exploratory notebook into a recurring report. papermill runs a Jupyter notebook with new values injected after the cell tagged `parameters`. Agent Platform Workbench can run a notebook once or on a recurring schedule, with parameters, and keeps the executed results in Cloud Storage. Fabric notebooks run from pipelines, a scheduler or an API, under the identity of whoever last changed the pipeline or the schedule. Once a scheduled notebook feeds other systems, it is production code, and the usual advice applies: move the logic into tested modules and keep the notebook thin."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "The notebook interface predates data science. Theodore Gray began work on what became the Mathematica notebook front end in 1987, and Wolfram Research says Gray and Stephen Wolfram conceived the notebook front end in 1988. Mathematica 1.0 shipped on June 23, 1988, and, as Wolfram puts it, even version 1 had “a recognizable Wolfram Notebook”.",
+      "Fernando Pérez, a physics graduate student at the University of Colorado Boulder and a heavy user of Mathematica notebooks, started IPython in late 2001 because Python’s interactive prompt felt like “a crippled toy” next to them. The first version was 259 lines. Attempts at a notebook in 2005 and 2006–2007 never reached production quality, while William Stein’s Sage project built its own browser notebook in 2006. The breakthrough came in 2010, when Pérez and Brian Granger used ZeroMQ to split IPython into a kernel process and separate front ends; one kernel could then serve a terminal, a Qt console and, after Granger built it in the summer of 2011, a web notebook. IPython 0.12 shipped that notebook on December 21, 2011, saving documents as version-control-friendly JSON. In 2014 Project Jupyter was born out of IPython, to serve interactive computing in every language.",
+      "Notebooks spread to every cloud, and so did their problems. A 2019 study found that only about 4% of 863,878 GitHub notebooks it re-ran reproduced their saved results, with hidden state and out-of-order cells among the culprits. The answer from a newer generation of tools was reactivity, borrowed from spreadsheets: Observable for JavaScript, marimo for Python (stored as plain `.py` files and acquired by CoreWeave in 2025, which promised to keep it permissively licensed), and commercial notebooks such as Hex, whose 2021 release 2.0 introduced a reactive cell graph."
+    ],
+    "choices": [
+      {
+        "choice": "A kernel in its own process, separate from the editor",
+        "why": "IPython’s 2010 redesign over ZeroMQ let one kernel serve many front ends: terminal, Qt console, web notebook, even Python Tools for Visual Studio, which Microsoft built from the protocol without asking the IPython team a single question. Jupyter’s kernels for other languages follow the same protocol."
+      },
+      {
+        "choice": "Outputs saved inside the document",
+        "why": "A notebook was meant to be a record of a computation, text, code, results and figures together, readable without re-running it. Storing it as JSON made it easy to export to scripts, HTML or LaTeX, but means the saved outputs can disagree with the code beside them."
+      },
+      {
+        "choice": "Any cell can run at any time",
+        "why": "Pérez wanted the full IPython experience in the browser, magics and all, close to the file system. A cell runs when you run it, as at a console prompt, and that freedom is what creates hidden state."
+      },
+      {
+        "choice": "Reactive graphs in newer notebooks",
+        "why": "Re-running dependent cells automatically keeps code and outputs consistent and makes notebooks usable as apps and scripts. The cost is rules on how you write code, such as one definition per global name."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "1988",
+        "text": "Mathematica 1.0 ships with a notebook front end"
+      },
+      {
+        "year": "2001",
+        "text": "Fernando Pérez starts IPython at CU Boulder"
+      },
+      {
+        "year": "2011",
+        "text": "IPython 0.12 introduces the browser-based notebook in December"
+      },
+      {
+        "year": "2014",
+        "text": "Project Jupyter is born out of IPython, for all languages"
+      },
+      {
+        "year": "2019",
+        "text": "A study re-runs 863,878 GitHub notebooks: 4.03% reproduce their results"
+      },
+      {
+        "year": "2021",
+        "text": "Hex 2.0 brings a reactive cell graph to a SQL and Python notebook"
+      },
+      {
+        "year": "2025",
+        "text": "CoreWeave agrees to acquire Marimo Inc., maker of the reactive marimo notebook"
+      }
+    ],
+    "sources": [
+      {
+        "label": "Theodore Gray: biography (began work on the Mathematica notebook front end in 1987)",
+        "url": "https://theodoregray.com/bio.html"
+      },
+      {
+        "label": "Wolfram blog: Launching Wolfram Player for iOS (notebook front end conceived in 1988, Nov 2016)",
+        "url": "https://blog.wolfram.com/2016/11/16/launching-wolfram-player-for-ios/"
+      },
+      {
+        "label": "Stephen Wolfram: We’ve come a long way in 30 years (Mathematica 1.0 released June 23, 1988)",
+        "url": "https://writings.stephenwolfram.com/2018/06/weve-come-a-long-way-in-30-years-but-you-havent-seen-anything-yet/"
+      },
+      {
+        "label": "Fernando Pérez: The IPython notebook, a historical retrospective (Jan 2012)",
+        "url": "http://blog.fperez.org/2012/01/ipython-notebook-historical.html",
+        "archive": "https://web.archive.org/web/20191225211040/http://blog.fperez.org/2012/01/ipython-notebook-historical.html"
+      },
+      {
+        "label": "IPython docs: History (started in 2001 by Fernando Pérez)",
+        "url": "https://ipython.readthedocs.io/en/stable/about/history.html"
+      },
+      {
+        "label": "IPython docs: What’s new in 0.12 (browser-based notebook)",
+        "url": "https://ipython.readthedocs.io/en/stable/whatsnew/version0.12.html"
+      },
+      {
+        "label": "Project Jupyter: About (born out of IPython in 2014)",
+        "url": "https://jupyter.org/about"
+      },
+      {
+        "label": "Pimentel, Murta, Braganholo and Freire: A Large-scale Study about Quality and Reproducibility of Jupyter Notebooks (2019, PDF)",
+        "url": "http://www.ic.uff.br/~leomurta/papers/pimentel2019a.pdf"
+      },
+      {
+        "label": "Hex blog: Our $16M Series A (reactive compute model in Hex 2.0, Oct 2021)",
+        "url": "https://hex.tech/blog/series-a/"
+      },
+      {
+        "label": "CoreWeave: CoreWeave acquires Marimo (Oct 2025)",
+        "url": "https://coreweave.com/news/coreweave-acquires-marimo-to-unify-the-generative-ai-developer-workflow"
+      },
+      {
+        "label": "Observable Runtime README",
+        "url": "https://github.com/observablehq/runtime/blob/main/README.md"
+      },
+      {
+        "label": "marimo docs: FAQ (notebooks stored as pure Python files)",
+        "url": "https://docs.marimo.io/faq/"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "Jupyter docs: The notebook file format (nbformat)",
+      "url": "https://nbformat.readthedocs.io/en/latest/format_description.html"
+    },
+    {
+      "label": "Jupyter docs: Messaging in Jupyter (execution counter, ZeroMQ transport)",
+      "url": "https://jupyter-client.readthedocs.io/en/latest/messaging.html"
+    },
+    {
+      "label": "Jupyter docs: Kernels",
+      "url": "https://docs.jupyter.org/en/latest/projects/kernels.html"
+    },
+    {
+      "label": "Project Jupyter: About (subprojects, BSD licence)",
+      "url": "https://jupyter.org/about"
+    },
+    {
+      "label": "marimo docs: Running cells (static analysis, DAG, mutations not tracked)",
+      "url": "https://docs.marimo.io/guides/reactivity/"
+    },
+    {
+      "label": "marimo docs: FAQ",
+      "url": "https://docs.marimo.io/faq/"
+    },
+    {
+      "label": "marimo docs: Run as an app",
+      "url": "https://docs.marimo.io/guides/apps/"
+    },
+    {
+      "label": "marimo docs: Run as a script",
+      "url": "https://docs.marimo.io/guides/scripts/"
+    },
+    {
+      "label": "Observable Runtime README (variables akin to spreadsheet cells)",
+      "url": "https://github.com/observablehq/runtime/blob/main/README.md"
+    },
+    {
+      "label": "Hex docs: Execution model (reactive graph)",
+      "url": "https://learn.hex.tech/docs/explore-data/projects/project-execution/execution-model"
+    },
+    {
+      "label": "Hex docs: Run modes and cell staleness",
+      "url": "https://learn.hex.tech/docs/explore-data/projects/project-execution/run-modes-and-cell-staleness"
+    },
+    {
+      "label": "Pimentel et al.: A Large-scale Study about Quality and Reproducibility of Jupyter Notebooks (2019, PDF)",
+      "url": "http://www.ic.uff.br/~leomurta/papers/pimentel2019a.pdf"
+    },
+    {
+      "label": "Voilà README (notebooks as web apps, a kernel per user)",
+      "url": "https://github.com/voila-dashboards/voila/blob/main/README.md"
+    },
+    {
+      "label": "papermill README (parameters cell, injected parameters)",
+      "url": "https://github.com/nteract/papermill/blob/main/README.md"
+    },
+    {
+      "label": "AWS docs: SageMaker JupyterLab (JupyterLab spaces in SageMaker Studio)",
+      "url": "https://docs.aws.amazon.com/sagemaker/latest/dg/studio-updated-jl.html"
+    },
+    {
+      "label": "AWS docs: Notebooks in Amazon SageMaker Unified Studio",
+      "url": "https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/notebooks.html"
+    },
+    {
+      "label": "Google Cloud docs: Introduction to Colab Enterprise",
+      "url": "https://cloud.google.com/colab/docs/introduction"
+    },
+    {
+      "label": "Google Cloud docs: BigQuery notebooks and programmatic analysis tools",
+      "url": "https://cloud.google.com/bigquery/docs/notebooks-introduction"
+    },
+    {
+      "label": "Google Cloud docs: Introduction to Agent Platform Workbench (scheduled, parameterized runs)",
+      "url": "https://cloud.google.com/vertex-ai/docs/workbench/introduction"
+    },
+    {
+      "label": "Google Cloud: Gemini Enterprise Agent Platform release notes (Vertex AI Workbench renamed, Apr 2026)",
+      "url": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/release-notes"
+    },
+    {
+      "label": "Microsoft Learn: Run Jupyter notebooks in your Azure Machine Learning workspace",
+      "url": "https://learn.microsoft.com/en-us/azure/machine-learning/how-to-run-jupyter-notebooks"
+    },
+    {
+      "label": "Microsoft Learn: How to use Microsoft Fabric notebooks (pipelines, scheduler, API)",
+      "url": "https://learn.microsoft.com/en-us/fabric/data-engineering/how-to-use-notebook"
+    },
+    {
+      "label": "Databricks docs: Notebooks (coauthoring, dashboards from notebook results)",
+      "url": "https://docs.databricks.com/aws/en/notebooks/"
+    }
+  ]
+}

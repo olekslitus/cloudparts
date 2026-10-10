@@ -1,0 +1,298 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Apache TsFile",
+  "concepts": [
+    "file-formats"
+  ],
+  "kinds": [
+    "columnar-files"
+  ],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://tsfile.apache.org/",
+  "repo": "https://github.com/apache/tsfile",
+  "summary": "A columnar file format for device time series, with per-series indexes and time-series encodings; the storage format of Apache IoTDB and its own Apache project since 2023.",
+  "intro": [
+    "A TsFile holds the readings of many devices, organised in four layers. A page stores a run of one series’ timestamps and values in time order, as two separate columns. A chunk is a header plus pages for one series. A chunk group holds the chunks of one device written in the same period. An index at the end of the file locates each series’ chunks and keeps file-level statistics. Minimum and maximum time and value and the count of points are kept for the file, each chunk and each page, so a reader skips pages that can’t match and answers some aggregates without decoding data. Unlike Parquet or ORC, metadata is stored per series, so reading one series never touches the metadata of the others.",
+    "Each column is encoded for its shape and then compressed: `TS_2DIFF` (second-order differences) for timestamps and counters, `GORILLA` or `CHIMP` for floats that change slowly, `DICTIONARY` for repetitive strings, `RLE`, `SPRINTZ`, `RLBE` and others, followed by LZ4 by default, or Snappy, ZSTD, GZIP or LZMA2. Since 2.0 (January 2025) the format also has a table model that matches IoTDB’s: a table per device type, string `TAG` columns that together identify a device, `FIELD` columns for the measurements, and a time column that must be in order for each device.",
+    "Libraries exist for Java, C++, C and Python (`pip install tsfile`), and the Python package can open a folder of TsFiles as a lazy, DataFrame-like view. DuckDB reads and writes table-model TsFiles through a community extension. IoTDB loads a TsFile with one `LOAD` statement or by watching a folder, so an edge device can write files offline and ship them later. TsFile grew inside IoTDB at Tsinghua University and became a top-level Apache project on 15 November 2023, without passing through the Incubator. The latest release is 2.4.0 (July 2026); a 1.1.x line is kept for IoTDB 1.x."
+  ],
+  "strengths": [
+    "Per-series indexes and statistics at file, chunk and page level, so a query for one device and time range reads only the chunks it needs",
+    "Encodings built for sensor data (second-order deltas, Gorilla, Chimp, Sprintz), chosen per column",
+    "The same files are IoTDB’s storage, so data written on a device or in Python loads straight into the database without conversion",
+    "Apache 2.0, with native libraries for Java, C++, C and Python, a DuckDB extension, and bundled scripts that convert CSV, Parquet and Arrow files"
+  ],
+  "limits": [
+    "Few engines read it compared with Parquet: outside IoTDB there’s the DuckDB extension (local, table-model files only) and a Spark connector documented only for Spark 2.4.3",
+    "The Python guide covers only the table model, and `TsFileDataFrame` reads only numeric fields, skipping `STRING`, `TEXT`, `BLOB` and `DATE` columns",
+    "`RLE` and `TS_2DIFF` keep only two decimal places of a float by default; `GORILLA` is the recommended lossless choice",
+    "Rows must arrive in time order per device (DuckDB’s writer wants them sorted by tag columns, then time), and the 1.1.x and 2.x lines pair with different IoTDB major versions"
+  ],
+  "worksWith": [
+    {
+      "id": "duckdb",
+      "how": "is read and written, via an extension, by"
+    },
+    {
+      "id": "parquet",
+      "how": "can be converted, by bundled scripts, from"
+    }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Write a table-model TsFile and read it back with the Python library (ran with tsfile 2.4.0)",
+    "source": [
+      "# pip install tsfile   (2.4.0: Python 3.9+, wheels for Linux, macOS and Windows)",
+      "from tsfile import (ColumnSchema, ColumnCategory, TableSchema, Tablet,",
+      "                    TSDataType, TsFileTableWriter, TsFileReader, to_dataframe)",
+      "",
+      "schema = TableSchema(\"turbine\", [",
+      "    ColumnSchema(\"farm\", TSDataType.STRING, ColumnCategory.TAG),",
+      "    ColumnSchema(\"turbine_id\", TSDataType.STRING, ColumnCategory.TAG),",
+      "    ColumnSchema(\"wind_speed\", TSDataType.DOUBLE, ColumnCategory.FIELD),",
+      "    ColumnSchema(\"power_kw\", TSDataType.DOUBLE, ColumnCategory.FIELD),",
+      "])",
+      "rows = [(1000, \"north\", \"t1\", 7.5, 1510.0), (2000, \"north\", \"t1\", 8.1, 1720.0),",
+      "        (1000, \"north\", \"t2\", 6.9, 1380.0), (2000, \"north\", \"t2\", 7.2, 1450.0)]",
+      "",
+      "with TsFileTableWriter(\"turbines.tsfile\", schema) as writer:",
+      "    tablet = Tablet([\"farm\", \"turbine_id\", \"wind_speed\", \"power_kw\"],",
+      "                    [TSDataType.STRING, TSDataType.STRING,",
+      "                     TSDataType.DOUBLE, TSDataType.DOUBLE], len(rows))",
+      "    for i, (ts, farm, turbine, speed, power) in enumerate(rows):",
+      "        tablet.add_timestamp(i, ts)",
+      "        tablet.add_value_by_name(\"farm\", i, farm)",
+      "        tablet.add_value_by_name(\"turbine_id\", i, turbine)",
+      "        tablet.add_value_by_name(\"wind_speed\", i, speed)",
+      "        tablet.add_value_by_name(\"power_kw\", i, power)",
+      "    writer.write_table(tablet)",
+      "",
+      "# read two columns for times 0 to 1500: prints \"t1 1510.0\" and \"t2 1380.0\"",
+      "with TsFileReader(\"turbines.tsfile\") as reader:",
+      "    with reader.query_table(\"turbine\", [\"turbine_id\", \"power_kw\"], 0, 1500) as rs:",
+      "        while rs.next():",
+      "            print(rs.get_value_by_name(\"turbine_id\"), rs.get_value_by_name(\"power_kw\"))",
+      "",
+      "print(to_dataframe(\"turbines.tsfile\"))   # all four rows as a pandas DataFrame"
+    ]
+  },
+  "sections": [
+    {
+      "type": "code",
+      "title": "Query the same file from DuckDB",
+      "intro": "The community extension adds `read_tsfile(path, table)`. Time filters and column choices are pushed down to the TsFile reader. Ran on DuckDB 1.5.6.",
+      "lang": "sql",
+      "source": [
+        "INSTALL tsfile FROM community;",
+        "LOAD tsfile;",
+        "",
+        "SELECT turbine_id, avg(power_kw) AS avg_kw",
+        "FROM read_tsfile('turbines.tsfile', 'turbine')",
+        "WHERE time >= 1000",
+        "GROUP BY turbine_id ORDER BY turbine_id;",
+        "-- t1  1615.0",
+        "-- t2  1415.0"
+      ]
+    },
+    {
+      "type": "table",
+      "title": "TsFile next to Parquet",
+      "intro": "Both are columnar; they split the data differently.",
+      "columns": [
+        "TsFile",
+        "Parquet"
+      ],
+      "rows": [
+        {
+          "label": "Unit of grouping",
+          "values": [
+            "Chunk group: one device’s series for a period",
+            "Row group: a slice of rows across all columns"
+          ]
+        },
+        {
+          "label": "Timestamps",
+          "values": [
+            "Stored with every series, so series sampled at different instants need no nulls",
+            "An ordinary column, shared by the row"
+          ]
+        },
+        {
+          "label": "Nested data",
+          "values": [
+            "None; flat device, series, time, value",
+            "Structs, lists and maps, via repetition and definition levels"
+          ]
+        },
+        {
+          "label": "Statistics",
+          "values": [
+            "Per file, chunk and page, indexed by series",
+            "Per column chunk in the footer, plus an optional page index"
+          ]
+        },
+        {
+          "label": "Who reads it",
+          "values": [
+            "IoTDB, the TsFile libraries, DuckDB",
+            "Nearly every engine and dataframe library"
+          ]
+        }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "TsFile was born inside IoTDB at Tsinghua University. When the team proposed IoTDB to the Apache Incubator in 2018, TsFile was the part already open source on GitHub, described as a columnar format similar to Parquet and CarbonData but built for time series of the form device, series, timestamp, value.",
+      "Its design started from how sensors behave. Two sensors on one device rarely sample at the same millisecond, so forcing them into rows means storing nulls, and Parquet’s repetition and definition levels for nested data add work that flat series don’t need. TsFile stores each series with its own timestamps, puts time-series statistics in every page header, and keeps a device’s chunk groups in time order so a time-range scan can stop early. IoTDB used it as its storage format, and Hadoop, Hive and Spark could read the same files directly, so analysts didn’t need an export.",
+      "In October 2023 the IoTDB community discussed splitting TsFile off so it could serve as a general file format for IoT rather than a database internal. On 15 November 2023 the ASF board established Apache TsFile directly as a top-level project, with an initial PMC of IoTDB committers, and handed it the IoTDB TsFile subproject. Version 1.0.0 followed in February 2024, and 2.0.0 in January 2025 added a format version for the table model. Later releases built out the C++ and Python libraries."
+    ],
+    "choices": [
+      {
+        "choice": "Timestamps stored with each series",
+        "why": "Sensors on one device sample at slightly different times. Giving every column chunk its own timestamps avoids padding with nulls and the repetition and definition fields Parquet needs."
+      },
+      {
+        "choice": "Statistics in every page header",
+        "why": "Minimum and maximum values and timestamps let a reader skip pages that can’t match a filter, which is most of them in a narrow time-range query."
+      },
+      {
+        "choice": "Metadata indexed per series at the end of the file",
+        "why": "A query usually asks for a few series of one device. Keeping each series’ metadata separate means a reader doesn’t load metadata for columns it won’t read."
+      },
+      {
+        "choice": "Its own Apache project",
+        "why": "The IoTDB community argued that a format with its encodings and self-describing files could become a standard for IoT data beyond one database, which needed separate governance and releases."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "2018",
+        "text": "Already open source when IoTDB enters the Apache Incubator in November"
+      },
+      {
+        "year": "2020",
+        "text": "VLDB paper describes it as IoTDB’s storage format, readable from Spark and Hive"
+      },
+      {
+        "year": "2023",
+        "text": "Established as a top-level Apache project on 15 November"
+      },
+      {
+        "year": "2024",
+        "text": "1.0.0 released in February"
+      },
+      {
+        "year": "2025",
+        "text": "2.0.0 adds the table-model format in January"
+      },
+      {
+        "year": "2026",
+        "text": "2.4.0 in July speeds up the C++ library with SIMD and parallel reads"
+      }
+    ],
+    "sources": [
+      {
+        "label": "Apache Incubator: IoTDB proposal (2018; TsFile format and design)",
+        "url": "https://cwiki.apache.org/confluence/display/INCUBATOR/IoTDBProposal"
+      },
+      {
+        "label": "Wang, Huang, Qiao et al.: Apache IoTDB, time-series database for internet of things (VLDB 2020)",
+        "url": "https://www.vldb.org/pvldb/vol13/p2901-wang.pdf"
+      },
+      {
+        "label": "ASF board minutes, 15 November 2023: Establish the Apache TsFile Project",
+        "url": "https://www.apache.org/foundation/records/minutes/2023/board_minutes_2023_11_15.txt"
+      },
+      {
+        "label": "Timecho blog: Apache TsFile, time-series data storage redefined (March 2024; vendor post on the split)",
+        "url": "https://www.timecho-global.com/archives/apache-tsfile-time-series-data-storage-redefined"
+      },
+      {
+        "label": "GitHub: Apache TsFile releases (1.0.0 February 2024, 2.0.0 January 2025, 2.4.0 July 2026)",
+        "url": "https://github.com/apache/tsfile/releases"
+      },
+      {
+        "label": "Apache TsFile release notes (2.4.0 back to 1.0.0)",
+        "url": "https://dlcdn.apache.org/tsfile/2.4.0/RELEASE_NOTES.md"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "Apache TsFile README (file structure, encodings, tsfile-cli)",
+      "url": "https://github.com/apache/tsfile"
+    },
+    {
+      "label": "TsFile docs: Data model (tags, fields, table model)",
+      "url": "https://tsfile.apache.org/UserGuide/latest/QuickStart/Data-Model.html"
+    },
+    {
+      "label": "TsFile docs: Quick start, Python (pip install, table writer and reader)",
+      "url": "https://tsfile.apache.org/UserGuide/latest/QuickStart/QuickStart-PYTHON.html"
+    },
+    {
+      "label": "TsFile docs: Quick start, Java",
+      "url": "https://tsfile.apache.org/UserGuide/latest/QuickStart/QuickStart.html"
+    },
+    {
+      "label": "TsFile docs: Quick start, C",
+      "url": "https://tsfile.apache.org/UserGuide/latest/QuickStart/QuickStart-C.html"
+    },
+    {
+      "label": "TsFile docs: Quick start, C++",
+      "url": "https://tsfile.apache.org/UserGuide/latest/QuickStart/QuickStart-CPP.html"
+    },
+    {
+      "label": "TsFile docs: TsFileDataFrame (numeric fields only)",
+      "url": "https://tsfile.apache.org/UserGuide/latest/DataFrame/TsFileDataFrame.html"
+    },
+    {
+      "label": "TsFile docs: DuckDB TsFile extension (read_tsfile, COPY, local table-model files, sort order)",
+      "url": "https://tsfile.apache.org/UserGuide/latest/Ecosystem-Integration/Duck-TsFile.html"
+    },
+    {
+      "label": "DuckDB community extensions: tsfile",
+      "url": "https://duckdb.org/community_extensions/extensions/tsfile.html"
+    },
+    {
+      "label": "TsFile docs: Spark-TsFile connector (Spark 2.4.3)",
+      "url": "https://tsfile.apache.org/UserGuide/latest/Ecosystem-Integration/Spark-TsFile.html"
+    },
+    {
+      "label": "TsFile download page (2.4.0 for IoTDB 2.x, 1.1.4 for IoTDB 1.x)",
+      "url": "https://tsfile.apache.org/Download/"
+    },
+    {
+      "label": "Apache TsFile release notes (2.4.0, 2.3.1 conversion scripts, 2.0.0 table model)",
+      "url": "https://dlcdn.apache.org/tsfile/2.4.0/RELEASE_NOTES.md"
+    },
+    {
+      "label": "IoTDB docs: Compression and encoding (encodings, compressors, float precision)",
+      "url": "https://iotdb.apache.org/UserGuide/latest-Table/Technical-Insider/Encoding-and-Compression.html"
+    },
+    {
+      "label": "IoTDB docs: Data import (LOAD statement, TsFile auto-loading)",
+      "url": "https://iotdb.apache.org/UserGuide/latest-Table/Tools-System/Data-Import-Tool_apache.html"
+    },
+    {
+      "label": "Wang, Huang, Qiao et al.: Apache IoTDB (VLDB 2020; TsFile summary info and per-series metadata)",
+      "url": "https://www.vldb.org/pvldb/vol13/p2901-wang.pdf"
+    },
+    {
+      "label": "Apache Parquet docs: File format",
+      "url": "https://parquet.apache.org/docs/file-format/"
+    },
+    {
+      "label": "ASF board minutes, 15 November 2023: Establish the Apache TsFile Project",
+      "url": "https://www.apache.org/foundation/records/minutes/2023/board_minutes_2023_11_15.txt"
+    },
+    {
+      "label": "PyPI: tsfile 2.4.0",
+      "url": "https://pypi.org/project/tsfile/"
+    }
+  ],
+  "checked": "2026-10-09"
+}

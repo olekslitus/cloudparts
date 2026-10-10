@@ -1,0 +1,316 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Apache IoTDB",
+  "concepts": [
+    "tsdb"
+  ],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://iotdb.apache.org/",
+  "repo": "https://github.com/apache/iotdb",
+  "summary": "An Apache time-series database for industrial IoT that stores everything in its own open file format, TsFile, and lets you model devices as a tree of paths or as SQL tables.",
+  "intro": [
+    "IoTDB is built around devices and their measurement points: each point, such as a turbine’s wind speed, is a time series. Version 2.0 offers two ways to model them in one server. The tree model names every series by a dotted path like `root.db.turbine.device1.speed`, much like files in folders, which fits SCADA-style plant hierarchies. The table model, first shipped as a beta in February 2025, uses one table per device type: `TAG` columns identify a device, `ATTRIBUTE` columns describe it, and `FIELD` columns hold the measurements, queried with standard SQL including joins, window functions and `ASOF` joins. Both can live in the same instance but are isolated by default, and each client picks one with `sql_dialect`.",
+    "Writes go to an in-memory memtable backed by a write-ahead log and are flushed to TsFiles, a columnar format IoTDB created and that is now its own Apache project. Readings that arrive late, behind data already flushed, go to separate unsequence files that background compaction later merges into the ordered ones. A standalone server is one ConfigNode and one DataNode. The recommended cluster has three ConfigNodes, which hold metadata and partition tables and replicate them with Raft (Apache Ratis), and at least three DataNodes, which store data in regions replicated by IoTDB’s own IoTConsensus protocol by default. Series are hashed into 1,000 series slots and time is cut into seven-day partitions. Around the core sit a built-in MQTT broker, pipes that sync data from edge to cloud, and AINode, which runs forecasting models such as Timer-XL, Sundial and Chronos-2 from SQL.",
+    "IoTDB began as a research project at Tsinghua University’s School of Software and became a top-level Apache project in September 2020. Its creators founded Timecho, which sells TimechoDB, a commercial edition with extras such as dual-active deployment, audit logs and a management console. The latest release, 2.0.11 (September 2026), requires JDK 17 and adds an Edge edition that caps memory at 512 MB for about 10,000 measurements sampled once a second."
+  ],
+  "strengths": [
+    "Made for messy industrial data: more than 1,000 series per machine, high sampling rates, and late readings that go to separate files instead of slowing the ordered write path",
+    "Data sits in an open file format: TsFiles written by an edge device or a Python script load with one `LOAD` statement or by dropping them into a watched folder",
+    "One code base from edge to cluster: a standalone 1C1D server, a 3C3D cluster with Raft-replicated metadata, and since 2.0.11 an Edge edition for 512 MB devices",
+    "Clustering and replication are in the free Apache 2.0 build, alongside a built-in MQTT broker and in-database forecasting with AINode"
+  ],
+  "limits": [
+    "Two models mean two dialects: tree and table data are isolated by default, pipes and plugins differ per model, the CLI starts in the tree model, and tree-to-table views (since 2.0.5) are read-only",
+    "The table model is young: beta in February 2025 and declared official in 2.0.4 (July 2025), and pipes can’t sync data between 1.x and 2.x clusters, so upgrades are migrations",
+    "Some operational features are commercial: dual-active deployment, audit logs, the Workbench console and cluster management tools come with Timecho’s TimechoDB, and community support has no service levels",
+    "Floats stored with `RLE` or `TS_2DIFF` encoding keep only two decimal places by default; use `GORILLA` for values that need full precision",
+    "Runs on the JVM, and from 2.0.11 needs JDK 17, which matters on small edge hardware"
+  ],
+  "worksWith": [
+    {
+      "id": "tsfile",
+      "how": "stores all its data in"
+    },
+    {
+      "id": "mqtt",
+      "how": "accepts device writes over"
+    },
+    {
+      "id": "spark",
+      "how": "is read and written as DataFrames by"
+    },
+    {
+      "id": "grafana",
+      "how": "is charted, through a plugin, by"
+    }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "A table per device type, hourly averages, the latest value, and a TsFile import (run on the 2.0.11 Docker image)",
+    "source": [
+      "/* start-cli.sh -sql_dialect table   (the CLI starts in the tree model otherwise) */",
+      "CREATE DATABASE wind;",
+      "USE wind;",
+      "",
+      "/* one table per device type: TAG columns identify a turbine,",
+      "   ATTRIBUTE columns describe it, FIELD columns hold the measurements */",
+      "CREATE TABLE turbine (",
+      "  farm       STRING TAG,",
+      "  turbine_id STRING TAG,",
+      "  model      STRING ATTRIBUTE,",
+      "  wind_speed DOUBLE FIELD,",
+      "  power_kw   DOUBLE FIELD",
+      ") WITH (TTL=31536000000);   /* keep one year, in milliseconds */",
+      "",
+      "INSERT INTO turbine (time, farm, turbine_id, model, wind_speed, power_kw) VALUES",
+      "  ('2026-10-09T10:00:00Z', 'north', 't1', 'V150', 7.5, 1510.0),",
+      "  ('2026-10-09T10:20:00Z', 'north', 't1', 'V150', 8.1, 1720.0),",
+      "  ('2026-10-09T10:40:00Z', 'north', 't1', 'V150', 9.0, 2010.0),",
+      "  ('2026-10-09T10:00:00Z', 'north', 't2', 'V150', 6.9, 1380.0),",
+      "  ('2026-10-09T10:40:00Z', 'north', 't2', 'V150', 7.4, 1490.0);",
+      "",
+      "/* hourly average per turbine: t1 1746.67, t2 1435.0 */",
+      "SELECT date_bin(1h, time) AS hour, turbine_id, avg(power_kw) AS avg_kw",
+      "FROM turbine WHERE farm = 'north'",
+      "GROUP BY 1, turbine_id ORDER BY turbine_id;",
+      "",
+      "/* newest reading per turbine: t1 2010.0, t2 1490.0 */",
+      "SELECT turbine_id, last_by(power_kw, time) AS latest_kw",
+      "FROM turbine GROUP BY turbine_id ORDER BY turbine_id;",
+      "",
+      "/* import a TsFile written elsewhere, e.g. by the Python tsfile library,",
+      "   the count comes back as 4 */",
+      "LOAD '/tmp/turbines.tsfile' WITH ('database-name'='imported', 'on-success'='none');",
+      "SELECT count(*) FROM imported.turbine;"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Tree model or table model?",
+      "intro": "IoTDB 2.x runs both models in one instance. The project’s own comparison, plus how each names data.",
+      "columns": [
+        "Tree model",
+        "Table model"
+      ],
+      "rows": [
+        {
+          "label": "How a series is named",
+          "values": [
+            "A dotted path under `root`, e.g. `root.db.turbine.device1.metric1`; the second-to-last level is the device",
+            "A row in a table per device type: `TAG` columns identify the device, `FIELD` columns hold the values"
+          ]
+        },
+        {
+          "label": "Suits",
+          "values": [
+            "Monitoring and point management, e.g. DCS and SCADA",
+            "Device management, analysis, and migrating from other databases"
+          ]
+        },
+        {
+          "label": "Schema",
+          "values": [
+            "Flexible, like a file system: add or drop branches freely",
+            "A template per device type, which helps data governance"
+          ]
+        },
+        {
+          "label": "Querying",
+          "values": [
+            "Read and write by path, with wildcards",
+            "Standard SQL with joins, window functions, CTEs and `ASOF` joins"
+          ]
+        },
+        {
+          "label": "Choose it with",
+          "values": [
+            "`start-cli.sh` (the default) or `SET SQL_DIALECT=TREE`",
+            "`start-cli.sh -sql_dialect table`, `SET SQL_DIALECT=TABLE`, or `sql_dialect=table` in the JDBC URL"
+          ]
+        }
+      ],
+      "notes": [
+        "The docs rate performance as similar for both. Since 2.0.5 a read-only table view can be defined over tree data, so devices written by path can be analysed with SQL."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Industrial equipment produces time series that monitoring databases weren’t built for. The IoTDB proposal of 2018 listed the gaps: a turbine engine can report 1,000 points a second and an excavator more than 1,000 series, devices often send over UDP or buffer data during network drops so readings arrive out of order, and manufacturers keep history for the life of a machine. Gorilla and InfluxDB were aimed at data centre metrics, OpenTSDB and KairosDB sat on HBase and Cassandra, and analysing data in Spark or Hadoop meant exporting a second copy.",
+      "About two dozen students and teachers at Tsinghua University built IoTDB, with funding from the National Natural Science Foundation of China and sponsors such as Lenovo and K2Data. Its file format, TsFile, was already open source on GitHub; the database was still private. By the time it entered the Apache Incubator in November 2018 it ran in a State Grid Corporation of China staging environment with about 3 million series. The first Apache release, 0.8.0-incubating, came in August 2019, and IoTDB graduated to a top-level project in September 2020.",
+      "Version 1.0 in December 2022 brought a distributed, highly available architecture of ConfigNodes and DataNodes with a choice of consensus protocols. That June the creators’ company, Timecho, had raised more than $10 million in a round led by Sequoia China. In November 2023 TsFile left to become its own Apache project, and the 2.0 line added a relational table model next to the original tree, plus AINode for forecasting with time-series foundation models."
+    ],
+    "choices": [
+      {
+        "choice": "A new columnar file format instead of HBase, Cassandra or Parquet",
+        "why": "Sensors on one device rarely sample at the same instant, so TsFile stores each series with its own timestamps and no nulls, and skips Parquet’s repetition and definition levels for nested data. Spark and Hadoop could read the same files, so analysis didn’t need a second copy."
+      },
+      {
+        "choice": "A tree of paths as the schema",
+        "why": "Industrial assets already form hierarchies. A path such as `root.China.beijing.windFarm1.windTurbine1.speed` identifies a series, and a wildcard like `windFarm1.*.speed` selects every turbine on a farm, so grouping comes from the naming itself."
+      },
+      {
+        "choice": "Out-of-order data kept apart",
+        "why": "Ordered files that don’t overlap in time let a query stop scanning early. Late readings go to separate unsequence files that are merged in the background, so they don’t break that order for everyone else."
+      },
+      {
+        "choice": "A table model alongside the tree in 2.0",
+        "why": "Paths suit monitoring by point, but analysis across many devices of one type, and migrations from relational databases, are easier with one table per device type and standard SQL."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "2018",
+        "text": "Enters the Apache Incubator from Tsinghua University in November"
+      },
+      {
+        "year": "2019",
+        "text": "First Apache release, 0.8.0-incubating, in August"
+      },
+      {
+        "year": "2020",
+        "text": "Graduates to a top-level Apache project in September"
+      },
+      {
+        "year": "2022",
+        "text": "Timecho raises over $10 million in June; 1.0 with the ConfigNode/DataNode cluster in December"
+      },
+      {
+        "year": "2023",
+        "text": "TsFile becomes its own Apache project in November"
+      },
+      {
+        "year": "2025",
+        "text": "2.0.1-beta adds the SQL table model in February"
+      },
+      {
+        "year": "2026",
+        "text": "2.0.11 in September requires JDK 17 and adds an Edge edition"
+      }
+    ],
+    "sources": [
+      {
+        "label": "Apache Incubator: IoTDB proposal (2018; Tsinghua origins, requirements, TsFile)",
+        "url": "https://cwiki.apache.org/confluence/display/INCUBATOR/IoTDBProposal"
+      },
+      {
+        "label": "Apache Incubator: IoTDB incubation status (entered 2018-11-18, graduated 2020-09-18)",
+        "url": "https://incubator.apache.org/projects/iotdb.html"
+      },
+      {
+        "label": "Apache archive: IoTDB incubating releases (0.8.0-incubating, August 2019)",
+        "url": "https://archive.apache.org/dist/incubator/iotdb/"
+      },
+      {
+        "label": "Wang, Huang, Qiao et al.: Apache IoTDB, time-series database for internet of things (VLDB 2020)",
+        "url": "https://www.vldb.org/pvldb/vol13/p2901-wang.pdf"
+      },
+      {
+        "label": "IoTDB docs: Release history (1.0.0, 2.0.1-beta, 2.0.5, 2.0.11)",
+        "url": "https://iotdb.apache.org/UserGuide/latest-Table/IoTDB-Introduction/Release-history_apache.html"
+      },
+      {
+        "label": "Timecho press release via PR Newswire: Timecho raises over US$10 million (June 29, 2022)",
+        "url": "https://kyodonewsprwire.jp/release/202206293203"
+      },
+      {
+        "label": "ASF board minutes, 15 November 2023: Establish the Apache TsFile Project",
+        "url": "https://www.apache.org/foundation/records/minutes/2023/board_minutes_2023_11_15.txt"
+      },
+      {
+        "label": "IoTDB docs: Modeling scheme design (tree and table models)",
+        "url": "https://iotdb.apache.org/UserGuide/latest-Table/Background-knowledge/Data-Model-and-Terminology_apache.html"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "IoTDB docs: IoTDB introduction (TsFile, AINode, ecosystem)",
+      "url": "https://iotdb.apache.org/UserGuide/latest-Table/IoTDB-Introduction/IoTDB-Introduction_apache.html"
+    },
+    {
+      "label": "IoTDB docs: Common concepts (sql_dialect, ConfigNode, DataNode, AINode, regions, 1C1D and 3C3D)",
+      "url": "https://iotdb.apache.org/UserGuide/latest-Table/Background-knowledge/Cluster-Concept_apache.html"
+    },
+    {
+      "label": "IoTDB docs: Modeling scheme design (tree vs table model, CLI default, tree-to-table)",
+      "url": "https://iotdb.apache.org/UserGuide/latest-Table/Background-knowledge/Data-Model-and-Terminology_apache.html"
+    },
+    {
+      "label": "IoTDB docs: Table management (TAG, ATTRIBUTE, FIELD columns, table TTL)",
+      "url": "https://iotdb.apache.org/UserGuide/latest-Table/Basic-Concept/Table-Management_apache.html"
+    },
+    {
+      "label": "IoTDB docs: Query data (date_bin, last_by, date_bin_gapfill)",
+      "url": "https://iotdb.apache.org/UserGuide/latest-Table/Basic-Concept/Query-Data_apache.html"
+    },
+    {
+      "label": "IoTDB docs: Tree-to-table mapping (read-only views since 2.0.5)",
+      "url": "https://iotdb.apache.org/UserGuide/latest-Table/User-Manual/Tree-to-Table_apache.html"
+    },
+    {
+      "label": "IoTDB docs: Data partitioning and load balancing (1,000 series slots, seven-day time partitions)",
+      "url": "https://iotdb.apache.org/UserGuide/latest-Table/Technical-Insider/Cluster-data-partitioning.html"
+    },
+    {
+      "label": "IoTDB docs: System configuration (Ratis and IoTConsensus defaults, compaction, LZ4, port 6667)",
+      "url": "https://iotdb.apache.org/UserGuide/latest-Table/Reference/System-Config-Manual_apache.html"
+    },
+    {
+      "label": "IoTDB docs: Compression and encoding (RLE and TS_2DIFF float precision, GORILLA)",
+      "url": "https://iotdb.apache.org/UserGuide/latest-Table/Technical-Insider/Encoding-and-Compression.html"
+    },
+    {
+      "label": "IoTDB docs: Data import (import-data.sh, TsFile auto-loading, LOAD statement)",
+      "url": "https://iotdb.apache.org/UserGuide/latest-Table/Tools-System/Data-Import-Tool_apache.html"
+    },
+    {
+      "label": "IoTDB docs: Data sync (pipes; no sync between 1.x and 2.x)",
+      "url": "https://iotdb.apache.org/UserGuide/latest-Table/User-Manual/Data-Sync_apache.html"
+    },
+    {
+      "label": "IoTDB docs: MQTT protocol (built-in broker, line format for the table model)",
+      "url": "https://iotdb.apache.org/UserGuide/latest-Table/API/Programming-MQTT_apache.html"
+    },
+    {
+      "label": "IoTDB docs: Apache Spark table connector (Spark 3.3 to 3.5)",
+      "url": "https://iotdb.apache.org/UserGuide/latest-Table/Ecosystem-Integration/Spark-IoTDB.html"
+    },
+    {
+      "label": "IoTDB docs: Grafana plugin",
+      "url": "https://iotdb.apache.org/UserGuide/latest/Ecosystem-Integration/Grafana-Plugin.html"
+    },
+    {
+      "label": "IoTDB docs: Docker deployment (apache/iotdb standalone image)",
+      "url": "https://iotdb.apache.org/UserGuide/latest-Table/Deployment-and-Maintenance/Docker-Deployment_apache.html"
+    },
+    {
+      "label": "IoTDB docs: Release history (2.0.11 of September 2026: JDK 17, Edge edition; AINode models)",
+      "url": "https://iotdb.apache.org/UserGuide/latest-Table/IoTDB-Introduction/Release-history_apache.html"
+    },
+    {
+      "label": "IoTDB docs: Commercial support (Timecho Europe and others; no SLA for community support)",
+      "url": "https://iotdb.apache.org/UserGuide/latest-Table/IoTDB-Introduction/Commercial-Support_apache.html"
+    },
+    {
+      "label": "Timecho docs: TimechoDB introduction and comparison with Apache IoTDB",
+      "url": "https://www.timecho.com/docs/UserGuide/latest/IoTDB-Introduction/IoTDB-Introduction_timecho.html"
+    },
+    {
+      "label": "Wang, Huang, Qiao et al.: Apache IoTDB, time-series database for internet of things (VLDB 2020; memtable, WAL, out-of-order files)",
+      "url": "https://www.vldb.org/pvldb/vol13/p2901-wang.pdf"
+    },
+    {
+      "label": "GitHub: apache/iotdb (Apache 2.0)",
+      "url": "https://github.com/apache/iotdb"
+    },
+    {
+      "label": "GitHub: Apache IoTDB v2.0.11 release (September 2026)",
+      "url": "https://github.com/apache/iotdb/releases/tag/v2.0.11"
+    }
+  ],
+  "checked": "2026-10-09"
+}
