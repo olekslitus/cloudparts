@@ -1,0 +1,191 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "pgBackRest",
+  "concepts": ["backup", "relational"],
+  "provider": "oss",
+  "vendor": "David Steele and contributors, funded by a coalition of sponsors (Crunchy Data until 2025)",
+  "license": "MIT",
+  "website": "https://pgbackrest.org/",
+  "repo": "https://github.com/pgbackrest/pgbackrest",
+  "summary": "A PostgreSQL-only backup tool in C: parallel full, differential and incremental backups, WAL archiving and point-in-time restores, to disk, S3, Azure, GCS or SFTP.",
+  "intro": [
+    "pgBackRest keeps backups and archived WAL in a repository it formats itself. Each PostgreSQL cluster it protects is a stanza, a named section of `pgbackrest.conf` that says where the data directory is and how to back it up. Postgres hands it every finished WAL segment through `archive_command = 'pgbackrest --stanza=main archive-push %p'`, and gets them back on restore with `archive-get`. With `archive-async` on, a background process pushes or prefetches segments in parallel and the command Postgres waits on returns at once. A `backup` is `full`, `diff` (changes since the last full) or `incr` (changes since the last backup of any type, the default), with `process-max` processes compressing (gzip by default, or lz4, Zstandard or bzip2) and copying files at the same time. Every file gets a checksum that is checked again on restore and by `verify`, and, when the cluster has page checksums turned on, those are validated as files are read. Since version 2.46 (May 2023), `repo-block` stores only the changed blocks of a file rather than the whole file.",
+    "A repository can be a local or mounted directory (`posix`), Amazon S3 or another S3-compatible store, Azure Blob Storage, Google Cloud Storage or an SFTP server, and one stanza can write to several at once (`repo1`, `repo2` and so on): WAL goes to all of them, each backup to one, each with its own retention. Encryption is client-side AES-256-CBC. pgBackRest can run entirely on the database server, or on a dedicated repository host that reaches the database hosts over SSH or, since 2.37 (January 2022), its own TLS server, so a database host failure doesn’t take the backups with it. With `backup-standby` it copies most files from a replica to spare the primary. A `restore` takes `--type=time`, `xid`, `lsn` or `name` targets and writes the recovery settings for you; `--delta` keeps files whose checksums already match, so rebuilding a damaged or lagging node copies only what differs. Version 2.59 supports PostgreSQL 9.6 to 18 plus 19, the five supported releases and the last five out of support.",
+    "It is free under the MIT license and written by David Steele, who started it in 2013. Crunchy Data paid for most of that work until Snowflake bought Crunchy in June 2025 and Steele didn’t move to Snowflake. On April 27, 2026 Steele announced that pgBackRest was no longer being maintained, after a year of failed fundraising; on May 18 came the news that it would continue, funded by a coalition of sponsors so that a single acquisition can’t stop it again. Releases resumed with 2.59 in July 2026. Crunchy’s PGO and Percona’s operator for PostgreSQL use it for their backups, and Dalibo is writing an experimental plugin for CloudNativePG."
+  ],
+  "strengths": [
+    "Built for very large databases: parallel compression and transfer, block-level incrementals, file bundling for object stores, resumable backups and delta restores that copy only changed files",
+    "Integrity checks throughout: checksums on every file, page checksum validation during backup, a `verify` command, and `archive-push` refusing a segment that differs from one already archived",
+    "Flexible layout: several repositories at once (for example a local one for fast restores and a cloud one with longer retention), a dedicated repository host, and backups taken from a standby",
+    "Supports ten PostgreSQL major versions at a time, and a plain MIT license with no paid edition",
+    "The default backup engine in PGO and Percona’s PostgreSQL operator, and supported by Patroni’s replica creation, so the same tool works on VMs and Kubernetes"
+  ],
+  "limits": [
+    "Its future rests on one lead developer: in April 2026 David Steele announced it was no longer maintained, and it continued only after six sponsors stepped in that May; Steele and Percona have said they want another maintainer for continuity",
+    "PostgreSQL only, and no scheduler of its own: cron, systemd timers or an operator must run `backup`, and you must watch for failures",
+    "Many options and a learning curve: stanzas, indexed `repoN-` and `pgN-` settings, and the faster settings (`zst`, `repo-bundle`, `repo-block`) aren’t defaults, for backward compatibility",
+    "Encryption is one passphrase-based cipher, AES-256-CBC; versions before 2.59.3 (October 2026) could create weak encryption subkeys if the system’s random source failed, and fixing an affected repository means a new stanza",
+    "Block incremental arrived in 2.46 but the user guide recommends at least 2.52.1, and new storage features can make a repository unreadable by older pgBackRest versions"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "backs up and archives WAL for" },
+    { "id": "s3", "how": "can keep repositories in" },
+    { "id": "azure-blob", "how": "can keep repositories in" },
+    { "id": "gcs", "how": "can keep repositories in" },
+    { "id": "minio", "how": "can keep repositories in, via the S3 API," },
+    { "id": "sftp", "how": "can keep repositories on a server over" },
+    { "id": "tls", "how": "reaches remote hosts over" },
+    { "id": "patroni", "how": "can build new replicas for" },
+    { "id": "pgo", "how": "is the backup engine of" },
+    { "id": "percona-operators", "how": "backs up Postgres clusters run by" },
+    { "id": "cloudnative-pg", "how": "has an experimental plugin for" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Full and incremental backups, then a point-in-time restore after a dropped table (run in a postgres:17 container with pgBackRest 2.59.3)",
+    "source": [
+      "# /etc/pgbackrest/pgbackrest.conf",
+      "#   [global]",
+      "#   repo1-path=/var/lib/pgbackrest",
+      "#   repo1-retention-full=2",
+      "#   repo1-bundle=y",
+      "#   repo1-block=y          # block-level incrementals (needs repo1-bundle)",
+      "#   compress-type=zst",
+      "#   process-max=2",
+      "#   start-fast=y",
+      "#   [main]",
+      "#   pg1-path=/var/lib/postgresql/17/main",
+      "",
+      "# postgresql.conf",
+      "#   archive_mode = on",
+      "#   archive_command = 'pgbackrest --stanza=main archive-push %p'",
+      "",
+      "pgbackrest --stanza=main stanza-create",
+      "pgbackrest --stanza=main --log-level-console=info check",
+      "# INFO: WAL segment 000000010000000000000001 successfully archived to",
+      "#   '/var/lib/pgbackrest/archive/main/17-1/.../000000010000000000000001-137f5777....zst' on repo1",
+      "",
+      "pgbackrest --stanza=main --type=full backup",
+      "psql -c \"CREATE TABLE orders (id int PRIMARY KEY, total numeric);",
+      "         INSERT INTO orders SELECT g, g * 1.5 FROM generate_series(1, 100000) g;\"",
+      "pgbackrest --stanza=main --type=incr backup",
+      "",
+      "pgbackrest --stanza=main info",
+      "# full backup: 20261010-065641F",
+      "#     database size: 22.1MB, database backup size: 22.1MB",
+      "#     repo1: backup size: 2.7MB",
+      "# incr backup: 20261010-065641F_20261010-065642I",
+      "#     database size: 28.6MB, database backup size: 8MB",
+      "#     repo1: backup size: 976.3KB",
+      "#     backup reference total: 1 full",
+      "",
+      "psql -Atc \"SELECT now()\"          # 2026-10-10 06:56:45.425119+00",
+      "psql -c \"DROP TABLE orders;\"       # the mistake",
+      "pgbackrest --stanza=main check     # switches WAL and waits until it is archived",
+      "pg_ctl -D /var/lib/postgresql/17/main -m fast stop",
+      "",
+      "pgbackrest --stanza=main --delta --type=time \\",
+      "  \"--target=2026-10-10 06:56:45.425119+00\" --target-action=promote restore",
+      "# INFO: repo1: restore backup set 20261010-065641F_20261010-065642I, recovery will start at 2026-10-10 06:56:42",
+      "# INFO: restore size = 28.6MB, file total = 971",
+      "",
+      "pg_ctl -D /var/lib/postgresql/17/main start",
+      "# LOG:  recovery stopping before commit of transaction 739, time 2026-10-10 06:56:47.438733+00",
+      "# LOG:  selected new timeline ID: 2",
+      "psql -Atc \"SELECT count(*) FROM orders;\"   # 100000"
+    ]
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "Where a repository can live",
+      "intro": "The `repo-type` values in the configuration reference, with the release that added each cloud backend.",
+      "items": [
+        { "name": "posix", "tag": "default", "text": "A local disk or mounted file system, on the database server or on a dedicated repository host; `cifs` is the same with links and directory fsyncs turned off." },
+        { "name": "s3", "tag": "S3 and compatible", "text": "Amazon S3 or another S3-compatible store; on versioned buckets, `repo-target-time` (2.54, October 2024) reads the repository as it was before backups were deleted or damaged." },
+        { "name": "azure", "tag": "since 2.28 (2020)", "text": "Azure Blob Storage, with shared key or SAS authentication." },
+        { "name": "gcs", "tag": "since 2.33 (2021)", "text": "Google Cloud Storage, added in the same release as multiple repositories." },
+        { "name": "sftp", "tag": "since 2.46 (2023)", "text": "Any server reachable over SFTP." }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "pgBackRest, WAL-G or Barman?",
+      "intro": "The three open-source tools most often used for physical PostgreSQL backups and point-in-time recovery.",
+      "corner": "",
+      "columns": ["pgBackRest", "WAL-G", "Barman"],
+      "rows": [
+        { "label": "Written in", "values": ["C (Perl until the 2018 to 2020 migration)", "Go", "Python"] },
+        { "label": "Model", "values": ["Its own repository; runs on the database host or a dedicated repository host over SSH or TLS", "A binary called from `archive_command` and cron; state lives in the bucket", "A Barman server pulls backups and WAL, or `barman-cloud` scripts run on the database host without a server"] },
+        { "label": "Databases", "values": ["PostgreSQL only", "PostgreSQL, MySQL and MariaDB, SQL Server; MongoDB and Redis in beta", "PostgreSQL only"] },
+        { "label": "Incrementals", "values": ["Full, differential and incremental, at file or block level", "Delta backups, up to `WALG_DELTA_MAX_STEPS` between full ones", "File-level with rsync and hard links; block-level through PostgreSQL 17’s own incremental backup (Barman 3.11+)"] },
+        { "label": "Where backups go", "values": ["Disk, S3, Azure, GCS, SFTP; several repositories at once", "S3, GCS, Azure, Alibaba Cloud, Swift, SSH or local disk", "The Barman server’s disk, or S3, Azure and GCS through `barman-cloud`"] },
+        { "label": "License and steward", "values": ["MIT; David Steele, funded by a sponsor coalition", "Apache 2.0; WAL-G contributors", "GPL 3; EnterpriseDB"] }
+      ],
+      "notes": [
+        "On Kubernetes the choice usually follows the operator: PGO and Percona’s operator use pgBackRest, Zalando’s operator uses WAL-G through Spilo, and CloudNativePG uses its Barman Cloud plugin."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "At PostgreSQL Conference Europe in Dublin in 2013, David Steele, Stephen Frost, Cynthia Shang, Magnus Hagander and others talked about backing up a database of about 50 TB, large for the time. Nothing available could do incremental backups and compression together at that size. Steele planned a small tool, a single Perl file that was easy to copy around, built a first usable version in about 40 hours, and persuaded Resonate, the ad tech company Steele worked for, to open-source it. Release 0.10 in March 2014 could back up and archive but not yet restore.",
+      "Steele kept working on it after leaving Resonate and was then hired by Crunchy Data, where Frost backed the project and Shang later joined it. To make it faster, and partly because some PostgreSQL committers liked the idea of a backup tool fit for core that would have to be in C, they rewrote it in C over two years, fixing bugs but adding features only where they could live in the C code. The `pgbackrest` executable became a C binary in 2.00 (February 2018), and 2.21 (January 2020) was pure C. Multiple repositories, GCS, a TLS server and block incremental backups followed.",
+      "Snowflake bought Crunchy Data in June 2025. Steele didn’t move to Snowflake and kept maintaining pgBackRest alone, asking for sponsors with every release. On April 27, 2026 the project’s news page announced it was no longer being maintained and asked any fork to take a new name. Within about three weeks AWS, Supabase, pgEdge, Tiger Data, Percona and Eon agreed to fund it; Steele announced on May 18 that pgBackRest would continue, and Xata, Dalibo and Data Egret were also listed as sponsors by its July release."
+    ],
+    "choices": [
+      { "choice": "Its own repository format instead of rsync", "why": "pgBackRest records a checksum for every file in a manifest, so differential and incremental backups don’t depend on file timestamps the way rsync does, and restores and `verify` can check every file." },
+      { "choice": "From Perl to C", "why": "Commands that Postgres calls for every WAL segment, like `archive-push`, had to start and finish fast, and committers interested in a core backup tool wanted C. The rewrite cost two years with almost no new features." },
+      { "choice": "A custom protocol between hosts", "why": "Backups, restores and archiving can run locally or against a remote repository host over SSH or TLS, and pgBackRest queries PostgreSQL through the same protocol, so the repository host never needs a database connection." },
+      { "choice": "Funded by many sponsors, not one employer", "why": "When Crunchy’s sale ended its funding, the project nearly stopped. The 2026 rescue spread the cost over several companies so a single acquisition can’t halt it again." }
+    ],
+    "timeline": [
+      { "year": "2013", "text": "Conceived at PostgreSQL Conference Europe in Dublin; repository created in November" },
+      { "year": "2016", "text": "1.00 in April: new repository format, `pg_backrest` renamed `pgbackrest`" },
+      { "year": "2018", "text": "2.00 in February: the executable becomes a C binary" },
+      { "year": "2020", "text": "2.21 in January: pure C; Azure repositories follow in July" },
+      { "year": "2023", "text": "2.46 in May: block incremental backup and SFTP repositories" },
+      { "year": "2025", "text": "Snowflake buys Crunchy Data, the project’s main sponsor, in June" },
+      { "year": "2026", "text": "Maintenance stops in April, resumes in May with six sponsors; 2.59 adds PostgreSQL 19 support in July" }
+    ],
+    "sources": [
+      { "label": "Postgres FM: pgBackRest, with David Steele (transcript, Jul 2026): origin story, Resonate, Crunchy, C migration, sponsorship", "url": "https://postgres.fm/episodes/pgbackrest/transcript" },
+      { "label": "pgBackRest release notes (0.10 in 2014, 1.00, 2.00, 2.21, 2.28, 2.33, 2.37, 2.46, 2.59.0)", "url": "https://pgbackrest.org/release.html" },
+      { "label": "pgBackRest/pgbackrest on GitHub (created November 2013)", "url": "https://github.com/pgbackrest/pgbackrest" },
+      { "label": "pgBackRest news: pgBackRest is no longer being maintained (Apr 27, 2026)", "url": "https://pgbackrest.org/news.html#no-longer-maintained" },
+      { "label": "pgBackRest news: Maintenance update (May 4, 2026)", "url": "https://pgbackrest.org/news.html#maintenance-update" },
+      { "label": "pgBackRest news: pgBackRest will continue! (May 18, 2026)", "url": "https://pgbackrest.org/news.html#will-continue" },
+      { "label": "pgBackRest news: pgBackRest 2.59.0 released, sponsors (Jul 20, 2026)", "url": "https://pgbackrest.org/news.html#release-2-59-0" },
+      { "label": "Crunchy Data blog: Crunchy Data joins Snowflake (Jun 2, 2025)", "url": "https://www.crunchydata.com/blog/crunchy-data-joins-snowflake" },
+      { "label": "The Register: PostgreSQL backup tool gets some backup of its own after sole maintainer sounds alarm (May 20, 2026)", "url": "https://www.theregister.com/databases/2026/05/20/postgresql-backup-tool-gets-some-backup-of-its-own-after-sole-maintainer-sounds-alarm/5242822" }
+    ]
+  },
+  "sources": [
+    { "label": "pgBackRest README: features, ten PostgreSQL versions, sponsors and past sponsors, MIT license", "url": "https://github.com/pgbackrest/pgbackrest/blob/main/README.md" },
+    { "label": "pgBackRest LICENSE (MIT)", "url": "https://github.com/pgbackrest/pgbackrest/blob/main/LICENSE" },
+    { "label": "pgBackRest user guide for Debian and Ubuntu (stanzas, performance tuning, block incremental, repository host, backup from a standby)", "url": "https://pgbackrest.org/user-guide.html" },
+    { "label": "pgBackRest configuration reference (`repo-type`, `compress-type`, `repo-cipher-type`, retention, `repo-block`, `process-max`)", "url": "https://pgbackrest.org/configuration.html" },
+    { "label": "pgBackRest command reference (`archive-push`, `backup` types, `restore` types, `--delta`, `server`, `verify`)", "url": "https://pgbackrest.org/command.html" },
+    { "label": "pgBackRest release notes", "url": "https://pgbackrest.org/release.html" },
+    { "label": "pgBackRest source: supported PostgreSQL versions (`version.auto.h`, 9.6 to 19)", "url": "https://github.com/pgbackrest/pgbackrest/blob/main/src/postgres/version.auto.h" },
+    { "label": "pgBackRest news: Weak encryption subkeys and salts (Oct 4, 2026)", "url": "https://pgbackrest.org/news.html#weak-encryption" },
+    { "label": "pgBackRest news: no longer maintained (Apr 27, 2026) and will continue (May 18, 2026)", "url": "https://pgbackrest.org/news.html" },
+    { "label": "David Steele on GitHub Sponsors (primary author of pgBackRest)", "url": "https://github.com/sponsors/dwsteele" },
+    { "label": "Percona blog: Meet pgstef, why Stefan Fercot joined Percona (Sep 2026)", "url": "https://www.percona.com/blog/meet-pgstef/" },
+    { "label": "The Register: PostgreSQL backup tool gets some backup of its own (May 20, 2026)", "url": "https://www.theregister.com/databases/2026/05/20/postgresql-backup-tool-gets-some-backup-of-its-own-after-sole-maintainer-sounds-alarm/5242822" },
+    { "label": "PGO docs: Backup configuration (pgBackRest for terabyte-size databases, several repositories)", "url": "https://access.crunchydata.com/documentation/postgres-operator/latest/tutorials/backups-disaster-recovery/backups" },
+    { "label": "Percona Operator for PostgreSQL docs: Architecture (pgBackRest)", "url": "https://docs.percona.com/percona-operator-for-postgresql/latest/architecture.html" },
+    { "label": "Patroni docs: Replica imaging and bootstrap (a `pgbackrest --delta restore` replica method)", "url": "https://patroni.readthedocs.io/en/latest/replica_bootstrap.html" },
+    { "label": "Dalibo blog: pgBackRest plugin for CloudNativePG, version 0.0.3, experimental (Jun 2026)", "url": "https://blog.dalibo.com/2026/06/25/plugin-pgbackrest.html" },
+    { "label": "pgBackRest plugin for CloudNativePG docs: Introduction (CloudNativePG 1.27+, S3 and Azure only)", "url": "https://plugin-pgbackrest.readthedocs.io/en/latest/docs/introduction/" },
+    { "label": "Barman Cloud Plugin docs: Introduction (CloudNativePG’s backup plugin)", "url": "https://cloudnative-pg.io/plugin-barman-cloud/docs/intro/" },
+    { "label": "Zalando Spilo: environment (WAL-G backups)", "url": "https://github.com/zalando/spilo/blob/master/ENVIRONMENT.rst" },
+    { "label": "WAL-G docs: README (supported databases)", "url": "https://github.com/wal-g/wal-g/blob/master/docs/README.md" },
+    { "label": "WAL-G docs: PostgreSQL (`WALG_DELTA_MAX_STEPS` delta backups)", "url": "https://github.com/wal-g/wal-g/blob/master/docs/PostgreSQL.md" },
+    { "label": "WAL-G docs: Storages", "url": "https://github.com/wal-g/wal-g/blob/master/docs/STORAGES.md" },
+    { "label": "Barman README (Python, GPL 3, maintained by EnterpriseDB)", "url": "https://github.com/EnterpriseDB/barman" },
+    { "label": "Barman docs: Backups (rsync file-level incrementals, block-level incrementals on PostgreSQL 17 since 3.11)", "url": "https://github.com/EnterpriseDB/barman/blob/master/docs/user_guide/backup.rst" },
+    { "label": "Barman docs: Barman for the cloud (S3, Azure Blob Storage, Google Cloud Storage)", "url": "https://github.com/EnterpriseDB/barman/blob/master/docs/user_guide/barman_cloud.rst" }
+  ],
+  "checked": "2026-10-10"
+}
