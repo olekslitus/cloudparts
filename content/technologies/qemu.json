@@ -1,0 +1,151 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "QEMU",
+  "concepts": ["hypervisors", "vm"],
+  "provider": "oss",
+  "vendor": "QEMU project (started by Fabrice Bellard)",
+  "license": "GPL 2.0",
+  "website": "https://www.qemu.org/",
+  "repo": "https://gitlab.com/qemu-project/qemu",
+  "summary": "The open-source machine emulator and virtualizer: it emulates whole computers in software, or runs them at native speed on a hypervisor such as KVM, and supplies the virtual devices either way.",
+  "intro": [
+    "QEMU is an emulator and a virtualizer in one program. As an emulator it uses TCG, the Tiny Code Generator, a just-in-time compiler that translates blocks of guest instructions into host instructions and caches them, so an x86 guest can boot on an Arm machine or the other way round. As a virtualizer it hands the CPU work to a hypervisor, which QEMU calls an accelerator: KVM on Linux, Hypervisor.framework (`hvf`) on macOS, the Windows Hypervisor Platform (`whpx`), Xen, MSHV or NetBSD’s NVMM. Guest code then runs directly on the processor and QEMU only emulates the hardware around it. That device side is what most VM platforms use QEMU for. A machine type picks the board: `q35` is a PC with Intel’s Q35 and ICH9 chipset from 2009, `virt` is an Arm board that matches no real hardware and is meant for VMs, and `microvm` is a minimal x86 machine with no PCI or ACPI, inspired by Firecracker.",
+    "On that board QEMU can emulate real devices, such as an e1000 network card, or attach paravirtual virtio devices designed for VMs, and it can pass a host device straight through to the guest. Its block layer reads and writes many image formats; its native one, qcow2, grows as data is written and supports zlib compression, internal snapshots and backing files, so a thin overlay can share one base image. The `qemu-img` tool creates, converts and inspects images, including raw, VMDK, VDI and VHDX. Programs control a running QEMU through QMP, the QEMU Machine Protocol, a JSON protocol on a socket; libvirt, for one, drives QEMU this way.",
+    "QEMU also has a user-mode emulator that runs a single Linux program built for another CPU, translating its system calls to the host’s. Registered with the kernel’s `binfmt_misc`, it lets an x86 host run Arm binaries transparently, which is how Docker’s BuildKit builds multi-platform images. Fabrice Bellard started QEMU in 2003; it is now developed by a large community, has made three feature releases a year recently (April, August and December), and the latest is 11.1.2 (September 29, 2026). QEMU as a whole is GPL 2.0, while most of TCG is under BSD or MIT licenses."
+  ],
+  "strengths": [
+    "Runs almost anything on almost anything: TCG emulates Arm, x86, RISC-V, PowerPC, s390x, MIPS and more on several host architectures, and accelerators bring same-architecture guests to near-native speed",
+    "The standard device model behind Linux virtualization: libvirt, Proxmox VE, OpenStack and KubeVirt all start VMs as QEMU processes",
+    "Complete tooling: `qemu-img` and qcow2 overlays, live migration, snapshots, device passthrough and a scriptable JSON control protocol (QMP)",
+    "User-mode emulation makes cross-architecture container builds and test runs possible without a full VM"
+  ],
+  "limits": [
+    "Large and complex: decades of emulated hardware are attack surface, which is why Google wrote its own VMM for Compute Engine and smaller VMMs like Firecracker exist",
+    "TCG emulation is much slower than hardware virtualization; Docker warns that emulated multi-platform builds can be much slower than native ones",
+    "The command line is long and low-level (a one-disk test VM started by libvirt got 16 `-device`, `-blockdev` and `-object` options), so most people use QEMU through libvirt, Proxmox VE or another manager",
+    "User-mode emulation can’t emulate `clone` flags that create namespaces, so container runtimes can’t run under it, though emulated programs can run inside containers"
+  ],
+  "worksWith": [
+    { "id": "kvm", "how": "runs guests at native CPU speed with" },
+    { "id": "docker", "how": "emulates other CPUs for multi-arch builds in" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Create a qcow2 overlay and boot an x86 CirrOS guest under TCG (QEMU 10.0.13 in a Debian 13 container on an arm64 Mac, so no KVM)",
+    "source": [
+      "qemu-system-x86_64 -accel help",
+      "# Accelerators supported in QEMU binary:",
+      "# tcg",
+      "qemu-system-x86_64 -machine help | grep -E '^(q35|microvm) '",
+      "# microvm              microvm (i386)",
+      "# q35                  Standard PC (Q35 + ICH9, 2009) (alias of pc-q35-10.0)",
+      "",
+      "wget -q https://download.cirros-cloud.net/0.6.2/cirros-0.6.2-x86_64-disk.img",
+      "qemu-img create -f qcow2 -b cirros-0.6.2-x86_64-disk.img -F qcow2 vm1.qcow2 1G",
+      "qemu-img info vm1.qcow2",
+      "# file format: qcow2",
+      "# virtual size: 1 GiB (1073741824 bytes)",
+      "# disk size: 196 KiB                    # only the overlay; reads fall through to the base",
+      "# backing file: cirros-0.6.2-x86_64-disk.img",
+      "",
+      "qemu-system-x86_64 -accel tcg -machine q35 -m 256 -smp 1 -nographic \\",
+      "  -drive file=vm1.qcow2,if=virtio -nic user,model=virtio-net-pci",
+      "# [    0.000000] Linux version 5.15.0-71-generic ...",
+      "# [    4.113434] virtio_blk virtio1: [vda] 2097152 512-byte logical blocks (1.07 GB/1.00 GiB)",
+      "# === cirros: current=0.6.2 uptime=87.07 ===",
+      "# cirros login:",
+      "# (afterwards `qemu-img info vm1.qcow2` shows disk size: 28.4 MiB, the blocks the guest wrote)"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Accelerators: who runs the guest’s CPU",
+      "intro": "From QEMU’s documentation. Without one of the hypervisors, QEMU falls back to TCG and translates every instruction itself.",
+      "corner": "Accelerator",
+      "columns": ["Host OS", "Host architectures"],
+      "rows": [
+        { "label": "KVM", "values": ["Linux", "Arm, MIPS, PPC, RISC-V, s390x, x86"] },
+        { "label": "Xen", "values": ["Linux (as dom0)", "Arm, x86"] },
+        { "label": "MSHV", "values": ["Linux (as dom0)", "x86"] },
+        { "label": "Hypervisor.framework (`hvf`)", "values": ["macOS", "x86, Arm"] },
+        { "label": "Windows Hypervisor Platform (`whpx`)", "values": ["Windows", "Arm, x86"] },
+        { "label": "NetBSD Virtual Machine Monitor (`nvmm`)", "values": ["NetBSD", "x86"] },
+        { "label": "Tiny Code Generator (`tcg`)", "values": ["Linux, other POSIX, Windows, macOS", "Arm, x86, LoongArch64, MIPS, PPC, s390x, Sparc64"] }
+      ]
+    },
+    {
+      "type": "code",
+      "title": "Driving QEMU over QMP",
+      "intro": "Started paused (`-S`) with a QMP socket, then controlled with JSON commands, the way management tools do it. Run with QEMU 10.0.13 under TCG; `socat` is the client.",
+      "lang": "bash",
+      "source": [
+        "qemu-system-x86_64 -accel tcg -machine q35 -m 256 -display none -S \\",
+        "  -qmp unix:/tmp/qmp.sock,server=on,wait=off -drive file=vm2.qcow2,if=virtio &",
+        "",
+        "printf '%s\\n' '{\"execute\":\"qmp_capabilities\"}' '{\"execute\":\"query-status\"}' \\",
+        "  '{\"execute\":\"cont\"}' '{\"execute\":\"query-status\"}' '{\"execute\":\"quit\"}' |",
+        "  socat -t2 - unix-connect:/tmp/qmp.sock",
+        "# {\"QMP\": {\"version\": {\"qemu\": {\"micro\": 13, \"minor\": 0, \"major\": 10}, ...}, \"capabilities\": [\"oob\"]}}",
+        "# {\"return\": {}}",
+        "# {\"return\": {\"status\": \"prelaunch\", \"running\": false}}",
+        "# {\"timestamp\": {...}, \"event\": \"RESUME\"}",
+        "# {\"return\": {}}",
+        "# {\"return\": {\"status\": \"running\", \"running\": true}}",
+        "# {\"timestamp\": {...}, \"event\": \"SHUTDOWN\", \"data\": {\"guest\": false, \"reason\": \"host-qmp-quit\"}}",
+        "# {\"return\": {}}"
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Fabrice Bellard began QEMU in early 2003 as an x86 CPU emulator that could run Linux programs on other processors. The first commit is dated February 18, 2003, and version 0.1, the “initial public release”, followed in March. By June, version 0.4 could boot an almost unmodified Linux kernel with no host kernel patches and no special privileges. Bellard’s 2005 USENIX paper explained the trick: a portable dynamic translator that stitched together pieces of machine code that GCC had compiled ahead of time, so supporting a new host took far less work than writing a compiler back end.",
+      "When KVM arrived in Linux in 2007, it left all device emulation to a user-space program, and QEMU filled that role. QEMU 0.10 in March 2009 brought KVM acceleration upstream, together with TCG, a real code generator that ended the dependence on old GCC versions, plus virtio devices and live migration. From then on QEMU was both an emulator and the device model under most Linux virtualization, with libvirt, OpenStack and later Proxmox VE and KubeVirt driving it.",
+      "QEMU 1.0 came out in December 2011. Since 2025 the project has shipped feature releases in April, August and December, plus stable point releases in between."
+    ],
+    "choices": [
+      { "choice": "Dynamic translation instead of an interpreter", "why": "Guest instructions are translated once into host code and cached, so each one is fetched and decoded only once. That made full-system emulation fast enough to boot real operating systems." },
+      { "choice": "Portability over peak speed", "why": "The first translator glued together code fragments that GCC had already compiled, so a new host needed little new code. TCG, its 2009 replacement, kept the same goal of running many guests on many hosts." },
+      { "choice": "Hand the CPU to a hypervisor when one is available", "why": "With accelerators like KVM, QEMU stops emulating the CPU and keeps only the device model, so one program serves both cross-architecture emulation and fast same-architecture virtualization." },
+      { "choice": "User-mode emulation next to system emulation", "why": "Running a single foreign Linux binary needs only CPU emulation and system call translation, which Bellard used to test cross compilers; the same feature now powers cross-architecture container builds." }
+    ],
+    "timeline": [
+      { "year": "2003", "text": "First commit (February 18); 0.1 in March; 0.4 boots a Linux kernel in June" },
+      { "year": "2005", "text": "Bellard’s USENIX paper on QEMU’s portable dynamic translator" },
+      { "year": "2009", "text": "QEMU 0.10 (March): TCG, KVM acceleration, virtio and live migration" },
+      { "year": "2011", "text": "QEMU 1.0 (December)" },
+      { "year": "2025", "text": "QEMU 10.0 (April); feature releases follow in August and December" },
+      { "year": "2026", "text": "QEMU 11.0 (April) and 11.1 (August)" }
+    ],
+    "sources": [
+      { "label": "Fabrice Bellard: QEMU, a Fast and Portable Dynamic Translator (USENIX 2005)", "url": "https://www.usenix.org/legacy/event/usenix05/tech/freenix/full_papers/bellard/bellard.pdf" },
+      { "label": "QEMU git: first commit (February 18, 2003)", "url": "https://gitlab.com/qemu-project/qemu/-/commit/e63c3dc74bfb90e4522d075d0d5a7600c5145745" },
+      { "label": "QEMU git: Changelog added with “version 0.1: initial public release” (March 23, 2003)", "url": "https://gitlab.com/qemu-project/qemu/-/commit/3ef693a03205217a5def9318b443c8cb6de17217" },
+      { "label": "Fabrice Bellard on linux-kernel: [ANNOUNCE] QEMU 0.4 release (June 26, 2003)", "url": "https://lkml.indiana.edu/0306.3/0656.html" },
+      { "label": "QEMU Changelog for 0.10.0: TCG, KVM acceleration, virtio, live migration", "url": "https://gitlab.com/qemu-project/qemu/-/blob/v0.10.0/Changelog" },
+      { "label": "QEMU git: tag v0.10.0 (March 5, 2009)", "url": "https://gitlab.com/qemu-project/qemu/-/tags/v0.10.0" },
+      { "label": "QEMU git: tag v1.0 (December 1, 2011)", "url": "https://gitlab.com/qemu-project/qemu/-/tags/v1.0" },
+      { "label": "download.qemu.org: release tarballs and dates", "url": "https://download.qemu.org/" }
+    ]
+  },
+  "sources": [
+    { "label": "QEMU docs: Introduction (accelerators table, TCG, virtio, passthrough, block layer)", "url": "https://www.qemu.org/docs/master/system/introduction.html" },
+    { "label": "QEMU docs: System emulator targets (Arm, LoongArch, MIPS, PowerPC, RISC-V, s390x, Sparc, x86 and more)", "url": "https://www.qemu.org/docs/master/system/targets.html" },
+    { "label": "QEMU docs: ‘microvm’ virtual platform", "url": "https://www.qemu.org/docs/master/system/i386/microvm.html" },
+    { "label": "QEMU docs: ‘virt’ generic virtual platform (Arm)", "url": "https://www.qemu.org/docs/master/system/arm/virt.html" },
+    { "label": "QEMU docs: Disk image file formats (qcow2, raw, VMDK, VDI, VHDX)", "url": "https://www.qemu.org/docs/master/system/qemu-block-drivers.html" },
+    { "label": "QEMU docs: QEMU Machine Protocol specification", "url": "https://www.qemu.org/docs/master/interop/qmp-spec.html" },
+    { "label": "QEMU docs: User space emulator (system call translation, clone limits)", "url": "https://www.qemu.org/docs/master/user/main.html" },
+    { "label": "QEMU LICENSE file (GPL 2.0 as a whole, TCG mostly BSD or MIT)", "url": "https://gitlab.com/qemu-project/qemu/-/blob/master/LICENSE" },
+    { "label": "QEMU download page (latest releases, 11.1.2)", "url": "https://www.qemu.org/download/" },
+    { "label": "download.qemu.org: release tarballs and dates (10.0 to 11.1.2)", "url": "https://download.qemu.org/" },
+    { "label": "Docker docs: Multi-platform builds (BuildKit bundles QEMU user-mode emulators, binfmt)", "url": "https://docs.docker.com/build/building/multi-platform/" },
+    { "label": "Google Cloud Blog: 7 ways we harden our KVM hypervisor at Google Cloud (own VMM instead of QEMU)", "url": "https://cloud.google.com/blog/products/gcp/7-ways-we-harden-our-kvm-hypervisor-at-google-cloud-security-in-plaintext" },
+    { "label": "Proxmox VE docs: QEMU/KVM Virtual Machines", "url": "https://pve.proxmox.com/pve-docs/chapter-qm.html" },
+    { "label": "libvirt docs: QEMU/KVM/HVF driver (monitor commands in QMP format)", "url": "https://libvirt.org/drvqemu.html" },
+    { "label": "KubeVirt docs: Components (libvirt and QEMU in virt-launcher)", "url": "https://github.com/kubevirt/kubevirt/blob/main/docs/components.md" },
+    { "label": "OpenStack Nova docs: KVM", "url": "https://docs.openstack.org/nova/latest/admin/configuration/hypervisor-kvm.html" },
+    { "label": "Fabrice Bellard: QEMU, a Fast and Portable Dynamic Translator (USENIX 2005)", "url": "https://www.usenix.org/legacy/event/usenix05/tech/freenix/full_papers/bellard/bellard.pdf" }
+  ],
+  "checked": "2026-10-11"
+}

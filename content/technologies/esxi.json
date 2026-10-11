@@ -1,0 +1,158 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "VMware ESXi",
+  "concepts": ["hypervisors", "vm"],
+  "provider": "vendor",
+  "vendor": "Broadcom (VMware)",
+  "license": "Proprietary",
+  "website": "https://www.vmware.com/products/cloud-infrastructure/vsphere",
+  "summary": "VMware’s bare-metal hypervisor (called ESX again since VCF 9), whose own kernel runs VMs directly on servers while vCenter adds vMotion, HA, DRS and vSAN; since Broadcom bought VMware in 2023 it is sold only as per-core subscriptions.",
+  "intro": [
+    "ESXi installs straight onto a server, with no general-purpose operating system underneath. Broadcom’s security guide says it is not built on the Linux kernel or a Linux distribution: it uses VMware’s own kernel, the VMkernel, and its own tools. ESXi 8.0 needs at least two CPU cores with Intel VT-x or AMD RVI turned on, 8 GB of RAM and a 32 GB boot disk, and the server should be on VMware’s compatibility guide. A VM is a folder of files on a datastore: its configuration (`.vmx`), its virtual disks and its logs. Datastores on block storage use VMFS, a cluster file system: many ESXi hosts can open the same datastore at once, and on-disk locking stops two hosts from running the same VM. NFS, vSAN and vVols datastores work too. Inside each guest, VMware Tools adds drivers, time sync and quiesced snapshots; most Linux distributions ship the open-source `open-vm-tools`.",
+    "One host can be run from its web Host Client, but the features people buy vSphere for come from vCenter Server, the central administrator for many hosts. vMotion moves a running VM to another host without interruption, Storage vMotion moves its disks between datastores, vSphere HA restarts a failed host’s VMs on other hosts in the cluster, DRS spreads load across hosts, and Fault Tolerance keeps a live secondary copy of a VM. vSAN is built into the ESXi kernel and pools the hosts’ local disks into one shared datastore. Broadcom ships all of this inside VMware Cloud Foundation (VCF) and the smaller vSphere Foundation. With VCF 9.0 (June 17, 2025) the hypervisor was renamed back to ESX; the current release is ESX 9.1.1 (September 3, 2026), the 8.0 line still gets updates (8.0 Update 3k, July 2026), and 7.x reached end of general support on October 2, 2025.",
+    "Broadcom completed its purchase of VMware on November 22, 2023. On December 11, 2023 it ended sales of perpetual licenses and of support renewals for them: VMware products are now subscriptions or term licenses, counted per physical core with a minimum of 16 cores per CPU. In February 2024 Broadcom discontinued the free ESXi hypervisor, marking it end of general availability “along with the termination of perpetual licensing”. A free license came back with ESXi 8.0 Update 3e (an April 2025 release), limited to two physical CPUs per host and 8 vCPUs per VM, with no vCenter, vMotion, HA or DRS, read-only APIs and no support."
+  ],
+  "strengths": [
+    "A full cluster feature set from one vCenter: live migration of VMs and their disks, automatic restarts after a host failure, load balancing, fault tolerance and in-kernel vSAN storage",
+    "A purpose-built kernel instead of a general-purpose OS, and VMFS, which lets every host in a cluster share the same block storage safely",
+    "A large ecosystem built on one API: `govc`, PowerCLI, a Broadcom-maintained Terraform provider and Packer plugin, backup tools, and hardware certified in the compatibility guide",
+    "Guests are well supported: VMware Tools for Windows, and `open-vm-tools` already packaged by most Linux distributions"
+  ],
+  "limits": [
+    "Since December 2023 there are no perpetual licenses: only subscriptions, priced per core with a 16-core minimum per CPU and sold mainly as the VCF or vSphere Foundation bundles",
+    "The free edition vanished from February 2024 until April 2025, and today’s free license can’t join vCenter, has no vMotion, HA or DRS, allows only read-only API use and has no support",
+    "Closed source and tied to certified hardware: ESXi 8.0 needs at least 2 cores, 8 GB of RAM and a 32 GB boot disk, and support follows Broadcom’s lifecycle (7.x ended in October 2025)",
+    "Leaving takes work, though rivals now help: Proxmox VE 8.2 (April 2024) added a wizard that imports VMs straight from ESXi 6.5 to 8.0"
+  ],
+  "worksWith": [
+    { "id": "terraform", "how": "is managed via the vSphere provider by" },
+    { "id": "packer", "how": "gets VM templates built by" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Drive vSphere from the command line with `govc` (run against `vcsim`, VMware’s vCenter API simulator, so no real ESXi is involved)",
+    "source": [
+      "# vcsim simulates vCenter with one standalone ESXi host and a 3-host cluster",
+      "docker run -d --rm --name vcsim -p 127.0.0.1:8989:8989 vmware/vcsim -l 0.0.0.0:8989",
+      "export GOVC_URL=https://user:pass@127.0.0.1:8989/sdk GOVC_INSECURE=1",
+      "",
+      "govc about",
+      "# FullName:     VMware vCenter Server 6.5.0 build-5973321 (govmomi simulator)",
+      "# API type:     VirtualCenter",
+      "govc find / -type h                 # the ESXi hosts",
+      "# /DC0/host/DC0_H0/DC0_H0",
+      "# /DC0/host/DC0_C0/DC0_C0_H0",
+      "# /DC0/host/DC0_C0/DC0_C0_H1",
+      "# /DC0/host/DC0_C0/DC0_C0_H2",
+      "",
+      "govc cluster.change -drs-enabled -drs-mode fullyAutomated -ha-enabled /DC0/host/DC0_C0",
+      "",
+      "govc vm.create -c 2 -m 4096 -g ubuntu64Guest -net \"VM Network\" -ds LocalDS_0 \\",
+      "  -pool /DC0/host/DC0_C0/Resources -host /DC0/host/DC0_C0/DC0_C0_H0 -on=false web01",
+      "govc vm.power -on web01",
+      "# Powering on VirtualMachine:vm-75... OK",
+      "govc datastore.ls -ds LocalDS_0 web01   # a VM is a folder of files on a datastore",
+      "# vmware.log",
+      "# web01.nvram",
+      "# web01.vmx",
+      "",
+      "govc vm.migrate -host /DC0/host/DC0_C0/DC0_C0_H1 web01   # vMotion while it runs",
+      "# migrating VirtualMachine:vm-75... OK",
+      "govc vm.info web01",
+      "#   Power state:  poweredOn",
+      "#   Host:         DC0_C0_H1",
+      "",
+      "docker stop vcsim"
+    ]
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "What vCenter adds to a cluster of ESXi hosts",
+      "intro": "The optional vCenter Server components in Broadcom’s vSphere 8.0 documentation, plus vSAN. None of them are available with the free ESXi license.",
+      "items": [
+        { "name": "vMotion", "tag": "live migration", "text": "Moves a running VM from one ESXi host to another without interrupting it." },
+        { "name": "Storage vMotion", "tag": "live migration", "text": "Moves a running VM’s disks and configuration file from one datastore to another." },
+        { "name": "vSphere HA", "tag": "availability", "text": "When a host fails, restarts the VMs that were running on it on other hosts in the cluster." },
+        { "name": "DRS", "tag": "scheduling", "text": "Balances resource use and power consumption across the hosts and resource pools of a cluster." },
+        { "name": "Fault Tolerance", "tag": "availability", "text": "Keeps a secondary VM running in step with the primary, for continuous availability." },
+        { "name": "vSAN", "tag": "storage", "text": "Built into the ESXi kernel: pools the local disks of the cluster’s hosts into one shared datastore. Licensed per TiB of raw capacity." }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "How the licensing changed under Broadcom",
+      "corner": "",
+      "columns": ["What happened", "Source"],
+      "rows": [
+        { "label": "Nov 22, 2023", "values": ["Broadcom completes its acquisition of VMware.", "Broadcom press release"] },
+        { "label": "Dec 11, 2023", "values": ["End of sale of perpetual licenses and of support renewals for them; products become subscriptions or term licenses, mainly the VCF and vSphere Foundation bundles.", "Broadcom (Krish Prasad) post"] },
+        { "label": "From 2024", "values": ["VCF and vSphere Foundation are licensed per physical core, at least 16 cores per CPU.", "Broadcom KB 313548"] },
+        { "label": "Feb 2024", "values": ["The free ESXi hypervisor is marked end of general availability and removed from the website.", "VMware knowledge base article, as reported by The Register"] },
+        { "label": "Apr 2025", "values": ["A free license returns for ESXi 8.0 Update 3e: 2 CPUs per host, 8 vCPUs per VM, no vCenter and no support.", "Broadcom KB 399823"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "VMware was founded in 1998 in Palo Alto. Its ESX Server, first released in 2001, ran directly on Intel servers and partitioned each one into several isolated virtual servers, so companies could consolidate many lightly used machines onto fewer ones. Classic ESX booted a Linux-based service console that ran next to the VMkernel and handled management. EMC bought VMware, closing on January 9, 2004.",
+      "On September 10, 2007 VMware announced ESX Server 3i: a 32 MB hypervisor with no general-purpose operating system, designed to be built into servers from Dell, HP, IBM and others. On July 28, 2008 VMware made the stand-alone ESXi free, to get companies of every size started with virtualization. vSphere 4.1 (2010) was the last release with both ESX and ESXi, and from 5.0 in August 2011 only ESXi remained.",
+      "Dell, which owned 81% of VMware by then, spun it off on November 1, 2021, and Broadcom completed its purchase on November 22, 2023. Within weeks Broadcom ended perpetual licenses and folded most products into two bundles, and in February 2024 it withdrew the free hypervisor. VCF 9.0 in June 2025 renamed ESXi back to ESX, though without the old service console, and a free license for ESXi 8.0 Update 3e followed."
+    ],
+    "choices": [
+      { "choice": "Bare metal instead of a hosted product", "why": "ESX Server was built to consolidate data center servers, so it ran directly on the hardware with its own kernel rather than as an application on Windows or Linux." },
+      { "choice": "Dropping the service console", "why": "ESX Server 3i fit in 32 MB, and VMware said that having no general-purpose OS freed it from the work of maintaining one. Management moved to a small local console and remote clients." },
+      { "choice": "A cluster file system for VM storage", "why": "VMFS lets several hosts open the same datastore at once, with on-disk locks so only one runs a given VM, so any host in a cluster can take over a VM’s files." },
+      { "choice": "Bundles and subscriptions only", "why": "Broadcom said customers and partners found VMware’s offers too complex, and that subscriptions were already the industry standard; it cut the lineup to VCF and vSphere Foundation." }
+    ],
+    "timeline": [
+      { "year": "1998", "text": "VMware founded in Palo Alto" },
+      { "year": "2001", "text": "ESX Server, VMware’s first bare-metal hypervisor, ships" },
+      { "year": "2007", "text": "ESX Server 3i: a 32 MB hypervisor with no service console" },
+      { "year": "2008", "text": "ESXi becomes free to download (July 28)" },
+      { "year": "2011", "text": "ESXi 5.0: classic ESX is gone; ESXi only" },
+      { "year": "2023", "text": "Broadcom completes the acquisition (Nov 22) and ends perpetual licenses (Dec 11)" },
+      { "year": "2025", "text": "VCF 9.0 renames ESXi to ESX (June); a free ESXi 8.0 license returns" }
+    ],
+    "sources": [
+      { "label": "VMware press release: ESX Server 1.1 (Jan 2002), with “VMware was founded in 1998”", "url": "https://news.vmware.com/releases/esx11", "archive": "https://web.archive.org/web/20220731054103/https://news.vmware.com/releases/esx11" },
+      { "label": "EMC press release: EMC completes acquisition of VMware (Jan 9, 2004)", "url": "https://www.dell.com/en-us/dt/corporate/newsroom/announcements/2004/01/20040109-2025.htm" },
+      { "label": "VMware press release: VMware unveils next generation hypervisor to be integrated in server hardware, ESX Server 3i (Sep 10, 2007)", "url": "http://www.vmware.com/company/news/releases/esx3i.html", "archive": "https://web.archive.org/web/20080511151811/http://www.vmware.com/company/news/releases/esx3i.html" },
+      { "label": "VMware press release: VMware ESXi hypervisor now free (Jul 28, 2008)", "url": "https://news.vmware.com/releases/esxi_pricing", "archive": "https://web.archive.org/web/20221126165100/https://news.vmware.com/releases/esxi_pricing" },
+      { "label": "VMware vSphere 4.1 release notes: last release with both ESX and ESXi (Jul 2010)", "url": "http://www.vmware.com/support/vsphere4/doc/vsp_esx41_vc41_rel_notes.html", "archive": "https://web.archive.org/web/20100717222921/http://www.vmware.com:80/support/vsphere4/doc/vsp_esx41_vc41_rel_notes.html" },
+      { "label": "Broadcom KB 316595: build numbers and versions of VMware ESXi/ESX (ESX 4.1 GA 2010, ESXi 5.0 GA Aug 2011, ESX 9.x)", "url": "https://knowledge.broadcom.com/external/article/316595/build-numbers-and-versions-of-vmware-esx.html" },
+      { "label": "Dell Technologies: completion of VMware spin-off, 8-K exhibit (Nov 1, 2021)", "url": "https://www.sec.gov/Archives/edgar/data/1571996/000119312521315488/d146470dex991.htm" },
+      { "label": "Broadcom press release: Broadcom completes acquisition of VMware (Nov 22, 2023)", "url": "https://investors.broadcom.com/news-releases/news-release-details/broadcom-completes-acquisition-vmware", "archive": "https://web.archive.org/web/20231123033915/https://investors.broadcom.com/news-releases/news-release-details/broadcom-completes-acquisition-vmware" },
+      { "label": "Krish Prasad, VMware by Broadcom: dramatically simplifies offer lineup and licensing model (Dec 11, 2023)", "url": "https://news.vmware.com/company/vmware-by-broadcom-business-transformation", "archive": "https://web.archive.org/web/20231212093130/https://news.vmware.com/company/vmware-by-broadcom-business-transformation" },
+      { "label": "vNinja (Christian Mohn): ESX to ESXi and back again (Jun 2025)", "url": "https://vninja.net/2025/06/18/esx-to-esxi-and-back-again/" },
+      { "label": "Wikipedia: VMware ESX (service console, ESX and ESXi lineage)", "url": "https://en.wikipedia.org/wiki/VMware_ESXi" }
+    ]
+  },
+  "sources": [
+    { "label": "Broadcom TechDocs, vSphere 8.0: vSphere software components (ESXi, vCenter Server, host agents)", "url": "https://techdocs.broadcom.com/us/en/vmware-cis/vsphere/vsphere/8-0/vcenter-and-host-management/vsphere-concepts-and-features-host-management/vsphere-software-components-host-management.html" },
+    { "label": "Broadcom TechDocs, vSphere 8.0: optional vCenter Server components (vMotion, Storage vMotion, HA, DRS, Fault Tolerance)", "url": "https://techdocs.broadcom.com/us/en/vmware-cis/vsphere/vsphere/8-0/vcenter-and-host-management/vsphere-concepts-and-features-host-management/optional-vcenter-server-components-host-management.html" },
+    { "label": "Broadcom TechDocs, vSphere 8.0: securing ESXi hosts (not built on the Linux kernel; its own kernel)", "url": "https://techdocs.broadcom.com/us/en/vmware-cis/vsphere/vsphere/8-0/vsphere-security/securing-esxi-hosts.html" },
+    { "label": "Broadcom TechDocs, vSphere 8.0: ESXi hardware requirements", "url": "https://techdocs.broadcom.com/us/en/vmware-cis/vsphere/vsphere/8-0/esx-installation-and-setup/installing-and-setting-up-esxi-install/esxi-requirements-install/esxi-hardware-requirements-install.html" },
+    { "label": "Broadcom TechDocs, vSphere 8.0: working with datastores (VMFS, NFS, vSAN, vVols)", "url": "https://techdocs.broadcom.com/us/en/vmware-cis/vsphere/vsphere/8-0/vsphere-storage/working-with-datastores-in-vsphere-storage-environment.html" },
+    { "label": "Broadcom TechDocs, vSphere 8.0: VMFS datastore concepts (cluster file system, on-disk locking)", "url": "https://techdocs.broadcom.com/us/en/vmware-cis/vsphere/vsphere/8-0/vsphere-storage/working-with-datastores-in-vsphere-storage-environment/vsphere-vmfs-datastore-concepts-and-operations.html" },
+    { "label": "Broadcom KB 315382: overview of VMware Tools and Open VM Tools", "url": "https://knowledge.broadcom.com/external/article/315382" },
+    { "label": "Broadcom KB 316595: build numbers and versions of VMware ESXi/ESX (ESX 9.1.1 Sep 2026, ESXi 8.0 Update 3k Jul 2026, vSAN integrated into the kernel)", "url": "https://knowledge.broadcom.com/external/article/316595/build-numbers-and-versions-of-vmware-esx.html" },
+    { "label": "Broadcom KB 410435: unified VCF product releases and versioning", "url": "https://knowledge.broadcom.com/external/article/410435/unified-vcf-product-releases-versioning.html" },
+    { "label": "Broadcom TechDocs: VMware Cloud Foundation 9.1 release notes (May 12, 2026)", "url": "https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-9-0-and-later/9-1/release-notes/vmware-cloud-foundation-9-1-0-0-release-notes.html" },
+    { "label": "Broadcom TechDocs: VMware Cloud Foundation 9.0 release notes (Jun 17, 2025)", "url": "https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-9-0-and-later/9-0/release-notes/vmware-cloud-foundation-90-release-notes.html" },
+    { "label": "Broadcom press release: Broadcom delivers the modern private cloud with VMware Cloud Foundation 9.0 (Jun 17, 2025)", "url": "https://www.nasdaq.com/press-release/broadcom-delivers-modern-private-cloud-vmware-cloud-foundation-90-2025-06-17" },
+    { "label": "Broadcom KB 415405: end of general support for vSphere 7.0 (Oct 2, 2025)", "url": "https://knowledge.broadcom.com/external/article/415405" },
+    { "label": "Broadcom press release: Broadcom completes acquisition of VMware (Nov 22, 2023)", "url": "https://investors.broadcom.com/news-releases/news-release-details/broadcom-completes-acquisition-vmware", "archive": "https://web.archive.org/web/20231123033915/https://investors.broadcom.com/news-releases/news-release-details/broadcom-completes-acquisition-vmware" },
+    { "label": "Krish Prasad, VMware by Broadcom: end of sale of perpetual licenses and SnS renewals; VCF and vSphere Foundation (Dec 11, 2023)", "url": "https://news.vmware.com/company/vmware-by-broadcom-business-transformation", "archive": "https://web.archive.org/web/20231212093130/https://news.vmware.com/company/vmware-by-broadcom-business-transformation" },
+    { "label": "Broadcom KB 313548: counting cores for VCF and vSphere Foundation (16-core minimum per CPU) and TiBs for vSAN", "url": "https://knowledge.broadcom.com/external/article/313548" },
+    { "label": "The Register: Broadcom terminates VMware’s free ESXi hypervisor, quoting KB 2107518 (Feb 13, 2024)", "url": "https://www.theregister.com/2024/02/13/broadcom_ends_free_esxi_vsphere" },
+    { "label": "Broadcom KB 399823: VMware ESXi 8.0 Update 3e now available as a free hypervisor (limits of the free license)", "url": "https://knowledge.broadcom.com/external/article/399823" },
+    { "label": "Terraform Provider for VMware vSphere README (Broadcom, Partner tier)", "url": "https://github.com/vmware/terraform-provider-vsphere" },
+    { "label": "Packer integrations: VMware vSphere plugin (`vsphere-iso`, `vsphere-clone`)", "url": "https://developer.hashicorp.com/packer/integrations/vmware/vsphere" },
+    { "label": "Proxmox press release: Proxmox VE 8.2 with import wizard (Apr 24, 2024)", "url": "https://www.proxmox.com/en/about/company-details/press-releases/proxmox-virtual-environment-8-2" },
+    { "label": "Proxmox wiki: Migrate to Proxmox VE (ESXi import tested from 6.5 to 8.0)", "url": "https://pve.proxmox.com/wiki/Migrate_to_Proxmox_VE" },
+    { "label": "govmomi: vcsim, a vCenter and ESXi API simulator", "url": "https://github.com/vmware/govmomi/blob/main/vcsim/README.md" },
+    { "label": "govmomi: govc usage (`vm.create`, `vm.migrate`, `cluster.change`)", "url": "https://raw.githubusercontent.com/vmware/govmomi/main/govc/USAGE.md" }
+  ],
+  "checked": "2026-10-11"
+}

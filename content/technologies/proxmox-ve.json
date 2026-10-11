@@ -1,0 +1,127 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Proxmox Virtual Environment",
+  "concepts": ["hypervisors", "vm"],
+  "provider": "oss",
+  "vendor": "Proxmox Server Solutions GmbH",
+  "license": "AGPLv3",
+  "website": "https://www.proxmox.com/en/products/proxmox-virtual-environment/overview",
+  "repo": "https://git.proxmox.com/",
+  "summary": "A Debian-based server platform from Vienna that runs KVM virtual machines and LXC containers, with clustering, high availability, Ceph and ZFS storage, backups and a web interface in one free ISO.",
+  "intro": [
+    "Proxmox VE installs from an ISO onto bare metal and turns a Debian server into a virtualization host. It offers two kinds of guest: virtual machines, each a QEMU process accelerated by the kernel’s KVM and managed with `qm`, and Linux containers (LXC), managed with `pct`; since 9.1 (November 2025) a container can also be created from an OCI image. Everything is driven through one REST API whose every call is declared in JSON Schema: the ExtJS web interface is a client of it, and `pvesh` calls it from a root shell. There is no separate management server. Each node can manage the whole cluster, because the configuration of every guest lives in the Proxmox Cluster File System (pmxcfs), a small database-backed file system (at most 128 MiB) that Corosync replicates to all nodes in real time.",
+    "`pvecm` joins servers into a cluster; there’s no fixed node limit, and the docs mention production clusters of over 50 nodes. The built-in HA manager restarts VMs and containers from a failed node elsewhere after watchdog-based fencing; it needs at least three nodes for quorum and shared storage, and typical failover takes about 2 minutes. Disks can live on local ZFS, LVM or directories, or on shared NFS, CIFS, iSCSI, Fibre Channel, Ceph RBD or CephFS, and the web interface can deploy and manage a Ceph cluster on the hypervisor nodes themselves (hyper-converged, at least three nodes). Backups go through the built-in `vzdump` or to Proxmox Backup Server, a separate Rust product (2020) with incremental, deduplicated backups. The SDN stack adds VXLAN and EVPN zones and has been fully supported since 8.1. An import wizard, released in March 2024 and part of 8.2 that April, copies VMs from VMware ESXi 6.5 to 8.0 through ESXi’s public API and can boot them while the disks are still copying.",
+    "The current major version, 9, is based on Debian 13 “Trixie”: 9.0 shipped on August 5, 2025, and 9.2 on May 21, 2026 with Linux 7.0, QEMU 11.0, LXC 7.0, ZFS 2.4 and Ceph Squid or Tentacle. In August 2026 an arm64 build followed, officially supported on NVIDIA Grace and Vera servers. All of it is free under the AGPLv3. What Proxmox sells is a subscription per CPU socket per year (Community €120, Basic €370, Standard €550, Premium €1,100 in October 2026) that unlocks the `pve-enterprise` package repository and, from Basic up, support tickets. A fresh install points at that repository; without a key you switch to `pve-no-subscription`, which Proxmox calls suitable for testing and non-production use, and the web interface shows a “No valid subscription” warning after every login."
+  ],
+  "strengths": [
+    "Everything in one ISO and one web interface: VMs, containers, clustering, HA, Ceph and ZFS storage, backups, firewall and SDN, with no separate management server or appliance",
+    "Every feature is in the free AGPLv3 code; the paid subscription buys a more tested package repository and support, priced per CPU socket rather than per core or by feature edition",
+    "Built from standard Linux parts (Debian, KVM, QEMU, LXC, ZFS, Ceph), so existing Linux skills and any storage Debian supports carry over",
+    "A practical exit from VMware: the import wizard reads VMs straight from ESXi through its API, maps most settings and can start the guest while its data is still being copied",
+    "Everything the GUI does is in a REST API declared in JSON Schema, scriptable from any node with `pvesh`"
+  ],
+  "limits": [
+    "High availability needs at least three nodes and shared or replicated storage, and failover takes about 2 minutes, so Proxmox itself says HA can’t go beyond about 99.999%",
+    "The free path is the `pve-no-subscription` repository, which Proxmox says isn’t recommended for production because its packages are less heavily tested; without a key the default enterprise repository gives update errors and every login shows a subscription warning",
+    "Each major version follows a Debian release and is supported for about three years: Proxmox VE 8 reached end of life in August 2026, so clusters must be upgraded in place every couple of years",
+    "Snapshot support depends on the storage: qcow2 snapshots on file storage such as NFS block the running VM and can take minutes or hours on large disks, and snapshots on shared thick LVM (the usual iSCSI or Fibre Channel setup) arrived only as a technology preview in 9.0",
+    "The ESXi importer can’t read disks on vSAN or encrypted disks, and can’t carry over a VM’s virtual TPM state"
+  ],
+  "worksWith": [
+    { "id": "kvm", "how": "accelerates every VM with" },
+    { "id": "qemu", "how": "runs each virtual machine as a process of" },
+    { "id": "ceph", "how": "deploys and manages, on its own nodes," }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Create, start and stop VMs with `qm`, then call the REST API with `pvesh` (examples from the Proxmox VE docs; run as root on a node)",
+    "source": [
+      "# VM 300: a 4 GB IDE disk on local-lvm, an e1000 NIC and an ISO in the CD drive",
+      "qm create 300 -ide0 local-lvm:4 -net0 e1000 -cdrom local:iso/proxmox-mailgateway_2.1.iso",
+      "qm start 300",
+      "",
+      "# Ask the guest to shut down, then wait at most 40 seconds for it to stop",
+      "qm shutdown 300 && qm wait 300 -timeout 40",
+      "",
+      "# VM 9000 booting from an imported Ubuntu cloud image on a VirtIO SCSI disk",
+      "qm create 9000 --memory 2048 --net0 virtio,bridge=vmbr0 --scsihw virtio-scsi-pci",
+      "qm set 9000 --scsi0 local-lvm:0,import-from=/path/to/bionic-server-cloudimg-amd64.img",
+      "",
+      "# The same API the web interface uses, called directly from the shell",
+      "pvesh get /nodes",
+      "pvesh set cluster/options -console html5"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Where guest disks can live",
+      "intro": "A selection of the storage types in the Proxmox VE storage docs. Shared storage is what lets running VMs live-migrate between nodes and HA restart them elsewhere.",
+      "corner": "Storage",
+      "columns": ["Plugin", "Level", "Shared", "Snapshots"],
+      "rows": [
+        { "label": "ZFS (local)", "values": ["`zfspool`", "file and block (VM disks are zvols)", "no", "yes"] },
+        { "label": "Directory", "values": ["`dir`", "file", "no", "with qcow2 files"] },
+        { "label": "LVM-thin", "values": ["`lvmthin`", "block", "no", "yes"] },
+        { "label": "LVM", "values": ["`lvm`", "block", "only on a shared iSCSI, FC or SAS LUN", "as volume chains since 9.0"] },
+        { "label": "NFS and CIFS", "values": ["`nfs`, `cifs`", "file", "yes", "with qcow2 files"] },
+        { "label": "Ceph RBD", "values": ["`rbd`", "block", "yes", "yes"] },
+        { "label": "CephFS", "values": ["`cephfs`", "file", "yes", "yes"] },
+        { "label": "Proxmox Backup Server", "values": ["`pbs`", "backups only", "yes", "n/a"] }
+      ],
+      "notes": [
+        "BTRFS is also available as a technology preview, and ZFS over iSCSI lets a remote ZFS box serve VM disks."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Martin Maurer and Dietmar Maurer founded Proxmox Server Solutions, based in Vienna, in 2005; its first product was Proxmox Mail Gateway. The virtualization project began in 2007, and Proxmox VE 0.9 came out on April 15, 2008, followed by 1.0, the first stable release, on October 29, 2008. It used KVM for virtual machines and OpenVZ for containers, with live migration for both, but clustering was limited and the interface was a simple server-generated web page. Proxmox says it was among the first companies to offer commercial support for KVM.",
+      "Version 2.0 in March 2012 rebuilt the product around three ideas that still define it: a Corosync cluster with the pmxcfs configuration file system, so every node is a master; a REST API declared in JSON Schema; and a new web interface built on Ext JS 4 that talks to that API. Ceph on the hypervisor nodes followed as a technology preview in 3.2 (2014) and ZFS support in 3.4 (2015). Version 4.0 in October 2015 replaced OpenVZ with LXC and introduced the current HA manager.",
+      "Proxmox Backup Server, written in Rust, came out in 2020. In March 2024 Proxmox added an import wizard for VMware ESXi VMs, which shipped in 8.2 that April. Version 9.0, on Debian 13, followed in August 2025, and in 2026 Proxmox VE 9.2 added dynamic load balancing of HA guests and became available for arm64 servers."
+    ],
+    "choices": [
+      { "choice": "A Debian distribution built from stock open-source parts", "why": "Proxmox uses KVM, QEMU, LXC, ZFS and Ceph instead of writing its own hypervisor or storage, so any storage technology Debian supports can hold VM images and users aren’t tied to one vendor’s stack." },
+      { "choice": "Multi-master clustering on pmxcfs instead of a management server", "why": "Corosync replicates the configuration file system to every node, so any node can manage the whole cluster and there is no central server to fail or to license separately." },
+      { "choice": "API first, with the GUI as a client", "why": "Declaring the whole REST API in JSON Schema in 2.0 let hosting companies and tools integrate Proxmox VE, and made it possible to replace the server-generated pages with a browser application." },
+      { "choice": "Sell repository access and support, not feature editions", "why": "All features stay in the AGPLv3 code. Subscriptions are priced per CPU socket and buy the more tested enterprise repository and support, so a home lab and a paying customer run the same software." }
+    ],
+    "timeline": [
+      { "year": "2005", "text": "Martin and Dietmar Maurer found Proxmox Server Solutions" },
+      { "year": "2008", "text": "0.9 in April, the first public release; 1.0 in October with KVM and OpenVZ" },
+      { "year": "2012", "text": "2.0 in March: Corosync cluster, pmxcfs, REST API and a new web interface" },
+      { "year": "2015", "text": "4.0 in October replaces OpenVZ with LXC and adds the HA manager" },
+      { "year": "2020", "text": "First stable Proxmox Backup Server, written in Rust" },
+      { "year": "2024", "text": "ESXi import wizard in March, shipped in 8.2 in April" },
+      { "year": "2026", "text": "9.2 in May on Linux 7.0; first arm64 release in August" }
+    ],
+    "sources": [
+      { "label": "Proxmox VE Administration Guide: Introduction and project history", "url": "https://pve.proxmox.com/pve-docs/chapter-pve-intro.html" },
+      { "label": "Proxmox VE Roadmap and release history (0.9 to 9.2)", "url": "https://pve.proxmox.com/wiki/Roadmap" },
+      { "label": "Proxmox: Our story (founded 2005 by Martin and Dietmar Maurer; Proxmox Backup Server in 2020)", "url": "https://www.proxmox.com/en/about/about-us/company" },
+      { "label": "Proxmox: Contact (Proxmox Server Solutions GmbH, Vienna)", "url": "https://www.proxmox.com/en/about/contact" },
+      { "label": "Proxmox forum: New import wizard available for migrating VMware ESXi based virtual machines (Mar 27, 2024)", "url": "https://forum.proxmox.com/threads/new-import-wizard-available-for-migrating-vmware-esxi-based-virtual-machines.144023/" },
+      { "label": "Proxmox VE pricing (subscriptions per CPU socket, no feature editions)", "url": "https://www.proxmox.com/en/products/proxmox-virtual-environment/pricing" }
+    ]
+  },
+  "sources": [
+    { "label": "Proxmox VE Administration Guide: Introduction (KVM and LXC, pmxcfs, REST API, storage types, AGPLv3)", "url": "https://pve.proxmox.com/pve-docs/chapter-pve-intro.html" },
+    { "label": "Proxmox VE Administration Guide: Cluster Manager (Corosync, no fixed node limit, over 50 nodes reported)", "url": "https://pve.proxmox.com/pve-docs/chapter-pvecm.html" },
+    { "label": "Proxmox VE Administration Guide: Proxmox Cluster File System (pmxcfs)", "url": "https://pve.proxmox.com/pve-docs/chapter-pmxcfs.html" },
+    { "label": "Proxmox VE Administration Guide: High Availability (three nodes, about 2 minutes failover, watchdog fencing)", "url": "https://pve.proxmox.com/pve-docs/chapter-ha-manager.html" },
+    { "label": "Proxmox VE Administration Guide: Storage (storage types table, snapshot notes)", "url": "https://pve.proxmox.com/pve-docs/chapter-pvesm.html" },
+    { "label": "Proxmox VE Administration Guide: Host system administration (package repositories)", "url": "https://pve.proxmox.com/pve-docs/chapter-sysadmin.html" },
+    { "label": "Proxmox VE Administration Guide: QEMU/KVM virtual machines (`qm` examples, cloud-init image import)", "url": "https://pve.proxmox.com/pve-docs/chapter-qm.html" },
+    { "label": "Proxmox VE docs: `pvesh` manual page (examples)", "url": "https://pve.proxmox.com/pve-docs/pvesh.1.html" },
+    { "label": "Proxmox VE Administration Guide: Deploy hyper-converged Ceph cluster (at least three nodes)", "url": "https://pve.proxmox.com/pve-docs/chapter-pveceph.html" },
+    { "label": "Proxmox VE Administration Guide: Software-Defined Network", "url": "https://pve.proxmox.com/pve-docs/chapter-pvesdn.html" },
+    { "label": "Proxmox VE Administration Guide: FAQ (support lifecycle, Proxmox VE 8 end of life August 2026)", "url": "https://pve.proxmox.com/pve-docs/chapter-pve-faq.html" },
+    { "label": "Proxmox VE Roadmap (9.0, 9.1, 9.2 and the arm64 release)", "url": "https://pve.proxmox.com/wiki/Roadmap" },
+    { "label": "Proxmox VE wiki: Migrate to Proxmox VE (import sources, ESXi 6.5 to 8.0, vSAN, encryption and vTPM limits)", "url": "https://pve.proxmox.com/wiki/Migrate_to_Proxmox_VE" },
+    { "label": "Proxmox forum: New import wizard for VMware ESXi (Mar 27, 2024)", "url": "https://forum.proxmox.com/threads/new-import-wizard-available-for-migrating-vmware-esxi-based-virtual-machines.144023/" },
+    { "label": "Proxmox VE pricing (Community, Basic, Standard, Premium per CPU socket per year)", "url": "https://www.proxmox.com/en/products/proxmox-virtual-environment/pricing" },
+    { "label": "proxmox-widget-toolkit source: `checked_command` and the “No valid subscription” dialog", "url": "https://git.proxmox.com/?p=proxmox-widget-toolkit.git;a=blob;f=src/Utils.js;hb=HEAD" },
+    { "label": "pve-manager source: subscription check after login (`Workspace.js`)", "url": "https://git.proxmox.com/?p=pve-manager.git;a=blob;f=www/manager6/Workspace.js;hb=HEAD" }
+  ],
+  "checked": "2026-10-11"
+}

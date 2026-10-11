@@ -1,0 +1,122 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Xen Project hypervisor",
+  "concepts": ["hypervisors", "vm"],
+  "provider": "oss",
+  "vendor": "Xen Project (Linux Foundation), started at the University of Cambridge",
+  "license": "GPL-2.0 (version 2 only)",
+  "website": "https://xenproject.org/",
+  "repo": "https://github.com/xen-project/xen",
+  "summary": "The open-source type-1 hypervisor from Cambridge that ran the first Amazon EC2 instances: a small microkernel-style core that boots first, with drivers and management in a privileged VM called dom0.",
+  "intro": [
+    "Xen boots straight from the bootloader and handles only CPU, memory, timers and interrupts. It is about 1 MB, under 300,000 lines of code on x86 and under 65,000 on Arm, and knows nothing about disks or networks. Those live in domain 0 (`dom0`), the first VM started, usually a Linux kernel: it holds the real device drivers, the backend half of every virtual disk and network card, the XenStore configuration database and the toolstack. Ordinary guests are unprivileged domains (`domU`) with no direct access to hardware. A guest’s frontend driver talks to its backend in dom0 over shared-memory rings, and drivers can also move into separate driver domains so that a crashed driver doesn’t take the host down.",
+    "On x86 a guest runs in one of three modes, set with `type=` in its config file. PV (paravirtualized) guests run a Xen-aware kernel and need no hardware virtualization support. HVM guests use Intel VT or AMD-V and a QEMU device model, normally in dom0, that emulates a PC (BIOS, IDE, VGA, USB, network card), so unmodified Windows runs; they switch to PV drivers when the guest has them. PVH guests use the hardware extensions but no QEMU, with PV drivers for I/O; it is the default on Arm, where there is a single mode. The default toolstack is `xl`, a command-line tool built on the libxl (libxenlight) library, which reads one config file per guest. libvirt and XAPI are the main alternatives. XAPI is the stack behind XenServer and XCP-ng, the two full platforms built on Xen. Citrix agreed to buy XenSource in 2007 and sold XenServer, later renamed Citrix Hypervisor. After Cloud Software Group took over Citrix it was relaunched as XenServer 8 in March 2024, and in 2026 it moved back under the Citrix brand with XenServer 9 (on Xen 4.21). XCP-ng is a community-driven fork of XenServer started by Olivier Lambert.",
+    "Xen 4.22, tagged in July 2026, is the latest release. New versions arrive roughly every 6 to 9 months (4.20 in March 2025, 4.21 in November 2025), and from 4.20 on each gets three years of full support plus two years of security fixes. Much current work targets Arm, embedded and automotive systems: “dom0less” boots several guests straight from a device tree, in parallel, with no control domain at all, and the project is working toward functional safety certification with MISRA C checks in CI and an Armv8-R port for chips without an MMU. Amazon EC2 ran on Xen from its first instances until AWS moved new instance types to its KVM-based Nitro hypervisor in 2017. Since 2022 AWS has also run older instance types on Nitro hardware, and an engineer on Amazon’s EC2 Nitro team has described emulating Xen in KVM and QEMU for customer VMs that “still think they’re running under real Xen”."
+  ],
+  "strengths": [
+    "A small hypervisor with the drivers outside it: device drivers live in dom0 or driver domains, and an HVM guest’s QEMU can run in its own stub domain rather than in dom0",
+    "Runs where a full Linux host doesn’t fit: Arm boards, automotive and real-time systems, with dom0less static partitioning, cache coloring and work toward safety certification",
+    "Long, predictable maintenance: from 4.20, five years of security support for every release, without separate LTS branches",
+    "Long production history and broad guest support: it ran the first EC2 instances, powers XenServer and XCP-ng, and Linux and the BSDs ship Xen PV drivers upstream"
+  ],
+  "limits": [
+    "Nothing works without dom0: it is a full OS with the drivers, backends, toolstack and (for HVM) QEMU, so it is a large trusted component you must patch and size",
+    "Less mainstream than KVM on Linux servers: RHEL stopped including the hypervisor after RHEL 5, and AWS moved new EC2 instance types to its KVM-based Nitro hypervisor in 2017",
+    "Many moving parts to choose between: three x86 guest modes, several toolstacks, and with `xl` you set up host networking (such as a `xenbr0` bridge) yourself and have no image import or export",
+    "RISC-V and PowerPC ports are still early: the 4.22 notes say RISC-V guest virtualization isn’t production-ready yet"
+  ],
+  "worksWith": [
+    { "id": "qemu", "how": "emulates HVM guest devices with" },
+    { "id": "ec2", "how": "hosted the first instances of" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Define a PVH guest and start it with xl, from dom0 (written from the Xen docs, not run here)",
+    "source": [
+      "# /etc/xen/web1.cfg, adapted from Xen's tools/examples/xlexample.pvhlinux",
+      "cat > /etc/xen/web1.cfg <<'EOF'",
+      "type   = \"pvh\"",
+      "name   = \"web1\"",
+      "kernel = \"/boot/vmlinuz\"",
+      "extra  = \"root=/dev/xvda1\"",
+      "memory = 1024",
+      "vcpus  = 2",
+      "vif    = [ 'bridge=xenbr0' ]",
+      "disk   = [ '/dev/vg0/web1,raw,xvda,rw' ]",
+      "EOF",
+      "",
+      "xl create -c /etc/xen/web1.cfg   # create the domain and attach to its console",
+      "",
+      "# from another shell in dom0",
+      "xl list                          # Domain-0 and web1: ID, memory, vCPUs, state, CPU time",
+      "xl shutdown -w web1              # ask the guest to shut down, and wait for it"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Guest types on x86",
+      "intro": "Chosen per guest with `type=` in the xl config file. On Arm there is one mode, which works like PVH.",
+      "corner": "Mode",
+      "columns": ["Needs VT-x or AMD-V", "Device emulation", "Guest kernel", "Typical use"],
+      "rows": [
+        { "label": "PV", "values": ["No", "None: PV drivers only", "Must be Xen-aware (Linux since 2.6.24, NetBSD, FreeBSD)", "Old hardware, old images, unikernels, Xen inside another VM without nested virtualization"] },
+        { "label": "HVM", "values": ["Yes", "QEMU emulates a PC (BIOS, IDE, VGA, USB, NIC); PV drivers used when present", "Any, including unmodified Windows", "General-purpose Linux, Windows and BSD guests"] },
+        { "label": "PVH", "values": ["Yes", "None: no QEMU, PV drivers for I/O", "Must support PVH (Linux 4.11 or later)", "Lightweight modern Linux guests; the default on Arm"] }
+      ],
+      "notes": ["`type=` replaced the older `builder=` option in Xen 4.10."]
+    }
+  ],
+  "history": {
+    "story": [
+      "In the early 2000s a team at the University of Cambridge Computer Laboratory wanted to host other people’s operating systems on shared servers at ISPs and Internet exchanges: the XenoServer project, where mutually untrusting users would pay for the VMs they ran. That needed a virtual machine monitor with strong isolation and low overhead, and x86 made that hard: some privileged instructions failed silently instead of trapping, so VMware had to rewrite guest code on the fly. Paul Barham, Boris Dragovic, Keir Fraser, Steven Hand, Tim Harris, Alex Ho, Rolf Neugebauer, Ian Pratt and Andrew Warfield described their answer at SOSP in October 2003 in “Xen and the Art of Virtualization”. Xen showed the guest an idealized machine that operating systems were ported to, aimed at about 100 VMs per server, and cost at most a few percent of performance.",
+      "The founders of XenSource came out of that Cambridge work, and Citrix agreed to buy the company in August 2007 for about $500 million. Xen also became the hypervisor of the first Amazon EC2 instances, launched in 2006. On April 15, 2013 Xen moved to the Linux Foundation as a Collaborative Project, with twelve founding members including Amazon Web Services, AMD, Citrix, Google, Intel and Oracle.",
+      "Once Intel and AMD added hardware virtualization to their CPUs (2005–2006), HVM guests became generally faster than PV ones, and Red Hat stopped including the Xen hypervisor after RHEL 5. AWS launched its KVM-based Nitro hypervisor with the C5 instances in 2017, and from 2022 began running older Xen instance types on Nitro hardware. Xen’s growth has moved toward Arm, embedded and automotive systems, with dom0less, safety-certification work and five-year security support from Xen 4.20."
+    ],
+    "choices": [
+      { "choice": "Paravirtualization instead of faithful hardware emulation", "why": "x86 wasn’t built to be virtualized, and emulating it exactly was slow and complex. Changing the guest kernel, but not the application ABI, made Xen fast on 2003 hardware, and the PV interfaces later came back as the drivers that HVM and PVH guests use." },
+      { "choice": "Keep policy out of the hypervisor", "why": "The paper’s goal was to separate policy from mechanism: Xen does scheduling, memory and access checks, and a privileged Domain0 runs the management software that decides what to create and how to share resources. That kept the hypervisor small, and it is why a Xen host still needs dom0." },
+      { "choice": "Simple virtual devices over shared-memory rings, with the drivers in a VM", "why": "Instead of emulating real network cards and disks, Xen gave guests clean device abstractions and moved data through asynchronous rings and event channels. Real drivers stayed in dom0 (or driver domains), so the hypervisor never needed them." },
+      { "choice": "PVH: hardware virtualization without QEMU", "why": "HVM needed a QEMU device model per guest, and PV needed a heavily modified guest kernel. The project wanted the best of both and a simpler interface to the OS: PVH (fully supported since Xen 4.10) uses the hardware extensions for memory and privileged instructions and PV drivers for I/O, the same model Xen already used on Arm." }
+    ],
+    "timeline": [
+      { "year": "2003", "text": "“Xen and the Art of Virtualization” presented at SOSP by the Cambridge team" },
+      { "year": "2006", "text": "Amazon EC2 launches, its first instances running as Xen PV guests" },
+      { "year": "2007", "text": "Citrix agrees to buy XenSource for about $500 million (August 15)" },
+      { "year": "2013", "text": "Xen becomes a Linux Foundation Collaborative Project (April 15)" },
+      { "year": "2017", "text": "AWS introduces Nitro, a KVM-based hypervisor, for new EC2 instance types" },
+      { "year": "2022", "text": "AWS starts running older Xen-era EC2 instance types on Nitro hardware" },
+      { "year": "2026", "text": "Xen 4.22 released; releases from 4.20 on get five years of security support" }
+    ],
+    "sources": [
+      { "label": "Barham et al.: Xen and the Art of Virtualization (SOSP 2003)", "url": "https://www.cl.cam.ac.uk/research/srg/netos/papers/2003-xensosp.pdf" },
+      { "label": "Citrix press release (SEC 8-K exhibit): Citrix to acquire XenSource (Aug 2007)", "url": "https://www.sec.gov/Archives/edgar/data/0000877890/000115752307008429/a5472393ex99_1.txt" },
+      { "label": "Linux Foundation: Xen to become Linux Foundation Collaborative Project (Apr 2013)", "url": "https://www.linuxfoundation.org/press/press-release/xen-to-become-linux-foundation-collaborative-project" },
+      { "label": "AWS What’s New: Announcing Amazon EC2 beta (Aug 2006)", "url": "https://aws.amazon.com/about-aws/whats-new/2006/08/24/announcing-amazon-elastic-compute-cloud-amazon-ec2---beta/" },
+      { "label": "Brendan Gregg: AWS EC2 Virtualization 2017, Introducing Nitro (Nov 2017)", "url": "https://www.brendangregg.com/blog/2017-11-29/aws-ec2-virtualization-2017.html" },
+      { "label": "AWS What’s New: Nitro System supports previous generation instances (Nov 2022)", "url": "https://aws.amazon.com/about-aws/whats-new/2022/11/aws-nitro-system-supports-previous-generation-instances/" },
+      { "label": "Xen Project wiki: Xen Project Software Overview (guest types, PVH history)", "url": "https://wiki.xenproject.org/wiki/Xen_Project_Software_Overview" },
+      { "label": "Xen Project blog: Xen 4.22 released (Aug 2026)", "url": "https://xenproject.org/blog/xen-4-22-release/" }
+    ]
+  },
+  "sources": [
+    { "label": "Xen Project wiki: Xen Project Software Overview (architecture, dom0, guest types, toolstacks, I/O, release cadence)", "url": "https://wiki.xenproject.org/wiki/Xen_Project_Software_Overview" },
+    { "label": "Xen docs: xl.cfg(5), guest types and device model options", "url": "https://xenbits.xen.org/docs/unstable/man/xl.cfg.5.html" },
+    { "label": "Xen docs: xl(1), the xl management tool based on libxenlight", "url": "https://xenbits.xen.org/docs/unstable/man/xl.1.html" },
+    { "label": "Xen source: COPYING (GPL version 2 only)", "url": "https://github.com/xen-project/xen/blob/master/COPYING" },
+    { "label": "Xen source: example PVH guest config, tools/examples/xlexample.pvhlinux", "url": "https://github.com/xen-project/xen/blob/master/tools/examples/xlexample.pvhlinux" },
+    { "label": "Xen source: docs/features/dom0less.pandoc", "url": "https://github.com/xen-project/xen/blob/master/docs/features/dom0less.pandoc" },
+    { "label": "Xen release tags on GitLab (4.20.0 March 2025, 4.21.0 November 2025, 4.22.0 July 2026)", "url": "https://gitlab.com/xen-project/xen/-/tags" },
+    { "label": "Xen Project blog: Xen 4.22 released, five-year support policy, Arm, RISC-V (Aug 2026)", "url": "https://xenproject.org/blog/xen-4-22-release/" },
+    { "label": "Xen Project blog: Xen 4.20 released, MISRA C, safety requirements, LLC coloring (Mar 2025)", "url": "https://xenproject.org/blog/xen-project-4-20-oss-virtualization/" },
+    { "label": "XCP-ng docs: About XCP-ng (fork of XenServer)", "url": "https://docs.xcp-ng.org/project/about/" },
+    { "label": "XenServer 9 docs: What’s new (Xen 4.21)", "url": "https://docs.xenserver.com/en-us/xenserver/9/whats-new.html" },
+    { "label": "The Register: XenServer 8, a rebrand of Citrix Hypervisor 8.2 CU1 (Mar 2024)", "url": "https://www.theregister.com/2024/03/27/xenserver_8_returns/" },
+    { "label": "The Register: Citrix says it’s back in server virtualization with XenServer 9 (Jul 2026)", "url": "https://www.theregister.com/virtualization/2026/07/01/citrix-says-its-back-as-a-mainstream-server-virtualization-player-that-wont-send-scary-bills/5264838" },
+    { "label": "Brendan Gregg: AWS EC2 Virtualization 2017, Introducing Nitro (Nov 2017)", "url": "https://www.brendangregg.com/blog/2017-11-29/aws-ec2-virtualization-2017.html" },
+    { "label": "AWS What’s New: Nitro System supports previous generation instances (Nov 2022)", "url": "https://aws.amazon.com/about-aws/whats-new/2022/11/aws-nitro-system-supports-previous-generation-instances/" },
+    { "label": "Kernel Recipes 2025: David Woodhouse (AWS EC2 Nitro), Virtual Xen: hosting Xen guests on KVM", "url": "https://kernel-recipes.org/en/2025/schedule/virtual-xen-using-linux-kvm-to-host-xen-guests-without-them-noticing/", "archive": "https://web.archive.org/web/20260615043721/https://kernel-recipes.org/en/2025/schedule/virtual-xen-using-linux-kvm-to-host-xen-guests-without-them-noticing/" },
+    { "label": "QEMU docs: Xen HVM guest support on KVM", "url": "https://www.qemu.org/docs/master/system/i386/xen.html" }
+  ],
+  "checked": "2026-10-11"
+}

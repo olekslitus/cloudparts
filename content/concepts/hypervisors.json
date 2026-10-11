@@ -1,0 +1,312 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Hypervisors",
+  "category": "compute",
+  "order": 15,
+  "summary": "The layer that splits one physical computer into several virtual ones, each with its own CPUs, memory, devices and kernel.",
+  "howItWorks": "A hypervisor, also called a virtual machine monitor (VMM), gives each guest virtual CPUs, a slice of memory and a set of devices. Ordinary guest instructions run directly on the real CPU. When a guest does something only the owner of the machine may do, such as touching a device or changing page tables, the CPU stops it and hands control to the hypervisor: a “VM exit”. The hypervisor emulates the operation, then resumes the guest. Modern CPUs build this in (Intel VT-x and AMD-V on x86, exception level EL2 on Arm), and a second layer of page tables (Intel EPT, AMD NPT) maps each guest’s memory onto real memory in hardware. Devices come in three flavors: fully emulated copies of real hardware, paravirtual devices such as virtio that the guest knows are virtual, and real devices passed straight through to one guest.",
+  "analogy": "A stage manager during a play. The actors (guests) perform on their own, and the audience never sees the manager. But the moment an actor needs a prop, a light change or a door that’s locked, the play pauses for a beat, the manager sorts it out, and the scene carries on.",
+  "useWhen": [
+    "Running several operating systems, or several kernel versions, on one physical server",
+    "Isolating tenants who don’t trust each other: each one gets its own kernel and a hardware-enforced boundary",
+    "Building your own private cloud or lab, e.g. Proxmox VE on KVM",
+    "Moving running workloads off a host for maintenance without restarting them (live migration)"
+  ],
+  "avoidWhen": [
+    "You only need to separate processes you trust on one kernel: containers start faster and share memory more easily",
+    "Latency-critical, I/O-heavy work where every VM exit hurts: use bare metal, or pass the device straight through",
+    "Inside a cloud VM that doesn’t expose virtualization extensions: on AWS nested virtualization works only on some instance families, and Compute Engine allows only KVM as the nested hypervisor"
+  ],
+  "example": "A provider must patch the host kernel under 40 running VMs without rebooting customers. It live-migrates each VM to another host: memory is copied while the guest keeps running, pages the guest changes are sent again, and finally the guest pauses for a short “blackout” while the last state moves. Compute Engine does this during routine host maintenance, and its docs warn that the guest clock can appear to jump forward by up to 5 seconds during blackout. The original live-migration paper, built on Xen in 2005, measured downtimes as low as 60 ms.",
+  "providers": {
+    "aws": "Nitro Hypervisor (built on KVM) under EC2; Xen on older instance types; Firecracker under Lambda",
+    "gcp": "Compute Engine’s security-hardened, KVM-based hypervisor",
+    "azure": "The Azure hypervisor, based on Windows Hyper-V",
+    "oss": "KVM, Xen, QEMU, Cloud Hypervisor, Firecracker, Proxmox VE, VirtualBox, bhyve"
+  },
+  "snippet": {
+    "lang": "bash",
+    "source": [
+      "# Run in a Debian 12 container on an Arm Mac: no /dev/kvm, so no hardware acceleration",
+      "apt-get install -y qemu-system-x86 qemu-system-arm",
+      "",
+      "# Which accelerators can each QEMU binary use?",
+      "qemu-system-aarch64 -accel help",
+      "# Accelerators supported in QEMU binary:",
+      "# kvm",
+      "# tcg",
+      "qemu-system-x86_64 -accel help        # an x86 guest on an Arm host can only be emulated",
+      "# Accelerators supported in QEMU binary:",
+      "# tcg",
+      "",
+      "# KVM needs the kernel’s /dev/kvm device, which this container doesn’t have",
+      "qemu-system-aarch64 -M virt -accel kvm -nographic",
+      "# Could not access KVM kernel module: No such file or directory",
+      "# qemu-system-aarch64: -accel kvm: failed to initialize kvm: No such file or directory",
+      "",
+      "# So boot an x86 Linux guest (Alpine’s netboot kernel) with TCG, QEMU’s software CPU",
+      "qemu-system-x86_64 -accel tcg -m 512 -nographic -no-reboot \\",
+      "  -kernel vmlinuz-virt -initrd initramfs-virt -append \"console=ttyS0 panic=-1\"",
+      "# [    0.000000] DMI: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.16.2-debian-1.16.2-1 04/01/2014",
+      "# [    0.072501] Booting paravirtualized kernel on bare hardware",
+      "# [    3.005845] e1000 0000:00:03.0 eth0: Intel(R) PRO/1000 Network Connection",
+      "# The guest sees an emulated 1996 chipset and an emulated Intel network card.",
+      "# Under KVM, the same kernel line reads “on KVM” instead of “on bare hardware”.",
+      "",
+      "# Add -nic user,model=virtio-net-pci and the card becomes a paravirtual virtio device",
+      "# (the virtio spec: PCI vendor 0x1af4 with a device ID from 0x1000 to 0x107f is a virtio device):",
+      "# [    0.953372] pci 0000:00:03.0: [1af4:1000] type 00 class 0x020000 conventional PCI endpoint",
+      "",
+      "# On a Linux host, check for hardware support, then swap -accel tcg for -accel kvm",
+      "grep -cE 'vmx|svm' /proc/cpuinfo      # x86: more than 0 means VT-x or AMD-V",
+      "ls -l /dev/kvm"
+    ]
+  },
+  "related": ["vm", "microvm", "containers"],
+  "diagram": {
+    "caption": "Most guest instructions run straight on the CPU and never appear here. Each packet is a VM exit. The hypervisor in the host kernel handles timer and page-fault exits itself and resumes the guest quickly; network and disk exits go up to device models in the VMM process, so they take longer to come back.",
+    "h": 270,
+    "zones": [
+      { "x": 205, "y": 30, "w": 230, "h": 225, "label": "Host kernel · hypervisor" },
+      { "x": 460, "y": 30, "w": 280, "h": 225, "label": "User space · VMM device models" }
+    ],
+    "nodes": [
+      {
+        "id": "a",
+        "x": 95,
+        "y": 60,
+        "label": "VM A",
+        "sub": "Linux guest",
+        "emit": { "every": 650, "jitter": 0.5, "req": true, "types": ["timer", "fault", "net", "disk"], "colorByType": { "timer": 0, "fault": 1, "net": 2, "disk": 3 } },
+        "out": ["kvm"]
+      },
+      {
+        "id": "b",
+        "x": 95,
+        "y": 140,
+        "label": "VM B",
+        "sub": "Windows guest",
+        "emit": { "every": 800, "jitter": 0.5, "req": true, "types": ["timer", "fault", "disk"], "colorByType": { "timer": 0, "fault": 1, "net": 2, "disk": 3 } },
+        "out": ["kvm"]
+      },
+      {
+        "id": "c",
+        "x": 95,
+        "y": 220,
+        "label": "VM C",
+        "sub": "Linux guest",
+        "emit": { "every": 900, "jitter": 0.5, "req": true, "types": ["timer", "net"], "colorByType": { "timer": 0, "fault": 1, "net": 2, "disk": 3 } },
+        "out": ["kvm"]
+      },
+      {
+        "id": "kvm",
+        "x": 320,
+        "y": 95,
+        "label": "Hypervisor",
+        "sub": "VM exit · decode reason",
+        "tech": "kvm",
+        "route": "type",
+        "rules": { "timer": ["inkernel"], "fault": ["inkernel"], "net": ["net"], "disk": ["blk"] },
+        "out": ["inkernel", "net", "blk"]
+      },
+      {
+        "id": "inkernel",
+        "x": 320,
+        "y": 205,
+        "label": "In-kernel handlers",
+        "sub": "timers · page faults",
+        "mode": "reply",
+        "delay": 60
+      },
+      {
+        "id": "net",
+        "x": 600,
+        "y": 95,
+        "label": "Network device",
+        "sub": "virtio-net or emulated NIC",
+        "mode": "reply",
+        "delay": 320
+      },
+      {
+        "id": "blk",
+        "x": 600,
+        "y": 195,
+        "label": "Disk device",
+        "sub": "virtio-blk",
+        "mode": "reply",
+        "delay": 380
+      }
+    ]
+  },
+  "sections": [
+    {
+      "type": "text",
+      "title": "Inside a VM exit",
+      "body": [
+        "The classic recipe is “trap and emulate”: run the guest’s kernel with reduced privileges, let every privileged instruction fault, and emulate it in the monitor. Popek and Goldberg showed in 1974 that this works on any CPU where every instruction that can reveal or change the machine’s state is also privileged. The original x86 broke that rule: some sensitive instructions silently behaved differently instead of trapping. VMware worked around it in 1999 by rewriting guest kernel code on the fly (binary translation), and Xen in 2003 by modifying the guest kernel to call the hypervisor directly (paravirtualization).",
+        "Intel VT-x and AMD-V fixed the hardware. They add a guest mode with all the usual privilege levels, plus a control structure where the hypervisor says which events should force an exit. On an exit the CPU saves the guest’s state, loads the hypervisor’s, and reports why it stopped, e.g. an I/O port access with its port number, width and direction. The hypervisor handles it and re-enters the guest. AMD’s SVM (AMD-V) and Intel’s VT-x work the same way. Exits are expensive: on a Pentium 4, VMware measured 2,030 cycles to trap and emulate one `rdtsc` instruction, against 216 cycles for its translated version. First-generation VT-x and AMD-V also left memory virtualization to software (“shadow” page tables), which is why second-level address translation followed: EPT and NPT let the CPU walk the guest’s page tables and the hypervisor’s guest-physical to host-physical map in hardware.",
+        "On Linux the loop is visible in KVM’s API. A user-space program opens `/dev/kvm`, creates a VM and its vCPUs, maps guest memory from its own address space, and calls `KVM_RUN`. The kernel enters guest mode and handles many exits itself, such as external interrupts and page faults. When the guest touches an I/O port or a memory-mapped device KVM can’t satisfy, `KVM_RUN` returns with `KVM_EXIT_IO` or `KVM_EXIT_MMIO`, and the user-space VMM emulates the device before calling `KVM_RUN` again. On 64-bit Arm the hypervisor runs at exception level EL2, and Linux asks to be booted there to use the virtualization extensions."
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Three ways to give a guest a device",
+      "corner": "Approach",
+      "columns": ["How it works", "What the guest needs", "Trade-off"],
+      "rows": [
+        {
+          "label": "Full emulation",
+          "values": [
+            "The VMM imitates a real piece of hardware, register by register, e.g. the Intel e1000 network card in QEMU’s default PC",
+            "Nothing special: the driver for the real card",
+            "Runs any OS, but each register access is a VM exit, and emulating I/O means leaving guest mode, which is costly"
+          ]
+        },
+        {
+          "label": "Paravirtual (virtio, Hyper-V VMBus)",
+          "values": [
+            "The device is designed for virtual machines: the guest driver puts requests on queues (virtqueues) that the host side processes",
+            "A virtio driver, or Hyper-V’s integration services",
+            "Skips imitating real hardware, which is more efficient, and gives one standard interface; the guest must have the driver"
+          ]
+        },
+        {
+          "label": "Passthrough (VFIO, SR-IOV)",
+          "values": [
+            "A real PCI device is handed to one guest, with the IOMMU (Intel VT-d, AMD-Vi) confining its DMA to that guest’s memory. SR-IOV splits one card into several virtual functions",
+            "The normal bare-metal driver for that device",
+            "The lowest latency and highest bandwidth, but the device (or virtual function) belongs to one VM and needs IOMMU support"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Type 1, type 2, and why the line blurs",
+      "body": [
+        "Robert Goldberg’s 1973 Harvard thesis split monitors into two kinds. In Type I, “the VMM runs on a bare machine”. In Type II, “the VMM runs on an extended host, under the host operating system”. ESXi and Xen are the textbook type 1 examples: ESXi installs on the physical server as the platform for VMs, and Xen calls itself a type-1 or bare-metal hypervisor. VirtualBox’s manual calls it a hosted, type 2 hypervisor that needs an existing OS.",
+        "Real systems mix the two. Xen boots first, but a privileged first guest, Domain0, runs the management software. Hyper-V sits directly on the hardware, yet it needs a root partition running Windows, which owns the physical devices and serves the other partitions’ device requests over VMBus. KVM turns the Linux kernel itself into the hypervisor: each VM is an ordinary process and each vCPU a thread, so `top` and `kill` work on them. Apple’s Hypervisor framework does the same on macOS, from a sandboxed user-space app.",
+        "That is why people now separate the hypervisor (the privileged part that runs guests on the CPU and isolates memory) from the VMM (the user-space process that sets up the VM and emulates its devices). On Linux, KVM is the hypervisor and QEMU, Firecracker or Cloud Hypervisor is the VMM. QEMU can also run with no hypervisor at all, emulating the whole CPU in software with TCG, as in the snippet above. Cloud Hypervisor runs on either KVM or the Microsoft Hypervisor (MSHV)."
+      ]
+    },
+    {
+      "type": "table",
+      "title": "The main hypervisors and VMMs",
+      "corner": "Name",
+      "columns": ["What it is", "Made by", "License", "Where you meet it"],
+      "rows": [
+        { "label": "KVM", "values": ["Hypervisor built into the Linux kernel; needs a user-space VMM", "Linux kernel community (started at Qumranet)", "GPL-2.0, as part of Linux", "AWS Nitro Hypervisor, Compute Engine, Proxmox VE, most Linux virtualization"] },
+        { "label": "Xen", "values": ["Type 1, with a privileged Domain0 guest", "Xen Project (a Linux Foundation project)", "GPL-2.0", "EC2 from 2006 until Nitro; server and embedded virtualization"] },
+        { "label": "VMware ESXi", "values": ["Type 1, installed on the physical server", "VMware, now part of Broadcom", "Proprietary; the free vSphere Hypervisor 8 is unsupported and for non-production use only", "vSphere data centers"] },
+        { "label": "Microsoft Hyper-V", "values": ["Type 1 under a Windows root partition", "Microsoft", "Proprietary, part of certain x64 editions of Windows", "Windows Server, Windows, Azure"] },
+        { "label": "QEMU", "values": ["VMM and machine emulator: uses KVM, Xen or Apple’s Hypervisor framework, or emulates the CPU in software", "QEMU project", "GPL-2.0", "Paired with KVM on Linux; running other CPU architectures"] },
+        { "label": "Firecracker", "values": ["Minimal VMM on KVM, one microVM per process", "Amazon Web Services", "Apache 2.0", "AWS Lambda"] },
+        { "label": "Cloud Hypervisor", "values": ["VMM on KVM or MSHV for modern cloud guests", "Cloud Hypervisor project", "Apache 2.0 and BSD-3-Clause", "Cloud workloads on modern 64-bit guests with virtio devices"] },
+        { "label": "Oracle VirtualBox", "values": ["Type 2 (hosted) application", "Oracle", "GPLv3 base package; the Extension Pack is under the PUEL, free only for personal and educational use", "Desktops and laptops, local test VMs"] },
+        { "label": "bhyve", "values": ["Hypervisor in the FreeBSD base system since 10.0", "FreeBSD project", "BSD", "FreeBSD hosts"] },
+        { "label": "Apple Hypervisor framework", "values": ["macOS API for running VMs from user space, without kernel extensions", "Apple", "Proprietary, part of macOS", "Virtualization apps on Macs; QEMU’s macOS accelerator"] }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Running many VMs: migration, snapshots, overcommit, nesting",
+      "body": [
+        "Because a VM’s whole state is memory plus device state held by the hypervisor, it can be moved or saved. Live migration (Clark et al., 2005) copies all memory to the new host while the guest runs, then repeatedly re-sends only the pages dirtied since the last round, and finally pauses the guest to send the remainder and CPU state; the source keeps a consistent copy until the target confirms. A snapshot serializes the same state to files: Firecracker writes a guest memory file and a microVM state file covering KVM and emulated device state, and leaves disks to the user. Restoring a snapshot in a new process resumes the guest where it was, without booting.",
+        "Overcommit means the memory configured for all VMs exceeds the machine’s real memory. VMware ESX Server’s 2002 paper introduced two techniques for it. A balloon driver inside the guest allocates and pins pages on the hypervisor’s request, so the guest’s own memory manager decides what to give up. Content-based page sharing merges identical pages across VMs; in one experiment with identical Linux VMs, sharing reclaimed nearly 60% of all VM memory. Linux has the same idea as KSM (Kernel Samepage Merging), originally written for KVM: a daemon scans registered memory and replaces identical pages with one write-protected copy.",
+        "Nested virtualization runs a hypervisor inside a VM. Google describes it as levels: the physical host and its hypervisor are L0, the VMs on it L1, and VMs inside an L1 hypervisor L2. Each cloud limits it: Compute Engine supports only KVM at L1, and EC2 offers it on C8i, M8i and R8i instances. Every extra level adds address translations, which KVM has to fold into hardware that supports at most two."
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Security: escapes and side channels",
+      "body": [
+        "The hypervisor is the wall between tenants, and its biggest attack surface is the device models. In 2015 the VENOM bug (CVE-2015-3456) let a guest user write out of bounds in QEMU’s emulated floppy disk controller, used by Xen and KVM, and possibly run code on the host. That is why newer VMMs emulate very few devices, why Firecracker and Cloud Hypervisor are written in Rust, a memory-safe language, and why AWS’s Nitro Hypervisor leaves out general-purpose operating system components and moves networking and storage to separate Nitro cards.",
+        "CPU side channels cross the wall without a bug in the hypervisor. With L1 Terminal Fault (L1TF), a malicious guest on one hyperthread could read data that the sibling hyperthread (the host, or another guest) had brought into the shared L1 cache. The mitigations are costly: flushing the L1 cache on VM entry (the Linux docs report slowdowns from 1% to 50% depending on the workload), pinning each guest to whole cores so tenants never share siblings, or turning SMT off."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "The hypervisor began as a way to share one expensive mainframe. At IBM’s Cambridge Scientific Center, CP-40 went into production in January 1967 on a specially modified System/360 Model 40, giving each user a virtual machine, and was then rewritten as CP-67 for the Model 67. In a February 1973 Harvard thesis, Robert Goldberg named the two ways to build such a monitor: Type I runs on a bare machine, Type II under a host operating system. A year later Popek and Goldberg defined a monitor by three properties (an essentially identical machine, at worst minor slowdowns, complete control of resources) and proved when trap-and-emulate works.",
+      "The x86 PC failed their test, so the first PC hypervisors relied on software tricks. VMware Workstation (1999) was a hosted, type 2 design that combined direct execution with dynamic binary translation of kernel code. Xen (2003), from the University of Cambridge, asked guests to be ported to an idealized interface, targeting up to 100 VMs on one server. Intel shipped its first processors with Virtualization Technology in November 2005, and AMD introduced a similar design. Surprisingly, VMware’s 2006 study found the hardware-assisted monitor often slower than its software one, mainly because the CPU still didn’t virtualize the MMU; nested paging (AMD) and EPT (Intel) were the answer.",
+      "Hardware support made a small hypervisor possible. KVM, written at Qumranet, was merged into Linux 2.6.20 in February 2007: a driver exposing `/dev/kvm`, with each VM a Linux process and device emulation left to user space. Microsoft released Hyper-V in June 2008. In the cloud, EC2 ran on Xen from its 2006 launch, but emulating storage and network devices in software meant reserving several CPU cores per server. With C5 in November 2017, AWS introduced the Nitro Hypervisor, built on KVM, with I/O moved to dedicated cards. A year later AWS open-sourced Firecracker, a minimal KVM-based VMM for Lambda."
+    ],
+    "choices": [
+      { "choice": "Trap only what must be trapped", "why": "Emulating every instruction is too slow. Running guest code directly and stepping in only for privileged operations is what keeps VMs close to native speed, and it’s why the cost of each VM exit matters so much." },
+      { "choice": "Paravirtualize when the hardware can’t help", "why": "Without hardware support, Xen made the guest call the hypervisor instead of touching hardware. The idea outlived its reason: virtio and Hyper-V’s VMBus devices are paravirtual because bypassing device emulation is more efficient than imitating real hardware." },
+      { "choice": "Reuse an operating system kernel as the hypervisor", "why": "KVM let Linux schedule vCPUs as threads and manage guest memory as process memory, so swapping, page migration, page merging and huge pages work on VMs without new code. Hyper-V’s root partition does the same with Windows for drivers and management." },
+      { "choice": "Move device emulation off the host CPU", "why": "As networks and disks got faster, emulating them in software took whole CPU cores. Nitro moved networking and storage onto dedicated hardware, leaving the hypervisor to isolate CPU and memory, which let AWS sell practically all of a server’s resources." }
+    ],
+    "timeline": [
+      { "year": "1967", "text": "IBM’s CP-40 goes into production, running virtual machines on a modified System/360" },
+      { "year": "1973", "text": "Goldberg’s Harvard thesis classifies monitors as Type I (bare machine) and Type II (hosted)" },
+      { "year": "1999", "text": "VMware Workstation virtualizes x86 with binary translation" },
+      { "year": "2003", "text": "Xen introduces paravirtualization on x86" },
+      { "year": "2005", "text": "Intel ships the first processors with hardware virtualization (VT-x)" },
+      { "year": "2007", "text": "KVM merged into Linux 2.6.20" },
+      { "year": "2017", "text": "AWS introduces the KVM-based Nitro Hypervisor with C5 instances" }
+    ],
+    "sources": [
+      { "label": "Melinda Varian: VM and the VM Community, Past, Present, and Future (1997)", "url": "https://www.leeandmelindavarian.com/Melinda/neuvm.pdf" },
+      { "label": "Robert P. Goldberg: Architectural Principles for Virtual Computer Systems, Harvard thesis (Feb 1973), DTIC AD0772809", "url": "https://apps.dtic.mil/sti/pdfs/AD0772809.pdf", "archive": "https://web.archive.org/web/20251129083605/https://apps.dtic.mil/sti/pdfs/AD0772809.pdf" },
+      { "label": "Bugnion et al.: Bringing virtualization to the x86 architecture with the original VMware Workstation (ACM TOCS, 2012)", "url": "https://www.cs.columbia.edu/~cdall/candidacy/pdf/Bugnion2012.pdf" },
+      { "label": "Barham et al.: Xen and the Art of Virtualization (SOSP 2003)", "url": "https://www.cl.cam.ac.uk/research/srg/netos/papers/2003-xensosp.pdf" },
+      { "label": "Intel press release: Intel delivers new era for virtualization (Nov 2005)", "url": "https://www.intel.com/pressroom/archive/releases/2005/20051114comp.htm" },
+      { "label": "Adams and Agesen: A Comparison of Software and Hardware Techniques for x86 Virtualization (ASPLOS 2006)", "url": "https://pdos.csail.mit.edu/6.1810/2019/readings/adams06vmware.pdf" },
+      { "label": "Kernel Newbies: Linux 2.6.20 adds KVM (Feb 2007)", "url": "https://kernelnewbies.org/Linux_2_6_20" },
+      { "label": "Kivity et al.: kvm, the Linux Virtual Machine Monitor (Ottawa Linux Symposium, 2007)", "url": "https://www.kernel.org/doc/ols/2007/ols2007v1-pages-225-230.pdf" },
+      { "label": "Virtualization Review: Hyper-V made available (Jun 2008)", "url": "https://virtualizationreview.com/articles/2008/06/26/hyperv-made-available.aspx" },
+      { "label": "James Hamilton: Xen-on-Nitro, AWS Nitro for legacy instances (2021)", "url": "https://perspectives.mvdirona.com/2021/11/xen-on-nitro-aws-nitro-for-legacy-instances/" },
+      { "label": "AWS News Blog: Now available, compute-intensive C5 instances (Nov 2017)", "url": "https://aws.amazon.com/blogs/aws/now-available-compute-intensive-c5-instances-for-amazon-ec2/" },
+      { "label": "Amazon EC2 FAQs: the Nitro Hypervisor is built on core KVM technology", "url": "https://aws.amazon.com/ec2/faqs/" },
+      { "label": "AWS News Blog: Firecracker, lightweight virtualization for serverless computing (Nov 2018)", "url": "https://aws.amazon.com/blogs/aws/firecracker-lightweight-virtualization-for-serverless-computing/" },
+      { "label": "Linux kernel docs: the x86 KVM shadow MMU (integration requirements)", "url": "https://docs.kernel.org/virt/kvm/x86/mmu.html" }
+    ]
+  },
+  "sources": [
+    { "label": "Adams and Agesen: A Comparison of Software and Hardware Techniques for x86 Virtualization (ASPLOS 2006)", "url": "https://pdos.csail.mit.edu/6.1810/2019/readings/adams06vmware.pdf" },
+    { "label": "Bugnion et al.: Bringing virtualization to the x86 architecture with the original VMware Workstation (ACM TOCS, 2012)", "url": "https://www.cs.columbia.edu/~cdall/candidacy/pdf/Bugnion2012.pdf" },
+    { "label": "Barham et al.: Xen and the Art of Virtualization (SOSP 2003)", "url": "https://www.cl.cam.ac.uk/research/srg/netos/papers/2003-xensosp.pdf" },
+    { "label": "Robert P. Goldberg: Architectural Principles for Virtual Computer Systems, Harvard thesis (Feb 1973), DTIC AD0772809", "url": "https://apps.dtic.mil/sti/pdfs/AD0772809.pdf", "archive": "https://web.archive.org/web/20251129083605/https://apps.dtic.mil/sti/pdfs/AD0772809.pdf" },
+    { "label": "Kivity et al.: kvm, the Linux Virtual Machine Monitor (Ottawa Linux Symposium, 2007)", "url": "https://www.kernel.org/doc/ols/2007/ols2007v1-pages-225-230.pdf" },
+    { "label": "Linux kernel docs: The KVM API (/dev/kvm, KVM_RUN, exit reasons)", "url": "https://docs.kernel.org/virt/kvm/api.html" },
+    { "label": "Linux kernel docs: the x86 KVM shadow MMU (two-dimensional paging, nested translation)", "url": "https://docs.kernel.org/virt/kvm/x86/mmu.html" },
+    { "label": "Linux kernel docs: Booting AArch64 Linux (EL2 for the virtualization extensions)", "url": "https://docs.kernel.org/arch/arm64/booting.html" },
+    { "label": "Kernel Newbies: Linux 2.6.20 adds KVM (each VM a process, each vCPU a thread)", "url": "https://kernelnewbies.org/Linux_2_6_20" },
+    { "label": "Linux source: arch/x86/kernel/kvm.c (paravirt name “KVM”)", "url": "https://github.com/torvalds/linux/blob/master/arch/x86/kernel/kvm.c" },
+    { "label": "OASIS: Virtual I/O Device (VIRTIO) Version 1.3 (PCI vendor ID 0x1AF4)", "url": "https://docs.oasis-open.org/virtio/virtio/v1.3/virtio-v1.3.html" },
+    { "label": "Linux kernel docs: VFIO, Virtual Function I/O", "url": "https://docs.kernel.org/driver-api/vfio.html" },
+    { "label": "Linux kernel docs: PCI Express I/O Virtualization (SR-IOV) howto", "url": "https://docs.kernel.org/PCI/pci-iov-howto.html" },
+    { "label": "Microsoft Learn: Hyper-V architecture (root partition, VMBus, enlightened I/O)", "url": "https://learn.microsoft.com/en-us/windows-server/virtualization/hyper-v/architecture" },
+    { "label": "Microsoft Learn: Hypervisor security on the Azure fleet (based on Windows Hyper-V)", "url": "https://learn.microsoft.com/en-us/azure/security/fundamentals/hypervisor" },
+    { "label": "Microsoft Learn: Isolation in the Azure public cloud (Hyper-V and root OS isolation)", "url": "https://learn.microsoft.com/en-us/azure/security/fundamentals/isolation-choices" },
+    { "label": "Amazon EC2 FAQs: Nitro Hypervisor built on KVM; nested virtualization on C8i, M8i and R8i", "url": "https://aws.amazon.com/ec2/faqs/" },
+    { "label": "Compute Engine docs: About nested virtualization (KVM-based hypervisor, L0/L1/L2)", "url": "https://docs.cloud.google.com/compute/docs/instances/nested-virtualization/overview" },
+    { "label": "Compute Engine docs: Live migration process (brownout, blackout, clock jump)", "url": "https://docs.cloud.google.com/compute/docs/instances/live-migration-process" },
+    { "label": "Lambda docs: Tenant isolation (execution environments use Firecracker)", "url": "https://docs.aws.amazon.com/lambda/latest/dg/tenant-isolation.html" },
+    { "label": "James Hamilton: Xen-on-Nitro, AWS Nitro for legacy instances (2021)", "url": "https://perspectives.mvdirona.com/2021/11/xen-on-nitro-aws-nitro-for-legacy-instances/" },
+    { "label": "Xen Project: the Xen hypervisor (type-1, Linux Foundation project)", "url": "https://xenproject.org/projects/hypervisor/" },
+    { "label": "Xen source: COPYING (GPL version 2 only)", "url": "https://github.com/xen-project/xen/blob/master/COPYING" },
+    { "label": "Linux kernel docs: Linux kernel licensing rules (GPL-2.0)", "url": "https://docs.kernel.org/process/license-rules.html" },
+    { "label": "Broadcom TechDocs: Installing and setting up ESXi", "url": "https://techdocs.broadcom.com/us/en/vmware-cis/vsphere/vsphere/8-0/esx-installation-and-setup/installing-and-setting-up-esxi-install.html" },
+    { "label": "Broadcom TechDocs: VMware ESXi 8.0 Update 3e release notes (free vSphere Hypervisor 8, non-production)", "url": "https://techdocs.broadcom.com/us/en/vmware-cis/vsphere/vsphere/8-0/release-notes/esxi-update-and-patch-release-notes/vsphere-esxi-80u3e-release-notes.html" },
+    { "label": "Broadcom: Broadcom completes acquisition of VMware (Nov 2023)", "url": "https://www.broadcom.com/company/news/financial-releases/61541" },
+    { "label": "QEMU docs: About QEMU (emulator and virtualizer; KVM, Xen, Hypervisor.Framework)", "url": "https://www.qemu.org/docs/master/about/index.html" },
+    { "label": "QEMU docs: License (GPL version 2)", "url": "https://www.qemu.org/docs/master/about/license.html" },
+    { "label": "AWS News Blog: Firecracker, lightweight virtualization for serverless computing (Nov 2018)", "url": "https://aws.amazon.com/blogs/aws/firecracker-lightweight-virtualization-for-serverless-computing/" },
+    { "label": "Firecracker LICENSE (Apache 2.0)", "url": "https://github.com/firecracker-microvm/firecracker/blob/main/LICENSE" },
+    { "label": "Cloud Hypervisor README: a VMM on KVM and MSHV", "url": "https://github.com/cloud-hypervisor/cloud-hypervisor/blob/main/README.md" },
+    { "label": "Cloud Hypervisor LICENSES directory (Apache-2.0, BSD-3-Clause)", "url": "https://github.com/cloud-hypervisor/cloud-hypervisor/tree/main/LICENSES" },
+    { "label": "Oracle VirtualBox manual: Introduction (a hosted, type 2 hypervisor)", "url": "https://www.virtualbox.org/manual/topics/Introduction.html" },
+    { "label": "VirtualBox: Licensing FAQ (GPLv3 base, PUEL Extension Pack)", "url": "https://www.virtualbox.org/wiki/Licensing_FAQ" },
+    { "label": "FreeBSD Handbook: Virtualization (bhyve in the base system since 10.0)", "url": "https://docs.freebsd.org/en/books/handbook/virtualization/" },
+    { "label": "Apple Developer: Hypervisor framework", "url": "https://developer.apple.com/documentation/hypervisor" },
+    { "label": "Proxmox VE overview (integrates the KVM hypervisor and LXC)", "url": "https://www.proxmox.com/en/products/proxmox-virtual-environment/overview" },
+    { "label": "Clark et al.: Live Migration of Virtual Machines (NSDI 2005)", "url": "https://www.usenix.org/legacy/event/nsdi05/tech/full_papers/clark/clark.pdf" },
+    { "label": "Firecracker docs: Snapshot support", "url": "https://github.com/firecracker-microvm/firecracker/blob/main/docs/snapshotting/snapshot-support.md" },
+    { "label": "Waldspurger: Memory Resource Management in VMware ESX Server (OSDI 2002)", "url": "https://www.usenix.org/legacy/event/osdi02/tech/waldspurger/waldspurger.pdf" },
+    { "label": "Linux kernel docs: Kernel Samepage Merging", "url": "https://docs.kernel.org/admin-guide/mm/ksm.html" },
+    { "label": "CVE-2015-3456 (VENOM): QEMU floppy disk controller", "url": "https://nvd.nist.gov/vuln/detail/CVE-2015-3456" },
+    { "label": "Linux kernel docs: L1TF, L1 Terminal Fault (malicious guests, SMT, mitigations)", "url": "https://docs.kernel.org/admin-guide/hw-vuln/l1tf.html" }
+  ]
+}

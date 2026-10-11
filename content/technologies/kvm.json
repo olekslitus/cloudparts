@@ -1,0 +1,127 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "KVM (Kernel-based Virtual Machine)",
+  "concepts": ["hypervisors", "vm"],
+  "provider": "oss",
+  "vendor": "Linux kernel community",
+  "license": "GPL 2.0",
+  "website": "https://www.linux-kvm.org/",
+  "repo": "https://git.kernel.org/pub/scm/virt/kvm/kvm.git",
+  "summary": "The hypervisor built into the Linux kernel: it runs guest code directly on the CPU through `/dev/kvm`, and leaves device emulation to a user-space program such as QEMU or Firecracker.",
+  "intro": [
+    "KVM turns a Linux kernel into a hypervisor. On x86 it is a core module, `kvm`, plus a vendor module that drives the CPU’s virtualization extensions: `kvm-intel` for Intel VT (VMX) or `kvm-amd` for AMD-V (SVM). On arm64 it is built into the kernel rather than loaded as a module. KVM exposes one character device, `/dev/kvm`, and a set of `ioctl` calls on it. `KVM_CREATE_VM` returns a file descriptor for a new VM, `KVM_CREATE_VCPU` on that returns one per virtual CPU, and a thread that calls `KVM_RUN` on a vCPU makes the processor run guest code natively, in a guest mode alongside the usual kernel and user modes. When the guest does something the kernel can’t finish on its own, such as port I/O or touching a memory-mapped device, `KVM_RUN` returns with an exit reason like `KVM_EXIT_IO` or `KVM_EXIT_MMIO`, the program handles it and calls `KVM_RUN` again. Each VM is an ordinary process and each vCPU a thread, so the Linux scheduler, `top`, `taskset` and `kill` all work on them.",
+    "KVM itself emulates no disks, network cards or firmware. A user-space virtual machine monitor (VMM) provides those: QEMU is the classic one, and Firecracker, Cloud Hypervisor and crosvm are smaller ones written in Rust. Guests run fastest with paravirtual virtio devices, and VFIO lets the VMM hand a physical device, such as a GPU or a NIC, straight to a guest behind the IOMMU. The kernel also supplies what VM platforms build on: a dirty-page log for live migration, Kernel Samepage Merging (KSM, originally written for KVM) to share identical memory pages between VMs, and nested virtualization, on by default for Intel and AMD since Linux 4.20.",
+    "Avi Kivity started KVM at the startup Qumranet, and it was merged into Linux 2.6.20 in February 2007. Red Hat bought Qumranet in September 2008. KVM now sits under some of the largest VM fleets: AWS’s Nitro Hypervisor is built on core KVM technology, Google Compute Engine runs on KVM with Google’s own VMM instead of QEMU, and Proxmox VE, OpenStack’s libvirt driver and KubeVirt all run their VMs on QEMU with KVM."
+  ],
+  "strengths": [
+    "Part of the mainline Linux kernel, so mainstream distributions ship it, and it reuses Linux’s scheduler, NUMA support and timers instead of writing its own",
+    "Near-native CPU speed: guest code runs directly on the processor, and only I/O and a few privileged operations exit to the host",
+    "A small, stable API (`KVM_GET_API_VERSION` has returned 12 since Linux 2.6.22; the two earlier releases are unsupported) that many VMMs build on, from QEMU to Firecracker",
+    "Proven at cloud scale: AWS’s Nitro Hypervisor and Google Compute Engine are built on it, and Google describes it as validated by scores of security researchers"
+  ],
+  "limits": [
+    "Not a product on its own: you need a user-space VMM for devices and a management layer (libvirt, Proxmox VE, OpenStack, KubeVirt) for anything beyond one VM",
+    "Linux hosts only, and the CPU must have hardware virtualization; in a cloud VM that means nested virtualization or a bare-metal instance",
+    "Device passthrough with VFIO needs an IOMMU and ties the VM to that host, which complicates live migration",
+    "Every exit from guest mode is expensive, so I/O-heavy guests need paravirtual virtio devices or passthrough to get close to native speed; fully emulated devices are slow"
+  ],
+  "worksWith": [],
+  "snippet": {
+    "lang": "c",
+    "title": "The first three steps of every KVM-based VMM: open `/dev/kvm`, check the API version, create a VM and a vCPU",
+    "source": [
+      "// Compiled with gcc 14.2 (Debian 13 container on Docker for an arm64 Mac, no /dev/kvm):",
+      "//   $ gcc -Wall -Wextra -o kvmcheck kvmcheck.c && ./kvmcheck",
+      "//   open /dev/kvm: No such file or directory",
+      "// On a Linux host with KVM loaded it prints the API version and the new file descriptors.",
+      "#include <fcntl.h>",
+      "#include <linux/kvm.h>",
+      "#include <stdio.h>",
+      "#include <sys/ioctl.h>",
+      "",
+      "int main(void) {",
+      "    int kvm = open(\"/dev/kvm\", O_RDWR | O_CLOEXEC);",
+      "    if (kvm < 0) { perror(\"open /dev/kvm\"); return 1; }",
+      "",
+      "    int version = ioctl(kvm, KVM_GET_API_VERSION, 0);",
+      "    printf(\"KVM API version: %d\\n\", version);",
+      "    if (version != 12) return 1;                      /* the docs: refuse to run otherwise */",
+      "",
+      "    int vm = ioctl(kvm, KVM_CREATE_VM, 0);            /* a VM file descriptor */",
+      "    int vcpu = ioctl(vm, KVM_CREATE_VCPU, 0);         /* vCPU 0 */",
+      "    printf(\"vm fd %d, vcpu fd %d, max vcpus %d\\n\", vm, vcpu,",
+      "           ioctl(kvm, KVM_CHECK_EXTENSION, KVM_CAP_MAX_VCPUS));",
+      "",
+      "    /* A real VMM continues: KVM_SET_USER_MEMORY_REGION to give the guest RAM,",
+      "       mmap() the vCPU's struct kvm_run, then loop on ioctl(vcpu, KVM_RUN, 0)",
+      "       and emulate a device on each KVM_EXIT_IO or KVM_EXIT_MMIO. */",
+      "    return 0;",
+      "}"
+    ]
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "The user-space half: VMMs that run on KVM",
+      "intro": "KVM runs the vCPUs; one of these programs supplies the devices, firmware and API around them.",
+      "items": [
+        { "name": "QEMU", "tag": "general purpose", "text": "Emulates a full PC or Arm board with hundreds of device models, runs Windows and other guests, and is what libvirt, Proxmox VE, OpenStack and KubeVirt drive." },
+        { "name": "Firecracker", "tag": "microVMs", "text": "AWS’s minimal Rust VMM for Lambda: a handful of virtio devices, no BIOS, configured through a REST API on a Unix socket." },
+        { "name": "Cloud Hypervisor", "tag": "cloud VMs", "text": "A Rust VMM for modern cloud workloads that runs on KVM or Microsoft’s MSHV." },
+        { "name": "crosvm", "tag": "ChromeOS", "text": "The Chromium OS VMM, written in Rust, which runs each virtual device in its own sandbox. It was built for KVM on Linux, and Firecracker started from its code." },
+        { "name": "Google’s own VMM", "tag": "Compute Engine", "text": "Google says it doesn’t use QEMU for Compute Engine and wrote its own user-space VMM on top of KVM for security reasons." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "By 2006 Intel and AMD had both added hardware virtualization extensions to x86, which made a hypervisor much simpler to write: the CPU itself could run a guest in a separate mode and report why it stopped. Xen had brought virtualization to open source, first through paravirtualization (modified guests) and then full virtualization. Avi Kivity and colleagues at Qumranet, a startup selling virtualization technology, took another route: make Linux itself the hypervisor, with a driver that exposes the CPU extensions to user space through `/dev/kvm`.",
+      "KVM was merged into Linux 2.6.20, released on February 5, 2007. Its first version could not yet run guests with more than one vCPU, and Windows installs crashed with a blue screen. The 2007 Ottawa Linux Symposium paper by Kivity, Yaniv Kamay, Dor Laor, Uri Lublin and Anthony Liguori described the design: a third execution mode for Linux, I/O forwarded to user space, a dirty-page log for live migration. Red Hat bought Qumranet, with KVM, for about $107 million in September 2008.",
+      "Because it was just Linux, KVM improved with every kernel release and spread with every distribution. QEMU merged KVM support upstream in version 0.10 (2009), KSM followed in Linux 2.6.32, and KVM gained ports to s390, PowerPC and, in Linux 3.9, Arm. Google Compute Engine (by Google’s own 2017 account) and AWS’s Nitro Hypervisor are both built on it."
+    ],
+    "choices": [
+      { "choice": "A kernel module, not a separate hypervisor", "why": "Being part of Linux let KVM reuse the scheduler, NUMA support and timers instead of writing its own, and let users manage VMs with `top`, `taskset` and `kill` like any other process." },
+      { "choice": "Leave device emulation to user space", "why": "All port and memory-mapped I/O is forwarded to a user-space program, so the kernel part stays small and the large, risky device models live in an unprivileged process that can be swapped for a different VMM." },
+      { "choice": "Require hardware virtualization", "why": "Relying on Intel’s and AMD’s extensions instead of binary translation or a modified guest kept the code simple. KVM put the shared code in `kvm.ko` and each vendor’s differing instructions behind a table of function pointers in `kvm-intel.ko` and `kvm-amd.ko`." }
+    ],
+    "timeline": [
+      { "year": "2006", "text": "Written at Qumranet by Avi Kivity and Yaniv Kamay" },
+      { "year": "2007", "text": "Merged into Linux 2.6.20 (February 5); OLS paper describes the design" },
+      { "year": "2008", "text": "Red Hat buys Qumranet for about $107 million (September)" },
+      { "year": "2009", "text": "QEMU 0.10 adds KVM acceleration upstream (March); KSM lands in Linux 2.6.32" },
+      { "year": "2017", "text": "Google describes the hardened KVM under Compute Engine (January)" },
+      { "year": "2018", "text": "Linux 4.20 turns nested virtualization on by default for Intel and AMD" }
+    ],
+    "sources": [
+      { "label": "Kivity et al.: kvm, the Linux Virtual Machine Monitor (Ottawa Linux Symposium, 2007)", "url": "https://www.kernel.org/doc/ols/2007/ols2007v1-pages-225-230.pdf" },
+      { "label": "Kernelnewbies: Linux 2.6.20 (released February 5, 2007, adds KVM)", "url": "https://kernelnewbies.org/Linux_2_6_20" },
+      { "label": "Kernelnewbies: Linux 3.9 (KVM support for the ARM architecture)", "url": "https://kernelnewbies.org/Linux_3.9" },
+      { "label": "Red Hat Form 10-Q (2008): acquisition of Qumranet, including KVM, for about $107.0 million", "url": "https://www.sec.gov/Archives/edgar/data/0001087423/000119312508209130/d10q.htm" },
+      { "label": "Linux source: virt/kvm/kvm_main.c (copyright 2006 Qumranet, authors Avi Kivity and Yaniv Kamay)", "url": "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/virt/kvm/kvm_main.c" },
+      { "label": "QEMU Changelog for 0.10.0: TCG, KVM acceleration, virtio, live migration", "url": "https://gitlab.com/qemu-project/qemu/-/blob/v0.10.0/Changelog" },
+      { "label": "Linux kernel docs: Kernel Samepage Merging (added in 2.6.32, originally for KVM)", "url": "https://docs.kernel.org/admin-guide/mm/ksm.html" },
+      { "label": "Google Cloud Blog: 7 ways we harden our KVM hypervisor at Google Cloud (Jan 2017)", "url": "https://cloud.google.com/blog/products/gcp/7-ways-we-harden-our-kvm-hypervisor-at-google-cloud-security-in-plaintext" },
+      { "label": "Linux kernel docs: Running nested guests with KVM (on by default since 4.20)", "url": "https://docs.kernel.org/virt/kvm/x86/running-nested-guests.html" }
+    ]
+  },
+  "sources": [
+    { "label": "Linux kernel docs: The Definitive KVM API Documentation (`/dev/kvm`, `KVM_CREATE_VM`, `KVM_RUN`, exits, API version 12)", "url": "https://docs.kernel.org/virt/kvm/api.html" },
+    { "label": "Linux source: arch/x86/kvm/Kconfig (`kvm`, `kvm-intel`, `kvm-amd` modules)", "url": "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/Kconfig" },
+    { "label": "Linux source: arch/arm64/kvm/Kconfig (KVM built in on arm64)", "url": "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/kvm/Kconfig" },
+    { "label": "Linux source: virt/kvm/kvm_main.c (SPDX GPL-2.0-only)", "url": "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/virt/kvm/kvm_main.c" },
+    { "label": "Kivity et al.: kvm, the Linux Virtual Machine Monitor (OLS 2007: guest mode, user-space I/O, dirty log for live migration)", "url": "https://www.kernel.org/doc/ols/2007/ols2007v1-pages-225-230.pdf" },
+    { "label": "Kernelnewbies: Linux 2.6.20 (VMs as processes, vCPUs as threads)", "url": "https://kernelnewbies.org/Linux_2_6_20" },
+    { "label": "Linux kernel docs: VFIO, Virtual Function I/O (device assignment behind an IOMMU)", "url": "https://docs.kernel.org/driver-api/vfio.html" },
+    { "label": "Linux kernel docs: Kernel Samepage Merging", "url": "https://docs.kernel.org/admin-guide/mm/ksm.html" },
+    { "label": "Linux kernel docs: Running nested guests with KVM", "url": "https://docs.kernel.org/virt/kvm/x86/running-nested-guests.html" },
+    { "label": "Amazon EC2 FAQs: the Nitro Hypervisor is built on core Linux KVM technology", "url": "https://aws.amazon.com/ec2/faqs/" },
+    { "label": "Google Cloud Blog: 7 ways we harden our KVM hypervisor at Google Cloud (own VMM instead of QEMU)", "url": "https://cloud.google.com/blog/products/gcp/7-ways-we-harden-our-kvm-hypervisor-at-google-cloud-security-in-plaintext" },
+    { "label": "Proxmox VE docs: QEMU/KVM Virtual Machines", "url": "https://pve.proxmox.com/pve-docs/chapter-qm.html" },
+    { "label": "OpenStack Nova docs: KVM (`compute_driver = libvirt.LibvirtDriver`, `virt_type = kvm`)", "url": "https://docs.openstack.org/nova/latest/admin/configuration/hypervisor-kvm.html" },
+    { "label": "Firecracker docs: Getting started (requires the KVM module)", "url": "https://github.com/firecracker-microvm/firecracker/blob/main/docs/getting-started.md" },
+    { "label": "Cloud Hypervisor README (runs on KVM or MSHV)", "url": "https://github.com/cloud-hypervisor/cloud-hypervisor" },
+    { "label": "The crosvm book: Introduction", "url": "https://crosvm.dev/book/" },
+    { "label": "Firecracker FAQ: started from crosvm", "url": "https://github.com/firecracker-microvm/firecracker/blob/main/FAQ.md" }
+  ],
+  "checked": "2026-10-11"
+}
