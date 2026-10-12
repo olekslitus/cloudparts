@@ -1,0 +1,123 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Apache XTable",
+  "concepts": ["table-formats", "lakehouse"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://xtable.apache.org/",
+  "repo": "https://github.com/apache/incubator-xtable",
+  "summary": "An incubating Apache project, formerly Onehouse’s OneTable, that makes one set of Parquet files readable as a Delta Lake, Apache Iceberg and Apache Hudi table at once by translating only the table metadata.",
+  "intro": [
+    "Hudi, Iceberg and Delta Lake all keep their data in Parquet files and differ in the metadata on top: Hudi’s timeline, Iceberg’s manifests and Delta’s JSON transaction log. XTable reads the source table’s metadata into a common in-memory model (schema, partitioning, the list of data files with their column statistics, row counts and sizes) and writes the same table out in each target format’s metadata, next to the source’s, in the same directory. No data file is copied or rewritten. A sync runs in “incremental” mode, which replays only the commits since the last sync, and falls back to a “full” snapshot sync when incremental isn’t safe. It also maintains the target metadata: it marks files as cleaned for Hudi, expires old Iceberg snapshots and retains Delta’s log for a set time. Since 0.3.0 it can also register the result in Hive Metastore or AWS Glue.",
+    "Sources are Hudi, Iceberg and Delta, plus, since 0.4.0 (August 2026), Apache Paimon and plain Parquet directories. Targets are Hudi, Iceberg, Delta and a Delta Kernel writer. You run it as the `RunSync` utility, a bundled jar that you build yourself with Java 11 and Maven, because Apache releases are source-only, or as `xtable-spark-runtime`, a 4 MB jar on Maven Central for Spark 3.4 and 3.5 that you call after a write in an existing job. The runtime jar declares Spark, Hadoop, Hudi, Iceberg and Delta as `provided`, so it uses the libraries already on the cluster. XTable has been in the Apache Incubator since February 2024, so it isn’t yet a top-level Apache project, and its latest release is 0.4.0-incubating."
+  ],
+  "strengths": [
+    "Metadata-only: a sync writes a few metadata files and leaves the Parquet data alone, so one copy of the data serves Delta, Iceberg and Hudi readers",
+    "Omni-directional: any supported format can be the source and any other the target, so a Hudi or Delta writer can feed an Iceberg-only engine and the other way round",
+    "Incremental sync that falls back to a full sync by itself and tracks its own watermark, which the docs say makes it safe to call after every write",
+    "Pluggable sources and targets through a common table model, which is how Paimon and plain Parquet sources were added in 0.4.0"
+  ],
+  "limits": [
+    "Only copy-on-write and read-optimized views are synced: Hudi log files and Delta or Iceberg deletion vectors don’t carry over, so targets don’t see updates and deletes that still live in those files",
+    "Format quirks need settings on the source: Iceberg targets may need Parquet field ids (Delta column mapping, a Hudi extension), Hudi targets need Hudi 0.14 or later with the metadata table on, and Delta generated columns aren’t synced",
+    "Still incubating at version 0.x: releases are source-only, the `RunSync` jar must be built from source, and the Spark runtime jar brings none of the format libraries with it",
+    "Plain Parquet sources take the schema from the most recently modified file and can’t handle schema changes across files or partition columns that exist only in directory names"
+  ],
+  "worksWith": [
+    { "id": "delta-lake", "how": "translates the transaction log of" },
+    { "id": "iceberg", "how": "writes and reads the metadata of" },
+    { "id": "hudi", "how": "translates the timeline of" },
+    { "id": "paimon", "how": "reads tables from" },
+    { "id": "parquet", "how": "shares the data files, in" },
+    { "id": "spark", "how": "runs as a library inside jobs on" },
+    { "id": "hive", "how": "registers synced tables in the metastore of" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Write a Delta table with Spark, sync it to Iceberg with xtable-spark-runtime, read it back as Iceberg",
+    "source": [
+      "# spark-submit --packages io.delta:delta-spark_2.12:3.2.1,\\",
+      "#     org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.9.2 \\",
+      "#   --jars xtable-spark-runtime_2.12-0.4.0-incubating.jar sync.py      (Spark 3.5.9)",
+      "import os",
+      "from pyspark.sql import SparkSession",
+      "",
+      "spark = (SparkSession.builder",
+      "  .config(\"spark.sql.extensions\", \"io.delta.sql.DeltaSparkSessionExtension\")",
+      "  .config(\"spark.sql.catalog.spark_catalog\", \"org.apache.spark.sql.delta.catalog.DeltaCatalog\")",
+      "  .getOrCreate())",
+      "path = \"/work/lake/orders\"",
+      "",
+      "# 1. The job's normal write: a Delta table, partitioned by region",
+      "spark.createDataFrame([(1, \"eu\", 9.5), (2, \"us\", 20.0), (3, \"eu\", 4.25)],",
+      "                      \"id INT, region STRING, amount DOUBLE\") \\",
+      "  .write.format(\"delta\").partitionBy(\"region\").save(path)",
+      "",
+      "# 2. The call XTable adds: write Iceberg metadata for the same Parquet files",
+      "jvm = spark._jvm",
+      "spec = (jvm.org.apache.xtable.spark.TableSyncSpec.builder()",
+      "        .key(\"orders\").basePath(path).sourceFormat(\"DELTA\")",
+      "        .targets([\"ICEBERG\"]).build())",
+      "jvm.org.apache.xtable.spark.XTableSyncService().sync(",
+      "    spec, spark.sparkContext._jsc.hadoopConfiguration())",
+      "# log: No previous InternalTable sync for target. Falling back to snapshot sync.",
+      "# log: Sync is successful for the following formats ICEBERG",
+      "",
+      "print(sorted(os.listdir(path)))",
+      "# ['_delta_log', 'metadata', 'region=eu', 'region=us']",
+      "",
+      "# 3. An Iceberg reader now sees the same three rows; no data was copied",
+      "spark.read.format(\"iceberg\").load(path).groupBy(\"region\").sum(\"amount\").orderBy(\"region\").show()",
+      "# +------+-----------+",
+      "# |region|sum(amount)|",
+      "# +------+-----------+",
+      "# |    eu|      13.75|",
+      "# |    us|       20.0|",
+      "# +------+-----------+"
+    ]
+  },
+  "history": {
+    "story": [
+      "By 2023 the lakehouse had three popular table formats, Apache Hudi, Apache Iceberg and Delta Lake, and engines and cloud services each supported some of them. A table written in one format could be locked out of an engine that read another. All three store their rows in Parquet files, though, and differ only in the metadata layer.",
+      "In February 2023 Onehouse announced OneTable and invited others to help build bridges between the formats. Microsoft and Google joined, and after months of work on a prototype, Kyle Weller and Tim Brown announced on 15 November 2023 that OneTable was open source. It wasn’t a new table format, they wrote, but a converter that turns Hudi, Delta and Iceberg metadata into each other “in an omni-directional way”, with no data copied.",
+      "The same post announced a plan to donate it to the Apache Software Foundation. The proposal listed initial committers from Onehouse, Microsoft, Google, Walmart, Adobe, Cloudera and Dremio, and planned to rename the code from OneTable to XTable. XTable entered the Apache Incubator on 11 February 2024. Its first Apache release, 0.1.0-incubating, came out in August 2024, catalog sync arrived in 0.3.0 in June 2025, and Paimon and Parquet sources in 0.4.0 in August 2026."
+    ],
+    "choices": [
+      { "choice": "Translate metadata, never data", "why": "The three formats share Parquet as the data layer, so converting only the metadata makes the same files readable as all three, with “very little performance overhead” according to the launch post." },
+      { "choice": "A common in-memory model with source and target interfaces", "why": "Each format only needs a reader into the model and a writer out of it. The launch post used a Paimon source as the example of how the project could grow, and 0.4.0 added one." },
+      { "choice": "Omni-directional instead of one-way", "why": "The launch post said users could start from any format, convert to any other and round-trip across them in any combination, which also reassured users who need only one format that their tables were future-proof." },
+      { "choice": "A neutral home at Apache", "why": "The launch post said the project’s success depended on it being neutral and governed by strong community principles, and announced the plan to submit it to the Apache Incubator to make sure of that." }
+    ],
+    "timeline": [
+      { "year": "2023", "text": "Onehouse announces OneTable in February" },
+      { "year": "2023", "text": "OneTable is open-sourced with Microsoft and Google on 15 November" },
+      { "year": "2024", "text": "Enters the Apache Incubator as XTable on 11 February" },
+      { "year": "2024", "text": "First Apache release, 0.1.0-incubating, in August" },
+      { "year": "2025", "text": "0.3.0 adds Hive Metastore and Glue catalog sync in June" },
+      { "year": "2026", "text": "0.4.0 adds Paimon and Parquet sources and a Spark runtime jar in August" }
+    ],
+    "sources": [
+      { "label": "Onehouse blog: OneTable is now open source, by Kyle Weller and Tim Brown (15 November 2023)", "url": "https://www.onehouse.ai/blog/onetable-is-now-open-source" },
+      { "label": "Apache Incubator: XTable proposal (rename from OneTable, initial committers)", "url": "https://cwiki.apache.org/confluence/display/INCUBATOR/XTable+Proposal" },
+      { "label": "Apache Incubator: XTable incubation status (entered 11 February 2024)", "url": "https://incubator.apache.org/projects/xtable.html" },
+      { "label": "Apache archive: XTable 0.1.0-incubating source release (21 August 2024)", "url": "https://archive.apache.org/dist/incubator/xtable/0.1.0-incubating/" },
+      { "label": "GitHub: XTable 0.2.0-incubating release, “the second official apache release” (November 2024)", "url": "https://github.com/apache/incubator-xtable/releases/tag/0.2.0-incubating" },
+      { "label": "GitHub: XTable 0.3.0-incubating release notes (June 2025)", "url": "https://github.com/apache/incubator-xtable/releases/tag/0.3.0-incubating" },
+      { "label": "GitHub: XTable 0.4.0-incubating release notes (August 2026)", "url": "https://github.com/apache/incubator-xtable/releases/tag/0.4.0-incubating" }
+    ]
+  },
+  "sources": [
+    { "label": "XTable docs: Features and limitations (sync modes, catalog sync, copy-on-write only, format notes)", "url": "https://xtable.apache.org/docs/features-and-limitations" },
+    { "label": "XTable docs: Creating your first interoperable table (`RunSync`, dataset config)", "url": "https://xtable.apache.org/docs/how-to" },
+    { "label": "XTable docs: Installation (build with Java 11 and Maven)", "url": "https://xtable.apache.org/docs/setup" },
+    { "label": "XTable docs: Run an XTable sync on Apache Spark (`xtable-spark-runtime`)", "url": "https://xtable.apache.org/docs/how-to-spark-runtime" },
+    { "label": "GitHub: apache/incubator-xtable README (common model, bundled jar)", "url": "https://github.com/apache/incubator-xtable" },
+    { "label": "GitHub: XTable 0.4.0-incubating release notes (Paimon and Parquet sources, Delta Kernel target, Spark runtime)", "url": "https://github.com/apache/incubator-xtable/releases/tag/0.4.0-incubating" },
+    { "label": "GitHub: XTable 0.3.0-incubating release notes (Glue and HMS catalog sync)", "url": "https://github.com/apache/incubator-xtable/releases/tag/0.3.0-incubating" },
+    { "label": "GitHub: XTable spark-runtime demo (Spark 3.4 for Hudi 0.14.0, engine classpath)", "url": "https://github.com/apache/incubator-xtable/tree/main/demo/spark-runtime" },
+    { "label": "Apache downloads: XTable 0.4.0-incubating (source release only)", "url": "https://dlcdn.apache.org/incubator/xtable/0.4.0-incubating/" },
+    { "label": "Apache Incubator: XTable incubation status", "url": "https://incubator.apache.org/projects/xtable.html" }
+  ],
+  "checked": "2026-10-11"
+}

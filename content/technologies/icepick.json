@@ -1,0 +1,112 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "icepick",
+  "concepts": ["table-formats", "catalogs"],
+  "provider": "oss",
+  "vendor": "Clay Smith",
+  "license": "Apache 2.0",
+  "website": "https://github.com/smithclay/icepick",
+  "repo": "https://github.com/smithclay/icepick",
+  "summary": "A small, experimental Rust CLI and library that commits Parquet files to Apache Iceberg tables and runs compaction and snapshot cleanup through a REST catalog, aimed at Cloudflare’s R2 Data Catalog (now Basin Catalog) and Amazon S3 Tables, with no JVM.",
+  "intro": [
+    "icepick is one binary (`cargo install icepick --features cli`) that talks to an Iceberg REST catalog with just two inputs, a catalog URL and a bearer token. It reads the catalog’s `/v1/config` for the prefix, then asks the catalog’s `/credentials` endpoint for short-lived storage keys for each table. `icepick commit` takes a glob of Parquet files, checks that they all match the first file’s schema, uploads local files to the table’s location and registers them in one snapshot, skipping files already in the table. `icepick compact` bin-packs small files into larger ones (by default files under 128 MB into 256 MB outputs, in groups of at least 3), `icepick snapshot cleanup` expires snapshots older than N days while keeping the last N and anything a branch or tag points to, and `icepick table scan --filter` shows how many files partition pruning would skip. `commit`, `compact` and `snapshot cleanup` each take `--dry-run` to print the plan first.",
+    "Clay Smith started it in November 2025 because the official `iceberg-rust` library didn’t compile to WebAssembly and most Iceberg tooling needs a JVM. Four days in, it replaced `iceberg-rust` with its own implementation of the Iceberg REST protocol; it now writes manifests itself with `apache-avro` and reaches storage through `opendal`. The README says its R2 catalog code is WebAssembly-compatible, for use in Cloudflare Workers, while S3 Tables needs the AWS SDK and runs only on native platforms; in 0.4.1 the CLI itself only takes a URL and token, so S3 Tables is reachable only from the Rust library. It describes itself as an experimental, append-only client. The latest release is 0.4.1 (19 January 2026), and the repository has had no commits since that day."
+  ],
+  "strengths": [
+    "No JVM, Spark or Python: one native binary commits files, compacts and expires snapshots, which suits cron jobs and CI",
+    "Registers Parquet files that already exist, without rewriting them, and skips files already in the table, so reruns are safe",
+    "Needs only a catalog URL and token; in a test for this page the same binary worked against a local Lakekeeper 0.14 catalog with MinIO, because it relies only on the standard config and credentials endpoints",
+    "Snapshot cleanup never expires the current snapshot or one a branch or tag points to, and only removes snapshots that are both older than the age limit and outside the last N"
+  ],
+  "limits": [
+    "A one-person experiment: version 0.4.1, a few hundred downloads, no commits since January 2026, and docs that have drifted from the code (the README’s `--limit` flag and `ICEPICK_CATALOG_ARN` setting don’t exist in the 0.4.1 CLI, and the changelog describes a 0.5.0 that was never published)",
+    "In a test for this page, 0.4.1’s `compact` couldn’t read Snappy-compressed Parquet, because its `parquet` dependency is built without compression codecs, and on uncompressed files it left the six original files live next to the merged one, so readers saw 120 rows instead of 60",
+    "Append-only, and strict about inputs: no deletes or updates, and `commit` rejects Parquet files whose columns lack Iceberg field ids, which a plain PyArrow write doesn’t add",
+    "In a test for this page, `commit --create --partition` created a partitioned table but registered the files with no partition values, so filters pruned nothing"
+  ],
+  "worksWith": [
+    { "id": "iceberg", "how": "commits to and maintains tables in" },
+    { "id": "basin-catalog", "how": "commits and compacts tables through" },
+    { "id": "s3-tables", "how": "manages tables, from its library, in" },
+    { "id": "parquet", "how": "registers and compacts files in" },
+    { "id": "opendal", "how": "reads and writes storage through" },
+    { "id": "rust", "how": "is written in" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Register local Parquet files as a new Iceberg table, then plan a compaction",
+    "source": [
+      "cargo install icepick --version 0.4.1 --features cli --locked",
+      "",
+      "# For Basin Catalog: https://catalog.cloudflarestorage.com/<account-id>/<bucket>",
+      "# Run here against a local Lakekeeper 0.14 catalog (warehouse \"catalog\") on MinIO",
+      "export ICEPICK_CATALOG_URL=http://localhost:28181/catalog",
+      "export ICEPICK_TOKEN=dummy                  # a Cloudflare API token on Basin",
+      "",
+      "icepick namespace create web",
+      "# Namespace 'web' created successfully.",
+      "",
+      "# Six uncompressed files written by PyArrow, with PARQUET:field_id on each column",
+      "icepick commit 'raw/*.parquet' --namespace web --table clicks --create",
+      "# Found 6 Parquet files",
+      "# Detected local files - will upload to table storage",
+      "# Schema from: raw/part-0.parquet",
+      "# Created table: web.clicks",
+      "# Uploading 6 local files...",
+      "#   part-0.parquet -> s3://lake/01a12e09-.../data/part-0_b5acfe29-....parquet",
+      "#   ...",
+      "# Upload complete",
+      "#   Files: 6 committed, 0 skipped",
+      "#   Rows: 60",
+      "",
+      "icepick compact web.clicks --dry-run",
+      "# Partition: (unpartitioned)",
+      "#   Input:  6 files, 5.7 kiB (avg 974 B /file)",
+      "#   Output: ~1 files (target 5.7 kiB)",
+      "# Dry run complete. Remove --dry-run to execute.",
+      "",
+      "icepick snapshot list web.clicks           # one append snapshot, current, on main"
+    ]
+  },
+  "history": {
+    "story": [
+      "By 2025 teams could get a managed Iceberg catalog without running servers, such as Amazon S3 Tables or Cloudflare’s R2 Data Catalog, which entered public beta in April 2025. Most Iceberg tools, icepick’s README notes, are built for JVM environments, and the official Rust library, `iceberg-rust`, couldn’t be compiled to WebAssembly, so it couldn’t run inside a Cloudflare Worker.",
+      "Clay Smith began the project on 15 November 2025 as `hello-world-iceberg`, a test of `iceberg-rust` against S3 Tables, and renamed it icepick. That first day the commit history records an S3 Tables incompatibility finding and a switch from `iceberg-catalog-rest` to a minimal hand-written client; on 19 November “Standalone implementation of Iceberg REST” removed `iceberg-rust` altogether. 0.1.0 went to crates.io on 17 November 2025.",
+      "December’s 0.3.0 added registration of existing Parquet files with Hive-style partition values read from their paths. In January 2026 a reworked CLI arrived with partition pruning, bin-pack compaction, snapshot cleanup and the `commit` command, and 0.4.1 shipped on 19 January 2026."
+    ],
+    "choices": [
+      { "choice": "Its own REST client instead of `iceberg-rust`", "why": "The 0.4.0 changelog notes that `iceberg-rust` 0.7.0 couldn’t build for WebAssembly because of its Tokio dependency, which blocked the main goal of running in Cloudflare Workers." },
+      { "choice": "Only a catalog URL and a token", "why": "The CLI rework made everything else, the prefix and the storage credentials, come from the catalog’s own config and credentials endpoints, so pointing it at R2 or another REST catalog takes two settings." },
+      { "choice": "Register files rather than write rows", "why": "The developer guide pitches it for Parquet files that already sit in object storage: they become an Iceberg table without being rewritten, and files already registered are skipped." },
+      { "choice": "Bearer tokens for R2, SigV4 only on native builds", "why": "R2’s catalog takes a Cloudflare API token, which works from WebAssembly. S3 Tables needs SigV4 signing and the AWS SDK, which doesn’t compile to WebAssembly, so that path is native-only." }
+    ],
+    "timeline": [
+      { "year": "2025", "text": "Clay Smith starts `hello-world-iceberg` on 15 November and renames it icepick" },
+      { "year": "2025", "text": "Replaces `iceberg-rust` with a standalone REST client on 19 November" },
+      { "year": "2025", "text": "0.3.0 adds registration of existing Parquet files in December" },
+      { "year": "2026", "text": "0.4.1 brings the CLI with commit, compaction and snapshot cleanup on 19 January" }
+    ],
+    "sources": [
+      { "label": "GitHub: smithclay/icepick commit history (November 2025 to January 2026)", "url": "https://github.com/smithclay/icepick/commits/main" },
+      { "label": "GitHub: icepick PR #3, Standalone implementation of Iceberg REST (19 November 2025)", "url": "https://github.com/smithclay/icepick/pull/3" },
+      { "label": "GitHub: icepick PR #5, register_data_files for existing Parquet files (December 2025)", "url": "https://github.com/smithclay/icepick/pull/5" },
+      { "label": "GitHub: icepick PR #8, simplified REST catalog CLI with partition pruning and compaction (January 2026)", "url": "https://github.com/smithclay/icepick/pull/8" },
+      { "label": "GitHub: icepick CHANGELOG (rename from hello-world-iceberg, iceberg-rust WASM limitation)", "url": "https://github.com/smithclay/icepick/blob/main/CHANGELOG.md" },
+      { "label": "crates.io: icepick versions (0.1.0 November 2025 to 0.4.1 January 2026)", "url": "https://crates.io/crates/icepick/versions" },
+      { "label": "Cloudflare blog: R2 Data Catalog public beta (April 2025)", "url": "https://blog.cloudflare.com/r2-data-catalog-public-beta/" }
+    ]
+  },
+  "sources": [
+    { "label": "GitHub: smithclay/icepick README (commands, R2 and S3 Tables setup, WASM notes)", "url": "https://github.com/smithclay/icepick" },
+    { "label": "GitHub: icepick DEVELOPER.md (library usage, generic REST catalog, registering files)", "url": "https://github.com/smithclay/icepick/blob/main/DEVELOPER.md" },
+    { "label": "GitHub: icepick Cargo.toml 0.4.1 (“Experimental Rust client”, `parquet` with only the `arrow` feature, `opendal`)", "url": "https://github.com/smithclay/icepick/blob/v0.4.1/Cargo.toml" },
+    { "label": "GitHub: icepick REST client (config and credentials endpoints, warehouse from URL)", "url": "https://github.com/smithclay/icepick/blob/v0.4.1/src/catalog/rest/client.rs" },
+    { "label": "GitHub: icepick compact command (defaults: 256 MB target, 128 MB max input, 3 files per group)", "url": "https://github.com/smithclay/icepick/blob/v0.4.1/src/cli/commands/compact.rs" },
+    { "label": "GitHub: icepick CLI options (catalog URL and token only)", "url": "https://github.com/smithclay/icepick/blob/v0.4.1/src/bin/icepick.rs" },
+    { "label": "GitHub: icepick PR #10, snapshot cleanup (retention rules, defaults)", "url": "https://github.com/smithclay/icepick/pull/10" },
+    { "label": "GitHub: icepick CHANGELOG", "url": "https://github.com/smithclay/icepick/blob/main/CHANGELOG.md" },
+    { "label": "GitHub: smithclay/icepick repository (description: append-only Rust Iceberg client)", "url": "https://github.com/smithclay/icepick" },
+    { "label": "crates.io: icepick (versions and downloads)", "url": "https://crates.io/crates/icepick" }
+  ],
+  "checked": "2026-10-11"
+}

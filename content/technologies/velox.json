@@ -1,0 +1,116 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Velox",
+  "concepts": ["query-engines"],
+  "provider": "oss",
+  "vendor": "Meta",
+  "license": "Apache 2.0",
+  "website": "https://velox-lib.io/",
+  "repo": "https://github.com/facebookincubator/velox",
+  "summary": "Meta’s open-source C++ execution engine library: it takes an already-optimized query plan and runs it with vectorized operators, and it is the engine inside Presto’s C++ workers (Prestissimo) and Apache Gluten’s native Spark.",
+  "intro": [
+    "Every query engine has the same parts: a language front end, an optimizer, a runtime that spreads tasks over machines, and an execution engine that does the actual work on one machine. Velox is only that last part, as a library. It has no SQL parser, no dataframe API and no optimizer. A host engine such as Presto or Spark plans the query and hands Velox a plan fragment; Velox runs it with the CPU and memory of the local node. Inside are a type system with nested types, columnar Vectors, a vectorized expression evaluator, Presto- and Spark-compatible function packages, operators (scans, writes, filters, projections, hash, merge and nested-loop joins, aggregations, sorts, exchanges), support for the Parquet, ORC/DWRF and Meta’s Nimble file formats, storage adapters for S3, HDFS, GCS and Azure (ABFS), the Presto and Spark wire formats, and memory management with spilling and caching.",
+    "Velox Vectors follow the Apache Arrow layout but add 16-byte string views, out-of-order writes for conditionals, and run-length and constant encodings, so filters and joins can often work on encoded data without decoding it. Velox also adapts as it runs: it tracks how selective each filter is and reorders them, and learns which columns to prefetch. Meta started it in late 2020, open-sourced it in 2022, and develops it with IBM, Intel, Voltron Data, Microsoft, ByteDance and others. It is not part of a foundation: the code lives in Meta’s `facebookincubator` GitHub organization under a project leadership council of individuals. There are no numbered releases; the repository is tagged by date, most recently `v2026.10.02.00`."
+  ],
+  "strengths": [
+    "Large measured gains from replacing JVM execution: in Meta’s VLDB 2022 paper, Prestissimo ran TPC-H Q1 8.4x faster than Presto Java, replayed production queries about 6–7x faster on average, and carried the same workload on 20 servers instead of 60",
+    "One engine, consistent semantics: Presto and Spark function packages give the same results across systems, where Meta once counted at least 12 different `substr()` implementations",
+    "Built to be extended: custom types, scalar, aggregate and window functions, operators, file formats, storage adapters and network serializers",
+    "Works on encoded data (dictionary, run-length, constant) and delays decoding, which makes filters, joins and unnests over complex types cheaper"
+  ],
+  "limits": [
+    "Not for end users: without Presto, Gluten or your own planner on top there is no way to submit SQL, and plans must arrive fully optimized",
+    "No versioned releases, only date-stamped tags, and building it means a C++ toolchain (GCC 11 or Clang 15 or newer) and a long list of dependencies; the `pyvelox` Python package was last published in April 2025",
+    "Its vectors differ from Arrow in places, so handing data to Arrow tools is zero-copy only when the layouts match; otherwise Velox rearranges the data",
+    "Meta leads it outside any foundation, so its direction depends on Meta and the companies working with it"
+  ],
+  "worksWith": [
+    { "id": "cpp", "how": "is written in" },
+    { "id": "presto", "how": "runs the C++ workers (Prestissimo) of" },
+    { "id": "spark", "how": "runs queries, through Apache Gluten, for" },
+    { "id": "arrow", "how": "converts its vectors to and from" },
+    { "id": "parquet", "how": "reads and writes" },
+    { "id": "orc", "how": "reads" },
+    { "id": "s3", "how": "reads and writes files in" },
+    { "id": "gcs", "how": "reads and writes files in" },
+    { "id": "azure-blob", "how": "reads and writes files in" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Build a plan by hand and run it on Velox with pyvelox (TPC-H rows generated in memory)",
+    "source": [
+      "# pip install pyvelox==0.2.0   (Python 3.12, macOS arm64)",
+      "from pyvelox.plan_builder import PlanBuilder",
+      "from pyvelox.runner import LocalRunner, register_tpch",
+      "",
+      "register_tpch(\"tpch\")  # a connector that generates TPC-H rows in memory",
+      "",
+      "# Velox takes an already-optimized plan: there is no SQL parser or optimizer",
+      "plan = (",
+      "    PlanBuilder()",
+      "    .tpch_gen(table_name=\"lineitem\", connector_id=\"tpch\", scale_factor=0.1,",
+      "              columns=[\"l_returnflag\", \"l_quantity\", \"l_extendedprice\", \"l_shipdate\"])",
+      "    .filter(\"l_shipdate <= DATE '1998-09-02'\")",
+      "    .aggregate(grouping_keys=[\"l_returnflag\"],",
+      "               aggregations=[\"sum(l_quantity) AS qty\", \"avg(l_extendedprice) AS avg_price\",",
+      "                             \"count(1) AS line_items\"])",
+      "    .order_by([\"l_returnflag\"])",
+      ")",
+      "",
+      "runner = LocalRunner(plan.get_plan_node())",
+      "for batch in runner.execute():",
+      "    for i in range(batch.size()):",
+      "        print([batch.child_at(c)[i] for c in range(4)])",
+      "# ['A', '3774200', '38294.602618376986', '147790']",
+      "# ['N', '7554554', '38288.665318783744', '295765']",
+      "# ['R', '3785523', '38276.82187139619', '148301']"
+    ]
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "Engines that run on Velox",
+      "items": [
+        { "name": "Prestissimo (Presto C++)", "tag": "Presto workers", "text": "A C++ worker that speaks Presto’s HTTP protocol, takes plan fragments from the usual Java coordinator, translates them into Velox plans and runs them. No JVM or garbage collector on the workers. Meta started it in 2020." },
+        { "name": "Apache Gluten", "tag": "Spark plugin", "text": "Created by Intel. Passes Spark plans to a native engine (Velox or ClickHouse) through a JNI interface built on Arrow and Substrait. Meta reported about 3x efficiency gains on benchmarks. A top-level Apache project since March 2026." },
+        { "name": "Meta’s internal systems", "tag": "inside Meta", "text": "By 2024 Velox was in different stages of integration with more than 10 data systems at Meta, including stream processing, data ingestion and ML feature engineering." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "By 2020 Meta ran dozens of specialized data engines for batch ETL, interactive SQL, streaming, ingestion and machine learning. They shared almost no code, were written in different languages and behaved differently: an informal survey found at least 12 implementations of `substr()`, with different indexing, null handling and errors. Pedro Pedreira and colleagues noticed that the engines differed mostly in their front ends, optimizers and runtimes, while their execution engines were much alike. In late 2020 Meta started writing one execution layer as a reusable, extensible C++ library, so each optimization would be built once and every engine would get it.",
+      "The first full integration was Prestissimo, which replaced Presto’s Java workers with C++ ones; in the VLDB 2022 paper it handled the same production workload with a third of the servers. Meta open-sourced Velox in 2022 and announced it publicly in March 2023, with Ahana, Intel and Voltron Data as key collaborators. Intel built Gluten to run Spark on Velox. Velox’s own vector layout had diverged from Apache Arrow, which hurt interoperability, so Meta and Voltron Data worked with the Arrow community for a year until Arrow added `StringView`, `ListView` and run-end encoding, all inspired by Velox Vectors."
+    ],
+    "choices": [
+      { "choice": "Only the execution engine, with no parser or optimizer", "why": "The front end and optimizer are what make each engine specialized; the execution layer was the duplicated part. Taking an optimized plan as input lets Presto, Spark, streaming and ML systems all share it." },
+      { "choice": "Extend Arrow instead of adopting it unchanged", "why": "Inline string prefixes, out-of-order writes and extra encodings sped up filters, conditionals and joins. The cost was conversion at the boundary, which Meta later reduced by getting similar layouts added to Arrow itself." },
+      { "choice": "Function packages per SQL dialect", "why": "Engines need their own semantics (0- or 1-based indexes, null handling, errors), so Velox ships Presto and Spark function sets instead of one generic set." },
+      { "choice": "Vectorization and adaptivity before code generation", "why": "Velox leans on tight batch-at-a-time loops and on learning while it runs (reordering filters, prefetching columns). The 2022 paper still called code generation experimental, worth it only where the gains outweigh compile time." }
+    ],
+    "timeline": [
+      { "year": "2020", "text": "Meta starts Velox and the Prestissimo project to replace Presto’s Java workers" },
+      { "year": "2022", "text": "Open-sourced; VLDB paper reports Prestissimo running the same workload on a third of the servers" },
+      { "year": "2023", "text": "Meta formally announces Velox in March, with Ahana, Intel and Voltron Data as collaborators" },
+      { "year": "2024", "text": "Meta reports that Arrow has added StringView, ListView and run-end encoding, inspired by Velox Vectors" },
+      { "year": "2026", "text": "Apache Gluten, which runs Spark on Velox, becomes a top-level Apache project in March" }
+    ],
+    "sources": [
+      { "label": "Pedreira et al.: Velox, Meta’s Unified Execution Engine (PVLDB 15(12), 2022)", "url": "https://www.vldb.org/pvldb/vol15/p3372-pedreira.pdf" },
+      { "label": "Engineering at Meta: Introducing Velox, an open source unified execution engine (9 March 2023)", "url": "https://engineering.fb.com/2023/03/09/open-source/velox-open-source-execution-engine/" },
+      { "label": "Engineering at Meta: Composable data management at Meta (22 May 2024; created late 2020, open source 2022, Arrow alignment)", "url": "https://engineering.fb.com/2024/05/22/data-infrastructure/composable-data-management-at-meta/" },
+      { "label": "ASF: Apache Gluten and Apache Polaris become top-level projects (5 March 2026)", "url": "https://news.apache.org/foundation/entry/the-apache-software-foundation-graduates-two-open-source-projects-from-incubator" }
+    ]
+  },
+  "sources": [
+    { "label": "GitHub: facebookincubator/velox README (components, partners, compilers, Apache 2.0)", "url": "https://github.com/facebookincubator/velox" },
+    { "label": "GitHub: facebookincubator/velox tags (date-stamped, latest v2026.10.02.00)", "url": "https://github.com/facebookincubator/velox/tags" },
+    { "label": "Pedreira et al.: Velox, Meta’s Unified Execution Engine (VLDB 2022): Arrow differences, Prestissimo results, codegen", "url": "https://www.vldb.org/pvldb/vol15/p3372-pedreira.pdf" },
+    { "label": "Engineering at Meta: Introducing Velox (March 2023): components, runtime optimizations, Gluten", "url": "https://engineering.fb.com/2023/03/09/open-source/velox-open-source-execution-engine/" },
+    { "label": "Engineering at Meta: Composable data management at Meta (May 2024): 10+ systems, Gluten 3x, Arrow convergence", "url": "https://engineering.fb.com/2024/05/22/data-infrastructure/composable-data-management-at-meta/" },
+    { "label": "Velox docs: Technical governance (project leadership council, component maintainers)", "url": "https://velox-lib.io/docs/community/technical-governance" },
+    { "label": "ASF: Apache Gluten becomes a top-level project (5 March 2026)", "url": "https://news.apache.org/foundation/entry/the-apache-software-foundation-graduates-two-open-source-projects-from-incubator" },
+    { "label": "PyPI: pyvelox 0.2.0 (15 April 2025)", "url": "https://pypi.org/project/pyvelox/" }
+  ],
+  "checked": "2026-10-11"
+}

@@ -1,0 +1,168 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Databend",
+  "concepts": ["warehouse", "olap"],
+  "provider": "oss",
+  "vendor": "Databend Labs",
+  "license": "Apache 2.0 for the core; enterprise features (src/query/ee, src/meta/ee, BendSave) are under the Elastic License 2.0 and need a paid license key. Both ship in the same binary",
+  "website": "https://www.databend.com/",
+  "repo": "https://github.com/databendlabs/databend",
+  "summary": "A cloud data warehouse written in Rust that keeps every table as Parquet blocks and Git-like snapshots in object storage, so stateless compute clusters can start, scale and stop without moving data. Open core: Apache 2.0, with paid features under the Elastic License 2.0.",
+  "intro": [
+    "Databend splits into two programs. `databend-meta` is a Raft cluster that holds the catalog: table schemas and where their files live, users, roles and grants, and which query nodes belong to which cluster. `databend-query` nodes are stateless: they parse and plan SQL with a rule- and cost-based optimizer, then run it on a vectorized push-pull pipeline engine across one or more nodes. All table data sits in object storage (S3, Azure Blob Storage, Google Cloud Storage, Alibaba OSS or Tencent COS), which Databend reaches through Apache OpenDAL, a storage library that began inside Databend. The default storage engine, Fuse, works like Git: each write creates immutable Parquet blocks, groups them into segments with min/max and bloom filter indexes for pruning, and commits a new snapshot that points at the segments. Old snapshots stay readable, so `SELECT … AT (SNAPSHOT => …)`, `AT (TIMESTAMP => …)` and `UNDROP TABLE` work within a retention period of 24 hours by default.",
+    "Clients connect with the BendSQL shell, drivers for Go, Python, Node.js, Java and Rust, or an HTTP API, and the server also listens on a MySQL-compatible port. Besides its own tables, Databend can query staged files (Parquet, CSV, TSV, NDJSON, ORC, Avro) without loading them, read and insert into Apache Iceberg tables through REST, AWS Glue, S3 Tables or Hive Metastore catalogs, and, in nightly builds since July 2026, read and write Apache Paimon tables. Its read-only Delta Lake engine was removed in September 2026. In 2026 Databend Labs began pitching it as a warehouse for AI agents, with vector and full-text search, geospatial functions and sandboxed Python UDFs.",
+    "Databend Labs builds it and sells two products on top: Databend Cloud, a managed service on AWS that bills warehouses per second ($1 an hour for an XSmall warehouse on the Personal edition) and storage at $23 per TB a month, and a self-hosted Enterprise edition. The license has been split since April 2023: features in the enterprise directories, such as masking policies, storage encryption, streams, Python UDFs, virtual columns and BendSave backups, are under the Elastic License 2.0 and need a license key. Versions are still numbered 1.2.x, and the project ships nightly builds about once a week (v1.2.952-nightly on 11 October 2026)."
+  ],
+  "strengths": [
+    "Compute and storage are fully separate: query nodes keep no data, so a cluster can be resized, replaced or suspended without rebalancing, and Databend Cloud suspends idle warehouses after five minutes and bills running ones per second",
+    "Snapshot-based Fuse tables give time travel by snapshot, timestamp or offset, `UNDROP TABLE`, and cheap pruning from segment and block statistics, all on plain object storage",
+    "One engine covers SQL analytics, semi-structured `VARIANT` data, vector and full-text search, geospatial queries, querying staged files in place, and Iceberg catalogs, so many teams need fewer separate systems",
+    "Easy to start: one Docker image runs meta and query together, and the Apache 2.0 core already includes distributed execution, transactions, time travel, RBAC and spilling of large queries"
+  ],
+  "limits": [
+    "Open core with a hard line: masking policies, storage encryption, materialized views, streams and CDC, Python UDFs, virtual and computed columns, `ATTACH TABLE`, BendSave and automatic storage cleanup are Enterprise features under the Elastic License 2.0, which also forbids offering Databend as a managed service",
+    "Fast-moving and still numbered 1.2.x: the last GitHub release not marked pre-release is v1.2.881 (April 2026), and features come and go between builds; the Delta Lake engine was removed in September 2026 and experimental table branches were added in January 2026, removed in March and reintroduced in May",
+    "Every cache miss is an object-store request: Databend’s own engineers put an S3 GET at tens to hundreds of milliseconds, 1,000 to 5,000 times slower than local NVMe, so it suits large scans rather than point lookups or high-rate small writes",
+    "One company, Databend Labs, leads development and also sells the cloud service and the Enterprise license"
+  ],
+  "worksWith": [
+    { "id": "s3", "how": "keeps its tables as Parquet blocks in" },
+    { "id": "azure-blob", "how": "can keep its tables in" },
+    { "id": "gcs", "how": "can keep its tables in" },
+    { "id": "opendal", "how": "reaches object storage through" },
+    { "id": "parquet", "how": "writes its table blocks as" },
+    { "id": "iceberg", "how": "reads and inserts into tables in" },
+    { "id": "s3-tables", "how": "reads Iceberg tables from" },
+    { "id": "paimon", "how": "reads and writes tables in" },
+    { "id": "rust", "how": "is written in" },
+    { "id": "kubernetes", "how": "can be deployed on" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "Snapshots, time travel, querying staged Parquet and UNDROP (run on the datafuselabs/databend Docker image, v1.2.881)",
+    "source": [
+      "-- docker run -p 8000:8000 datafuselabs/databend   then connect with bendsql",
+      "CREATE TABLE orders (id INT, amount DECIMAL(10, 2));",
+      "INSERT INTO orders VALUES (1, 9.50), (2, 20.00);",
+      "INSERT INTO orders VALUES (3, 4.25);",
+      "",
+      "-- Each write committed a snapshot that points at segments of Parquet blocks",
+      "SELECT snapshot_id, segment_count, block_count, row_count",
+      "FROM fuse_snapshot('default', 'orders');",
+      "-- 01a12dfb461f75298c70a5fbdd9e37d4 | 2 | 2 | 3",
+      "-- 01a12dfb45f17d2ebec8d13e0995cf02 | 1 | 1 | 2",
+      "",
+      "DELETE FROM orders WHERE id = 2;",
+      "SELECT count(*), sum(amount) FROM orders;   -- 2 | 13.75",
+      "",
+      "-- Time travel: read the table as it was at an older snapshot",
+      "SELECT count(*), sum(amount)",
+      "FROM orders AT (SNAPSHOT => '01a12dfb461f75298c70a5fbdd9e37d4');   -- 3 | 33.75",
+      "",
+      "-- Unload to Parquet in the user stage, then query the files without loading them",
+      "COPY INTO @~/export/ FROM orders FILE_FORMAT = (TYPE = PARQUET);   -- 2 rows unloaded",
+      "SELECT id, amount FROM @~/export/ (FILE_FORMAT => 'parquet') ORDER BY id;",
+      "-- 1 | 9.50",
+      "-- 3 | 4.25",
+      "",
+      "DROP TABLE orders;",
+      "UNDROP TABLE orders;   -- within the retention period (24 hours by default)",
+      "SELECT count(*) FROM orders;   -- 2"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Community, Enterprise and Cloud",
+      "intro": "What each edition includes, from Databend’s editions and pricing pages, checked 2026-10-11.",
+      "corner": "",
+      "columns": ["Community", "Enterprise", "Databend Cloud"],
+      "rows": [
+        {
+          "label": "Who runs it",
+          "values": ["You: Docker, Kubernetes or bare metal", "You, with Databend Labs support", "Databend Labs, on AWS"]
+        },
+        {
+          "label": "License",
+          "values": ["Apache 2.0 core, plus free Elastic License 2.0 parts", "Elastic License 2.0 features unlocked by a paid key (15-day trials on request)", "Commercial service"]
+        },
+        {
+          "label": "Engine",
+          "values": ["Distributed SQL, transactions, time travel, RBAC, Iceberg and Hive queries, spill", "Adds materialized views, streams and CDC, Python UDFs, virtual and computed columns", "As Enterprise"]
+        },
+        {
+          "label": "Security and recovery",
+          "values": ["Basic audit, password policies, network allow lists", "Adds masking policies, storage encryption, full audit trail, BendSave backups and Fail-Safe recovery", "As Enterprise"]
+        },
+        {
+          "label": "Price",
+          "values": ["Free; you pay for servers and object storage", "Quote", "Per second of running warehouse ($1 to $512 an hour on Personal, 1.5 times that on Business) plus $23 per TB a month of storage"]
+        }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Databend began as FuseQuery: its first commit, “hello FuseQuery”, landed on 10 October 2020 from the GitHub user BohuTANG. Four days later the code moved from Apache 2.0 to the AGPL, and in February 2021 it went back to Apache 2.0. Databend Labs, the company behind it, was founded in 2021, and in September 2021 the project was renamed from Datafuse to Databend.",
+      "In December 2021 Xuanwo began rewriting Databend’s storage access layer as `dal2`. In February 2022 it left the repository as a standalone project called OpenDAL, which entered the Apache Incubator in 2023. Databend 1.0 shipped on 5 March 2023, the second anniversary of Databend Labs, adding `UPDATE`, `ALTER TABLE`, a `DECIMAL` type, a cost-based optimizer with histograms, querying files in stages and a query result cache. The release post described Databend as a cloud-native warehouse in Rust with storage-compute separation and an object-storage-oriented design, and said users were writing about 700 TB a day to object storage and analyzing it with Databend.",
+      "Weeks later, in April 2023, Databend added an enterprise license: code under `src/query/ee` and `src/meta/ee` became Elastic License 2.0 and needs a key, while the rest stayed Apache 2.0. In 2026 Databend Labs repositioned the product as a “data agent ready” warehouse built around vector and full-text search and sandboxed Python UDFs, and added geospatial functions and an R-tree index that February and March. Later that year it added Paimon read and write support and dropped the Delta Lake engine to shed a duplicate copy of Arrow and DataFusion from its dependencies."
+    ],
+    "choices": [
+      { "choice": "Separate storage from stateless compute", "why": "In a shared-nothing warehouse, adding nodes means reshuffling terabytes and a failed node takes its data with it. With data in S3, which became strongly consistent in 2020, compute nodes can be added, replaced or stopped without moving anything." },
+      { "choice": "Git-like snapshots over immutable Parquet blocks", "why": "Object storage has no in-place updates or atomic rename, so each write adds new files and a new snapshot. That design makes time travel, `UNDROP` and pruning from per-segment statistics fall out of the storage format." },
+      { "choice": "An asynchronous push-pull pipeline engine in Rust", "why": "An S3 read takes tens to hundreds of milliseconds, so an engine that blocks on I/O would sit idle. Databend overlaps I/O with computation and uses backpressure so fast and slow stages don’t overload or starve each other." },
+      { "choice": "Elastic License 2.0 for paid features", "why": "Databend Labs’ FAQ says it found ELv2 “simple, short and clear” compared with the Business Source License, with three limits: no hosted service, no bypassing the license key, and keep the notices." }
+    ],
+    "timeline": [
+      { "year": "2020", "text": "First commit, “hello FuseQuery”, on 10 October" },
+      { "year": "2021", "text": "Back to Apache 2.0 in February; renamed from Datafuse to Databend in September" },
+      { "year": "2022", "text": "The storage layer leaves the repository in February as OpenDAL" },
+      { "year": "2023", "text": "Databend 1.0 on 5 March; Elastic License 2.0 enterprise features added in April" },
+      { "year": "2026", "text": "Paimon read and write support merged in July" },
+      { "year": "2026", "text": "Delta Lake table engine removed in September" }
+    ],
+    "sources": [
+      { "label": "GitHub: databendlabs/databend commit “hello FuseQuery” (10 October 2020)", "url": "https://github.com/databendlabs/databend/commit/977e540d3f54ac844176f5c2469ec89287c987fb" },
+      { "label": "GitHub: commit “Change license from Apache 2.0 to AGPL version 3.0” (14 October 2020)", "url": "https://github.com/databendlabs/databend/commit/f8382cbd2e3cd55542619796bab791d903059bbf" },
+      { "label": "GitHub: commit “AGPL -> Apache” (15 February 2021)", "url": "https://github.com/databendlabs/databend/commit/836d5ae4e8bc92a6125d262c044cb59b114c708c" },
+      { "label": "GitHub: commit “datafuse -> databend” (13 September 2021)", "url": "https://github.com/databendlabs/databend/commit/01c5e4aa6e26f443f29f1fc06c82e1e3d0016716" },
+      { "label": "Databend blog: Way to Go, OpenDAL successfully entered Apache Incubator (March 2023)", "url": "https://www.databend.com/blog/category-product/opendal-enters-apache-incubator" },
+      { "label": "Databend blog: Databend 1.0 Release (5 March 2023)", "url": "https://www.databend.com/blog/category-engineering/databend-release-v1.0" },
+      { "label": "GitHub: PR #11153, add Enterprise license with bootstrap implementation (April 2023)", "url": "https://github.com/databendlabs/databend/pull/11153" },
+      { "label": "Databend blog: Rust for Big Data, how we built a cloud-native MPP query executor on S3 from scratch (September 2025)", "url": "https://www.databend.com/blog/engineering/rust-for-big-data-how-we-built-a-cloud-native-mpp-query-executor-on-s3-from-scratch" },
+      { "label": "Databend blog: Data Agent Ready Database (February 2026)", "url": "https://www.databend.com/blog/category-product/databend-agent-ready-database" },
+      { "label": "Databend blog: Feb–Mar 2026 bimonthly report (geography functions, R-tree index)", "url": "https://www.databend.com/blog/category-product/monthly-feb-mar-2026" },
+      { "label": "Databend docs: Licensing Databend (ELv2 FAQ)", "url": "https://docs.databend.com/guides/self-hosted/editions/enterprise/license" },
+      { "label": "GitHub: PR #20132, Paimon catalog read and distributed write (July 2026)", "url": "https://github.com/databendlabs/databend/pull/20132" },
+      { "label": "GitHub: PR #20558, remove the Delta Lake table engine (September 2026)", "url": "https://github.com/databendlabs/databend/pull/20558" }
+    ]
+  },
+  "sources": [
+    { "label": "GitHub: databendlabs/databend README (Apache 2.0 + Elastic 2.0, Docker and local quick start)", "url": "https://github.com/databendlabs/databend" },
+    { "label": "GitHub: databendlabs/databend LICENSE (which directories are Elastic License 2.0)", "url": "https://github.com/databendlabs/databend/blob/main/LICENSE" },
+    { "label": "Databend docs: Licensing Databend (Apache, Elastic free and paid, license keys, FAQ)", "url": "https://docs.databend.com/guides/self-hosted/editions/enterprise/license" },
+    { "label": "Databend docs: Enterprise features and Community vs Enterprise", "url": "https://docs.databend.com/guides/self-hosted/editions/enterprise/features" },
+    { "label": "Databend docs: Databend Cloud architecture (meta service on Raft, planner, optimizer, pipeline processors, Fuse storage)", "url": "https://docs.databend.com/guides/cloud/overview/architecture" },
+    { "label": "Databend docs: How the Fuse Engine works (snapshots, segments, blocks, pruning)", "url": "https://docs.databend.com/guides/how-databend-works/how-databend-fuse-engine-works" },
+    { "label": "Databend docs: Fuse Engine tables (Parquet blocks, compression, bloom filters)", "url": "https://docs.databend.com/sql/sql-reference/table-engines/fuse" },
+    { "label": "Databend docs: AT clause (time travel, 24-hour default retention)", "url": "https://docs.databend.com/sql/sql-commands/query-syntax/query-at" },
+    { "label": "Databend docs: UNDROP TABLE", "url": "https://docs.databend.com/sql/sql-commands/ddl/table/ddl-undrop-table" },
+    { "label": "Databend docs: Apache Iceberg catalogs (REST, Glue, S3 Tables, Hive; INSERT INTO)", "url": "https://docs.databend.com/sql/sql-reference/table-engines/iceberg" },
+    { "label": "Databend docs: Delta Lake engine (read-only, delta-rs)", "url": "https://docs.databend.com/sql/sql-reference/table-engines/delta" },
+    { "label": "Databend docs: Connect (BendSQL, drivers, BI tools)", "url": "https://docs.databend.com/guides/connect" },
+    { "label": "Databend docs: Databend Cloud pricing (per-second warehouses, $23 per TB storage, five-minute auto-suspend)", "url": "https://docs.databend.com/guides/cloud/overview/pricing" },
+    { "label": "Databend docs: Release channels (nightly, beta, stable)", "url": "https://docs.databend.com/release-notes/release-channels" },
+    { "label": "Databend blog: Databend 1.0 Release (MySQL, ClickHouse and HTTP protocols, stages)", "url": "https://www.databend.com/blog/category-engineering/databend-release-v1.0" },
+    { "label": "Databend blog: Rust for Big Data (S3 latency, push-pull executor)", "url": "https://www.databend.com/blog/engineering/rust-for-big-data-how-we-built-a-cloud-native-mpp-query-executor-on-s3-from-scratch" },
+    { "label": "Databend blog: Data Agent Ready Database (February 2026)", "url": "https://www.databend.com/blog/category-product/databend-agent-ready-database" },
+    { "label": "Databend: About (Databend Labs, Databend Cloud)", "url": "https://www.databend.com/about/" },
+    { "label": "GitHub: databend Cargo.toml (OpenDAL, Arrow, iceberg-rust dependencies)", "url": "https://github.com/databendlabs/databend/blob/main/Cargo.toml" },
+    { "label": "GitHub: Databend releases (v1.2.881 April 2026; v1.2.952-nightly 11 October 2026)", "url": "https://github.com/databendlabs/databend/releases" },
+    { "label": "GitHub: PR #19035, initial table branching and tagging (January 2026)", "url": "https://github.com/databendlabs/databend/pull/19035" },
+    { "label": "GitHub: PR #19534, remove legacy table branch and tag implementation (March 2026)", "url": "https://github.com/databendlabs/databend/pull/19534" },
+    { "label": "GitHub: PR #19551, support experimental table branch (May 2026)", "url": "https://github.com/databendlabs/databend/pull/19551" },
+    { "label": "GitHub: PR #20132, Paimon catalog read and distributed write (July 2026)", "url": "https://github.com/databendlabs/databend/pull/20132" },
+    { "label": "GitHub: PR #20558, remove the Delta Lake table engine (September 2026)", "url": "https://github.com/databendlabs/databend/pull/20558" }
+  ],
+  "checked": "2026-10-11"
+}

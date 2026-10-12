@@ -1,0 +1,105 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Cloudflare Basin Catalog",
+  "concepts": ["catalogs", "lakehouse"],
+  "provider": "vendor",
+  "vendor": "Cloudflare",
+  "license": "Proprietary",
+  "website": "https://developers.cloudflare.com/basin-catalog/",
+  "summary": "Cloudflare’s managed Apache Iceberg REST catalog built into R2 buckets, called R2 Data Catalog until it became generally available as Basin Catalog on 1 October 2026, which also compacts tables and expires old snapshots for you.",
+  "intro": [
+    "You turn the catalog on per R2 bucket, in the dashboard or with `wrangler basin catalog enable <bucket>`, and get back a catalog URI and a warehouse name. Engines connect through the standard Iceberg REST catalog API with a Cloudflare API token that has both catalog and R2 storage permissions, and the catalog hands them SigV4 credentials for the data files. Those credentials inherit the token’s storage permissions, so a token with read-only catalog access but read-write storage access can still write objects. Cloudflare documents DuckDB (1.4.0 or newer to attach and write), PyIceberg, Snowflake, Spark, StarRocks and Trino, and its own Basin SQL engine and Basin Pipelines ingestion service use it too. Because the data sits in R2, engines in other clouds read it without egress fees.",
+    "Maintenance runs inside the service. Compaction bin-packs small Parquet files into files of a target size between 64 and 512 MB (128 MB by default), names them `compacted-…` in the table’s `data/` directory, and since July 2026 also clusters manifests by partition. Snapshot expiration removes snapshots that are both older than a limit (30 days by default) and outside the most recent N (5 by default), along with the data files only they referenced. Both can be set for the whole catalog or per table. Billing started on 3 August 2026: beyond 1 million catalog operations a month it costs $9 per million, and compaction beyond 10 GB and 1 million objects costs $0.005 per GB and $2 per million objects, on top of R2 storage at $0.015 per GB-month. Snapshot expiration is free. On 1 October 2026 Cloudflare renamed its data platform Basin: R2 Data Catalog became Basin Catalog, Pipelines became Basin Pipelines and R2 SQL became Basin SQL. Existing R2 Data Catalog resources and configurations keep working and will be deprecated over time."
+  ],
+  "strengths": [
+    "No catalog server to run: one command turns any R2 bucket into an Iceberg warehouse, with the catalog state managed by Cloudflare",
+    "A standard Iceberg REST interface, so DuckDB, PyIceberg, Spark, Trino, Snowflake and StarRocks connect with a URI, a warehouse name and a token",
+    "No egress fees, so engines in other clouds or regions can query the same tables without paying for data transfer",
+    "Built-in compaction, manifest clustering and snapshot expiration, so small files from streaming writers don’t need scheduled Spark jobs; Cloudflare’s own example puts compaction for a 20 MB/s stream at about $253 a month against $759 of storage"
+  ],
+  "limits": [
+    "Renamed in October 2026: R2 Data Catalog names, `wrangler r2 bucket catalog` commands and existing configurations still work but will be deprecated, so older guides and scripts need updating",
+    "Compaction is bin-packing only, for Parquet files only, within 64 to 512 MB; Cloudflare says sort or z-order compaction may be priced differently if it comes, and files never referenced by a snapshot are not cleaned up",
+    "Tied to R2: one catalog per bucket, no buckets in a non-default jurisdiction, and access is set by API tokens scoped to buckets, with no per-table grants in the docs",
+    "Needs an active R2 subscription and a linked payment card even for use inside the free allowance, and `DROP TABLE … PURGE` deletes the files permanently while a plain `DROP TABLE` leaves them in the bucket"
+  ],
+  "worksWith": [
+    { "id": "r2", "how": "is built into buckets on" },
+    { "id": "iceberg", "how": "tracks, compacts and expires tables in" },
+    { "id": "spark", "how": "serves Iceberg tables to" },
+    { "id": "duckdb", "how": "serves Iceberg tables to" },
+    { "id": "trino", "how": "serves Iceberg tables to" },
+    { "id": "snowflake", "how": "serves Iceberg tables to" },
+    { "id": "starrocks", "how": "serves Iceberg tables to" },
+    { "id": "arroyo", "how": "is fed by Basin Pipelines, built on" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Turn an R2 bucket into an Iceberg catalog and switch on maintenance",
+    "source": [
+      "npx wrangler r2 bucket create analytics",
+      "npx wrangler basin catalog enable analytics      # prints the Catalog URI and Warehouse name",
+      "",
+      "# Catalog-level maintenance needs an API token with Basin Catalog and R2 storage",
+      "# read/write permissions, used as a service credential",
+      "npx wrangler basin catalog compaction enable analytics --target-size 128 --token \"$CATALOG_TOKEN\"",
+      "npx wrangler basin catalog snapshot-expiration enable analytics \\",
+      "  --token \"$CATALOG_TOKEN\" --older-than-days 7 --retain-last 10",
+      "",
+      "# Override for one busy table: smaller files, shorter history",
+      "npx wrangler basin catalog compaction enable analytics web events --target-size 64",
+      "npx wrangler basin catalog snapshot-expiration enable analytics web events \\",
+      "  --token \"$CATALOG_TOKEN\" --older-than-days 2 --retain-last 5",
+      "",
+      "# Any Iceberg REST client then connects with the URI, the warehouse and a token, e.g. DuckDB:",
+      "#   CREATE SECRET r2 (TYPE ICEBERG, TOKEN '<token>');",
+      "#   ATTACH '<warehouse_name>' AS lake (TYPE ICEBERG, ENDPOINT '<catalog_uri>');"
+    ]
+  },
+  "history": {
+    "story": [
+      "Cloudflare launched R2 in 2021 with no egress fees. Over time more companies kept analytical data on R2 in open formats, above all Apache Iceberg, so that any team could query it with whatever engine it liked, from any cloud. But an Iceberg table also needs a catalog that records where each table’s current metadata is, and on R2 that meant running one yourself or relying on an external service.",
+      "On 10 April 2025, during Developer Week, Cloudflare put R2 Data Catalog into public beta: a managed Iceberg REST catalog built into the bucket, free while in beta, with planned prices of $9 per million catalog operations and $0.05 per GB plus $4 per million objects for compaction. On 25 September 2025 it added compaction and announced the Cloudflare Data Platform around it, with Pipelines, built on the Arroyo stream processor Cloudflare had acquired that year, to load events into tables, and R2 SQL to query them. Automatic snapshot expiration followed in December 2025.",
+      "In 2026 snapshot expiration started deleting unreferenced data files, and the catalog gained read-only tokens and manifest optimization. Pricing published in May was a tenth of the beta plan for compaction data ($0.005 per GB), and billing began on 3 August 2026. On 1 October 2026 the data platform became generally available under a new name, Basin, and R2 Data Catalog became Basin Catalog."
+    ],
+    "choices": [
+      { "choice": "Build the catalog into the bucket", "why": "The launch post promised Iceberg’s database-like features “without the overhead of managing your own external catalog”: enabling a bucket is all the setup there is." },
+      { "choice": "The standard Iceberg REST API instead of a new one", "why": "Engines that already speak the REST catalog protocol, such as PyIceberg, Snowflake and Spark, can connect without a Cloudflare-specific connector." },
+      { "choice": "Maintenance as part of the catalog", "why": "Query engines work best with fewer, larger files, so Cloudflare listed compaction as the next step at launch and started with small-file bin-packing in September 2025, then added snapshot expiration and manifest clustering." },
+      { "choice": "Pay per catalog operation and per GB compacted", "why": "Cloudflare pitched the data platform on usage-based pricing: metadata requests and compaction work are billed by use, with a monthly free allowance, and reads out of R2 have no egress fees." }
+    ],
+    "timeline": [
+      { "year": "2021", "text": "Cloudflare launches R2 object storage with no egress fees" },
+      { "year": "2025", "text": "R2 Data Catalog enters public beta on 10 April" },
+      { "year": "2025", "text": "Compaction and the Cloudflare Data Platform arrive on 25 September" },
+      { "year": "2025", "text": "Automatic snapshot expiration on 18 December" },
+      { "year": "2026", "text": "Billing begins on 3 August" },
+      { "year": "2026", "text": "Generally available and renamed Basin Catalog on 1 October" }
+    ],
+    "sources": [
+      { "label": "Cloudflare blog: R2 Data Catalog, managed Apache Iceberg tables with zero egress fees (10 April 2025)", "url": "https://blog.cloudflare.com/r2-data-catalog-public-beta/" },
+      { "label": "Cloudflare blog: Announcing the Cloudflare Data Platform (25 September 2025)", "url": "https://blog.cloudflare.com/cloudflare-data-platform/" },
+      { "label": "Cloudflare changelog: R2 Data Catalog now supports compaction (25 September 2025)", "url": "https://developers.cloudflare.com/changelog/post/2025-09-25-data-catalog-compaction/" },
+      { "label": "Cloudflare changelog: R2 Data Catalog now supports automatic snapshot expiration (18 December 2025)", "url": "https://developers.cloudflare.com/changelog/post/2025-12-18-r2-data-catalog-snapshot-expiration/" },
+      { "label": "Cloudflare changelog: R2 Data Catalog pricing announced (28 May 2026)", "url": "https://developers.cloudflare.com/changelog/post/2026-05-11-r2-data-catalog-pricing-announced/" },
+      { "label": "Cloudflare changelog: Billing is now enabled for R2 Data Catalog (3 August 2026)", "url": "https://developers.cloudflare.com/changelog/post/2026-08-03-r2-data-catalog-billing-enabled/" },
+      { "label": "Cloudflare changelog: Cloudflare Basin is now generally available (1 October 2026)", "url": "https://developers.cloudflare.com/changelog/post/2026-10-01-basin-ga/" }
+    ]
+  },
+  "sources": [
+    { "label": "Cloudflare docs: Basin Catalog overview (formerly R2 Data Catalog, now generally available)", "url": "https://developers.cloudflare.com/basin-catalog/" },
+    { "label": "Cloudflare docs: Basin Catalog, Getting started", "url": "https://developers.cloudflare.com/basin-catalog/get-started/" },
+    { "label": "Cloudflare docs: Basin Catalog, Manage catalogs (enable, compaction, snapshot expiration, tokens, vended credentials, jurisdictions)", "url": "https://developers.cloudflare.com/basin-catalog/manage-catalogs/" },
+    { "label": "Cloudflare docs: Basin Catalog, Table maintenance (target sizes, defaults, limitations)", "url": "https://developers.cloudflare.com/basin-catalog/table-maintenance/" },
+    { "label": "Cloudflare docs: Basin Catalog, Deleting data (DROP TABLE vs PURGE)", "url": "https://developers.cloudflare.com/basin-catalog/deleting-data/" },
+    { "label": "Cloudflare docs: Basin Catalog pricing (included usage, billing examples)", "url": "https://developers.cloudflare.com/basin-catalog/platform/pricing/" },
+    { "label": "Cloudflare docs: Basin Catalog with DuckDB (1.4.0 or newer)", "url": "https://developers.cloudflare.com/basin-catalog/config-examples/duckdb/" },
+    { "label": "Cloudflare docs: Basin Catalog with PyIceberg", "url": "https://developers.cloudflare.com/basin-catalog/config-examples/pyiceberg/" },
+    { "label": "Cloudflare changelog: R2 Data Catalog compaction now optimizes manifest files (13 July 2026)", "url": "https://developers.cloudflare.com/changelog/post/2026-07-13-r2-data-catalog-manifest-optimization/" },
+    { "label": "Cloudflare changelog: Snapshot expiration now removes unreferenced data files (22 April 2026)", "url": "https://developers.cloudflare.com/changelog/post/2026-04-22-snapshot-expiration-cleans-data-files/" },
+    { "label": "Cloudflare changelog: R2 Data Catalog now supports read-only API tokens (13 July 2026)", "url": "https://developers.cloudflare.com/changelog/post/2026-07-09-r2-data-catalog-read-only-tokens/" },
+    { "label": "Cloudflare changelog: Billing is now enabled for R2 Data Catalog (3 August 2026)", "url": "https://developers.cloudflare.com/changelog/post/2026-08-03-r2-data-catalog-billing-enabled/" },
+    { "label": "Cloudflare changelog: Cloudflare Basin is now generally available (1 October 2026)", "url": "https://developers.cloudflare.com/changelog/post/2026-10-01-basin-ga/" }
+  ],
+  "checked": "2026-10-11"
+}

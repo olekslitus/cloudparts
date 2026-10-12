@@ -1,0 +1,110 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Puffin",
+  "concepts": ["file-formats", "table-formats"],
+  "kinds": ["columnar-files"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://iceberg.apache.org/puffin-spec/",
+  "repo": "https://github.com/apache/iceberg",
+  "summary": "Apache Iceberg’s file format for the data that doesn’t fit in a manifest: a container of typed binary blobs, such as distinct-value sketches and deletion vectors, described by a JSON footer.",
+  "intro": [
+    "A Puffin file is the 4-byte magic `PFA1` (“Puffin Fratercula arctica, version 1”), then any number of blobs, then a footer. The footer repeats the magic, holds a UTF-8 JSON payload, its length as a 4-byte little-endian integer, 4 bytes of flags and the magic once more, so a reader jumps to the end of the file, reads 12 bytes and knows where the JSON starts. The JSON lists every blob: its `type`, the Iceberg field ids it was computed for, the snapshot id and sequence number it came from, its `offset` and `length`, an optional `compression-codec` (`lz4` or `zstd` only, “for maximal interoperability”) and string properties. The payload itself can be LZ4-compressed. There is one version of the format so far.",
+    "The spec defines two blob types. `apache-datasketches-theta-v1` is an Apache DataSketches Theta sketch of a column’s distinct values, with the estimate stored in an `ndv` property. Iceberg tables register such files as table statistics, tied to one snapshot; Trino’s `ANALYZE` and Spark’s `compute_table_stats` procedure write them, and the spec says readers may ignore them, because statistics are informational. `deletion-vector-v1` arrived with format v3 (Iceberg 1.8.0, February 2025): a Roaring bitmap of the deleted row positions in one data file, with a CRC-32 checksum and a big-endian length that match Delta Lake’s deletion vectors. A v3 table may not add position delete files, keeps at most one deletion vector per data file per snapshot, and its manifests point at each vector by file, offset and length, so a reader fetches just that slice."
+  ],
+  "strengths": [
+    "One container for many kinds of side data: a new statistic or index is a new blob type in the same format, not a new file format",
+    "Readers find everything from the footer: seek to the end, read the JSON, then fetch only the blobs they need by offset and length",
+    "Deletion vectors replace v2’s position delete files with one compact bitmap per data file; in a test for this page, 100 deleted rows of a 1,000-row file took a 240-byte blob",
+    "Its deletion vector layout matches Delta Lake’s, and the theta sketches come from Apache DataSketches, so the bytes are not tied to one engine"
+  ],
+  "limits": [
+    "Only two blob types are standardized, theta sketches and deletion vectors; the bloom filters, dictionaries and histograms Iceberg’s authors had in mind when they added the format are still not in the spec",
+    "Statistics are optional and per snapshot: any reader may ignore them, and they describe the snapshot they were computed on until `ANALYZE` or `compute_table_stats` runs again",
+    "Deletion vectors need a v3 table, so engines and libraries that only read v1 or v2 tables can’t read a table once it uses them",
+    "Writers don’t have to rewrite a Puffin file when the data file one of its deletion vectors points at is removed, so stale vectors stay on storage until snapshot expiry and orphan-file cleanup remove them"
+  ],
+  "worksWith": [
+    { "id": "iceberg", "how": "stores statistics and deletion vectors for" },
+    { "id": "parquet", "how": "marks deleted row positions in" },
+    { "id": "trino", "how": "holds NDV sketches written by" },
+    { "id": "spark", "how": "holds deletion vectors and sketches from" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Make Spark write both Puffin blob types, then read their footers with the standard library",
+    "source": [
+      "# Spark 3.5.9 with iceberg-spark-runtime-3.5_2.12:1.10.0 and a Hadoop catalog `lake`:",
+      "#   CREATE TABLE lake.db.orders (id BIGINT, customer STRING) USING iceberg",
+      "#     TBLPROPERTIES ('format-version'='3', 'write.delete.mode'='merge-on-read');",
+      "#   INSERT INTO lake.db.orders SELECT /*+ REPARTITION(1) */ id, concat('c', id % 50) FROM range(1000);",
+      "#   DELETE FROM lake.db.orders WHERE id % 10 = 0;           -- writes a deletion vector",
+      "#   CALL lake.system.compute_table_stats('db.orders');       -- writes theta sketches",
+      "import glob, json, struct, zlib",
+      "",
+      "def footer(path):",
+      "    data = open(path, \"rb\").read()",
+      "    assert data[:4] == data[-4:] == b\"PFA1\"            # magic at both ends",
+      "    size, flags = struct.unpack(\"<ii\", data[-12:-4])    # little-endian ints",
+      "    assert flags & 1 == 0, \"footer is LZ4-compressed\"",
+      "    return data, json.loads(data[-12 - size:-12])",
+      "",
+      "data, meta = footer(glob.glob(\"wh/db/orders/data/*-deletes.puffin\")[0])",
+      "blob = meta[\"blobs\"][0]",
+      "print(blob[\"type\"], blob[\"properties\"][\"cardinality\"], blob[\"offset\"], blob[\"length\"])",
+      "# deletion-vector-v1 100 4 240",
+      "raw = data[blob[\"offset\"]:blob[\"offset\"] + blob[\"length\"]]",
+      "length = struct.unpack(\">I\", raw[:4])[0]               # big-endian, like Delta",
+      "print(raw[4:8].hex(), length, zlib.crc32(raw[4:-4]) == struct.unpack(\">I\", raw[-4:])[0])",
+      "# d1d33964 232 True",
+      "",
+      "_, meta = footer(glob.glob(\"wh/db/orders/metadata/*.stats\")[0])",
+      "for b in meta[\"blobs\"]:",
+      "    print(b[\"type\"], b[\"fields\"], b[\"properties\"][\"ndv\"])",
+      "# apache-datasketches-theta-v1 [1] 900",
+      "# apache-datasketches-theta-v1 [2] 45",
+      "print(meta[\"properties\"][\"created-by\"][:31])",
+      "# Iceberg Apache Iceberg 1.10.0 "
+    ]
+  },
+  "history": {
+    "story": [
+      "Iceberg manifests keep a few statistics per data file, such as value counts, null counts and lower and upper bounds, so engines can skip files. A cost-based optimizer also wants to know how many distinct values a column has across the table, and that kind of information doesn’t fit in a manifest entry. Until late 2022, Trino kept the statistics it gathered for Iceberg tables in Trino-specific table properties.",
+      "In 2022 Piotr Findeisen (`findepi` on GitHub) proposed Puffin, “a container file format to store indices and stats for Iceberg tables”. The spec was merged in June 2022. In the review, Ryan Blue said the idea was to hold bloom filters, dictionaries and other index types as well as sketches, and later histograms. Iceberg 0.14.0 shipped the spec and a reader and writer in July 2022; 1.1.0 in November 2022 let tables register Puffin statistics files, and Trino moved its distinct-value statistics into them the next month.",
+      "The second use came with format v3. Iceberg 1.8.0, in February 2025, stored row-level deletes as deletion vectors in `deletion-vector-v1` blobs, one bitmap per data file instead of the position delete files of v2. Its length and checksum fields are big-endian, which the spec says was chosen for compatibility with Delta Lake’s existing deletion vectors."
+    ],
+    "choices": [
+      { "choice": "A generic container of typed blobs", "why": "The authors expected many kinds of side data, from Theta sketches to bloom filters, dictionaries and histograms, so they defined a container with a blob type registry instead of a format per statistic." },
+      { "choice": "A JSON footer that records each blob’s snapshot, fields and byte range", "why": "Readers can fetch one blob by offset and length, and know exactly which snapshot and columns it describes. Iceberg manifests later point at deletion vectors with the same offset and length." },
+      { "choice": "Only LZ4 and Zstandard compression", "why": "The spec allows just these two codecs, each as a single frame with the content size present, “for maximal interoperability” across engines and languages." },
+      { "choice": "Delta-compatible deletion vectors", "why": "Using a Roaring bitmap layout with the same big-endian length and CRC fields as Delta Lake’s deletion vectors keeps the bytes compatible with those tables." }
+    ],
+    "timeline": [
+      { "year": "2022", "text": "Piotr Findeisen’s Puffin spec is merged into Iceberg in June" },
+      { "year": "2022", "text": "Iceberg 0.14.0 ships the Puffin spec, reader and writer in July" },
+      { "year": "2022", "text": "Iceberg 1.1.0 adds Puffin statistics to the Table API in November" },
+      { "year": "2022", "text": "Trino stores Iceberg distinct-value statistics in Puffin files from December" },
+      { "year": "2025", "text": "Iceberg 1.8.0 writes v3 deletion vectors as Puffin blobs in February" }
+    ],
+    "sources": [
+      { "label": "GitHub: apache/iceberg PR #4944, Add Puffin, indices and stats file format specification (June 2022)", "url": "https://github.com/apache/iceberg/pull/4944" },
+      { "label": "GitHub: Piotr Findeisen (findepi)", "url": "https://github.com/findepi" },
+      { "label": "GitHub: Ryan Blue (rdblue)", "url": "https://github.com/rdblue" },
+      { "label": "GitHub: apache/iceberg PR #4537, Add reader and writer for Puffin (June 2022)", "url": "https://github.com/apache/iceberg/pull/4537" },
+      { "label": "GitHub: trinodb/trino PR #15400, Store NDV stats in Iceberg Puffin statistics file (December 2022)", "url": "https://github.com/trinodb/trino/pull/15400" },
+      { "label": "Apache Iceberg: Releases (0.14.0 July 2022, 1.1.0 November 2022, 1.8.0 February 2025)", "url": "https://iceberg.apache.org/releases/" },
+      { "label": "Apache Iceberg: Puffin file format specification", "url": "https://iceberg.apache.org/puffin-spec/" }
+    ]
+  },
+  "sources": [
+    { "label": "Apache Iceberg: Puffin file format specification (structure, footer, blob types, codecs)", "url": "https://iceberg.apache.org/puffin-spec/" },
+    { "label": "Apache Iceberg: Table spec (table statistics, deletion vectors, v3 delete rules)", "url": "https://iceberg.apache.org/spec/" },
+    { "label": "Apache Iceberg: Spark procedures (`compute_table_stats`)", "url": "https://iceberg.apache.org/docs/latest/spark-procedures/" },
+    { "label": "Apache Iceberg: Releases (1.8.0 deletion vectors)", "url": "https://iceberg.apache.org/releases/" },
+    { "label": "Trino docs: Iceberg connector, table statistics and `ANALYZE`", "url": "https://trino.io/docs/current/connector/iceberg.html" },
+    { "label": "GitHub: trinodb/trino PR #15400, Store NDV stats in Iceberg Puffin statistics file", "url": "https://github.com/trinodb/trino/pull/15400" },
+    { "label": "GitHub: apache/iceberg PR #4944, review discussion (bloom filters, dictionaries, histograms)", "url": "https://github.com/apache/iceberg/pull/4944" }
+  ],
+  "checked": "2026-10-11"
+}

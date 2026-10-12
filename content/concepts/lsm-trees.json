@@ -1,0 +1,217 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "LSM trees",
+  "category": "data",
+  "order": 67,
+  "summary": "A storage structure that buffers writes in a sorted in-memory table, flushes them to immutable sorted files and merges those files in the background, trading extra reads and rewrites later for fast, sequential writes now.",
+  "howItWorks": "A log-structured merge (LSM) tree never updates data in place. A write is appended to a write-ahead log (so it survives a crash) and inserted into the memtable, a sorted structure in memory (a skiplist by default in RocksDB). When the memtable fills, it is frozen and flushed to disk as a new immutable sorted file, an SSTable or SST. Background compaction then merge-sorts files into larger ones, keeping only the newest version of each key, so data moves down through levels that are each about 10 times larger than the one above. An update is just a newer version, and a delete is a newer marker, a tombstone, that hides older values until compaction reaches the bottom and both can be dropped. A read checks the memtable, then the files from newest to oldest, and stops at the first version it finds; a Bloom filter per file (about 10 bits per key for a 1% false positive rate) lets it skip most files that can’t hold the key. The price is amplification: each byte is rewritten several times on its way down (write amplification), a lookup may touch several files (read amplification), and stale versions take space until compaction removes them (space amplification). The compaction policy decides the balance between the three.",
+  "analogy": "An office in-tray. New letters land on top of the tray without anyone filing them, which is fast. Every so often someone sorts the tray into a box, and later merges the boxes into the filing cabinet, throwing away letters that a newer one replaced. To find something you check the tray, then the boxes from newest to oldest, then the cabinet; a sticky note on each box listing what is surely not inside saves opening most of them.",
+  "useWhen": [
+    "Write-heavy data such as events, metrics, logs, time series or chat messages, where inserts far outnumber reads",
+    "Flash storage where bytes written matter: Facebook’s move from InnoDB to MyRocks cut bytes written to flash by 75% and instance size by 62.3%",
+    "Embedded state stores that must hold more than fits in memory, such as stream processors keeping per-key state in RocksDB",
+    "Distributed databases that want each node’s writes to be sequential appends, as in Cassandra, ScyllaDB, HBase and Bigtable"
+  ],
+  "avoidWhen": [
+    "Read-mostly workloads with heavy range scans and few writes: a range scan merges every sorted run, which costs several times more key comparisons than one B-tree descent",
+    "Queue-like or churning keys that are deleted soon after they are written: tombstones pile up and slow range scans until compaction reaches the last level",
+    "You need steady latency without tuning: when flush or compaction can’t keep up, the engine deliberately slows or stops writes",
+    "The data fits in memory, where neither disk layout matters much"
+  ],
+  "example": "In a run on an M1 laptop, a program writes 2 million random 116-byte key-value pairs (232 MB) into RocksDB with an 8 MB memtable and levels growing 10 times. Flushes and compactions write 1.28 GB of SST files, 5.5 times what the program wrote, and the data settles into 64 files across four levels. 100,000 lookups for keys that don’t exist skip about 363,000 file reads thanks to the Bloom filters, roughly 3.6 per lookup. Deleting half the keys shrinks the files only from 255 MB to 206 MB, because each delete is a tombstone. A full compaction brings them down to 127 MB.",
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "# pip install rocksdict   (Python bindings for RocksDB; rocksdict 0.3.29)",
+      "# Numbers are from one run on an M1 laptop; yours will differ.",
+      "import os, shutil, time",
+      "import rocksdict as r",
+      "",
+      "shutil.rmtree(\"/tmp/lsm\", ignore_errors=True)",
+      "opt = r.Options(raw_mode=True)",
+      "opt.create_if_missing(True)",
+      "opt.set_write_buffer_size(8 << 20)                   # 8 MB memtable",
+      "opt.set_level_compaction_dynamic_level_bytes(False)",
+      "opt.set_max_bytes_for_level_base(16 << 20)           # L1 16 MB, L2 160 MB, L3 1.6 GB",
+      "opt.set_target_file_size_base(4 << 20)               # 4 MB SST files",
+      "opt.enable_statistics()",
+      "table = r.BlockBasedOptions()",
+      "table.set_bloom_filter(10, False)                    # 10 bits per key, about 1% false positives",
+      "opt.set_block_based_table_factory(table)",
+      "db = r.Rdict(\"/tmp/lsm\", opt)",
+      "",
+      "def stat(name):",
+      "    line = next(l for l in opt.get_statistics().splitlines() if l.startswith(name + \" \"))",
+      "    return int(line.split()[-1])",
+      "",
+      "def mb(n):",
+      "    return f\"{n / 1e6:,.0f} MB\"",
+      "",
+      "keys = [os.urandom(16) for _ in range(2_000_000)]",
+      "for k in keys:",
+      "    db.put(k, os.urandom(100))                       # 116 bytes per pair, random order",
+      "db.flush()",
+      "time.sleep(10)                                       # let background compaction finish",
+      "user = len(keys) * 116",
+      "disk = stat(\"rocksdb.flush.write.bytes\") + stat(\"rocksdb.compact.write.bytes\")",
+      "print(\"you wrote\", mb(user), \"| SST files got\", mb(disk), f\"({disk / user:.1f}x)\")",
+      "# you wrote 232 MB | SST files got 1,279 MB (5.5x)",
+      "print(\"files per level:\", [db.property_int_value(f\"rocksdb.num-files-at-level{i}\") for i in range(4)])",
+      "# files per level: [2, 3, 39, 20]",
+      "",
+      "for _ in range(100_000):",
+      "    db.get(os.urandom(16))                           # keys that don't exist",
+      "print(\"file reads skipped by Bloom filters:\", stat(\"rocksdb.bloom.filter.useful\"))",
+      "# file reads skipped by Bloom filters: 362647",
+      "",
+      "size = lambda: mb(db.property_int_value(\"rocksdb.total-sst-files-size\"))",
+      "print(\"on disk:\", size())                            # on disk: 255 MB",
+      "for k in keys[:1_000_000]:",
+      "    db.delete(k)                                     # each delete writes a tombstone",
+      "db.flush()",
+      "print(\"after deleting half:\", size())                # after deleting half: 206 MB",
+      "db.compact_range(None, None)                         # rewrite everything, drop tombstones",
+      "print(\"after a full compaction:\", size())            # after a full compaction: 127 MB",
+      "db.close()"
+    ]
+  },
+  "related": ["indexes", "key-value", "data-structures", "wide-column"],
+  "diagram": {
+    "caption": "Each write is appended to the log and inserted into the sorted memtable. Flushes turn the memtable into immutable L0 files, and compaction merges them down, rewriting the same bytes again. Deletes (orange) travel as tombstones until compaction reaches the last level, where they are dropped.",
+    "h": 270,
+    "nodes": [
+      { "id": "writes", "x": 85, "y": 140, "label": "Writes", "sub": "put · delete",
+        "emit": { "every": 420, "jitter": 0.4, "types": ["put", "put", "put", "delete"], "colorByType": { "put": 0, "delete": 1 }, "route": "fanout" },
+        "out": ["wal", "mem"] },
+      { "id": "wal", "x": 255, "y": 55, "label": "Write-ahead log", "sub": "append-only, for recovery", "mode": "sink" },
+      { "id": "mem", "x": 255, "y": 200, "kind": "queue", "cap": 8, "gap": 120, "label": "Memtable", "sub": "sorted, in memory", "out": ["flush"] },
+      { "id": "flush", "x": 425, "y": 200, "kind": "pool", "max": 1, "work": 300, "label": "Flush", "sub": "write one sorted file", "out": ["l0"] },
+      { "id": "l0", "x": 425, "y": 75, "label": "L0 SSTables", "sub": "immutable, may overlap", "out": ["compact"] },
+      { "id": "compact", "x": 590, "y": 75, "kind": "pool", "max": 2, "work": 900, "label": "Compaction", "sub": "merge-sort, keep newest", "out": ["last"] },
+      { "id": "last", "x": 640, "y": 200, "label": "Last level", "sub": "about 90% of the data", "mode": "gate", "allowTypes": ["put"], "denyText": "tombstone dropped" }
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Compaction styles",
+      "intro": "Compaction decides which sorted runs get merged and when. Each style picks a different point between write, read and space amplification.",
+      "corner": "Style",
+      "columns": ["How it merges", "Amplification", "Where you find it"],
+      "rows": [
+        { "label": "Leveled", "values": [
+          "Each level below L0 is one sorted run, range-partitioned into files, about 10 times larger than the level above. Compaction merges a file into the overlapping files of the next level",
+          "Lowest space and read amplification: a point read checks at most one file per level. Highest write amplification, up to the fanout per level in the worst case",
+          "RocksDB’s default (with a tiered L0), LevelDB, Cassandra and ScyllaDB LCS with 160 MB SSTables"
+        ] },
+        { "label": "Tiered (size-tiered, universal)", "values": [
+          "Waits until there are several sorted runs of similar size (four by default in Cassandra) and merges them into one bigger run, without rewriting the larger runs below",
+          "Lowest write amplification, about 1 per level. More runs to check on reads, and a full compaction can briefly double disk usage",
+          "Cassandra STCS, ScyllaDB STCS and ICS (which splits runs to avoid the doubling), RocksDB universal compaction"
+        ] },
+        { "label": "Unified and hybrid", "values": [
+          "Tiered for the small, recent levels and leveled for the big ones, or one strategy that can be tuned between the two",
+          "Less write amplification than leveled and less space amplification than tiered",
+          "RocksDB leveled (tiered L0); Cassandra 5.0’s Unified Compaction Strategy, recommended for new tables, which one scaling parameter moves from read-friendly to write-friendly"
+        ] },
+        { "label": "FIFO and time windows", "values": [
+          "FIFO never merges: it drops the oldest file once a size limit is reached. Time-window compaction only merges files from the same time window",
+          "Little rewriting, but only fits data that expires by age",
+          "RocksDB FIFO compaction for cache-like data; ScyllaDB’s time-window strategy (TWCS) for time series with TTLs"
+        ] }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "LSM tree or B-tree",
+      "intro": "Both keep keys sorted, so both answer point lookups and range scans. Numbers in the B-tree column come from InnoDB, MySQL’s B+tree engine, in Facebook’s user database (UDB) before it moved to MyRocks, RocksDB under MySQL.",
+      "columns": ["LSM tree", "B-tree"],
+      "rows": [
+        { "label": "A write", "values": [
+          "An append to the log plus an insert in memory; disk writes happen later, in large sequential batches",
+          "Read the leaf page, change it, write the whole page back, even for a few changed bytes"
+        ] },
+        { "label": "Space", "values": [
+          "Dead versions until compaction removes them, kept to about 10% with tuning. Compressed blocks take their real size: 16 KB compressed to 5 KB uses 5 KB",
+          "InnoDB wasted 25–30% to fragmentation, and a 16 KB page compressed to 5 KB still takes 8 KB"
+        ] },
+        { "label": "In production (Facebook UDB)", "values": [
+          "MyRocks instances were 62.3% smaller than compressed InnoDB for the same data, wrote 75% fewer bytes to flash and used slightly less CPU",
+          "Needed more than twice as many servers for the same data"
+        ] },
+        { "label": "Reads", "values": [
+          "A range scan binary-searches every sorted run and merges them with a heap, which can mean several times more key comparisons; tombstones must be skipped one by one",
+          "One descent finds the start of a range, and moving to the next key needs no comparison"
+        ] },
+        { "label": "Background work", "values": [
+          "Compaction competes with foreground I/O and can stall writes when it falls behind",
+          "Random writes fragment pages; Facebook had to defragment InnoDB constantly to keep space down"
+        ] }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Amplification in numbers",
+      "body": [
+        "Write amplification is the bytes written to storage divided by the bytes the application wrote; read amplification is the same ratio for reads. In LevelDB, where each level is 10 times larger than the one above, moving a file down one level can rewrite up to 10 times its size, so in theory a key can be written more than 50 times on its way from L1 to L6. The WiscKey authors measured LevelDB loading 1 KB values: write amplification was 3.1 for a 1 GB database and 14 for a 100 GB one. Random lookups read 8.2 times the requested data at 1 GB and 327 times at 100 GB, because a lookup may check up to 8 files in L0 and one in each of the other 6 levels, reading an index block, a Bloom filter block and a data block from each.",
+        "Bloom filters are the main defense on reads. RocksDB’s defaults use about 10 bits per key: 9.9 bits gives a 1% false positive rate, 4.9 bits gives 10%, and 15.5 bits gives 0.1%. The filters usually live in memory, so their size is a real cost; Facebook made MyRocks skip filters on the last level, where most data sits, and cut total filter size by 90%. A Bloom filter helps point lookups only. Range scans still visit every sorted run, unless a prefix filter fits the query.",
+        "Deletes need care. A tombstone can’t simply remove the key from the file it lands in, because an older version may still sit in a lower level, so it stays until compaction reaches the bottom. In distributed stores it must also outlive the time a replica can be offline: Cassandra keeps tombstones for `gc_grace_seconds`, 864,000 seconds (ten days) by default, and a node that stays down longer can bring deleted data back as “zombies” during repair. RocksDB’s `DeleteRange` writes one marker for a whole key range instead of one per key."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In 1996 Patrick O’Neil, Edward Cheng, Dieter Gawlick and Elizabeth O’Neil published “The Log-Structured Merge-Tree (LSM-Tree)” in Acta Informatica. Their example was a bank’s History table taking 1,000 inserts a second, indexed by account and time: a B-tree index would need a random page read and write per insert, about 2,000 extra I/Os a second, and roughly 50 more disk arms, doubling the disk bill. Their design kept a small tree in memory (C0) and a larger one on disk (C1), with a “rolling merge” that moves entries down in large multi-page blocks, an idea borrowed from the Log-Structured File System of Rosenblum and Ousterhout. Deletes became delete entries applied during the merge, and they generalized it to more components, each larger than the last.",
+      "Google’s Bigtable paper (OSDI 2006) brought the shape to large systems and gave it today’s names: writes go to a commit log and a sorted in-memory memtable, full memtables become immutable SSTables, merging compactions bound how many files a read must check, and optional Bloom filters let most lookups for absent rows skip the disk. The paper noted that this is analogous to how the LSM tree stores index updates. Cassandra, built at Facebook for inbox search, which launched in June 2008, used the same commit log, in-memory structure, flushed files and per-file Bloom filters. Apache HBase, too, describes the LSM tree as the design it is based on.",
+      "In July 2011 Google open-sourced LevelDB, a small C++ library whose precursor stores Bigtable’s tablets, with levels that each grow 10 times. Facebook forked it into RocksDB, open-sourced in November 2013, adding multi-threaded compaction for flash and a choice of leveled and universal (tiered) compaction. Research since has focused on the amplification trade-off: WiscKey (FAST 2016) appended values to a separate value log so the LSM tree holds only keys and pointers, and Dostoevsky and later work mapped the space between leveled and tiered. In 2017 Facebook finished moving its main MySQL user database from InnoDB to MyRocks, and cut the database servers it needed to less than half."
+    ],
+    "choices": [
+      { "choice": "Defer and batch index changes", "why": "On spinning disks, the cost was disk arm movement, not capacity. Collecting changes in memory and writing them in large sorted batches turns many random page writes into few sequential ones; O’Neil and colleagues estimated an order of magnitude lower cost for insert-heavy indexes." },
+      { "choice": "Never modify a file once it is written", "why": "Immutable SSTables need no locking for readers, can be shared and copied safely, and make crash recovery simple: replay the log into a new memtable. The cost is that updates and deletes become new versions that compaction must clean up later." },
+      { "choice": "Levels that grow by a fixed ratio", "why": "With each level about 10 times larger than the last, a few levels hold a huge dataset and most data sits at the bottom. That bounds how many files a read checks and how much space stale versions take, at the price of rewriting data at each level." },
+      { "choice": "A small filter per file", "why": "Checking several files per lookup would make reads slow. A Bloom filter per SSTable answers “definitely not here” from memory, so most lookups for missing keys never touch the disk, as Bigtable and Cassandra both found." }
+    ],
+    "timeline": [
+      { "year": "1996", "text": "O’Neil, Cheng, Gawlick and O’Neil publish the LSM-tree in Acta Informatica" },
+      { "year": "2006", "text": "Google’s Bigtable paper describes memtables, SSTables, compactions and Bloom filters" },
+      { "year": "2008", "text": "Facebook launches inbox search on Cassandra" },
+      { "year": "2011", "text": "Google open-sources LevelDB" },
+      { "year": "2013", "text": "Facebook open-sources RocksDB, a LevelDB fork for flash and servers" },
+      { "year": "2016", "text": "WiscKey separates keys from values to cut write amplification" },
+      { "year": "2017", "text": "Facebook completes its move from InnoDB to MyRocks, an LSM engine under MySQL" }
+    ],
+    "sources": [
+      { "label": "O’Neil, Cheng, Gawlick and O’Neil: The Log-Structured Merge-Tree (LSM-Tree), Acta Informatica 33 (1996), author’s PDF", "url": "https://www.cs.umb.edu/~poneil/lsmtree.pdf" },
+      { "label": "Springer: The log-structured merge-tree (LSM-tree), Acta Informatica 33, 351–385 (June 1996)", "url": "https://link.springer.com/article/10.1007/s002360050048" },
+      { "label": "Chang et al.: Bigtable, A Distributed Storage System for Structured Data (OSDI 2006)", "url": "https://research.google.com/archive/bigtable-osdi06.pdf" },
+      { "label": "Lakshman and Malik: Cassandra, A Decentralized Structured Storage System (LADIS 2009)", "url": "https://www.cs.cornell.edu/projects/ladis2009/papers/lakshman-ladis2009.pdf" },
+      { "label": "Google Open Source Blog: LevelDB, a fast persistent key-value store (Jul 2011)", "url": "https://opensource.googleblog.com/2011/07/leveldb-fast-persistent-key-value-store.html" },
+      { "label": "Engineering at Meta: Under the hood, building and open-sourcing RocksDB (Nov 2013)", "url": "https://engineering.fb.com/2013/11/21/core-infra/under-the-hood-building-and-open-sourcing-rocksdb/" },
+      { "label": "Lu et al.: WiscKey, Separating Keys from Values in SSD-conscious Storage (FAST 2016)", "url": "https://www.usenix.org/system/files/conference/fast16/fast16-papers-lu.pdf" },
+      { "label": "Matsunobu, Dong and Lee: MyRocks, LSM-Tree Database Storage Engine Serving Facebook’s Social Graph (VLDB 2020)", "url": "https://www.vldb.org/pvldb/vol13/p3217-matsunobu.pdf" },
+      { "label": "RocksDB wiki: Compaction (taxonomy of leveled, tiered, tiered+leveled and FIFO)", "url": "https://github.com/facebook/rocksdb/wiki/Compaction" }
+    ]
+  },
+  "sources": [
+    { "label": "O’Neil, Cheng, Gawlick and O’Neil: The Log-Structured Merge-Tree (LSM-Tree), Acta Informatica 33 (1996), author’s PDF", "url": "https://www.cs.umb.edu/~poneil/lsmtree.pdf" },
+    { "label": "Chang et al.: Bigtable, A Distributed Storage System for Structured Data (OSDI 2006): memtable, SSTables, compactions, Bloom filters", "url": "https://research.google.com/archive/bigtable-osdi06.pdf" },
+    { "label": "RocksDB wiki: Overview (memtable, WAL, SST files, compaction)", "url": "https://github.com/facebook/rocksdb/wiki/RocksDB-Overview" },
+    { "label": "RocksDB wiki: MemTable (skiplist by default)", "url": "https://github.com/facebook/rocksdb/wiki/MemTable" },
+    { "label": "RocksDB wiki: Compaction (leveled, tiered, tiered+leveled, FIFO and their amplification)", "url": "https://github.com/facebook/rocksdb/wiki/Compaction" },
+    { "label": "RocksDB wiki: Leveled compaction (level targets, 90% of data in the last level)", "url": "https://github.com/facebook/rocksdb/wiki/Leveled-Compaction" },
+    { "label": "RocksDB wiki: Universal compaction (tiered; full compaction can double disk usage)", "url": "https://github.com/facebook/rocksdb/wiki/Universal-Compaction" },
+    { "label": "RocksDB wiki: RocksDB Bloom filter (bits per key and false positive rates)", "url": "https://github.com/facebook/rocksdb/wiki/RocksDB-Bloom-Filter" },
+    { "label": "RocksDB wiki: DeleteRange", "url": "https://github.com/facebook/rocksdb/wiki/DeleteRange" },
+    { "label": "RocksDB wiki: Write stalls", "url": "https://github.com/facebook/rocksdb/wiki/Write-Stalls" },
+    { "label": "Apache Cassandra docs: Storage engine (LSM trees, commit log, memtables, SSTables, write amplification)", "url": "https://cassandra.apache.org/doc/latest/cassandra/architecture/storage-engine.html" },
+    { "label": "Apache Cassandra docs: Compaction overview", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/overview.html" },
+    { "label": "Apache Cassandra docs: Tombstones (gc_grace_seconds, zombies)", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/tombstones.html" },
+    { "label": "Apache Cassandra docs: Size Tiered Compaction Strategy (UCS recommended from 5.0)", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/stcs.html" },
+    { "label": "Apache Cassandra docs: Leveled Compaction Strategy (10x levels, one SSTable per level per read)", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/lcs.html" },
+    { "label": "ScyllaDB docs: Compaction strategies (STCS, LCS with 160 MB SSTables, ICS)", "url": "https://docs.scylladb.com/manual/stable/architecture/compaction/compaction-strategies.html" },
+    { "label": "Apache HBase reference guide (HBase is based on the LSM tree design; in-memory compaction)", "url": "https://hbase.apache.org/book.html" },
+    { "label": "Apache Flink docs: State backends (EmbeddedRocksDBStateBackend keeps state in RocksDB)", "url": "https://nightlies.apache.org/flink/flink-docs-stable/docs/ops/state/state_backends/" },
+    { "label": "Lu et al.: WiscKey (FAST 2016), measured LevelDB write and read amplification", "url": "https://www.usenix.org/system/files/conference/fast16/fast16-papers-lu.pdf" },
+    { "label": "Matsunobu, Dong and Lee: MyRocks (VLDB 2020), InnoDB vs MyRocks space, writes, CPU and tombstones", "url": "https://www.vldb.org/pvldb/vol13/p3217-matsunobu.pdf" }
+  ]
+}

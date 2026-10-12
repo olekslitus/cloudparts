@@ -1,0 +1,122 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Apache Amoro",
+  "concepts": ["lakehouse", "table-formats"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://amoro.apache.org/",
+  "repo": "https://github.com/apache/amoro",
+  "summary": "An incubating Apache “lakehouse management system”, started at NetEase as Arctic, that watches Iceberg tables and keeps them fast on its own: it compacts small files, rewrites deletes and expires old snapshots and files in the background.",
+  "intro": [
+    "Amoro has two parts. AMS, the Amoro Management Service, is a central server that tracks every table it manages, notices when files pile up and plans optimizing tasks, then commits the results; it also serves a web dashboard, a catalog service and a Spark SQL terminal. Optimizers are separate, stateless worker processes that pull those tasks and execute them. They run as a local Java process, as Kubernetes pods, as a Flink or Spark job, or as anything you start yourself, and they are pooled into optimizer groups so one group of tables can’t starve another. AMS can be the metastore itself (an “internal catalog”, which it also serves as an Iceberg REST catalog) or manage tables that live in Hive Metastore, a Hadoop catalog, AWS Glue, a REST catalog or Nessie.",
+    "Its “self-optimizing” borrows from generational garbage collection. Files under one eighth of `self-optimizing.target-size` (128 MB by default, so 16 MB) are fragments; larger ones are segments. Minor optimizing runs often, merging fragments and turning equality deletes into position deletes; by default it triggers at 12 fragment and delete files or after an hour. Major optimizing runs rarely and merges segments to drop rows that deletes and duplicate keys have made redundant, and full optimizing rewrites everything into one file per space. Besides plain Iceberg tables, Amoro has its own formats for primary-key tables fed by CDC streams: Mixed-Iceberg, built from Iceberg tables underneath, and Mixed-Hive, which Hive can still read and write. It also shows Paimon and Hudi tables’ metadata. It has been in the Apache Incubator since March 2024. The latest release is 0.8.1-incubating (11 September 2025); 0.9.0 has been in release candidates since September 2026, and the Docker image tagged `latest` already points at one."
+  ],
+  "strengths": [
+    "Maintenance runs continuously without anyone scheduling Spark jobs: AMS watches commits and plans compaction, delete conversion, snapshot expiry and orphan-file cleanup per table",
+    "Minor and major optimizing are tuned separately, so streaming tables get small files merged quickly without rewriting large files over and over",
+    "Optimizers run where you already have capacity (Flink, Spark, Kubernetes or a plain JVM), and optimizer groups with `Quota` or `Balanced` scheduling keep tables from competing for the same workers",
+    "Works with existing catalogs: register Hive Metastore, Glue, a REST catalog or Nessie and Amoro maintains the tables in place, with no Amoro dependency for engines that read Iceberg tables"
+  ],
+  "limits": [
+    "Still incubating, with a slow release cadence: 0.8.1 from September 2025 is the latest release, and 0.9.0 had reached its twelfth release candidate by September 2026",
+    "Lags Iceberg’s newest format: 0.8 bundles Iceberg 1.6.1, and the 0.9 docs say format v3 tables are skipped for optimizing and maintenance because the bundled writer could make them unreadable to v3 readers",
+    "Another service to run: AMS keeps its state in embedded Derby unless you give it MySQL or PostgreSQL, and optimizers need a Flink, Spark or Kubernetes cluster to scale beyond the local container, which the docs recommend only for demos",
+    "Mixed-Iceberg and Mixed-Hive tables are Amoro’s own formats: their full features need Amoro’s Flink, Spark and Trino connectors, and the docs warn that primary-key uniqueness or conflict resolution can fail where tables are also used through Hive or plain Iceberg"
+  ],
+  "worksWith": [
+    { "id": "iceberg", "how": "compacts and expires snapshots of tables in" },
+    { "id": "paimon", "how": "shows schema, files and compactions of" },
+    { "id": "hive", "how": "upgrades tables in place from" },
+    { "id": "flink", "how": "runs optimizers as streaming jobs on" },
+    { "id": "spark", "how": "runs optimizers and its SQL terminal on" },
+    { "id": "kubernetes", "how": "runs optimizer pods on" },
+    { "id": "trino", "how": "provides a Mixed-format connector for" },
+    { "id": "kafka", "how": "can use as a LogStore for Mixed tables" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Twelve tiny appends through AMS’s Iceberg REST endpoint, then let self-optimizing merge them",
+    "source": [
+      "# pip install \"pyiceberg[pyarrow]\"   (pyiceberg 0.12)",
+      "# AMS 0.8.1 (apache/amoro:0.8.1-incubating) at amoro:1630, with an internal Iceberg",
+      "# catalog `lake` whose optimizer group `local` has one running local optimizer",
+      "import time",
+      "import pyarrow as pa",
+      "from pyiceberg.catalog.rest import RestCatalog",
+      "",
+      "# AMS serves an Iceberg REST catalog for its internal catalogs",
+      "catalog = RestCatalog(\"amoro\", uri=\"http://amoro:1630/api/iceberg/rest\", warehouse=\"lake\")",
+      "catalog.create_namespace(\"db\")",
+      "events = catalog.create_table(",
+      "    \"db.events\",",
+      "    pa.schema([(\"id\", pa.int64()), (\"kind\", pa.string())]),",
+      "    properties={\"self-optimizing.minor.trigger.file-count\": \"10\"},  # default 12",
+      ")",
+      "",
+      "# A streaming-style writer: twelve tiny commits, one small Parquet file each",
+      "for i in range(12):",
+      "    events.append(pa.table({\"id\": [i], \"kind\": [\"click\"]}))",
+      "",
+      "def data_files():",
+      "    return len(catalog.load_table(\"db.events\").inspect.files())",
+      "",
+      "print(data_files())  # 12",
+      "",
+      "time.sleep(120)       # AMS notices the fragments and plans a minor optimizing",
+      "",
+      "t = catalog.load_table(\"db.events\")",
+      "print(data_files(), t.current_snapshot().summary.operation)  # 1 Operation.REPLACE",
+      "print(t.scan().to_arrow().num_rows)                          # 12"
+    ]
+  },
+  "history": {
+    "story": [
+      "NetEase began using Apache Iceberg across several business lines in 2019. Tables written by streams and CDC piled up small files and delete files, and someone had to run compaction and cleanup jobs at the right pace: too rarely and reads slowed sharply, too often and the rewrites wasted resources. NetEase built a management system called Arctic to do that work automatically.",
+      "NetEase open-sourced Arctic in 2022 and renamed it Amoro in 2023; the first release under the new name, 0.5.0, came out in August 2023. By the time of its Apache Incubator proposal it supported more table formats, had 62 developers, had shipped eight versions in a year and was used at more than ten other companies. Jinsong Zhou of NetEase is listed as the project’s founder.",
+      "Amoro entered the Apache Incubator on 11 March 2024, with initial committers from NetEase, DtDream, Cisco Webex and Qichacha. The first Apache release, 0.7.0-incubating, followed in August 2024, and 0.8.0 in May 2025 moved to Iceberg 1.6.1, added Spark 3.5 for Mixed tables and showed Hudi metadata in the dashboard."
+    ],
+    "choices": [
+      { "choice": "Minor and major optimizing, after generational GC", "why": "Optimizing often keeps reads fast but rewrites the same data again and again. Splitting files into fragments and segments, as a JVM splits young and old objects, lets small files merge quickly while big ones are rewritten rarely." },
+      { "choice": "A central planner with separate, stateless optimizers", "why": "The proposal describes AMS as the one place that watches every table and schedules work, while optimizers carry no state, so they can be deployed at scale on Flink or Spark and grouped to isolate resources." },
+      { "choice": "Table formats as pluggable storage engines", "why": "The docs compare it to MySQL and ClickHouse choosing storage engines: Amoro manages Iceberg, its Mixed formats and Paimon side by side rather than defining one new format." },
+      { "choice": "Mixed-Hive tables built on existing Hive tables", "why": "Many users didn’t want to disturb jobs built on Hive, so a Hive table can be upgraded by migrating metadata only, and Hive keeps reading and writing it as before." }
+    ],
+    "timeline": [
+      { "year": "2019", "text": "NetEase starts Arctic to manage its Iceberg tables" },
+      { "year": "2022", "text": "Arctic is open-sourced; 0.3.0 is released in July" },
+      { "year": "2023", "text": "Renamed Amoro; 0.5.0 is the first release under the new name, in August" },
+      { "year": "2024", "text": "Enters the Apache Incubator on 11 March; 0.7.0-incubating in August" },
+      { "year": "2025", "text": "0.8.0 in May moves to Iceberg 1.6.1; 0.8.1 follows in September" },
+      { "year": "2026", "text": "0.9.0 release candidates begin in September" }
+    ],
+    "sources": [
+      { "label": "Apache Incubator: Amoro proposal (NetEase, Arctic, 2019, 2022, 2023, initial committers)", "url": "https://cwiki.apache.org/confluence/display/INCUBATOR/AmoroProposal" },
+      { "label": "Apache Incubator: Amoro incubation status (entered 11 March 2024)", "url": "https://incubator.apache.org/projects/amoro.html" },
+      { "label": "GitHub: apache/amoro releases (Arctic 0.3.0 July 2022 to 0.8.1-incubating September 2025)", "url": "https://github.com/apache/amoro/releases" },
+      { "label": "GitHub: Amoro 0.5.0 release (August 2023)", "url": "https://github.com/apache/amoro/releases/tag/v0.5.0" },
+      { "label": "GitHub: Amoro 0.8.0-incubating release notes (Iceberg 1.6.1, Spark 3.5, Hudi metadata)", "url": "https://github.com/apache/amoro/releases/tag/v0.8.0-incubating" },
+      { "label": "GitHub: apache/amoro tags (0.9.0 release candidates, rc12 in September 2026)", "url": "https://github.com/apache/amoro/tags" },
+      { "label": "Amoro docs: Self-optimizing (generational GC design)", "url": "https://amoro.apache.org/docs/latest/self-optimizing/" },
+      { "label": "Amoro docs: Formats overview (formats as storage engines, Mixed-Hive)", "url": "https://amoro.apache.org/docs/latest/formats-overview/" }
+    ]
+  },
+  "sources": [
+    { "label": "Amoro docs: Introduction (AMS, optimizers, terminal, LogStore, supported engines)", "url": "https://amoro.apache.org/docs/latest/" },
+    { "label": "Amoro docs: Self-optimizing (fragments, segments, minor, major and full, Quota and Balanced)", "url": "https://amoro.apache.org/docs/latest/self-optimizing/" },
+    { "label": "Amoro docs: Managing optimizers (local, Kubernetes, Flink, Spark and external containers)", "url": "https://amoro.apache.org/docs/latest/managing-optimizers/" },
+    { "label": "Amoro docs: Managing catalogs (internal and external catalogs, REST and Nessie)", "url": "https://amoro.apache.org/docs/latest/managing-catalogs/" },
+    { "label": "Amoro docs: Table configurations (target size, trigger file count and interval)", "url": "https://amoro.apache.org/docs/latest/configurations/" },
+    { "label": "Amoro docs: Formats overview", "url": "https://amoro.apache.org/docs/latest/formats-overview/" },
+    { "label": "Amoro docs: Mixed-Iceberg format (BaseStore, ChangeStore, LogStore, limitations)", "url": "https://amoro.apache.org/docs/latest/mixed-iceberg-format/" },
+    { "label": "Amoro docs: Paimon format (metadata display)", "url": "https://amoro.apache.org/docs/latest/paimon-format/" },
+    { "label": "GitHub: Amoro docs on master, Iceberg format (format v3 not supported)", "url": "https://github.com/apache/amoro/blob/master/docs/formats/iceberg.md" },
+    { "label": "GitHub: AMS RestCatalogService at 0.8.1 (Iceberg REST endpoint at /api/iceberg/rest)", "url": "https://github.com/apache/amoro/blob/v0.8.1-incubating/amoro-ams/src/main/java/org/apache/amoro/server/RestCatalogService.java" },
+    { "label": "Amoro docs: Deployment (embedded Derby by default, MySQL or PostgreSQL)", "url": "https://amoro.apache.org/docs/latest/deployment/" },
+    { "label": "Amoro: Quick start (Docker, dashboard, local optimizer)", "url": "https://amoro.apache.org/quick-start/" },
+    { "label": "Amoro: Download (0.8.1, 11 September 2025)", "url": "https://amoro.apache.org/download/" },
+    { "label": "GitHub: apache/amoro README", "url": "https://github.com/apache/amoro" },
+    { "label": "Docker Hub: apache/amoro tags (`latest` = 0.9.0-rc12)", "url": "https://hub.docker.com/r/apache/amoro/tags" }
+  ],
+  "checked": "2026-10-11"
+}

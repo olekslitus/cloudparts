@@ -1,0 +1,122 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "GlareDB",
+  "concepts": ["query-engines"],
+  "provider": "oss",
+  "vendor": "GlareDB, Inc.",
+  "license": "MIT since the rewrite (0.10.0, April 2025, onward); the DataFusion-based versions up to 0.9.5 were AGPLv3",
+  "website": "https://glaredb.com/",
+  "repo": "https://github.com/GlareDB/glaredb",
+  "summary": "A small, embeddable SQL engine in Rust for querying Parquet and CSV files locally, over HTTP or in S3 and GCS, from a CLI, Python or the browser. It began as a DataFusion-based federated query service and was rewritten in 2025 on its own engine, and it has had no release since June 2025.",
+  "intro": [
+    "Today’s GlareDB is a single binary (`glaredb`), a Python package, Rust crates and a WebAssembly build, all running the same engine in-process with no server. You point SQL at files: `SELECT * FROM 's3://bucket/cities.csv'` picks the S3 file system from the path prefix, `gs://` picks Google Cloud Storage, an `http(s)` URL picks HTTP, and anything else is a local path. Extensions add readers and functions in their own schemas: `parquet`, `csv`, `iceberg` (functions that read a table’s metadata, snapshots, manifest list and data files) and `tpch_gen`, which generates TPC-H tables on the fly. Tables you create are temporary and last only for the session. The engine plans each query into partition pipelines that a runtime schedules as data becomes ready: on a laptop they run on many threads with network I/O on Tokio, and in the browser each one becomes a JavaScript Promise on a single thread. Its columnar format is inspired by Arrow, but it doesn’t use the `arrow-rs` libraries, so it can control buffer allocation and memory use itself. Lateral joins and correlated subqueries work out of the box.",
+    "This is a rewrite. Sean Smith founded GlareDB and launched it in May 2023 as a cloud query engine that joined live data from Postgres, MySQL, Snowflake, BigQuery, MongoDB and files in S3 and GCS without ETL, was Postgres-compatible, and ran as a hosted GlareDB Cloud or as a local CLI and Python library that could connect to a Cloud deployment (“hybrid execution”). That version was built on Apache DataFusion and licensed AGPLv3, and the last release was 0.9.5 in August 2024. In April 2025 Smith announced a fully custom engine that replaced DataFusion and dropped the connectors to external databases such as BigQuery and Postgres. The new engine shipped as 0.10.0 on 15 April 2025 under the MIT license, and from May 2025 releases used calendar versions (25.5.0 was the first release of May 2025).",
+    "Activity stopped soon after. The latest release is 25.6.3 from 19 June 2025, which published the Rust crates with an API marked unstable; the npm package still points at 0.9.5 from August 2024; the blog’s last post is from April 2025; and the last commit, on 5 November 2025, removed the benchmark schedule. GlareDB Cloud and the pricing page are gone from glaredb.com. The repository isn’t archived and the installers still work, but treat GlareDB as unmaintained until a new release appears."
+  ],
+  "strengths": [
+    "Nothing to run: one binary or `pip install glaredb`, with the same engine compiled to WebAssembly so it can query S3 or HTTP files from a browser tab",
+    "Built for awkward SQL: lateral joins, correlated subqueries and table functions that take columns from the row to their left",
+    "Queries Parquet and CSV in place on S3, GCS, HTTP or local disk, finds an S3 bucket’s region by itself, and ships a built-in TPC-H generator for quick benchmarks",
+    "A permissive MIT license since the rewrite, where the earlier versions were AGPLv3"
+  ],
+  "limits": [
+    "Effectively dormant: no release since 25.6.3 in June 2025 and no commits since November 2025, with no announcement either way",
+    "The rewrite dropped what GlareDB was first known for: there are no connectors to Postgres, MySQL, Snowflake or BigQuery, no Postgres-protocol server and no hosted service any more",
+    "Storage is session-only: `CREATE TABLE` supports temporary tables only, and the documented Iceberg functions read metadata (snapshots, manifests, data files), with the extension described as under heavy development",
+    "Narrow platform support: binaries for macOS 14+ on Arm64 and Linux on x86_64 or Arm64 only, an unstable Rust API, and single-threaded execution in WebAssembly"
+  ],
+  "worksWith": [
+    { "id": "s3", "how": "reads Parquet and CSV files from" },
+    { "id": "gcs", "how": "reads Parquet and CSV files from" },
+    { "id": "parquet", "how": "queries files in" },
+    { "id": "iceberg", "how": "reads table metadata of" },
+    { "id": "python", "how": "runs embedded in" },
+    { "id": "rust", "how": "is written in" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "A lateral join, generated TPC-H data and a Parquet file over HTTPS (run with the GlareDB 25.6.3 CLI: glaredb -f demo.sql)",
+    "source": [
+      "-- Temporary tables only; generate_series reads columns from the row on its left",
+      "CREATE TEMP TABLE ranges (range_start INT, range_end INT);",
+      "INSERT INTO ranges VALUES (1, 4), (5, 7);",
+      "SELECT range_start, count(*) AS n",
+      "FROM ranges, generate_series(range_start, range_end)",
+      "GROUP BY range_start ORDER BY range_start;",
+      "-- 1 | 4",
+      "-- 5 | 3",
+      "",
+      "-- TPC-H data generated on the fly by the tpch_gen extension",
+      "SELECT n_name, count(*) AS suppliers",
+      "FROM tpch_gen.supplier(1) s JOIN tpch_gen.nation(1) n ON s.s_nationkey = n.n_nationkey",
+      "GROUP BY n_name ORDER BY suppliers DESC LIMIT 3;",
+      "-- IRAQ | 438",
+      "-- PERU | 421",
+      "-- ALGERIA | 420",
+      "",
+      "-- A Parquet file over HTTPS, queried in place, and its footer metadata",
+      "SELECT count(*) AS rows, max(timestamp_col) AS latest",
+      "FROM 'https://raw.githubusercontent.com/apache/parquet-testing/master/data/alltypes_plain.parquet';",
+      "-- 8 | 2009-04-01 00:01:00 UTC",
+      "SELECT num_rows, num_row_groups",
+      "FROM parquet.file_metadata('https://raw.githubusercontent.com/apache/parquet-testing/master/data/alltypes_plain.parquet');",
+      "-- 8 | 1"
+    ]
+  },
+  "history": {
+    "story": [
+      "GlareDB’s repository dates from May 2022. In May 2023 its founder, Sean Smith, introduced it as a cloud query engine that “hooks directly into your data sources” so analysts could join a BigQuery table with a Postgres table in one statement instead of building ETL pipelines into a warehouse. It was Postgres-compatible so existing BI tools could connect, and it supported Postgres, MySQL, Snowflake, BigQuery, MongoDB and files on S3 and GCS at launch. Releases through 0.9 in February 2024 added SQLite, Cassandra, Excel and Lance, file uploads to GlareDB Cloud, and “hybrid execution”, which let the local CLI or Python library work with a Cloud deployment. Under the hood it used Apache DataFusion.",
+      "In April 2025 Smith wrote that GlareDB was getting “a whole new engine”, with “a complete shift away from DataFusion in favor of a fully custom execution engine”. The goals were SQL ergonomics (lateral and correlated subqueries), reliability under memory pressure, which meant leaving `arrow-rs` behind to control buffers directly, and compiling to WebAssembly as a first-class target. Querying external systems such as BigQuery and Postgres was removed because, in Smith’s words, the team “weren’t seeing enough value to justify the maintenance cost”, while CSV, Parquet, JSON, Iceberg and Delta Lake were to get deeper support.",
+      "The new engine shipped as 0.10.0 on 15 April 2025, under the MIT license instead of the AGPL. Eighteen calendar-versioned releases followed between 3 May and 19 June 2025, ending with 25.6.3. After a few dependency bumps that summer the commits stopped in November 2025."
+    ],
+    "choices": [
+      { "choice": "Federation first: query sources where they live", "why": "Copying data into a warehouse meant ETL pipelines, extra copies and stale results, so the first GlareDB pulled data from each source at query time and joined it in one engine." },
+      { "choice": "Replace DataFusion with a custom engine", "why": "The team wanted control over how buffers are allocated and reused, how much memory each operator uses and where it can fail, so a heavy query fails gracefully instead of crashing. That was also a big reason for leaving `arrow-rs`." },
+      { "choice": "WebAssembly as a first-class target", "why": "A self-contained engine in the browser can query S3 or HTTP files with nothing installed. That ruled out threads and blocking code, so pipelines are scheduled by readiness and dependencies were chosen to compile to WebAssembly." },
+      { "choice": "Calendar versioning", "why": "With the rewrite, versions switched from 0.x to `<year>.<month>.<release>`, so 25.5.0 is the first release of May 2025." }
+    ],
+    "timeline": [
+      { "year": "2022", "text": "GlareDB repository created in May" },
+      { "year": "2023", "text": "Public launch in May as a federated, Postgres-compatible cloud query engine" },
+      { "year": "2024", "text": "0.9.0 in February adds SQLite, Cassandra and Excel sources and Cloud file uploads" },
+      { "year": "2024", "text": "0.9.5 in August, the last DataFusion-based, AGPLv3 release" },
+      { "year": "2025", "text": "April: a fully custom engine replaces DataFusion in 0.10.0, now MIT-licensed, and external database connectors are removed" },
+      { "year": "2025", "text": "Calendar versions from 25.5.0 in May; 25.6.3 on 19 June is the latest release" },
+      { "year": "2025", "text": "Last commit to the repository in November" }
+    ],
+    "sources": [
+      { "label": "GlareDB blog: Introducing GlareDB, query and analyze your data wherever it lives (Sean Smith, May 2023)", "url": "https://glaredb.com/blog/introducing-glaredb", "archive": "https://web.archive.org/web/20250114230915/https://glaredb.com/blog/introducing-glaredb" },
+      { "label": "GlareDB blog: Announcing GlareDB 0.9 (February 2024)", "url": "https://glaredb.com/blog/announcing-v0.9.0", "archive": "https://web.archive.org/web/20240717092458/https://glaredb.com/blog/announcing-v0.9.0" },
+      { "label": "GitHub: GlareDB v0.10.0 release, “New engine” (15 April 2025)", "url": "https://github.com/GlareDB/glaredb/releases/tag/v0.10.0" },
+      { "label": "GitHub: GlareDB LICENSE at v0.10.0 (MIT)", "url": "https://github.com/GlareDB/glaredb/blob/v0.10.0/LICENSE" },
+      { "label": "GitHub: GlareDB README at v0.9.5 (hybrid execution, GlareDB Cloud)", "url": "https://github.com/GlareDB/glaredb/blob/v0.9.5/README.md" },
+      { "label": "GitHub: GlareDB Cargo.toml at v0.9.5 (DataFusion 36)", "url": "https://github.com/GlareDB/glaredb/blob/v0.9.5/Cargo.toml" },
+      { "label": "GlareDB blog: GlareDB Is Getting a Whole New Engine (Sean Smith, 7 April 2025)", "url": "https://glaredb.com/blog/whole-new-engine" },
+      { "label": "GlareDB blog: Compiling GlareDB to WebAssembly, a peek under the hood (17 April 2025)", "url": "https://glaredb.com/blog/peek-at-wasm" },
+      { "label": "GitHub: GlareDB README (calendar versioning)", "url": "https://github.com/GlareDB/glaredb" },
+      { "label": "GitHub: GlareDB releases (0.9.0 to 25.6.3)", "url": "https://github.com/GlareDB/glaredb/releases" },
+      { "label": "GitHub: GlareDB commit history (last commit 5 November 2025)", "url": "https://github.com/GlareDB/glaredb/commits/main" }
+    ]
+  },
+  "sources": [
+    { "label": "GlareDB docs: Install (CLI, Python, supported platforms)", "url": "https://glaredb.com/docs/get-started/install" },
+    { "label": "GlareDB docs: CLI", "url": "https://glaredb.com/docs/clients/cli" },
+    { "label": "GlareDB docs: File system overview (S3, GCS, HTTP, local; WebAssembly)", "url": "https://glaredb.com/docs/integrations/file-systems/overview" },
+    { "label": "GlareDB docs: S3 file system", "url": "https://glaredb.com/docs/integrations/file-systems/s3" },
+    { "label": "GlareDB docs: Iceberg extension (metadata functions, under heavy development)", "url": "https://glaredb.com/docs/integrations/tables-and-catalogs/iceberg" },
+    { "label": "GlareDB docs: TPC-H data generation (tpch_gen)", "url": "https://glaredb.com/docs/integrations/data-generation/tpch" },
+    { "label": "GlareDB docs: CREATE TABLE (temporary tables only)", "url": "https://glaredb.com/docs/sql/commands/create-table" },
+    { "label": "GlareDB changelog (25.6.3, 19 June 2025: Rust crates with an unstable API; S3 region auto-resolve)", "url": "https://glaredb.com/changelog" },
+    { "label": "GlareDB blog: GlareDB Is Getting a Whole New Engine (7 April 2025)", "url": "https://glaredb.com/blog/whole-new-engine" },
+    { "label": "GlareDB blog: Compiling GlareDB to WebAssembly (17 April 2025)", "url": "https://glaredb.com/blog/peek-at-wasm" },
+    { "label": "GlareDB blog index (latest post April 2025)", "url": "https://glaredb.com/blog" },
+    { "label": "GlareDB pricing page for GlareDB Cloud (December 2024 copy; the page now returns not found)", "url": "https://glaredb.com/pricing", "archive": "https://web.archive.org/web/20241228225255/https://glaredb.com/pricing" },
+    { "label": "GitHub: GlareDB/glaredb (MIT license, calendar versioning)", "url": "https://github.com/GlareDB/glaredb" },
+    { "label": "GitHub: GlareDB LICENSE at v0.9.5 (AGPLv3)", "url": "https://github.com/GlareDB/glaredb/blob/v0.9.5/LICENSE" },
+    { "label": "GitHub: GlareDB releases (latest 25.6.3, 19 June 2025)", "url": "https://github.com/GlareDB/glaredb/releases" },
+    { "label": "GitHub: GlareDB commit history (last commit 5 November 2025)", "url": "https://github.com/GlareDB/glaredb/commits/main" },
+    { "label": "PyPI: glaredb (25.6.3, MIT)", "url": "https://pypi.org/project/glaredb/" },
+    { "label": "npm: @glaredb/glaredb (latest 0.9.5, August 2024)", "url": "https://www.npmjs.com/package/@glaredb/glaredb" }
+  ],
+  "checked": "2026-10-11"
+}

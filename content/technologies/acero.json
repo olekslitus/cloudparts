@@ -1,0 +1,127 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Apache Arrow Acero",
+  "concepts": ["query-engines"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://arrow.apache.org/docs/cpp/acero.html",
+  "repo": "https://github.com/apache/arrow",
+  "summary": "The streaming execution engine inside Arrow’s C++ library: you hand it an exact plan of nodes (scan, filter, project, aggregate, join, sort) and it streams Arrow record batches through them, with no SQL parser or optimizer of its own.",
+  "intro": [
+    "Acero is part of Arrow C++ and builds on Arrow’s compute functions. A compute function works on arrays that are already in memory; Acero applies such functions to streams of batches. A plan is a graph of `Declaration` objects, one per node: sources (an in-memory table, a record batch reader, or a dataset scan over Parquet, CSV or other files), compute nodes (`filter`, `project`, `aggregate`, `pivot_longer`), arrangement nodes (`hashjoin`, `asofjoin`, `union`, `order_by`, `fetch`) and sinks (collect into a table, hand back a reader with backpressure, or write files). Data moves in small chunks: a 2-million-row input can come out as 64 batches of 32Ki rows. Plans can also arrive as Substrait, a cross-engine format for query plans, which the docs call the preferred way to build them.",
+    "Acero is deliberately narrow. It has no SQL parser, query planner or optimizer and runs a plan exactly as written; its authors want optimization done elsewhere and fed in through Substrait. It isn’t distributed, though a distributed engine could use it as a worker, and its writes have no transactions. Most people use it without knowing: Arrow’s dataset scanning and writing run on it, R’s `arrow` package uses it to run `dplyr` code, and in Python `Table.join`, `Table.group_by` and expression filters in `pyarrow` build Acero plans. Since Arrow 12 it is a separate library, `libarrow_acero`, exposed in Python as `pyarrow.acero`. It ships with every Arrow release (26.0.0, 9 October 2026), but its docs still say it is experimental and has no stable API."
+  ],
+  "strengths": [
+    "Already installed wherever Arrow C++ or `pyarrow` is, and works on Arrow data directly, so there is nothing to convert or copy",
+    "Streams data in batches with backpressure, so a plan can feed a reader or write partitioned files without collecting the whole result in memory",
+    "Accepts Substrait plans, so a front end that emits Substrait (for example Ibis through `ibis-substrait`) can target Acero and later switch engines",
+    "Has an as-of join node, which joins several inputs to the first one on a shared ordered column, usually time"
+  ],
+  "limits": [
+    "No SQL and no optimizer: you choose every node, join order and filter position yourself, or use a front end that does",
+    "Runs in one process; distributing work across machines is up to whatever embeds it",
+    "Marked experimental with no stable API guarantee, even though it is used inside `pyarrow` and Arrow’s dataset layer",
+    "Writes have no transaction support, and results collected into a table come back in Acero’s own chunk sizes (a request to control them, GH-15155, is still open)"
+  ],
+  "worksWith": [
+    { "id": "arrow", "how": "is the query engine bundled with" },
+    { "id": "cpp", "how": "is written in" },
+    { "id": "python", "how": "is exposed as `pyarrow.acero` to" },
+    { "id": "parquet", "how": "scans and writes, through Arrow Datasets," }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Spell out a filter, hash join, aggregate and sort as an Acero plan in pyarrow",
+    "source": [
+      "# pip install pyarrow==26.0.0",
+      "import pyarrow as pa",
+      "import pyarrow.compute as pc",
+      "from pyarrow.acero import (Declaration, TableSourceNodeOptions, FilterNodeOptions,",
+      "                           HashJoinNodeOptions, AggregateNodeOptions, OrderByNodeOptions)",
+      "",
+      "orders = pa.table({\"order_id\": [1, 2, 3, 4, 5], \"customer_id\": [10, 20, 10, 30, 20],",
+      "                   \"amount\": [25.0, 40.0, 15.0, 90.0, 5.0]})",
+      "customers = pa.table({\"customer_id\": [10, 20, 30], \"country\": [\"DE\", \"US\", \"DE\"]})",
+      "",
+      "# Acero has no SQL parser or optimizer: you spell out every node of the plan",
+      "plan = Declaration.from_sequence([",
+      "    Declaration(\"table_source\", TableSourceNodeOptions(orders)),",
+      "    Declaration(\"filter\", FilterNodeOptions(pc.field(\"amount\") > 10)),",
+      "])",
+      "plan = Declaration(\"hashjoin\", HashJoinNodeOptions(\"inner\", [\"customer_id\"], [\"customer_id\"]),",
+      "                   inputs=[plan, Declaration(\"table_source\", TableSourceNodeOptions(customers))])",
+      "plan = Declaration.from_sequence([",
+      "    plan,",
+      "    Declaration(\"aggregate\", AggregateNodeOptions(",
+      "        [(\"amount\", \"hash_sum\", None, \"revenue\"), (\"amount\", \"hash_count\", None, \"orders\")],",
+      "        keys=[\"country\"])),",
+      "    Declaration(\"order_by\", OrderByNodeOptions([(\"revenue\", \"descending\")])),",
+      "])",
+      "",
+      "print(plan.to_table().to_pylist())",
+      "# [{'country': 'DE', 'revenue': 130.0, 'orders': 3}, {'country': 'US', 'revenue': 40.0, 'orders': 1}]",
+      "",
+      "# pyarrow's Table.join and Table.group_by build the same kind of plan for you",
+      "print(orders.join(customers, \"customer_id\").group_by(\"country\")",
+      "      .aggregate([(\"amount\", \"sum\")]).sort_by(\"country\").to_pylist())",
+      "# [{'country': 'DE', 'amount_sum': 130.0}, {'country': 'US', 'amount_sum': 45.0}]"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Acero’s building blocks",
+      "intro": "The node types listed in the Acero user’s guide, checked 2026-10-11.",
+      "corner": "Kind",
+      "columns": ["Nodes", "What they do"],
+      "rows": [
+        { "label": "Sources", "values": ["`table_source`, `record_batch_source`, `record_batch_reader_source`, `exec_batch_source`, `array_vector_source`, `source`, `scan`", "Feed batches in from memory, a reader, a custom async generator, or files through Arrow Datasets" ] },
+        { "label": "Compute", "values": ["`filter`, `project`, `aggregate`, `pivot_longer`", "Drop rows, compute columns, summarize (grouped or not), turn columns into rows"] },
+        { "label": "Arrangement", "values": ["`hashjoin`, `asofjoin`, `union`, `order_by`, `fetch`", "Join, merge, reorder or slice streams"] },
+        { "label": "Sinks", "values": ["`sink`, `table_sink`, `consuming_sink`, `write`", "Usually chosen for you by `DeclarationToTable`, `DeclarationToReader` or `DeclarationToStatus`"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Arrow is a shared in-memory columnar format, and its C++ library grew compute functions and a datasets layer for reading collections of files. The compute functions work on data that is already in memory; scanning many files, joining and grouping needed a way to stream batches through a series of operations. Arrow 5.0.0 in July 2021 added an `ExecNode` hierarchy, wrapped grouped aggregation in a node and rebuilt dataset scans as graphs of these nodes. Arrow 6.0.0 in October 2021 shipped what its release post called a basic in-memory query engine, with filter, project, sort, equality joins and aggregations, and R users got grouped aggregation and joins in `dplyr` on top of it.",
+      "In May 2022 the developers reached consensus on a name, Acero, and from Arrow 9.0.0 (August 2022) the docs call it “Acero: A C++ streaming execution engine”. Arrow 12.0.0 in May 2023 moved Acero out of the core `libarrow` into its own shared library, so the core build could shrink, added the `order_by`, `fetch` and `pivot_longer` nodes, and gave Python a `pyarrow.acero` module. Its documentation sets out what it is not: not a database, not an optimizer, not distributed, not a tool for data scientists to use directly."
+    ],
+    "choices": [
+      { "choice": "No parser, planner or optimizer", "why": "The docs call creating the best plan very hard and argue the optimizer should live outside Acero, composed through standards such as Substrait so any backend can use it." },
+      { "choice": "Streams of batches, not tables", "why": "Working on one batch at a time removes the need for multi-batch containers and avoids awkward cases such as table columns chunked at different sizes." },
+      { "choice": "Substrait as the preferred input", "why": "Substrait producers offer friendlier APIs than hand-built node graphs, and a plan in a standard format can move to another Substrait-consuming engine." },
+      { "choice": "A separate library from Arrow 12", "why": "Splitting `libarrow_acero` out of `libarrow` lets projects that only need the format and compute functions ship smaller builds." }
+    ],
+    "timeline": [
+      { "year": "2021", "text": "Arrow 5.0.0 (July) adds the ExecNode hierarchy and runs dataset scans as node graphs" },
+      { "year": "2021", "text": "Arrow 6.0.0 (October) ships a basic query engine, used by R’s dplyr bindings" },
+      { "year": "2022", "text": "Developers settle on the name Acero in May; Arrow 9.0.0 docs use it in August" },
+      { "year": "2023", "text": "Arrow 12.0.0 (May) splits out libarrow_acero and adds the pyarrow.acero module" },
+      { "year": "2026", "text": "Arrow 26.0.0 (9 October) still ships Acero, documented as experimental" }
+    ],
+    "sources": [
+      { "label": "Apache Arrow: 5.0.0 release notes (29 July 2021; ExecNode hierarchy, dataset scans as ExecNode graphs)", "url": "https://arrow.apache.org/release/5.0.0.html" },
+      { "label": "Apache Arrow: 6.0.0 release notes (26 October 2021)", "url": "https://arrow.apache.org/release/6.0.0.html" },
+      { "label": "Apache Arrow blog: 6.0.0 release (basic in-memory query engine, dplyr joins and aggregation)", "url": "https://arrow.apache.org/blog/2021/11/04/6.0.0-release/" },
+      { "label": "Apache Jira: ARROW-16632, “Given consensus on Acero as the name” (23 May 2022)", "url": "https://issues.apache.org/jira/browse/ARROW-16632" },
+      { "label": "Apache Arrow 8.0 docs: Streaming execution engine (before the name)", "url": "https://arrow.apache.org/docs/8.0/cpp/streaming_execution.html" },
+      { "label": "Apache Arrow 9.0 docs: Acero, a C++ streaming execution engine", "url": "https://arrow.apache.org/docs/9.0/cpp/streaming_execution.html" },
+      { "label": "Apache Arrow: 9.0.0 release notes (3 August 2022)", "url": "https://arrow.apache.org/release/9.0.0.html" },
+      { "label": "Apache Arrow blog: 12.0.0 release (Acero in its own library, new nodes, pyarrow.acero; May 2023)", "url": "https://arrow.apache.org/blog/2023/05/02/12.0.0-release/" },
+      { "label": "Apache Arrow docs: Acero overview (what Acero is not, design)", "url": "https://arrow.apache.org/docs/cpp/acero/overview.html" }
+    ]
+  },
+  "sources": [
+    { "label": "Apache Arrow docs: Acero overview (not a database, optimizer or distributed engine; ExecNode, ExecBatch, Declaration)", "url": "https://arrow.apache.org/docs/cpp/acero/overview.html" },
+    { "label": "Apache Arrow docs: Acero user’s guide (Substrait, DeclarationToXyz, node list, 32Ki-row batches)", "url": "https://arrow.apache.org/docs/cpp/acero/user_guide.html" },
+    { "label": "Apache Arrow docs: Acero, a C++ streaming execution engine (experimental, no stable API)", "url": "https://arrow.apache.org/docs/cpp/acero.html" },
+    { "label": "Apache Arrow docs: Using Acero with Substrait", "url": "https://arrow.apache.org/docs/cpp/acero/substrait.html" },
+    { "label": "Apache Arrow docs: pyarrow.acero API reference", "url": "https://arrow.apache.org/docs/python/api/acero.html" },
+    { "label": "GitHub: apache/arrow python/pyarrow/acero.py (Table.join, group_by and filter built on Acero declarations)", "url": "https://github.com/apache/arrow/blob/main/python/pyarrow/acero.py" },
+    { "label": "Apache Arrow blog: 12.0.0 release (libarrow_acero, pyarrow.acero)", "url": "https://arrow.apache.org/blog/2023/05/02/12.0.0-release/" },
+    { "label": "Apache Arrow: 26.0.0 release notes (9 October 2026; Acero fixes)", "url": "https://arrow.apache.org/release/26.0.0.html" }
+  ],
+  "checked": "2026-10-11"
+}

@@ -1,0 +1,126 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Tiger Lake",
+  "concepts": ["lakehouse", "etl", "tsdb"],
+  "provider": "vendor",
+  "vendor": "Tiger Data (formerly Timescale)",
+  "license": "Proprietary (a Tiger Cloud feature)",
+  "website": "https://www.tigerdata.com/docs/integrate/connectors/destination/tigerlake",
+  "summary": "Tiger Cloud’s built-in Iceberg connector, in public beta: it copies a Postgres table or TimescaleDB hypertable into Apache Iceberg, then keeps it current from the write-ahead log.",
+  "intro": [
+    "Tiger Lake runs inside Tiger Cloud, Tiger Data’s hosted PostgreSQL with TimescaleDB, and the docs now call it the Iceberg connector. You point it at an Iceberg catalog and turn it on per table with `ALTER TABLE ... SET (tigerlake.iceberg_sync = true)`. It first streams a snapshot of the table, at about 300,000 records a second (roughly 1 billion records or 100 GB an hour for large tables), while changes made in the meantime go through PostgreSQL logical replication to a separate branch of the Iceberg table at about 30,000 events a second. When the snapshot is done the two branches are merged, which takes from a few seconds to ten minutes for tables of 5 TB or more, with new changes held in the WAL until then. After that, inserts, updates and deletes keep flowing, so the Iceberg copy is eventually consistent with the source. Tiger Data measured these rates on Amazon S3 Tables.",
+    "The source table needs a primary key, and the service needs PostgreSQL 17.6 or later. By default a hypertable becomes an Iceberg table partitioned by `day()` of its time column, in a namespace called `timescaledb`, written in Iceberg format version 3, with one row per primary key: updates and deletes become Iceberg equality deletes. Snowflake and Databricks can’t read equality deletes, so changelog mode, added in October 2026, writes every change as an appended row with `_tsdb_op` and `_tsdb_commit_lsn` columns instead. The destination is either a table bucket in your own Amazon S3 Tables account, which a CloudFormation template creates together with an IAM role for Tiger Cloud, or, since August 2026, any Iceberg REST catalog such as Apache Polaris, Snowflake Open Catalog or Snowflake Horizon Catalog. Athena (through Glue federation), Snowflake and other Iceberg engines then query the tables in place.",
+    "Tiger Data announced Tiger Lake in July 2025 as a two-way loop between Postgres and the lakehouse, with querying Iceberg from inside Postgres promised for later that summer and full round trips for fall 2025. As of October 2026 the docs describe only the Postgres-to-Iceberg direction; the S3 source connector loads CSV and Parquet files, not Iceberg tables. The changelog marked it public beta in November 2025, and no general availability had been announced by its October 2026 entries."
+  ],
+  "strengths": [
+    "Replaces a Kafka plus Flink pipeline with one table setting: the snapshot, CDC from logical replication, branch merge and replication-slot management all run inside Tiger Cloud",
+    "Plain Apache Iceberg in your own S3 Tables bucket or REST catalog, so Athena, Snowflake, Spark and other Iceberg engines read the same tables without another copy",
+    "Knows hypertables: picks a time partition by default, can include or exclude data already moved to the low-cost object storage tier, and keeps syncing while you change the Iceberg partitioning",
+    "Changelog mode gives engines that can’t read equality deletes, or that want raw change events, an append-only log with the operation and commit LSN on each row"
+  ],
+  "limits": [
+    "Still a public beta on Tiger Cloud only (beta since July 2025, public beta since November 2025, no GA by October 2026), and it needs a Tiger Cloud service: self-hosted TimescaleDB doesn’t have it",
+    "One direction for now: the announced Iceberg-to-Postgres sync and querying Iceberg from Postgres aren’t in the docs as of October 2026",
+    "Format version, tiered data and changelog mode are fixed when a sync starts, and a stopped sync can’t resume, so changing them means a new sync and a new initial snapshot",
+    "`TRUNCATE` isn’t propagated, tables need a primary key, one table bucket serves only one service, Direct Compress is turned off for synced hypertables, and long continuous aggregate refreshes can hold the replication slot",
+    "The S3 table bucket must be in the service’s AWS region to avoid cross-region transfer charges, and REST catalogs other than S3 Tables are less tested; Tiger Data says to confirm support before production use"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "streams changes by logical replication from" },
+    { "id": "timescaledb", "how": "syncs hypertables to Iceberg from" },
+    { "id": "iceberg", "how": "writes v3 or v2 tables in" },
+    { "id": "s3-tables", "how": "writes into table buckets in" },
+    { "id": "polaris", "how": "can commit through the REST catalog of" },
+    { "id": "snowflake", "how": "can commit via Open or Horizon Catalog in" },
+    { "id": "athena", "how": "exposes synced tables, via Glue, to" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "Sync a hypertable to Iceberg, then change its partitioning and stop",
+    "source": [
+      "-- The CREATE TABLE ran on TimescaleDB 2.29.1. The tigerlake.* settings only exist",
+      "-- on Tiger Cloud (PostgreSQL 17.6+), so they come from the docs and weren't run here.",
+      "CREATE TABLE readings (",
+      "  time    timestamptz NOT NULL,",
+      "  device  int NOT NULL,",
+      "  temp_c  double precision,",
+      "  PRIMARY KEY (device, time)          -- required for the sync",
+      ") WITH (tsdb.hypertable, tsdb.partition_column = 'time');",
+      "",
+      "-- snapshot first, then inserts, updates and deletes from logical replication",
+      "ALTER TABLE readings SET (",
+      "  tigerlake.iceberg_sync = true,",
+      "  tigerlake.iceberg_partitionby = 'hour(time)',  -- default for hypertables: day(time)",
+      "  tigerlake.iceberg_namespace = 'telemetry'      -- default: timescaledb",
+      ");",
+      "",
+      "-- for Snowflake or Databricks, start instead with an append-only change log:",
+      "-- ALTER TABLE readings SET (tigerlake.iceberg_sync = true,",
+      "--                          tigerlake.iceberg_changelog_mode = true);",
+      "",
+      "-- the Iceberg partitioning can change while the sync runs",
+      "ALTER TABLE readings SET (tigerlake.iceberg_partitionby = 'day(time)');",
+      "",
+      "-- stopping is final: a stopped sync can't be resumed",
+      "ALTER TABLE readings SET (tigerlake.iceberg_sync = false);"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Sync settings",
+      "intro": "Each is set with `ALTER TABLE <table> SET (...)`. Checked against the docs on 11 October 2026.",
+      "corner": "Setting",
+      "columns": ["Default", "Change while syncing?"],
+      "rows": [
+        { "label": "`tigerlake.iceberg_sync`", "values": ["off; `true` starts, `false` stops for good", "Only to stop"] },
+        { "label": "`tigerlake.iceberg_partitionby`", "values": ["`day(<time column>)` for hypertables, none for plain tables", "Yes, without pausing"] },
+        { "label": "`tigerlake.iceberg_namespace`", "values": ["`timescaledb`", "Set at start"] },
+        { "label": "`tigerlake.iceberg_table`", "values": ["The PostgreSQL table name", "Set at start"] },
+        { "label": "`tigerlake.iceberg_spec_version`", "values": ["`3` (`2` for older engines)", "No"] },
+        { "label": "`tigerlake.enable_tiered_reads`", "values": ["`true`: include data in the object storage tier", "No"] },
+        { "label": "`tigerlake.iceberg_changelog_mode`", "values": ["`false`: one row per key, equality deletes", "No"] }
+      ],
+      "notes": [
+        "Partition transforms supported: `hour`, `day`, `month`, `year` and `truncate[W]`.",
+        "Iceberg snapshots are pruned automatically once there are more than 2,500. Tables that started syncing before the format version setting existed stay on format version 2."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "By 2025 a common stack put Postgres behind the application and a lakehouse (Iceberg tables on S3, a catalog and several query engines) behind the analysts, owned by different teams and joined by pipelines. Speedcast, a satellite communications company, described its version as Kafka, Flink and custom code streaming Postgres into Iceberg: “It worked, but it was fragile and high-maintenance.” In June 2025 Mike Freedman, Tiger Data’s co-founder and CTO, argued that the OLTP and OLAP split no longer fit, proposed an “operational medallion architecture” in which raw data sits in Iceberg, cleaned data and aggregates are served from Postgres, and data moves in both directions, and called the combination a “BaseLake”.",
+      "Tiger Lake was the product of that argument. Freedman announced it on July 17, 2025, built into Tiger Cloud: continuous replication from Postgres tables and hypertables into Iceberg tables stored in Amazon S3 Tables, with streaming back into Postgres and query pushdown from Postgres to Iceberg described as part of the design. It launched as a beta for Scale and Enterprise customers, with querying Iceberg catalogs from Postgres promised for later that summer and full round-trip workflows for fall 2025.",
+      "What shipped was the outbound half, refined step by step. A public beta in November 2025 added full DML support and self-healing. In August 2026 it gained generic Iceberg REST catalogs and a controller that keeps replication slots from being invalidated by a fixed WAL limit, which had forced full re-copies. In October 2026 came changelog mode for engines that can’t read equality deletes, a choice about tiered data, and per-table sync status in the console."
+    ],
+    "choices": [
+      { "choice": "Logical replication from the database itself, instead of an external CDC pipeline", "why": "The pitch was to remove the Kafka, Flink and DAG-scheduler glue that customers ran between Postgres and Iceberg. Reading the WAL inside Tiger Cloud keeps one write path: applications write to Postgres and the lake follows." },
+      { "choice": "Amazon S3 Tables as the first destination", "why": "S3 Tables is both an Iceberg catalog and managed storage, and it compacts and maintains tables itself. Tiger Data still calls it the recommended destination after adding REST catalogs, and it is the one the throughput figures were measured on." },
+      { "choice": "Snapshot and changes on separate Iceberg branches, merged later", "why": "The initial copy of a large table can take hours. Writing ongoing changes to their own branch lets the snapshot run at full speed, at the cost of a merge step during which new events wait in the WAL." },
+      { "choice": "One row per primary key, with equality deletes, by default", "why": "It keeps the Iceberg table shaped like the source table. Because Snowflake and Databricks can’t read equality delete files, an append-only changelog mode was added later as an option." }
+    ],
+    "timeline": [
+      { "year": "2025", "text": "June: Mike Freedman describes the operational medallion architecture and the “BaseLake”" },
+      { "year": "2025", "text": "July: Tiger Lake announced; beta Iceberg connector to Amazon S3 Tables for Scale and Enterprise" },
+      { "year": "2025", "text": "November: public beta with full DML support" },
+      { "year": "2026", "text": "August: any Iceberg REST catalog (Polaris, Snowflake Open and Horizon Catalog); Slot Keep Controller" },
+      { "year": "2026", "text": "October: changelog mode, tiered data controls and connector observability" }
+    ],
+    "sources": [
+      { "label": "Mike Freedman: The database meets the lakehouse, toward a unified architecture for modern applications (Jun 2025)", "url": "https://www.tigerdata.com/blog/the-database-meets-the-lakehouse-toward-a-unified-architecture-for-modern-applications" },
+      { "label": "Mike Freedman: Tiger Lake, a new architecture for real-time analytical systems and agents (Jul 2025)", "url": "https://www.tigerdata.com/blog/tiger-lake-a-new-architecture-for-real-time-analytical-systems-and-agents" },
+      { "label": "Kevin Otten: How Speedcast built a global communications network on Tiger Lake (Jul 2025)", "url": "https://www.tigerdata.com/blog/how-speedcast-built-a-global-communications-network-on-tiger-lake" },
+      { "label": "Tiger Data docs: Changelog (Iceberg connector beta Jul 2025, public beta Nov 2025, REST catalogs Aug 2026, changelog mode Oct 2026)", "url": "https://www.tigerdata.com/docs/get-started/news/new" },
+      { "label": "Tiger Data docs: Integrate data lakes with Tiger Cloud (Iceberg connector)", "url": "https://www.tigerdata.com/docs/integrate/connectors/destination/tigerlake" }
+    ]
+  },
+  "sources": [
+    { "label": "Tiger Data docs: Integrate data lakes with Tiger Cloud (setup, sync settings, throughput, changelog mode, limitations)", "url": "https://www.tigerdata.com/docs/integrate/connectors/destination/tigerlake" },
+    { "label": "Tiger Data docs: Changelog (beta, public beta, REST catalogs, Slot Keep Controller, changelog mode and tiered data)", "url": "https://www.tigerdata.com/docs/get-started/news/new" },
+    { "label": "Tiger Data docs: Query Tiger Lake S3 Tables with AWS Glue and Athena", "url": "https://www.tigerdata.com/docs/integrate/connectors/destination/athena" },
+    { "label": "Tiger Data docs: Query Tiger Lake S3 Tables from Snowflake", "url": "https://www.tigerdata.com/docs/integrate/connectors/destination/snowflake" },
+    { "label": "Tiger Data docs: Sync data from S3 (CSV and Parquet source connector)", "url": "https://www.tigerdata.com/docs/integrate/connectors/source/sync-from-s3" },
+    { "label": "Mike Freedman: Tiger Lake, a new architecture for real-time analytical systems and agents (Jul 2025)", "url": "https://www.tigerdata.com/blog/tiger-lake-a-new-architecture-for-real-time-analytical-systems-and-agents" }
+  ],
+  "checked": "2026-10-11"
+}

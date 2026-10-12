@@ -1,0 +1,157 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Apache Calcite",
+  "concepts": ["query-engines"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://calcite.apache.org/",
+  "repo": "https://github.com/apache/calcite",
+  "summary": "A Java framework with everything a database needs to understand a query (SQL parser, validator, relational algebra and a rule-based, cost-based optimizer) but no storage of its own, which Hive, Flink, Druid, Dremio, Beam and many other systems embed as their SQL front end and planner.",
+  "intro": [
+    "Calcite takes SQL text, parses it, checks it against a schema, and turns it into a tree of relational operators: scan, filter, project, join, aggregate and so on. Its optimizer then rewrites that tree with rules. Calcite ships hundreds of them, plus two planner engines to fire them: a cost-based one modeled on Volcano, which keeps sets of equivalent plans and picks the cheapest, and a cheaper one that fires rules, without costing them, until the plan stops changing. Physical properties such as sort order and partitioning are “traits” of an operator, and so is the calling convention, the system that will run it. That lets one plan span engines: a filter can be pushed into Splunk while the join with a MySQL table runs elsewhere.",
+    "On purpose, Calcite leaves out data storage, the algorithms that process data and a metadata repository. You bring those through adapters. An adapter tells Calcite which collections count as tables and can add rules that push work into its backend; the project includes adapters for JDBC databases, Cassandra, MongoDB, Elasticsearch, Druid, Kafka, Redis, Arrow, Spark, CSV and plain Java objects. What can’t be pushed down runs in Calcite’s own `Enumerable` operators, which iterate over rows in generated Java code. Most users never see Calcite directly: Hive uses it for cost-based optimization, Flink to parse and optimize batch and streaming SQL, Druid to parse and plan Druid SQL, and Dremio, Beam, Drill, Kylin, Feldera and Alibaba’s MaxCompute for parsing or planning. It also has a JDBC driver, built on its Avatica subproject, so an application can query any mix of adapters as one database. The latest release is 1.42.0 (31 May 2026)."
+  ],
+  "strengths": [
+    "A complete, mature SQL front end you don’t have to write: parser, validator with dialect and conformance settings (MySQL, Oracle, BigQuery, SQL Server lexical rules), and conversion to relational algebra",
+    "An optimizer built for extension: pluggable rules, cost models, statistics and planner engines, with hundreds of rules included",
+    "Federation through adapters: one query can join tables from different systems, with rules pushing filters, joins and aggregations down to each source",
+    "Proven by adoption: Hive, Flink, Druid, Dremio, Beam, Drill and many more rely on it, so its parser and planner are exercised by a lot of production workloads"
+  ],
+  "limits": [
+    "Java only: an engine written in C++ or Rust has to run a JVM beside it, or pass plans across a language boundary",
+    "Not a database: no storage or catalog, and its built-in `Enumerable` execution runs row by row over iterators, so heavy work has to be pushed into an engine",
+    "The library API moves: release notes open with a “Breaking Changes” list (1.42.0 renamed methods and changed how DDL nodes report their operands), so embedders must budget for upgrades",
+    "Planning costs time: the cost-based planner can search exhaustively, so systems stop early when the cost stops improving or split rules into phases and run some with the cheaper planner that doesn’t cost plans"
+  ],
+  "worksWith": [
+    { "id": "java", "how": "is written in" },
+    { "id": "hive", "how": "does cost-based query optimization for" },
+    { "id": "flink", "how": "parses and optimizes streaming SQL for" },
+    { "id": "druid", "how": "parses and plans Druid SQL for" },
+    { "id": "dremio", "how": "parses and cost-optimizes SQL for" },
+    { "id": "beam", "how": "parses and optimizes SQL for" },
+    { "id": "feldera", "how": "parses and optimizes SQL for" },
+    { "id": "cassandra", "how": "queries, through an adapter," },
+    { "id": "mongodb", "how": "queries, through an adapter," }
+  ],
+  "snippet": {
+    "lang": "java",
+    "title": "Parse SQL over plain Java objects, push a filter below the join, and print the plan as PostgreSQL",
+    "source": [
+      "// calcite-core 1.42.0 on JDK 21",
+      "import org.apache.calcite.adapter.java.ReflectiveSchema;",
+      "import org.apache.calcite.config.Lex;",
+      "import org.apache.calcite.plan.RelOptUtil;",
+      "import org.apache.calcite.plan.hep.*;",
+      "import org.apache.calcite.rel.RelNode;",
+      "import org.apache.calcite.rel.rel2sql.RelToSqlConverter;",
+      "import org.apache.calcite.rel.rules.CoreRules;",
+      "import org.apache.calcite.schema.SchemaPlus;",
+      "import org.apache.calcite.sql.dialect.PostgresqlSqlDialect;",
+      "import org.apache.calcite.sql.parser.SqlParser;",
+      "import org.apache.calcite.tools.*;",
+      "",
+      "public class Demo {",
+      "  public static class Emp {  // public fields become columns",
+      "    public final int deptno; public final String name; public final int salary;",
+      "    Emp(int deptno, String name, int salary) { this.deptno = deptno; this.name = name; this.salary = salary; }",
+      "  }",
+      "  public static class Dept {",
+      "    public final int deptno; public final String name;",
+      "    Dept(int deptno, String name) { this.deptno = deptno; this.name = name; }",
+      "  }",
+      "  public static class Hr {",
+      "    public final Emp[] emps = { new Emp(10, \"Bill\", 10000), new Emp(10, \"Theodore\", 11500) };",
+      "    public final Dept[] depts = { new Dept(10, \"Sales\") };",
+      "  }",
+      "",
+      "  public static void main(String[] args) throws Exception {",
+      "    SchemaPlus root = Frameworks.createRootSchema(true);",
+      "    root.add(\"hr\", new ReflectiveSchema(new Hr()));  // any Java object can be a schema",
+      "    Planner planner = Frameworks.getPlanner(Frameworks.newConfigBuilder()",
+      "        .defaultSchema(root).parserConfig(SqlParser.config().withLex(Lex.JAVA)).build());",
+      "",
+      "    // 1. Parse, validate against the schema, convert to relational algebra",
+      "    RelNode plan = planner.rel(planner.validate(planner.parse(",
+      "        \"SELECT d.name, COUNT(*) AS n FROM hr.emps AS e JOIN hr.depts AS d \"",
+      "      + \"ON e.deptno = d.deptno WHERE e.salary > 5000 GROUP BY d.name\"))).project();",
+      "",
+      "    // 2. Rewrite it with a rule: push the filter below the join",
+      "    HepPlanner hep = new HepPlanner(HepProgram.builder()",
+      "        .addRuleInstance(CoreRules.FILTER_INTO_JOIN).build());",
+      "    hep.setRoot(plan);",
+      "    RelNode better = hep.findBestExp();",
+      "    System.out.println(RelOptUtil.toString(better));",
+      "    // LogicalAggregate(group=[{0}], n=[COUNT()])",
+      "    //   LogicalProject(name=[$4])",
+      "    //     LogicalJoin(condition=[=($0, $3)], joinType=[inner])",
+      "    //       LogicalFilter(condition=[>(CAST($2):INTEGER NOT NULL, 5000)])",
+      "    //         LogicalTableScan(table=[[hr, emps]])",
+      "    //       LogicalTableScan(table=[[hr, depts]])",
+      "",
+      "    // 3. Turn the plan back into SQL for another engine",
+      "    var pg = PostgresqlSqlDialect.DEFAULT;",
+      "    System.out.println(new RelToSqlConverter(pg).visitRoot(better).asStatement().toSqlString(pg));",
+      "    // SELECT \"depts\".\"name\", COUNT(*) AS \"n\"",
+      "    // FROM (SELECT *",
+      "    // FROM \"hr\".\"emps\"",
+      "    // WHERE CAST(\"salary\" AS INTEGER) > 5000) AS \"t\"",
+      "    // INNER JOIN \"hr\".\"depts\" ON \"t\".\"deptno\" = \"depts\".\"deptno\"",
+      "    // GROUP BY \"depts\".\"name\"",
+      "  }",
+      "}"
+    ]
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "What Calcite gives you, and what it leaves out",
+      "items": [
+        { "name": "SQL parser and validator", "tag": "included", "text": "Standard SQL with sub-queries, window aggregates, `GROUPING SETS` and streaming extensions, checked against your schema. Lexical rules for Oracle (the default), MySQL, BigQuery, SQL Server and Java." },
+        { "name": "Relational algebra", "tag": "included", "text": "The plan as a tree of operators, which you can also build directly in code. The 2014 proposal noted that Hive did just that, skipping Calcite’s SQL parser." },
+        { "name": "Optimizer", "tag": "included", "text": "Rules, metadata providers (row counts, selectivity, cost) and two planner engines: cost-based (Volcano-style) and a rule-firing one that skips costing. Materialized-view rewriting and lattices on top." },
+        { "name": "Adapters", "tag": "included", "text": "Make a source look like tables and push work into it: JDBC, Cassandra, MongoDB, Elasticsearch, Druid, Kafka, Redis, Arrow, files and Java objects." },
+        { "name": "JDBC driver", "tag": "included", "text": "Built on Avatica, local or remote over JSON or Protobuf on HTTP, so tools can connect to a Calcite schema like any database." },
+        { "name": "Storage, execution at scale, catalog", "tag": "left out", "text": "You bring them: an engine such as Hive, Flink or Druid runs the optimized plan, and its own metastore supplies the tables." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Traditional databases bundled storage, execution, a parser, a planner and a catalog into one product. The Hadoop and NoSQL systems of the early 2010s split that stack apart, and most of them had fast storage and runtimes but no SQL and no real optimizer. As the 2014 incubator proposal put it, building a query planner is hard, so “many systems muddle along without a planner” until customers demand one. Julian Hyde, lead developer of the Mondrian OLAP engine, started Optiq as a reusable one. The first commits, in May 2012, imported source files from the Eigenbase project and added Optiq code that could parse and validate SQL but not yet plan.",
+      "Before it reached Apache, Optiq was already inside Apache Drill, Apache Hive and Cascading Lingual. It entered the Apache Incubator on 19 May 2014 with committers from Concurrent, Hortonworks, MapR and Salesforce, was renamed Calcite that September, and became a top-level Apache project on 22 October 2015. Hive was a key early user: as it moved from batch jobs toward interactive SQL, it needed a strong optimizer at its core and adopted Calcite for that. Flink, Storm, Druid and MapD were using it by 2018, and the project’s powered-by list now also names Dremio, Beam, Drill, Kylin and Feldera. A 2018 SIGMOD paper by Edmon Begoli, Jesús Camacho-Rodríguez, Julian Hyde, Michael Mior and Daniel Lemire described the architecture and why it spread."
+    ],
+    "choices": [
+      { "choice": "Leave out storage, execution algorithms and the metadata store", "why": "Those are what specialized systems do best and want to keep. Omitting them made Calcite a fit for mediating between applications and many data stores, and a base on which to build a new database: “just add data”." },
+      { "choice": "The engine that runs an operator is just another trait", "why": "Treating the calling convention like sort order or partitioning let one cost-based search decide where each part of a query runs, so a single plan can span MySQL, Splunk and Spark." },
+      { "choice": "Two planner engines instead of one", "why": "A Volcano-style cost-based planner finds good plans but can be slow; a second engine fires rules quickly without costing them. Offering both lets systems split optimization into phases and control planning time." },
+      { "choice": "Java", "why": "Most of the data systems it aimed at, especially in the Hadoop ecosystem, were written in Java or Scala, so a Java library could be embedded in them directly." }
+    ],
+    "timeline": [
+      { "year": "2012", "text": "Julian Hyde commits the first Optiq code, which can parse and validate SQL" },
+      { "year": "2014", "text": "Optiq enters the Apache Incubator in May and is renamed Calcite in September" },
+      { "year": "2015", "text": "1.0.0 in January; graduates to a top-level Apache project on 22 October" },
+      { "year": "2018", "text": "SIGMOD paper describes the framework, by then used by Hive, Flink, Storm, Druid and MapD" },
+      { "year": "2026", "text": "1.42.0 on 31 May, from 39 contributors, resolving 249 issues" }
+    ],
+    "sources": [
+      { "label": "Begoli et al.: Apache Calcite, A Foundational Framework for Optimized Query Processing Over Heterogeneous Data Sources (SIGMOD 2018)", "url": "https://arxiv.org/abs/1802.10233" },
+      { "label": "Apache Incubator wiki: Optiq proposal (2014)", "url": "https://cwiki.apache.org/confluence/display/INCUBATOR2/OptiqProposal" },
+      { "label": "Apache Incubator: Calcite incubation status (entered May 2014, renamed September 2014, graduated October 2015)", "url": "https://incubator.apache.org/projects/calcite.html" },
+      { "label": "GitHub: apache/calcite commit 2f4d397, “Initial optiq source files” (7 May 2012)", "url": "https://github.com/apache/calcite/commit/2f4d397c7eaf6916150914da817000fec6307078" },
+      { "label": "Apache Calcite docs: History (release notes from Optiq 0.1.11 to 1.42.0)", "url": "https://calcite.apache.org/docs/history.html" }
+    ]
+  },
+  "sources": [
+    { "label": "Apache Calcite docs: Background (no storage, adapters, optimizer rules, feature status)", "url": "https://calcite.apache.org/docs/index.html" },
+    { "label": "Apache Calcite docs: Adapters (schema adapters, JDBC driver and connect-string options)", "url": "https://calcite.apache.org/docs/adapter.html" },
+    { "label": "Apache Calcite docs: Algebra (relational expressions, planner rules)", "url": "https://calcite.apache.org/docs/algebra.html" },
+    { "label": "Apache Calcite docs: Powered by Calcite (Hive, Flink, Dremio, Beam, Feldera, MaxCompute and others)", "url": "https://calcite.apache.org/docs/powered_by.html" },
+    { "label": "Apache Calcite docs: History (1.42.0, 31 May 2026; breaking changes; JDK 8 to 24)", "url": "https://calcite.apache.org/docs/history.html" },
+    { "label": "Begoli et al.: Apache Calcite (SIGMOD 2018): traits, calling conventions, planner engines, Enumerable convention, Java", "url": "https://arxiv.org/abs/1802.10233" },
+    { "label": "Apache Druid docs: SQL query translation (“Druid uses Apache Calcite to parse and plan SQL queries”)", "url": "https://druid.apache.org/docs/latest/querying/sql-translation" },
+    { "label": "Maven Central: calcite-core versions (latest 1.42.0)", "url": "https://repo1.maven.org/maven2/org/apache/calcite/calcite-core/maven-metadata.xml" }
+  ],
+  "checked": "2026-10-11"
+}

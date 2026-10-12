@@ -1,0 +1,131 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Apache DataFusion Comet",
+  "concepts": ["query-engines"],
+  "parent": { "id": "datafusion", "as": "extension" },
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://datafusion.apache.org/comet/",
+  "repo": "https://github.com/apache/datafusion-comet",
+  "summary": "A Spark plugin that keeps Spark’s optimizer and scheduler but runs the physical plan on Apache DataFusion in Rust, over Arrow batches, with no changes to your Spark code, and falls back to Spark for anything it can’t run the same way.",
+  "intro": [
+    "Comet plugs into Spark through `spark.plugins` and its own shuffle manager. Spark still parses, optimizes and schedules every query. Comet then walks the physical plan and swaps each operator it supports for a `Comet*` version: Parquet scans (including the files behind Iceberg tables), filters, projections, hash aggregates, all four Spark join types, sorts, window functions, `explode`, and a native Arrow IPC shuffle. Most run as native Rust code built on DataFusion inside the executor process; some run in the JVM directly on Arrow batches. Data stays in Arrow columnar format from scan to shuffle to result, instead of Spark’s row format. You can see what happened in `explain()`: `Comet*` nodes are accelerated, and nodes without the prefix are plain Spark.",
+    "Matching Spark’s results is the hard part. Every supported expression runs in a Spark-compatible way by default; native versions that differ for some inputs stay off unless you opt in per expression. When an operator, expression or data type isn’t supported, that part of the plan falls back to Spark, with row and column conversions at the boundaries. Comet runs Spark’s own test suite, more than 24,000 tests, in CI. It needs JDK 17 or newer and off-heap memory, supports Spark 3.4 (deprecated), 3.5, 4.0 and 4.1, with 4.2 experimental, and its published jars contain native code for Linux on amd64 and arm64 only. Apple built Comet and donated it in 2024. It became 1.0 in August 2026 and now follows semantic versioning; the current release is 1.1.0 (October 2026), built on DataFusion 55.1 and Arrow 59.2."
+  ],
+  "strengths": [
+    "No code changes: add one jar and a few settings to an existing Spark job, and SQL, DataFrame and PySpark code run as before",
+    "Measured gains on commodity hardware: the project reports about 1.8x faster TPC-DS at 1 TB than Spark 4.2 (about 45% lower cost), with no GPUs or special hardware",
+    "Conservative about correctness: incompatible native paths are off by default, unsupported pieces fall back to Spark, and Spark’s own test suite runs against it",
+    "Covers the expensive parts: Parquet and Iceberg scans, joins, aggregates, windows and a native shuffle, with more than 400 Spark expressions"
+  ],
+  "limits": [
+    "Speedups depend on coverage: each fallback adds row-to-column conversions, and frequent transitions can erase the gain, so you need to read plans or turn on `spark.comet.explain.fallback.enabled`",
+    "Published jars are for Linux only (amd64, arm64); macOS needs a source build, and Comet may not fully work on cloud vendors’ proprietary Spark forks",
+    "Needs off-heap memory sized for native execution (1.1.0 disables itself without it), plus executor memory overhead tuning",
+    "Some edge cases still differ from Spark, documented per feature: for example, dates before 15 October 1582 in Parquet files written with Spark’s legacy calendar are read without rebasing and come out wrong, silently"
+  ],
+  "worksWith": [
+    { "id": "spark", "how": "accelerates, as a plugin," },
+    { "id": "datafusion", "how": "runs Spark’s physical plans on" },
+    { "id": "rust", "how": "runs native operators written in" },
+    { "id": "arrow", "how": "keeps batches and shuffles in the format of" },
+    { "id": "parquet", "how": "reads natively, and experimentally writes," },
+    { "id": "iceberg", "how": "speeds up scans of tables in" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Turn Comet on for an ordinary PySpark job and see Comet operators in the plan",
+    "source": [
+      "# spark-submit --jars comet-spark-spark4.1_2.13-1.1.0.jar \\",
+      "#   --conf spark.driver.extraClassPath=comet-spark-spark4.1_2.13-1.1.0.jar \\",
+      "#   --conf spark.executor.extraClassPath=comet-spark-spark4.1_2.13-1.1.0.jar \\",
+      "#   comet_demo.py                      (Spark 4.1.3, Java 17, Linux arm64)",
+      "from pyspark.sql import SparkSession",
+      "",
+      "# The same Spark code as always; only the session config adds Comet",
+      "spark = (SparkSession.builder",
+      "         .config(\"spark.plugins\", \"org.apache.spark.CometPlugin\")",
+      "         .config(\"spark.shuffle.manager\",",
+      "                 \"org.apache.spark.sql.comet.execution.shuffle.CometShuffleManager\")",
+      "         .config(\"spark.memory.offHeap.enabled\", \"true\")",
+      "         .config(\"spark.memory.offHeap.size\", \"2g\")",
+      "         .getOrCreate())",
+      "",
+      "spark.range(1_000_000).selectExpr(\"id % 100 AS store\", \"id * 0.5 AS amount\") \\",
+      "     .write.mode(\"overwrite\").parquet(\"/tmp/sales\")",
+      "",
+      "df = spark.sql(\"\"\"",
+      "    SELECT store, sum(amount) AS revenue",
+      "    FROM parquet.`/tmp/sales` WHERE amount > 100",
+      "    GROUP BY store ORDER BY revenue DESC LIMIT 3",
+      "\"\"\")",
+      "df.explain()",
+      "# +- CometTakeOrderedAndProjectExec(limit=3, ...)",
+      "#    +- CometHashAggregate [...], [Final], [store#4L], [sum(amount#5)]",
+      "#       +- CometExchange hashpartitioning(store#4L, 200), ..., CometNativeShuffle",
+      "#          +- CometHashAggregate [...], [Partial], [store#4L], [partial_sum(amount#5)]",
+      "#             +- CometFilter [store#4L, amount#5], (isnotnull(amount#5) AND (amount#5 > 100.0))",
+      "#                +- CometNativeScan parquet [store#4L,amount#5] ...",
+      "df.show()",
+      "# |store|     revenue|",
+      "# |   99|2500244851.0|",
+      "# |   98|2500239852.0|",
+      "# |   97|2500234853.0|"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Spark versions in Comet 1.1",
+      "intro": "From the Comet 1.1.0 installation guide, checked 2026-10-11. Comet needs JDK 17 or newer.",
+      "corner": "Spark",
+      "columns": ["Java", "Scala", "Status"],
+      "rows": [
+        { "label": "3.4.3", "values": ["17", "2.12, 2.13", "Deprecated since 1.0.0; Spark’s SQL tests run only on demand"] },
+        { "label": "3.5.9", "values": ["17", "2.12, 2.13", "Supported; Comet and Spark SQL tests nightly"] },
+        { "label": "4.0.4", "values": ["17, 21", "2.13", "Supported; tests nightly"] },
+        { "label": "4.1.3", "values": ["17, 21", "2.13", "Supported; tests must pass before every merge"] },
+        { "label": "4.2.0", "values": ["17", "2.13", "Experimental, for development and testing only"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Spark runs on the JVM and processes rows in its built-in engine. Several projects set out to keep Spark’s planner and APIs while running the heavy work natively in columnar form: Databricks’ proprietary Photon, and open-source Gluten, Spark RAPIDS and Blaze. Comet was one of them, first implemented at Apple by engineers who were also significant contributors to Arrow and DataFusion. In March 2024 the Arrow PMC announced that Apple had donated it, under the name Arrow DataFusion Comet, as a plugin that hands Spark’s physical plan to DataFusion while queries still go through Spark’s optimizer and planner.",
+      "The first Apache release, 0.1.0 in July 2024, came out of five months of work by 41 contributors and supported 13 operators and 106 expressions on Spark 3.3 to 3.5. Early releases gave modest speedups. Over the next two years the project shipped 20 releases, drew more than 120 contributors and grew to over 400 Spark expressions, a fully native shuffle and Iceberg support. Release 1.0.0 in August 2026, with full support for Spark’s ANSI mode, started semantic versioning; 1.1.0 in October 2026 added experimental native Iceberg writes, reworked memory management and dropped JDK 11."
+    ],
+    "choices": [
+      { "choice": "Keep Spark’s planner and replace only execution", "why": "Users keep the same Spark ecosystem, tools and APIs; only the work inside each executor moves to DataFusion, so adopting it needs no code changes." },
+      { "choice": "Fall back rather than return different results", "why": "From the first release the goal was 100% compatibility with Spark: anything not fully compatible falls back to Spark unless the user explicitly enables it." },
+      { "choice": "Arrow from scan to shuffle", "why": "Keeping operators, expressions, shuffle and broadcast in Arrow columnar format avoids the per-row overhead of Spark’s row-based engine and repeated conversions." },
+      { "choice": "Test against Spark’s own suite", "why": "Running Spark’s 24,000-plus unit tests with Comet enabled, alongside fuzzing and Comet’s own SQL tests, is how the project checks that results match Spark." }
+    ],
+    "timeline": [
+      { "year": "2024", "text": "Apple donates Comet to the Apache Arrow project; announced 6 March" },
+      { "year": "2024", "text": "0.1.0 in July: 13 operators, 106 expressions, Spark 3.3 to 3.5" },
+      { "year": "2026", "text": "0.17.0 in June runs expressions it lacks through Spark’s generated code instead of falling back" },
+      { "year": "2026", "text": "1.0.0 in August: semantic versioning, ANSI mode, over 400 expressions" },
+      { "year": "2026", "text": "1.1.0 in October: experimental native Iceberg writes, JDK 17 or newer required" }
+    ],
+    "sources": [
+      { "label": "Apache DataFusion blog: Announcing Apache Arrow DataFusion Comet (6 March 2024)", "url": "https://datafusion.apache.org/blog/2024/03/06/comet-donation/" },
+      { "label": "Apache DataFusion blog: Comet 0.1.0 release (20 July 2024)", "url": "https://datafusion.apache.org/blog/2024/07/20/datafusion-comet-0.1.0" },
+      { "label": "Apache DataFusion blog: Comet 1.0.0 release (7 August 2026)", "url": "https://datafusion.apache.org/blog/2026/08/07/datafusion-comet-1.0.0" },
+      { "label": "Apache DataFusion blog: Comet 1.1.0 release (1 October 2026)", "url": "https://datafusion.apache.org/blog/2026/10/01/datafusion-comet-1.1.0" },
+      { "label": "GitHub: apache/datafusion-comet README (Arrow-native end to end)", "url": "https://github.com/apache/datafusion-comet" }
+    ]
+  },
+  "sources": [
+    { "label": "GitHub: apache/datafusion-comet README (what Comet accelerates, ~1.8x TPC-DS claim, configuration)", "url": "https://github.com/apache/datafusion-comet" },
+    { "label": "GitHub: apache/datafusion-comet releases (1.1.0, 6 October 2026)", "url": "https://github.com/apache/datafusion-comet/releases" },
+    { "label": "Comet docs: Installing Comet 1.1 (Linux-only jars, Spark and Java versions, JDK 17+)", "url": "https://datafusion.apache.org/comet/user-guide/1.1/installation.html" },
+    { "label": "Comet docs: Compatibility overview (compatible by default, allowIncompatible, known divergences)", "url": "https://datafusion.apache.org/comet/user-guide/1.1/compatibility/index.html" },
+    { "label": "Comet docs: Parquet compatibility (fallback cases, no datetime rebasing)", "url": "https://datafusion.apache.org/comet/user-guide/1.1/compatibility/scans.html" },
+    { "label": "Comet docs: Understanding Comet plans (Comet* nodes, transitions, fallback configs)", "url": "https://datafusion.apache.org/comet/user-guide/1.1/understanding-comet-plans.html" },
+    { "label": "Comet docs: Tuning (off-heap memory, executor overhead)", "url": "https://datafusion.apache.org/comet/user-guide/1.1/tuning.html" },
+    { "label": "Apache DataFusion blog: Comet 1.0.0 release (semver, 24,000+ Spark tests, 400+ expressions)", "url": "https://datafusion.apache.org/blog/2026/08/07/datafusion-comet-1.0.0" },
+    { "label": "Apache DataFusion blog: Comet 1.1.0 release (off-heap required, JDK 11 removed, DataFusion 55.1, Arrow 59.2)", "url": "https://datafusion.apache.org/blog/2026/10/01/datafusion-comet-1.1.0" }
+  ],
+  "checked": "2026-10-11"
+}
