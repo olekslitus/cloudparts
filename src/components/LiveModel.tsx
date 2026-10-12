@@ -58,14 +58,14 @@ export default function LiveModel({ diagram, links, highlight, warmup = 5200, ch
   const H = diagram.h || 260;
 
   return (
-    <figure className="overflow-hidden rounded-xl bg-card text-card-foreground ring-1 ring-foreground/10">
+    <figure className="overflow-hidden rounded-md border bg-card text-card-foreground">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b px-3 py-2">
-        <span className="flex items-center gap-2 font-mono text-[11px] font-semibold tracking-widest uppercase">
+        <span className="flex items-center gap-2 font-mono text-[11px] font-medium tracking-widest uppercase">
           <span className="relative flex size-2">
-            {running && <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-500 opacity-60" />}
-            <span className={cn('relative inline-flex size-2 rounded-full', running ? 'bg-emerald-500' : 'bg-muted-foreground/40')} />
+            {running && <span className="absolute inline-flex size-full animate-ping bg-brand opacity-60" />}
+            <span className={cn('relative inline-flex size-2', running ? 'bg-brand' : 'bg-muted-foreground/40')} />
           </span>
-          Live model
+          <span className={running ? 'text-brand' : undefined}>Live model</span>
         </span>
         <Legend />
         <div className="ml-auto flex items-center gap-2">
@@ -86,12 +86,12 @@ export default function LiveModel({ diagram, links, highlight, warmup = 5200, ch
       <div className="bench overflow-x-auto">
         <div
           ref={host}
-          className={cn('px-2 py-1.5', diagram.wide ? 'min-w-[780px] md:min-w-0' : 'min-w-[640px] md:min-w-0')}
+          className={cn(diagram.wide ? 'min-w-[780px] md:min-w-0' : 'min-w-[640px] md:min-w-0')}
           style={{ aspectRatio: `${W} / ${H}` }}
         />
       </div>
-      <figcaption className="border-t bg-muted/40 px-4 py-3 text-[15px] leading-relaxed text-muted-foreground">
-        <span className="mr-2 text-xs font-semibold tracking-wide text-foreground uppercase">What you’re watching</span>
+      <figcaption className="border-t px-4 py-3 text-[15px] leading-relaxed text-muted-foreground">
+        <span className="mr-2 font-mono text-[11px] font-medium tracking-widest text-foreground uppercase">What you’re watching</span>
         {diagram.caption}
       </figcaption>
     </figure>
@@ -100,19 +100,19 @@ export default function LiveModel({ diagram, links, highlight, warmup = 5200, ch
 
 function Legend() {
   return (
-    <span className="hidden flex-wrap gap-4 text-xs text-muted-foreground sm:flex">
+    <span className="hidden flex-wrap gap-4 font-mono text-[11px] text-muted-foreground uppercase sm:flex">
       <span className="inline-flex items-center gap-1.5">
-        <svg width="12" height="12" aria-hidden="true"><circle cx="6" cy="6" r="4.5" style={{ fill: 'var(--p1)' }} /></svg>
+        <svg width="12" height="12" aria-hidden="true"><rect x="1" y="1" width="10" height="10" style={{ fill: 'var(--p1)' }} /></svg>
         data or request
       </span>
       <span className="inline-flex items-center gap-1.5">
-        <svg width="12" height="12" aria-hidden="true"><circle cx="6" cy="6" r="4" style={{ fill: 'none', stroke: 'var(--p1)', strokeWidth: 2 }} /></svg>
+        <svg width="12" height="12" aria-hidden="true"><rect x="2" y="2" width="8" height="8" style={{ fill: 'none', stroke: 'var(--p1)', strokeWidth: 1.6 }} /></svg>
         response
       </span>
       <span className="inline-flex items-center gap-1.5">
         <svg width="22" height="12" aria-hidden="true">
-          <rect x="1" y="1" width="9" height="9" rx="2" style={{ fill: 'var(--p1)' }} />
-          <rect x="12" y="1" width="9" height="9" rx="2" style={{ fill: 'none', stroke: 'var(--p1)' }} />
+          <rect x="1" y="1" width="9" height="9" style={{ fill: 'var(--box)' }} />
+          <rect x="12.5" y="1.5" width="8" height="8" style={{ fill: 'none', stroke: 'var(--box)' }} />
         </svg>
         busy / idle instance
       </span>

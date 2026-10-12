@@ -25,7 +25,7 @@ interface Geom { x1: number; y1: number; x2: number; y2: number; len: number }
 interface Pkt { color: string; req: boolean; type?: string; key?: number; path: string[]; born: number }
 interface Packet extends Pkt {
   reply: boolean; from: string; to: string; t0: number; dur: number; g: Geom;
-  el?: SVGCircleElement;
+  el?: SVGRectElement;
 }
 interface Slot { busy: boolean; last: number; cold?: boolean; p?: Packet | null; coldEnd?: number; end?: number }
 interface Reader {
@@ -94,7 +94,7 @@ export class Sim {
   private packets: Packet[] = [];
   private timers: { at: number; fn: () => void }[] = [];
   private dies: { x: number; y: number; color: string; t0: number }[] = [];
-  private dieEls: SVGCircleElement[] = [];
+  private dieEls: SVGRectElement[] = [];
   private N: Record<string, SimNode> = {};
   private E: Record<string, Geom> = {};
   private events: Outage[];
@@ -124,11 +124,11 @@ export class Sim {
     n.out = spec.out || [];
     n.rr = 0; n.flash = null; n.pulseUntil = -1; n.disabled = false; n.inflight = 0;
     if (n.kind === 'svc') {
-      n.w = spec.w || Math.max(tw(n.label, 13) + 28, tw(n.sub, 9.5, true) + 24, 96);
+      n.w = spec.w || Math.max(tw(n.label, 12, true) + 28, tw(n.sub, 9.5, true) + 24, 96);
       n.h = n.sub ? 46 : 36;
     } else if (n.kind === 'pool') {
       n.max = n.max || 4;
-      n.w = spec.w || Math.max(tw(n.label, 13) + 28, tw(n.sub, 9.5, true) + 24, n.max * 15 + 22, 96);
+      n.w = spec.w || Math.max(tw(n.label, 12, true) + 28, tw(n.sub, 9.5, true) + 24, n.max * 15 + 22, 96);
       n.h = 64;
       n.slots = []; n.backlog = [];
       for (let i = 0; i < (n.min || 0); i++) n.slots.push({ busy: false, last: 0 });
@@ -177,12 +177,22 @@ export class Sim {
     const defs = sv('defs', null, svg);
     const m = sv('marker', { id, viewBox: '0 0 8 8', refX: '7.5', refY: '4', markerWidth: '7', markerHeight: '7', orient: 'auto' }, defs);
     sv('path', { d: 'M0,0.6 L8,4 L0,7.4 z', class: 'arrow' }, m);
+    // ASCII textures, as on a terminal: "+" behind the whole figure, "/\\" inside zones
+    const texture = (name: string, chars: string, w: number) => {
+      const pat = sv('pattern', { id: id + name, width: w, height: 14, patternUnits: 'userSpaceOnUse' }, defs);
+      sv('text', { x: 0, y: 11, class: 'tex' }, pat).textContent = chars;
+      return `url(#${id + name})`;
+    };
+    const plus = texture('p', '+', 12), slash = texture('s', '/\\', 12);
+    sv('rect', { x: 0, y: 0, width: this.W, height: this.H, style: `fill:${plus}` }, svg);
     const gZ = sv('g', null, svg), gE = sv('g', null, svg), gN = sv('g', null, svg);
     this.gP = sv('g', null, svg); this.gF = sv('g', null, svg);
 
     (this.spec.zones || []).forEach(z => {
-      sv('rect', { x: z.x, y: z.y, width: z.w, height: z.h, rx: 6, class: 'zone' }, gZ);
-      sv('text', { x: z.x + 10, y: z.y + 16, class: 'zlabel' }, gZ).textContent = z.label.toUpperCase();
+      sv('rect', { x: z.x, y: z.y, width: z.w, height: z.h, class: 'zone', style: `fill:${slash}` }, gZ);
+      const label = z.label.toUpperCase();
+      sv('rect', { x: z.x + 6, y: z.y + 6, width: tw(label, 9.5, true) * 1.17 + 8, height: 15, class: 'zlabel-bg' }, gZ);
+      sv('text', { x: z.x + 10, y: z.y + 17, class: 'zlabel' }, gZ).textContent = label;
     });
 
     const pairs: [string, string][] = [];
@@ -209,7 +219,7 @@ export class Sim {
   private buildNode(n: SimNode, parent: SVGGElement) {
     const g = n.g = sv('g', { class: 'node', transform: `translate(${n.x},${n.y})`, 'data-id': n.id }, parent);
     if (this.opts.highlight?.includes(n.id)) g.classList.add('current');
-    sv('rect', { x: -n.w / 2, y: -n.h / 2, width: n.w, height: n.h, rx: (n.kind === 'queue' || n.kind === 'log') ? 3 : 6, class: 'nbox' }, g);
+    sv('rect', { x: -n.w / 2, y: -n.h / 2, width: n.w, height: n.h, class: 'nbox' }, g);
     const above = (n.kind === 'queue' || n.kind === 'log');
     if (above) {
       sv('text', { x: 0, y: -n.h / 2 - 21, 'text-anchor': 'middle', class: 'nlabel' }, g).textContent = n.label;
@@ -221,17 +231,17 @@ export class Sim {
       sv('text', { x: 0, y: n.sub ? -3 : 4.5, 'text-anchor': 'middle', class: 'nlabel' }, g).textContent = n.label;
       if (n.sub) sv('text', { x: 0, y: 12.5, 'text-anchor': 'middle', class: 'nsub' }, g).textContent = n.sub;
     }
-    if (n.emit && !n.emit.to) sv('circle', { cx: -n.w / 2 + 8, cy: -n.h / 2 + 8, r: 2.6, class: 'srcdot' }, g);
+    if (n.emit && !n.emit.to) sv('rect', { x: -n.w / 2 + 5, y: -n.h / 2 + 5, width: 5, height: 5, class: 'srcdot' }, g);
 
     if (n.kind === 'queue') {
       n.slotEls = [];
-      for (let i = 0; i < n.cap!; i++) n.slotEls.push(sv('circle', { cx: n.w / 2 - 16 - i * 18, cy: 0, r: 6.5, class: 'slot-empty' }, g));
+      for (let i = 0; i < n.cap!; i++) n.slotEls.push(sv('rect', { x: n.w / 2 - 22 - i * 18, y: -6, width: 12, height: 12, class: 'slot-empty' }, g));
     }
     if (n.kind === 'log') {
       n.cellEls = []; n.cellTx = [];
       for (let i = 0; i < n.cells!; i++) {
         const x = -n.w / 2 + 6 + i * 22;
-        n.cellEls.push(sv('rect', { x, y: -11, width: 19, height: 22, rx: 2, class: 'cell empty' }, g));
+        n.cellEls.push(sv('rect', { x, y: -11, width: 19, height: 22, class: 'cell empty' }, g));
         n.cellTx.push(sv('text', { x: x + 9.5, y: 3.2, 'text-anchor': 'middle', class: 'celltxt' }, g));
       }
       n.readers!.forEach((r, ri) => {
@@ -244,7 +254,7 @@ export class Sim {
     if (n.kind === 'pool') {
       n.slotEls = [];
       const total = n.max! * 15 - 4;
-      for (let i = 0; i < n.max!; i++) n.slotEls.push(sv('rect', { x: -total / 2 + i * 15, y: n.h / 2 - 19, width: 11, height: 11, rx: 2, class: 'ps-none' }, g));
+      for (let i = 0; i < n.max!; i++) n.slotEls.push(sv('rect', { x: -total / 2 + i * 15, y: n.h / 2 - 19, width: 11, height: 11, class: 'ps-none' }, g));
       n.blEl = sv('text', { x: 0, y: n.h / 2 + 13, 'text-anchor': 'middle', class: 'backlog' }, g);
     }
     const fy = above ? -n.h / 2 - 36 : -n.h / 2 - 8;
@@ -513,20 +523,24 @@ export class Sim {
     const t = this.t;
     for (const p of this.packets) {
       if (!p.el) {
-        p.el = sv('circle', { r: 5.5, class: 'pk' }, this.gP);
-        if (p.reply) { p.el.style.fill = 'var(--bench)'; p.el.style.stroke = p.color; p.el.setAttribute('r', '4.8'); }
+        // Square packets: filled for data and requests, hollow for responses
+        const size = p.reply ? 8 : 10;
+        p.el = sv('rect', { width: size, height: size, class: 'pk' }, this.gP);
+        if (p.reply) { p.el.style.fill = 'var(--bench)'; p.el.style.stroke = p.color; }
         else { p.el.style.fill = p.color; p.el.style.stroke = 'var(--bench)'; }
       }
+      const half = p.reply ? 4 : 5;
       let k = (t - p.t0) / p.dur; k = k < 0 ? 0 : k > 1 ? 1 : k;
       k = k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
-      p.el.setAttribute('cx', (p.g.x1 + (p.g.x2 - p.g.x1) * k).toFixed(1));
-      p.el.setAttribute('cy', (p.g.y1 + (p.g.y2 - p.g.y1) * k).toFixed(1));
+      p.el.setAttribute('x', (p.g.x1 + (p.g.x2 - p.g.x1) * k - half).toFixed(1));
+      p.el.setAttribute('y', (p.g.y1 + (p.g.y2 - p.g.y1) * k - half).toFixed(1));
     }
     // dying packets
     this.dieEls.forEach(e => e.remove());
     this.dieEls = this.dies.map(d => {
       const a = (t - d.t0) / 500;
-      const c = sv('circle', { cx: d.x, cy: d.y, r: (5.5 + a * 9).toFixed(1), fill: 'none', 'stroke-width': 2, opacity: (1 - a).toFixed(2) }, this.gF);
+      const h = 5 + a * 9;
+      const c = sv('rect', { x: (d.x - h).toFixed(1), y: (d.y - h).toFixed(1), width: (2 * h).toFixed(1), height: (2 * h).toFixed(1), fill: 'none', 'stroke-width': 1.6, opacity: (1 - a).toFixed(2) }, this.gF);
       c.style.stroke = 'var(--bad)';
       return c;
     });
