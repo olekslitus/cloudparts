@@ -1,18 +1,111 @@
-import { useEffect, useState } from 'react';
-import { ArrowLeftRightIcon, BoxIcon, LayersIcon, LibraryIcon, NetworkIcon, SearchIcon, ShapesIcon } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { SearchIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Kbd } from '@/components/ui/kbd';
 import { STAGE_LABELS, type NavData } from '@/lib/nav';
 import { cn } from '@/lib/utils';
 
-// Every word must appear somewhere (name, id, summary or a product name); name matches rank first.
-function filter(value: string, search: string, keywords: string[] = []) {
-  const words = search.toLowerCase().split(/\s+/).filter(Boolean);
-  const name = value.toLowerCase();
-  const hay = `${name} ${keywords.join(' ')}`.toLowerCase();
-  if (!words.every(w => hay.includes(w))) return 0;
-  return words.every(w => name.includes(w)) ? 1 : 0.5;
+type Logo = NonNullable<NavData['groups'][number]['technologies'][number]['logo']>;
+interface Entry {
+  key: string;
+  type: 'Topic' | 'Concept' | 'Kind' | 'Technology' | 'Architecture' | 'Comparison';
+  name: string;
+  /** Shown under the name. */
+  sub: string;
+  path: string;
+  /** A Lucide icon name from the page's sprite (IconSprite.astro); a logo replaces it. */
+  icon: string;
+  logo?: Logo;
+  /** Other names people type for it: ids, product names, the concept it belongs to. */
+  aliases: string;
+  /** Everything else that may match: summaries, vendors, section titles. */
+  text: string;
+  archived?: boolean;
+}
+
+// A small lead for the broader page: a topic or concept before the products and kinds under it.
+const TYPE_BONUS: Record<Entry['type'], number> = { Topic: 6, Concept: 6, Technology: 3, Kind: 1, Architecture: 0, Comparison: 0 };
+const STOP = new Set(['a', 'an', 'and', 'or', 'of', 'for', 'the', 'on', 'in', 'to', 'vs']);
+// "Apache Kafka" is "Kafka" to most people, "AWS Lambda" is "Lambda".
+const VENDOR = /^(apache|amazon|aws|google cloud|google|azure|microsoft|cloudflare|hashicorp|alibaba cloud|eclipse|oracle|red hat) /;
+const words = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^a-z0-9+#]+/g, ' ').trim().split(' ').filter(Boolean);
+/** "formats" and "format", "queues" and "queue" count as the same word. */
+const stem = (w: string) => (w.length > 3 ? w.replace(/(es|s)$/, '') : w);
+const hit = (f: string, w: string) => f.startsWith(w) || stem(f) === stem(w);
+/** Every query word starts some word of the field (or is the same word, plural or not). */
+const covers = (field: string[], q: string[]) => q.every(w => field.some(f => hit(f, w)));
+const same = (a: string[], b: string[]) => a.length === b.length && a.every((w, i) => stem(w) === stem(b[i]));
+
+function score(e: Entry, q: string[]): number {
+  const name = words(e.name);
+  const core = words(e.name.toLowerCase().replace(VENDOR, ''));
+  let s = 0;
+  if (same(name, q) || same(core, q)) s = 100;
+  else if (covers(name, q)) {
+    // the more of the name the query accounts for, the better: "postgres" is PostgreSQL before PGO
+    const meaningful = name.filter(w => !STOP.has(w));
+    // and a whole word ("streams") counts for more than the start of one ("Streamling")
+    const credit = meaningful.reduce((n, f) => n + (q.some(w => stem(f) === stem(w)) ? 1 : q.some(w => f.startsWith(w)) ? 0.5 : 0), 0);
+    s = 60 + 20 * (credit / Math.max(1, meaningful.length));
+  }
+  else if (covers([...name, ...words(e.aliases)], q)) s = 40;
+  else if (covers([...name, ...words(e.aliases), ...words(e.text)], q)) s = 15;
+  if (!s) return 0;
+  return s + TYPE_BONUS[e.type] - (e.archived ? 5 : 0);
+}
+
+function entries(nav: NavData): Entry[] {
+  const concepts = new Map(nav.groups.flatMap(g => g.concepts.map(p => [p.id, p] as const)));
+  return [
+    ...nav.groups.map((g): Entry => ({
+      key: `topic:${g.id}`, type: 'Topic', name: g.name, sub: g.blurb, path: `topics/${g.id}/`, icon: g.icon,
+      aliases: `${g.id} ${nav.parts.find(x => x.id === g.part)?.name ?? ''}`, text: g.blurb,
+    })),
+    ...nav.groups.flatMap(g => g.concepts.flatMap((p): Entry[] => [
+      {
+        key: `concept:${p.id}`, type: 'Concept', name: p.name, sub: `${g.name} · ${p.summary}`, path: `concepts/${p.id}/`, icon: p.icon,
+        aliases: `${p.id} ${p.products}`, text: p.summary,
+      },
+      ...p.kinds.map((k): Entry => ({
+        key: `kind:${k.id}`, type: 'Kind', name: k.name, sub: `${p.name} · ${k.summary}`, path: `concepts/${p.id}/${k.id}/`, icon: 'folder',
+        aliases: `${k.id} ${p.name}`, text: k.summary,
+      })),
+    ])),
+    ...nav.groups.flatMap(g => g.technologies.map((t): Entry => ({
+      key: `tech:${t.id}`, type: 'Technology', name: t.name, path: `technologies/${t.id}/`,
+      sub: `${t.stage ? `${STAGE_LABELS[t.stage]} · ` : ''}${t.context} · ${t.summary}`,
+      icon: concepts.get(t.conceptId)?.icon ?? 'box', logo: t.logo,
+      aliases: `${t.id} ${t.context}`, text: `${t.summary} ${t.terms}`, archived: t.archived,
+    }))),
+    ...nav.architectures.map((a): Entry => ({
+      key: `arch:${a.id}`, type: 'Architecture', name: a.name, sub: a.summary, path: `architectures/${a.id}/`, icon: 'network',
+      aliases: `${a.id} architecture stack`, text: `${a.summary} ${a.terms}`,
+    })),
+    ...nav.comparisons.map((m): Entry => ({
+      key: `compare:${m.id}`, type: 'Comparison', name: m.title, sub: '', path: `compare/${m.id}/`, icon: 'arrow-left-right',
+      aliases: `${m.id} compare vs versus`, text: '',
+    })),
+  ];
+}
+
+/** Best matches first, across every kind of page. */
+function search(all: Entry[], query: string): Entry[] {
+  // "kafka vs redpanda" looks for Kafka and Redpanda; "vs" alone still finds the comparisons
+  const typed = words(query);
+  const q = typed.some(w => !STOP.has(w)) ? typed.filter(w => !STOP.has(w)) : typed;
+  return all
+    .map(e => ({ e, s: score(e, q) }))
+    .filter(x => x.s > 0)
+    .sort((a, b) => b.s - a.s || a.e.name.length - b.e.name.length)
+    .slice(0, 40)
+    .map(x => x.e);
+}
+
+function Glyph({ e }: { e: Entry }) {
+  return e.logo
+    ? <img src={e.logo.src} alt="" className={cn('size-4 shrink-0 object-contain', e.logo.tone && `logo-${e.logo.tone}`)} />
+    : <svg className="size-4 shrink-0 text-muted-foreground" aria-hidden="true"><use href={`#i-${e.icon}`} /></svg>;
 }
 
 /** The search button and dialog. Render it once per page: it also listens for ⌘K and "open-search" events. */
@@ -46,6 +139,20 @@ export default function Search({ nav, base }: { nav: NavData; base: string }) {
     setOpen(false);
     window.location.href = base + path;
   };
+  const all = useMemo(() => entries(nav), [nav]);
+  // a plain function, not a component, so items keep their identity between keystrokes
+  const item = (e: Entry, label?: string) => (
+    <CommandItem key={e.key} value={e.key} onSelect={() => go(e.path)} className="items-start gap-3">
+      <span className="mt-0.5 flex"><Glyph e={e} /></span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-baseline justify-between gap-2">
+          <span className={cn('font-medium', e.archived && 'text-muted-foreground')}>{e.name}</span>
+          {label && <span className="shrink-0 text-[11px] text-muted-foreground">{label}</span>}
+        </span>
+        {e.sub && <span className="block truncate text-xs text-muted-foreground">{e.sub}</span>}
+      </span>
+    </CommandItem>
+  );
 
   return (
     <>
@@ -59,96 +166,21 @@ export default function Search({ nav, base }: { nav: NavData; base: string }) {
         <Kbd className="ml-auto">⌘K</Kbd>
       </Button>
       <CommandDialog open={open} onOpenChange={setOpen} title="Search Cloud Parts" description="Find a topic, concept, technology or architecture, such as delivery, event loop or Kafka.">
-        <Command filter={filter}>
+        <Command shouldFilter={false}>
           <CommandInput placeholder="Try observability, event loop, Kafka…" value={query} onValueChange={setQuery} />
           <CommandList className="max-h-[min(60vh,420px)]">
             <CommandEmpty>Nothing matches. Try a topic like delivery, or a product like Kafka.</CommandEmpty>
-            <CommandGroup heading="Topics">
-              {nav.groups.map(g => (
-                <CommandItem
-                  key={g.id}
-                  value={g.name}
-                  keywords={[g.id, g.blurb, nav.parts.find(x => x.id === g.part)?.name ?? '', 'topic']}
-                  onSelect={() => go(`topics/${g.id}/`)}
-                >
-                  <LibraryIcon className="text-muted-foreground" />
-                  <span className="min-w-0">
-                    <span className="block font-medium">{g.name}</span>
-                    <span className="block truncate text-xs text-muted-foreground">{g.blurb}</span>
-                  </span>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-            {nav.groups.map(g => (
-              <CommandGroup key={g.id} heading={g.name}>
-                {g.concepts.map(p => (
-                  <CommandItem
-                    key={p.id}
-                    value={p.name}
-                    keywords={[p.id, p.summary, p.products]}
-                    onSelect={() => go(`concepts/${p.id}/`)}
-                    className="items-start"
-                  >
-                    <span className="mt-0.5 flex w-12 shrink-0 text-muted-foreground"><ShapesIcon /></span>
-                    <span className="min-w-0">
-                      <span className="block font-medium">{p.name}</span>
-                      <span className="block truncate text-xs text-muted-foreground">{p.products}</span>
-                    </span>
-                  </CommandItem>
-                ))}
-                {g.concepts.flatMap(p => p.kinds.map(k => (
-                  <CommandItem
-                    key={k.id}
-                    value={`${k.name} ${p.name}`}
-                    keywords={[k.id, k.summary]}
-                    onSelect={() => go(`concepts/${p.id}/${k.id}/`)}
-                    className="items-start"
-                  >
-                    <span className="mt-0.5 flex w-12 shrink-0 text-muted-foreground"><LayersIcon /></span>
-                    <span className="min-w-0">
-                      <span className="block font-medium">{k.name}</span>
-                      <span className="block truncate text-xs text-muted-foreground">{p.name} · {k.summary}</span>
-                    </span>
-                  </CommandItem>
-                )))}
-                {g.technologies.map(t => (
-                  <CommandItem
-                    key={t.id}
-                    value={t.name}
-                    keywords={[t.id, t.summary, t.terms]}
-                    onSelect={() => go(`technologies/${t.id}/`)}
-                    className="items-start"
-                  >
-                    <span className="mt-0.5 flex w-12 shrink-0 text-muted-foreground">
-                      {t.logo ? <img src={t.logo.src} alt="" className={cn('size-4 object-contain', t.logo.tone && `logo-${t.logo.tone}`)} /> : <BoxIcon />}
-                    </span>
-                    <span className="min-w-0">
-                      <span className="block font-medium">{t.name}</span>
-                      <span className="block truncate text-xs text-muted-foreground">{t.stage && `${STAGE_LABELS[t.stage]} · `}{t.context} · {t.summary}</span>
-                    </span>
-                  </CommandItem>
-                ))}
+            {query.trim() ? (
+              <CommandGroup>
+                {search(all, query).map(e => item(e, e.type))}
               </CommandGroup>
-            ))}
-            <CommandGroup heading="Architectures">
-              {nav.architectures.map(a => (
-                <CommandItem key={a.id} value={a.name} keywords={[a.id, a.summary, a.terms, 'architecture', 'stack']} onSelect={() => go(`architectures/${a.id}/`)}>
-                  <NetworkIcon className="text-muted-foreground" />
-                  <span className="min-w-0">
-                    <span className="block font-medium">{a.name}</span>
-                    <span className="block truncate text-xs text-muted-foreground">{a.summary}</span>
-                  </span>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-            <CommandGroup heading="Comparisons">
-              {nav.comparisons.map(m => (
-                <CommandItem key={m.id} value={m.title} keywords={['compare', 'vs']} onSelect={() => go(`compare/${m.id}/`)}>
-                  <ArrowLeftRightIcon className="text-muted-foreground" />
-                  {m.title}
-                </CommandItem>
-              ))}
-            </CommandGroup>
+            ) : (
+              <>
+                <CommandGroup heading="Topics">{all.filter(e => e.type === 'Topic').map(e => item(e))}</CommandGroup>
+                <CommandGroup heading="Architectures">{all.filter(e => e.type === 'Architecture').map(e => item(e))}</CommandGroup>
+                <CommandGroup heading="Comparisons">{all.filter(e => e.type === 'Comparison').map(e => item(e))}</CommandGroup>
+              </>
+            )}
           </CommandList>
         </Command>
       </CommandDialog>

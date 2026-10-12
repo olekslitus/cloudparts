@@ -27,6 +27,9 @@ export interface Where {
   active?: string;
 }
 
+/** Icons the site uses outside the content: sections, kinds, comparisons, architectures, benchmarks. */
+export const SITE_ICONS = ['house', 'shapes', 'box', 'arrow-left-right', 'network', 'square-mouse-pointer', 'bookmark', 'gauge', 'folder'];
+
 export function navTree(c: Catalog, { section, page, active }: Where): NavNode[] {
   const on = (kind: Where['page'], id: string) => page === kind && active === id;
   /** Opens a node when anything under it is the current page. */

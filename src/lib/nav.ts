@@ -8,8 +8,8 @@ export interface NavData {
   parts: { id: string; name: string }[];
   /** One per topic (category), in reading order. */
   groups: {
-    id: string; code: string; name: string; blurb: string; part: string;
-    concepts: (NavItem & { code: string; products: string; kinds: NavItem[] })[];
+    id: string; code: string; name: string; blurb: string; part: string; icon: string;
+    concepts: (NavItem & { code: string; products: string; icon: string; kinds: NavItem[] })[];
     technologies: (NavItem & {
       conceptId: string;
       /** Where it sits, e.g. "Columnar files" or "Managed Kubernetes"; the concept name otherwise. */
@@ -89,10 +89,11 @@ export function navData(c: Catalog, logo: (id: string) => NavData['groups'][numb
       name: cat.name,
       blurb: cat.blurb,
       part: cat.part,
+      icon: cat.icon,
       concepts: c.concepts
         .filter(p => p.category === cat.id)
         .map(p => ({
-          id: p.id, code: p.code, name: p.name, summary: p.summary, products: Object.values(p.providers ?? {}).join(', '),
+          id: p.id, code: p.code, name: p.name, summary: p.summary, icon: p.icon, products: Object.values(p.providers ?? {}).join(', '),
           kinds: p.kinds.map(k => ({ id: k.id, name: k.name, summary: k.summary })),
         })),
       technologies: c.technologies
