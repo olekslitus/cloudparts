@@ -1,0 +1,95 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Cloudflare Containers",
+  "concepts": ["containers"],
+  "uses": ["serverless"],
+  "provider": "vendor",
+  "vendor": "Cloudflare, Inc.",
+  "license": "Proprietary",
+  "website": "https://developers.cloudflare.com/containers/",
+  "summary": "Linux container images that run on Cloudflare’s network next to a Worker, each instance started on demand by its own Durable Object and put to sleep when idle.",
+  "intro": [
+    "You ship an ordinary `linux/amd64` image alongside a Worker, and `wrangler deploy` builds it, pushes it to Cloudflare’s registry and readies it across the network. A container instance is never reached directly: a Worker sends the request to a Durable Object, and that object starts, stops and talks to its container through `ctx.container` (or the `Container` helper class). Calling the namespace with a new ID, such as a user session, gets a separate instance, so routing per user, per tenant or per job is just a choice of ID. Each instance runs in its own Firecracker microVM with its own kernel, in a Cloudflare location near the request that started it; cold starts are often 1 to 3 seconds, depending on the image. Since Birthday Week 2026, Containers can also be run as agent sandboxes: under the `durable_object` scheduling policy (in public beta) each Durable Object picks the image and instance type when it starts its container, the container starts on or near the Durable Object’s machine from a prepared VM, and median startup in ComputeSDK’s benchmark fell from about 4 seconds to 648 ms.",
+    "Instances stop after an inactivity timeout (10 minutes by default with the `Container` class), and you pay only while they run, in 10 ms increments: memory and disk by the size provisioned, CPU by active use. Six instance types range from `lite` (1/16 vCPU, 256 MiB, 2 GB disk) to `standard-4` (4 vCPU, 12 GiB, 20 GB), or you can define a custom size. The Workers Paid plan includes 25 GiB-hours of memory, 375 vCPU-minutes and 200 GB-hours of disk a month; beyond that, a vCPU costs $0.00002 per second and a GiB of memory $0.0000025 per second, plus egress from $0.025 per GB after 1 TB in North America and Europe. Containers and the Sandbox SDK built on them became generally available on April 13, 2026."
+  ],
+  "strengths": [
+    "Scale to zero with per-ID routing: each session, tenant or job can get its own instance, started on the first request and stopped when idle",
+    "Hardware isolation: every instance is a Firecracker microVM with its own kernel, which suits untrusted or AI-generated code",
+    "Programmable from TypeScript: the Durable Object in front of each container handles routing, auth, lifecycle hooks and saved state, with no Kubernetes operators or control plane",
+    "CPU is billed by active use, not allocation, so a mostly idle instance pays mainly for its memory and disk"
+  ],
+  "limits": [
+    "Inbound traffic must arrive as HTTP or WebSocket through a Worker; end users can’t open raw TCP or UDP connections to a container",
+    "The local disk is wiped when an instance sleeps; keeping files means snapshots (Durable Object scheduling policy, in beta), FUSE-mounted R2 or other storage",
+    "Instances top out at 4 vCPU, 12 GiB of memory and 20 GB of disk, and an account at 1,500 vCPU and 6 TiB of memory running at once by default",
+    "Cold starts of 1 to 3 seconds, and a restarted instance may come up in a different location from before; only the Workers Paid plan has Containers"
+  ],
+  "worksWith": [
+    { "id": "cloudflare-workers", "how": "receives all its requests through" },
+    { "id": "durable-objects", "how": "is started and controlled by" },
+    { "id": "r2", "how": "can mount buckets with FUSE from" }
+  ],
+  "snippet": {
+    "lang": "ts",
+    "title": "One container per session, asleep after 5 idle minutes",
+    "source": [
+      "import { Container, getContainer } from \"@cloudflare/containers\";",
+      "",
+      "// A Durable Object class that wraps the container (\"containers\" in wrangler config)",
+      "export class CodeRunner extends Container {",
+      "  defaultPort = 8080;      // where the image listens",
+      "  sleepAfter = \"5m\";       // stop the instance when idle",
+      "  enableInternet = false;  // no outbound internet access",
+      "}",
+      "",
+      "export default {",
+      "  async fetch(request: Request, env: Env): Promise<Response> {",
+      "    const session = request.headers.get(\"x-session-id\") ?? \"anonymous\";",
+      "    // The same ID always reaches the same instance while it runs",
+      "    return getContainer(env.CODE_RUNNER, session).fetch(request);",
+      "  },",
+      "};"
+    ]
+  },
+  "history": {
+    "story": [
+      "Workers run in V8 isolates, which start fast but can’t run arbitrary binaries, a full Linux userland, or programs that need gigabytes of memory and several cores. Customers kept telling Cloudflare they would run their whole application on it if only they could deploy the one piece that needs a container. At the end of Developer Week in April 2025, Mike Nomitch announced that Cloudflare had been building a container platform and would open a beta in June, aimed at running user-generated code, CLI tools, heavy workloads and applications ported from other clouds.",
+      "Instead of a separate orchestrator, Containers sit on Durable Objects. Each container gets an object that acts as a programmable sidecar: it proxies requests, starts and stops the container, and runs code when its status changes, while the Worker in front plays API gateway, service mesh and orchestrator. The public beta opened to all paid plans on June 24, 2025.",
+      "During the beta Cloudflare switched CPU billing to active use (November 2025), raised account limits fifteenfold to 1,500 vCPU (February 2026), and added Docker Hub images, SSH and connections to Workers bindings. Containers and the Sandbox SDK became generally available on April 13, 2026. On September 30, 2026, in “Cloudflare Containers, rebuilt to scale agent sandboxes”, Thomas Gauvin described a rearchitecture for agents that create a sandbox per task: a new `durable_object` scheduling policy, in public beta, lets each Durable Object choose its image and size at start time, replaces application-wide rollouts with code, and adds filesystem snapshots, while a redesigned runtime restores prepared VMs to start containers more than 6x faster."
+    ],
+    "choices": [
+      { "choice": "Every container behind a Durable Object", "why": "The announcement calls each Durable Object a “programmable sidecar”: routing, lifecycle hooks, health checks and saved state are written as Worker code, instead of Kubernetes operators or control-plane configuration." },
+      { "choice": "Addressed by ID, started on demand", "why": "Calling the namespace with a unique ID gives a unique instance that boots on its first request and sleeps after a timeout, which fits per-user sandboxes for untrusted, LLM-generated code and costs nothing while asleep." },
+      { "choice": "Private by default, reached only through Workers", "why": "Requests are encrypted until they reach the container’s port on the host, so containers don’t need their own TLS certificates, and outbound traffic can also be forced through Workers." }
+    ],
+    "timeline": [
+      { "year": "2025", "text": "Announced in April, at the end of Developer Week" },
+      { "year": "2025", "text": "Public beta for paid plans on June 24" },
+      { "year": "2025", "text": "CPU billed by active use instead of allocation, from November 21" },
+      { "year": "2026", "text": "Account limits raised 15x to 1,500 vCPU and 6 TiB of memory in February" },
+      { "year": "2026", "text": "Containers and Sandboxes generally available on April 13" },
+      { "year": "2026", "text": "Rebuilt for agent sandboxes on September 30: per-start images, 6x faster starts, snapshots in beta" }
+    ],
+    "sources": [
+      { "label": "Cloudflare Blog: Simple, scalable, and global: Containers are coming to Cloudflare Workers in June 2025 (Apr 2025)", "url": "https://blog.cloudflare.com/cloudflare-containers-coming-2025/" },
+      { "label": "Cloudflare Blog: Containers are available in public beta for simple, global, and programmable compute (Jun 2025)", "url": "https://blog.cloudflare.com/containers-are-available-in-public-beta-for-simple-global-and-programmable/" },
+      { "label": "Cloudflare Changelog: New CPU pricing for Containers and Sandboxes (Nov 2025)", "url": "https://developers.cloudflare.com/changelog/post/2025-11-21-new-cpu-pricing/" },
+      { "label": "Cloudflare Changelog: Run 15x more Containers with higher resource limits (Feb 2026)", "url": "https://developers.cloudflare.com/changelog/post/2026-02-25-higher-container-resource-limits/" },
+      { "label": "Cloudflare Changelog: Containers and Sandboxes are now generally available (Apr 2026)", "url": "https://developers.cloudflare.com/changelog/post/2026-04-13-containers-sandbox-ga/" },
+      { "label": "Cloudflare Changelog: New scheduling policy for Containers (Sep 2026)", "url": "https://developers.cloudflare.com/changelog/post/2026-09-30-durable-object-scheduling-policy/" },
+      { "label": "Cloudflare Blog: Cloudflare Containers, rebuilt to scale agent sandboxes (Sep 2026)", "url": "https://blog.cloudflare.com/faster-agent-sandboxes/" }
+    ]
+  },
+  "sources": [
+    { "label": "Cloudflare Containers docs: Container fundamentals", "url": "https://developers.cloudflare.com/containers/concepts/" },
+    { "label": "Cloudflare Containers docs: Lifecycle of a Container (Firecracker, cold starts, shutdown)", "url": "https://developers.cloudflare.com/containers/concepts/architecture/" },
+    { "label": "Cloudflare Containers docs: API (Durable Object Container API and Container class)", "url": "https://developers.cloudflare.com/containers/api/" },
+    { "label": "Cloudflare Containers docs: Container class", "url": "https://developers.cloudflare.com/containers/api/container-class/" },
+    { "label": "Cloudflare Containers docs: Scheduling policies", "url": "https://developers.cloudflare.com/containers/configuration/scheduling-policy/" },
+    { "label": "Cloudflare Containers docs: Limits and instance types", "url": "https://developers.cloudflare.com/containers/platform/limits/" },
+    { "label": "Cloudflare Containers docs: Pricing", "url": "https://developers.cloudflare.com/containers/platform/pricing/" },
+    { "label": "Cloudflare Changelog: Containers and Sandboxes are now generally available (Apr 2026)", "url": "https://developers.cloudflare.com/changelog/post/2026-04-13-containers-sandbox-ga/" },
+    { "label": "Cloudflare Blog: Cloudflare Containers, rebuilt to scale agent sandboxes (startup benchmark, Sep 2026)", "url": "https://blog.cloudflare.com/faster-agent-sandboxes/" }
+  ],
+  "checked": "2026-10-12"
+}

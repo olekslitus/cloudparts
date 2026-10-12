@@ -1,0 +1,88 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Cloudflare D1",
+  "concepts": ["relational"],
+  "provider": "vendor",
+  "vendor": "Cloudflare, Inc.",
+  "license": "Proprietary",
+  "website": "https://developers.cloudflare.com/d1/",
+  "summary": "Cloudflare’s serverless SQL database that speaks SQLite, runs each database inside a Durable Object, and bills by rows read and written rather than by the hour.",
+  "intro": [
+    "Each D1 database is a SQLite database backed by a single Durable Object, so it lives in one location and runs one query at a time. Throughput is set by query time: at 1 ms per query a database can do about 1,000 queries a second, at 100 ms only 10. Writes are confirmed only once they are durably stored in several locations. A database can hold up to 10 GB on the Workers Paid plan (500 MB on Free), and that cap cannot be raised, so D1 is meant to scale out: one database per user, tenant or entity, with up to 50,000 databases per account by default. Workers query it through a binding, and there is also an HTTP API.",
+    "Two features come from the storage layer underneath. Time Travel keeps the database’s change log, so you can restore it to any minute in the last 30 days (7 on Free) without ever taking a backup. Read replication adds read-only copies in six regions (ENAM, WNAM, WEUR, EEUR, APAC and OC); to use them you open a session with `withSession()`, and each query carries a bookmark so a session never reads older data than it has already seen, even if it hits a different replica. Writes still go to the primary. Pricing is per row: the paid plan includes 25 billion rows read and 50 million rows written a month, then $0.001 per million rows read, $1.00 per million rows written and $0.75 per GB-month stored beyond 5 GB, with no charge for replicas, idle time or egress."
+  ],
+  "strengths": [
+    "Scale to zero and per-row billing: thousands of small databases cost nothing while idle",
+    "SQLite’s SQL dialect, JSON functions and tooling, with migrations and imports through Wrangler",
+    "Point-in-time restore to any minute in the last 30 days, always on and free",
+    "Read replicas in six regions at no extra cost, with sequential consistency inside a session"
+  ],
+  "limits": [
+    "A hard 10 GB ceiling per database, so larger data has to be sharded across databases",
+    "Single-threaded: one database serves one query at a time and returns “overloaded” errors once its queue fills",
+    "Writes always go to the primary’s location, and reads only use replicas if your code uses the Sessions API",
+    "SQLite limits apply: 100 columns per table, 2 MB rows, 100 bound parameters per query and 30 seconds per query"
+  ],
+  "worksWith": [
+    { "id": "cloudflare-workers", "how": "is queried through a binding from" },
+    { "id": "durable-objects", "how": "runs each database inside one of" },
+    { "id": "sqlite", "how": "is built on and speaks the SQL of" }
+  ],
+  "snippet": {
+    "lang": "ts",
+    "title": "Read from a nearby replica without losing your own writes",
+    "source": [
+      "// wrangler.jsonc: \"d1_databases\": [{ \"binding\": \"DB\", \"database_name\": \"shop\", \"database_id\": \"<ID>\" }]",
+      "export default {",
+      "  async fetch(request, env): Promise<Response> {",
+      "    // continue from the client's last bookmark, or start anywhere",
+      "    const bookmark = request.headers.get(\"x-d1-bookmark\") ?? \"first-unconstrained\";",
+      "    const session = env.DB.withSession(bookmark);",
+      "",
+      "    const { results, meta } = await session",
+      "      .prepare(\"SELECT id, total FROM orders WHERE customer_id = ? ORDER BY id DESC LIMIT 20\")",
+      "      .bind(new URL(request.url).searchParams.get(\"customer\"))",
+      "      .run();",
+      "",
+      "    const response = Response.json({ results, servedBy: meta.served_by_region });",
+      "    response.headers.set(\"x-d1-bookmark\", session.getBookmark() ?? \"\");",
+      "    return response;",
+      "  },",
+      "} satisfies ExportedHandler<{ DB: D1Database }>;"
+    ]
+  },
+  "history": {
+    "story": [
+      "By 2022 Workers had KV, Durable Objects and R2 for storage, but developers kept asking for a database they could query with SQL. On 11 May 2022 Cloudflare announced D1, “our first SQL database”, built on SQLite. The announcement pointed out that SQLite called itself “serverless” long before the cloud meaning existed, and that a database designed for clients fit Workers, which also borrowed client technology.",
+      "D1 went into open alpha in November 2022. In May 2023 Cloudflare replaced its storage with a new backend, up to 20 times faster on its Northwind demo, and introduced Time Travel, built by keeping SQLite’s write-ahead log. D1 became generally available on 1 April 2024 with 10 GB databases and 50,000 databases per account. The same storage system was later opened up to developers directly as SQLite inside Durable Objects, and Cloudflare says D1 itself runs on it.",
+      "Global read replication followed in public beta on 10 April 2025, built around sessions and bookmarks so that replicas could be used without breaking “read your own writes”."
+    ],
+    "choices": [
+      { "choice": "SQLite instead of a client-server database", "why": "Cloudflare wanted a familiar SQL dialect, a robust query engine and one of the most battle-tested codebases to build on, and SQLite was already designed to run without a server." },
+      { "choice": "Many small databases instead of one big one", "why": "Each database is a single-threaded Durable Object capped at 10 GB, and billing is per row, so Cloudflare steers users toward per-tenant databases that cost nothing when idle." },
+      { "choice": "Bookmarks and sessions for replicas", "why": "Requests from one client can land on different replicas, so D1 attaches a bookmark to each query and only serves a session from a copy at least that fresh, giving sequential consistency without pinning clients to a replica." }
+    ],
+    "timeline": [
+      { "year": "2022", "text": "D1 announced on 11 May; open alpha in November" },
+      { "year": "2023", "text": "New storage backend and Time Travel announced in May" },
+      { "year": "2024", "text": "Generally available on 1 April, with 10 GB databases" },
+      { "year": "2025", "text": "Global read replication enters public beta on 10 April" }
+    ],
+    "sources": [
+      { "label": "Cloudflare blog: Announcing D1, our first SQL database (11 May 2022)", "url": "https://blog.cloudflare.com/introducing-d1/" },
+      { "label": "Cloudflare blog: D1, turning it up to 11 (19 May 2023)", "url": "https://blog.cloudflare.com/d1-turning-it-up-to-11/" },
+      { "label": "Cloudflare blog: Making state easy with D1 GA, Hyperdrive, Queues and Workers Analytics Engine updates (1 April 2024)", "url": "https://blog.cloudflare.com/making-full-stack-easier-d1-ga-hyperdrive-queues/" },
+      { "label": "Cloudflare blog: Zero-latency SQLite storage in every Durable Object (26 September 2024)", "url": "https://blog.cloudflare.com/sqlite-in-durable-objects/" },
+      { "label": "Cloudflare blog: Sequential consistency without borders, D1 read replication beta (10 April 2025)", "url": "https://blog.cloudflare.com/d1-read-replication-beta/" }
+    ]
+  },
+  "sources": [
+    { "label": "D1 docs: Overview", "url": "https://developers.cloudflare.com/d1/" },
+    { "label": "D1 docs: Limits (database size, throughput, Durable Object per database)", "url": "https://developers.cloudflare.com/d1/platform/limits/" },
+    { "label": "D1 docs: Pricing", "url": "https://developers.cloudflare.com/d1/platform/pricing/" },
+    { "label": "D1 docs: Global read replication and the Sessions API", "url": "https://developers.cloudflare.com/d1/best-practices/read-replication/" },
+    { "label": "D1 docs: Time Travel and backups", "url": "https://developers.cloudflare.com/d1/reference/time-travel/" },
+    { "label": "D1 docs: Prepared statement methods", "url": "https://developers.cloudflare.com/d1/worker-api/prepared-statements/" }
+  ],
+  "checked": "2026-10-12"
+}

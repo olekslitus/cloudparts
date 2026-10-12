@@ -1,0 +1,88 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Vectorize",
+  "concepts": ["vector"],
+  "provider": "vendor",
+  "vendor": "Cloudflare, Inc.",
+  "license": "Proprietary",
+  "website": "https://developers.cloudflare.com/vectorize/",
+  "summary": "Cloudflare’s serverless vector database for Workers, which stores embeddings in R2-backed indexes and bills only for vector dimensions stored and queried.",
+  "intro": [
+    "You create an index with a fixed number of dimensions (up to 1,536, as 32-bit floats) and a fixed distance metric (`cosine`, `euclidean` or `dot-product`), neither of which can change later. Workers insert and query through a binding; embeddings can come from Workers AI, for example `@cf/baai/bge-base-en-v1.5` with 768 dimensions, or from any other model. An index holds up to 20 million vectors. Under the hood the index files live in R2 and are read through Cloudflare’s cache; Vectorize clusters vectors with an inverted file index (IVF) and compresses them with product quantization, so a query scans only the clusters nearest to it.",
+    "Each vector can carry up to 10 KiB of JSON metadata and belong to one namespace. To filter on a metadata field you first create a metadata index for it (up to 10 per index, on string, number or boolean fields). The filter is applied before the top-K search, and supports `$eq`, `$ne`, `$in`, `$nin` and ranges, which also gives prefix matching on strings. Writes go through a write-ahead log and are applied asynchronously, so new vectors show up in queries after a short delay. Pricing counts dimensions: the paid plan includes 50 million queried and 10 million stored dimensions a month, then $0.01 per million queried and $0.05 per 100 million stored, with no charge for idle indexes."
+  ],
+  "strengths": [
+    "No servers, CPU or “active index hours” to pay for, and Cloudflare’s own example of 50,000 768-dimension vectors queried 200,000 times a month comes to $1.94",
+    "A Workers binding next to Workers AI, so embedding, storing and searching fit in one Worker",
+    "Metadata filtering is applied before the nearest-neighbor search, with namespaces for cheap per-tenant isolation",
+    "Up to 20 million vectors per index and 50,000 indexes per account on the paid plan"
+  ],
+  "limits": [
+    "At most 1,536 dimensions, and dimensions and metric are fixed at creation, so changing embedding models means a new index",
+    "Eventually consistent: writes are applied asynchronously, so a vector may not appear in queries right after an upsert",
+    "Filtering needs a metadata index created before the vectors are inserted, only the first 64 bytes of a string are indexed, and range filters over about 10 million vectors may lose accuracy",
+    "Returns at most 50 results with values or metadata (100 without)"
+  ],
+  "worksWith": [
+    { "id": "cloudflare-workers", "how": "is queried through a binding from" },
+    { "id": "r2", "how": "keeps its index files in" },
+    { "id": "durable-objects", "how": "orders writes with a write-ahead log in" }
+  ],
+  "snippet": {
+    "lang": "ts",
+    "title": "Embed a question with Workers AI and search only one platform’s items",
+    "source": [
+      "// npx wrangler vectorize create catalog --dimensions=768 --metric=cosine",
+      "// npx wrangler vectorize create-metadata-index catalog --property-name=streaming_platform --type=string",
+      "export default {",
+      "  async fetch(request, env): Promise<Response> {",
+      "    const question = new URL(request.url).searchParams.get(\"q\") ?? \"\";",
+      "",
+      "    // bge-base-en-v1.5 returns 768-dimension vectors, matching the index",
+      "    const { data } = await env.AI.run(\"@cf/baai/bge-base-en-v1.5\", { text: [question] });",
+      "",
+      "    const { matches } = await env.VECTORIZE.query(data[0], {",
+      "      topK: 5,",
+      "      filter: { streaming_platform: { $in: [\"netflix\", \"hbo\"] } },",
+      "      returnMetadata: \"all\",",
+      "    });",
+      "    return Response.json(matches.map(m => ({ id: m.id, score: m.score, url: m.metadata?.url })));",
+      "  },",
+      "} satisfies ExportedHandler<{ AI: Ai; VECTORIZE: Vectorize }>;"
+    ]
+  },
+  "history": {
+    "story": [
+      "Language models only know what they were trained on. To answer questions about your own documents, an app embeds them as vectors and, for each query, finds the nearest ones to pass to the model as context. Cloudflare’s launch post described doing that without a vector database, by sending its whole 2.1 GB docs dataset along with every query, as impractical.",
+      "Vectorize launched in open beta on 27 September 2023, alongside Workers AI and AI Gateway, so that the whole retrieval loop could run in Workers. The first version was limited to 200,000 vectors per index and 20 results per query.",
+      "For general availability on 26 September 2024 Cloudflare rebuilt it: indexes of up to 5 million vectors, median query latency down from 500 ms to 30 ms, up to 100 results, and query prices cut by 75% and storage by 98%. A follow-up post in October 2024 described the new design on R2, Cloudflare’s cache, Durable Objects and its container platform. The vector limit per index has since grown to 20 million."
+    ],
+    "choices": [
+      { "choice": "Index files in R2, read through the cache", "why": "Storing indexes as objects lets any Cloudflare data center serve queries without dedicated database servers, and reading through the cache keeps hot index files close to the compute." },
+      { "choice": "IVF clustering with product quantization", "why": "To search multi-million-vector indexes within the CPU, memory and I/O of shared servers, Vectorize prunes the search to the nearest clusters and compresses vectors, then refines the best candidates." },
+      { "choice": "A write-ahead log in a Durable Object", "why": "A single coordinator applies writes in strict order and commits each new index version atomically, while heavier executors rewrite the index files, so queries always read a consistent snapshot." }
+    ],
+    "timeline": [
+      { "year": "2023", "text": "Open beta on 27 September, with Workers AI and AI Gateway" },
+      { "year": "2024", "text": "Rebuilt and generally available on 26 September: 5 million vectors per index, 30 ms median queries" },
+      { "year": "2024", "text": "Cloudflare publishes the new design on R2, Durable Objects and containers on 22 October" },
+      { "year": "2024", "text": "Legacy V1 indexes can no longer be created after December" }
+    ],
+    "sources": [
+      { "label": "Cloudflare blog: Vectorize, a vector database for shipping AI-powered applications to production, fast (27 September 2023)", "url": "https://blog.cloudflare.com/vectorize-vector-database-open-beta/" },
+      { "label": "Cloudflare blog: Cloudflare’s bigger, better, faster AI platform, including Vectorize GA (26 September 2024)", "url": "https://blog.cloudflare.com/workers-ai-bigger-better-faster/" },
+      { "label": "Cloudflare blog: Building Vectorize, a distributed vector database, on Cloudflare’s Developer Platform (22 October 2024)", "url": "https://blog.cloudflare.com/building-vectorize-a-distributed-vector-database-on-cloudflare-developer-platform/" },
+      { "label": "Vectorize docs: Limits (current and legacy V1)", "url": "https://developers.cloudflare.com/vectorize/platform/limits/" },
+      { "label": "Vectorize docs: Metadata filtering (legacy V1 index note)", "url": "https://developers.cloudflare.com/vectorize/reference/metadata-filtering/" }
+    ]
+  },
+  "sources": [
+    { "label": "Vectorize docs: Limits", "url": "https://developers.cloudflare.com/vectorize/platform/limits/" },
+    { "label": "Vectorize docs: Pricing", "url": "https://developers.cloudflare.com/vectorize/platform/pricing/" },
+    { "label": "Vectorize docs: Metadata filtering", "url": "https://developers.cloudflare.com/vectorize/reference/metadata-filtering/" },
+    { "label": "Vectorize docs: Create indexes (dimensions and distance metrics)", "url": "https://developers.cloudflare.com/vectorize/best-practices/create-indexes/" },
+    { "label": "Vectorize docs: Vectorize and Workers AI (embeddings tutorial)", "url": "https://developers.cloudflare.com/vectorize/get-started/embeddings/" },
+    { "label": "Cloudflare blog: Building Vectorize, a distributed vector database, on Cloudflare’s Developer Platform (22 October 2024)", "url": "https://blog.cloudflare.com/building-vectorize-a-distributed-vector-database-on-cloudflare-developer-platform/" }
+  ],
+  "checked": "2026-10-12"
+}

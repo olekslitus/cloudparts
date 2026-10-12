@@ -1,0 +1,88 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Workers KV",
+  "concepts": ["key-value"],
+  "uses": ["cache"],
+  "provider": "vendor",
+  "vendor": "Cloudflare, Inc.",
+  "license": "Proprietary",
+  "website": "https://developers.cloudflare.com/kv/",
+  "summary": "Cloudflare’s global key-value store that keeps data in a few central stores and caches it in the data centers where it is read, so reads are fast and writes take up to a minute to show up everywhere.",
+  "intro": [
+    "A write goes to a small number of central data stores; it is not pushed to every location. The first read of a key in a location misses the local cache and walks up a regional tier, then a central tier, then the central stores. After that, reads in that location come straight from Cloudflare’s cache, and KV refreshes popular values in the background before they expire. Each cached value lives for `cacheTtl` seconds (60 by default, 30 at minimum), and “key not found” answers are cached too. So a change is usually visible at once where it was made, but can take 60 seconds or more to reach other locations, and if two writes hit the same key the last one wins.",
+    "That makes KV a read-heavy store: configuration, feature flags, allow lists, redirects, static assets and user preferences that change rarely and are read on every request. A namespace has no limit on keys; a key can be 512 bytes, a value 25 MiB, with up to 1,024 bytes of metadata and an optional expiry. One key can be written once per second, and faster writes get HTTP 429. The Workers Paid plan includes 10 million reads and 1 million writes, deletes and lists a month, then charges $0.50 per million reads, $5.00 per million writes and $0.50 per GB-month stored, with no egress fees. In October 2026 Cloudflare put Workers KV Instant into private beta: a mode with the same API, backed by its internal Quicksilver store, that replicates 99% of writes to every location in about 250 ms, for namespaces of up to 1 MB."
+  ],
+  "strengths": [
+    "Reads of hot keys come from the cache in the data center running the Worker; Cloudflare reported a 12 ms median read when KV became generally available",
+    "Effectively unlimited keys and storage on the paid plan, values up to 25 MiB, and no egress fees",
+    "A binding with `get()`, `put()`, `delete()` and `list()`, plus per-key expiry and metadata, so a Worker needs no client library or credentials",
+    "Cheap reads ($0.50 per million) suit data read far more often than it is written"
+  ],
+  "limits": [
+    "Eventually consistent: another location can serve the old value (or a cached “not found”) for 60 seconds or more after a write, so it is wrong for balances, counters or locks",
+    "One write per second per key; concurrent writes to a key silently overwrite each other, and there are no transactions or atomic operations",
+    "The first read of a key in a location is a cold read from the central stores and is much slower than a cached one",
+    "Writes cost ten times as much as reads ($5.00 per million), and on the Free plan an account gets only 1,000 writes a day"
+  ],
+  "worksWith": [
+    { "id": "cloudflare-workers", "how": "is read and written through a binding in" },
+    { "id": "cloudflare", "how": "caches hot keys across the network of" }
+  ],
+  "snippet": {
+    "lang": "ts",
+    "title": "Read a flag on every request, update it rarely",
+    "source": [
+      "// wrangler.jsonc: \"kv_namespaces\": [{ \"binding\": \"CONFIG\", \"id\": \"<NAMESPACE_ID>\" }]",
+      "export default {",
+      "  async fetch(request, env): Promise<Response> {",
+      "    if (request.method === \"PUT\") {",
+      "      // at most one write per second to the same key",
+      "      await env.CONFIG.put(\"banner\", await request.text(), {",
+      "        metadata: { updatedBy: \"admin\" },",
+      "      });",
+      "      return new Response(\"saved\", { status: 201 });",
+      "    }",
+      "",
+      "    // cached in this location for 5 minutes; other locations may lag a write",
+      "    const banner = await env.CONFIG.get(\"banner\", { cacheTtl: 300 });",
+      "    return new Response(banner ?? \"no banner\");",
+      "  },",
+      "} satisfies ExportedHandler<{ CONFIG: KVNamespace }>;"
+    ]
+  },
+  "history": {
+    "story": [
+      "Cloudflare Workers ran JavaScript in every Cloudflare data center, but at first they had nowhere to keep data. Customers who wanted to handle, say, billions of redirects had to hard-code them into a script that had to fit in 1 MB and redeploy it for every change.",
+      "On 28 September 2018 John Graham-Cumming announced Workers KV as a native key-value store for Workers, with values written through the Cloudflare API and available “within seconds” at Cloudflare’s 150+ locations. It became generally available on 21 May 2019. The GA post explained the trade-off in CAP terms: KV picks availability and partition tolerance, so reads are fast (a 12 ms median) and the last writer eventually wins everywhere in under 60 seconds.",
+      "The original design stored every value in two third-party object stores and raced reads against both. Cloudflare later moved to a single provider, and on 12 June 2025 that provider’s outage made a large share of KV requests fail for over two hours, taking down Access logins, Gateway and WARP with it. Cloudflare then moved KV onto its own sharded database clusters, the same system behind R2 and Durable Objects, and in October 2026 previewed KV Instant, a mode built on its internal Quicksilver store."
+    ],
+    "choices": [
+      { "choice": "Eventual consistency in exchange for cached reads", "why": "The GA post framed it as the “Matthew question”: are you fine with someone occasionally acting on a stale value? For redirects, config and auth tokens the answer is yes, and that buys reads served from the local cache." },
+      { "choice": "Central stores plus pull-through caching, not full replication", "why": "Writes land in a few central stores and each location caches only what it reads, so each location holds only the keys its users actually read, at the cost of slow cold reads. KV later grew to hundreds of billions of keys." },
+      { "choice": "Moving storage onto Cloudflare’s own infrastructure", "why": "After the June 2025 outage, Cloudflare said KV’s workload of mostly tiny values (a median of 288 bytes) suited a sharded, three-way replicated database better than object storage, and that it should not depend on a third party." }
+    ],
+    "timeline": [
+      { "year": "2018", "text": "Workers KV announced on 28 September" },
+      { "year": "2019", "text": "Generally available on 21 May" },
+      { "year": "2025", "text": "A third-party storage outage on 12 June takes KV and dependent Cloudflare services down for over two hours" },
+      { "year": "2025", "text": "KV moves onto Cloudflare-run storage, announced 8 August" },
+      { "year": "2026", "text": "Workers KV Instant, backed by Quicksilver, enters private beta on 1 October" }
+    ],
+    "sources": [
+      { "label": "Cloudflare blog: Introducing Workers KV (28 September 2018)", "url": "https://blog.cloudflare.com/introducing-workers-kv/" },
+      { "label": "Cloudflare blog: Workers KV, Cloudflare’s distributed database (21 May 2019)", "url": "https://blog.cloudflare.com/workers-kv-is-ga/" },
+      { "label": "Cloudflare blog: Redesigning Workers KV for increased availability and faster performance (8 August 2025)", "url": "https://blog.cloudflare.com/rearchitecting-workers-kv-for-redundancy/" },
+      { "label": "Cloudflare blog: Introducing Workers KV Instant, powered by Quicksilver (1 October 2026)", "url": "https://blog.cloudflare.com/workers-kv-instant/" }
+    ]
+  },
+  "sources": [
+    { "label": "Workers KV docs: How KV works (central stores, tiered caching, consistency)", "url": "https://developers.cloudflare.com/kv/concepts/how-kv-works/" },
+    { "label": "Workers KV docs: Limits (key and value size, writes per key, KV Instant)", "url": "https://developers.cloudflare.com/kv/platform/limits/" },
+    { "label": "Workers KV docs: Pricing", "url": "https://developers.cloudflare.com/kv/platform/pricing/" },
+    { "label": "Workers KV docs: Read key-value pairs (`get()`, `cacheTtl`)", "url": "https://developers.cloudflare.com/kv/api/read-key-value-pairs/" },
+    { "label": "Workers KV docs: Write key-value pairs (`put()`, expiry, metadata, 429 on same-key writes)", "url": "https://developers.cloudflare.com/kv/api/write-key-value-pairs/" },
+    { "label": "Cloudflare blog: Workers KV, Cloudflare’s distributed database (21 May 2019)", "url": "https://blog.cloudflare.com/workers-kv-is-ga/" },
+    { "label": "Cloudflare blog: Introducing Workers KV Instant, powered by Quicksilver (1 October 2026)", "url": "https://blog.cloudflare.com/workers-kv-instant/" }
+  ],
+  "checked": "2026-10-12"
+}

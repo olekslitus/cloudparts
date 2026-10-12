@@ -12,7 +12,8 @@ content/
   technologies/<id>.json   specific products: /technologies/<id>/
   architectures/<id>.json  real stacks built from technologies: /architectures/<id>/
   comparisons/<id>.json    side-by-side tables of concepts or technologies: /compare/<id>/
-  foundations/<id>.json    open-source foundations such as Apache: /foundations/<id>/
+  foundations/<id>.json    open-source foundations such as Apache, /foundations/<id>/, and
+                           companies such as Cloudflare, /companies/<id>/
   resources/<id>.json      articles, videos and websites worth exploring: /resources/
   benchmarks/<id>.json     public benchmarks and how to read them: /benchmarks/<id>/
   system-map.json          the big diagram on the home page
@@ -236,12 +237,16 @@ link to the comparisons they appear in automatically.
 To compare products rather than ideas, such as Kata Containers, gVisor and Firecracker, list two to
 four `technologies` instead of `concepts`. Their pages link to the comparison the same way.
 
-## Add a foundation
+## Add a foundation or company
 
 Create `content/foundations/<id>.json` with a `name`, `vendor`, `website`, `summary`, `intro`,
 optional `sections`, a `history`, `sources` and `checked`. `vendor` must match the `vendor` of its
-projects exactly, e.g. `"Apache Software Foundation"`: the page lists those technologies, and their
-pages link back, automatically.
+projects exactly, e.g. `"Apache Software Foundation"`: the page lists those technologies, grouped by
+topic, and their pages link back, automatically.
+
+For a company whose products are meant to be used together, add `"type": "company"`. The page then
+lives at `/companies/<id>/`, and its sections should explain how the products fit together, ideally
+with a `model` diagram. See `cloudflare.json`.
 
 ## Add a resource
 

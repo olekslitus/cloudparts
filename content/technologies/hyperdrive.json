@@ -1,0 +1,94 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Hyperdrive",
+  "concepts": ["cache"],
+  "provider": "vendor",
+  "vendor": "Cloudflare, Inc.",
+  "license": "Proprietary",
+  "website": "https://developers.cloudflare.com/hyperdrive/",
+  "summary": "A Cloudflare service that makes an existing regional PostgreSQL or MySQL database fast to use from Workers by setting up connections at the edge, pooling them near the database and caching read queries.",
+  "intro": [
+    "A Worker can’t keep a database connection open between requests, and opening one to a database on another continent takes several round trips (TCP, TLS, authentication) before the first query, at up to 200 ms each. Hyperdrive does three things. The driver’s connection setup happens with Hyperdrive in the same data center as the Worker. Hyperdrive keeps a warm pool of connections in the data center nearest the database (about 20 per configuration on Free, 100 on Paid) and runs it in transaction mode, so each transaction borrows a connection and returns it. And it parses each query: reads that are safe to cache are answered from cache for `max_age` (60 seconds by default, up to 1 hour, plus 15 seconds of stale-while-revalidate), while writes and queries using volatile or stable functions such as `NOW()` go to the database.",
+    "You keep your database and your driver. A binding hands the Worker a connection string, or host, user and password, for `pg`, `postgres.js`, `mysql2` or an ORM such as Drizzle. Hyperdrive works with PostgreSQL 9.0 to 18 and MySQL 5.7 to 8 (MySQL support became generally available in August 2026), including RDS, Aurora, Cloud SQL, Azure, Neon, Supabase, PlanetScale, CockroachDB and Timescale. Pooling and caching cost nothing extra: the Free plan allows 100,000 queries a day, the Paid plan is unlimited, and there is no egress charge."
+  ],
+  "strengths": [
+    "No migration: change the connection string and keep PostgreSQL or MySQL, the driver and the ORM",
+    "Cuts per-request connection setup to a round trip inside one data center; Cloudflare measured 6 to 8 times faster uncached queries at launch",
+    "Caps connections to the origin (about 100 per configuration on Paid) however many Workers are running",
+    "Included in Workers plans with no charge for pooling, caching or data transfer"
+  ],
+  "limits": [
+    "The cache is not invalidated on writes: a later read can return data up to `max_age` old, so fresh reads need a second, cache-disabled configuration",
+    "Transaction-mode pooling: session state such as `SET` is reset between transactions, and named prepared statements are only fully supported in `postgres.js` and `node-postgres`",
+    "The database stays in one region, so each uncached query still crosses to it; Cloudflare suggests placing the Worker near the database when a request makes several queries",
+    "Queries are cut off after 60 seconds, responses over 50 MB are not cached, and SQL Server and MongoDB are not supported"
+  ],
+  "worksWith": [
+    { "id": "cloudflare-workers", "how": "hands a pooled connection string to" },
+    { "id": "postgresql", "how": "pools connections and caches reads for" },
+    { "id": "mysql", "how": "pools connections and caches reads for" },
+    { "id": "neon", "how": "connects Workers to databases on" },
+    { "id": "planetscale", "how": "connects Workers to databases on" }
+  ],
+  "snippet": {
+    "lang": "ts",
+    "title": "Query an existing Postgres through Hyperdrive with node-postgres",
+    "source": [
+      "// npx wrangler hyperdrive create my-db --connection-string=\"postgres://user:pass@db.example.com:5432/app\"",
+      "// wrangler.jsonc: \"hyperdrive\": [{ \"binding\": \"HYPERDRIVE\", \"id\": \"<HYPERDRIVE_ID>\" }]",
+      "import { Client } from \"pg\";",
+      "",
+      "export default {",
+      "  async fetch(request, env, ctx): Promise<Response> {",
+      "    // a new client per request is cheap: Hyperdrive keeps the real pool near the database",
+      "    const client = new Client({ connectionString: env.HYPERDRIVE.connectionString });",
+      "    await client.connect();",
+      "",
+      "    // a read with no volatile functions, so Hyperdrive can serve it from cache",
+      "    const { rows } = await client.query(",
+      "      \"SELECT id, title FROM articles WHERE published_on = $1 ORDER BY id DESC LIMIT 20\",",
+      "      [new Date().toISOString().slice(0, 10)],",
+      "    );",
+      "    ctx.waitUntil(client.end());",
+      "    return Response.json(rows);",
+      "  },",
+      "} satisfies ExportedHandler<{ HYPERDRIVE: Hyperdrive }>;"
+    ]
+  },
+  "history": {
+    "story": [
+      "Workers run in hundreds of locations, but most companies’ core data sits in one PostgreSQL or MySQL database in one cloud region. Connecting to it from a Worker meant paying several round trips of connection setup on every request, and a burst of traffic could exhaust the database’s connection limit. A regional connection pooler doesn’t help much, because a Worker still has to cross the world to reach the pooler.",
+      "Cloudflare launched Hyperdrive in open beta on 28 September 2023, in a post by Matt Silverlock and Alex Robinson, reporting 17 to 25 times faster cached queries and 6 to 8 times faster uncached ones in its demo. It became generally available on 1 April 2024 and free for paid Workers users. On 8 April 2025 Cloudflare made it available on the Free plan and added MySQL, and explained the design: a client part on the same server as the Worker, an endpoint part near the database holding the pool and cache, joined by pre-warmed connections between Cloudflare data centers.",
+      "MySQL support became generally available on 7 August 2026, and Python Workers could use Hyperdrive from September 2026."
+    ],
+    "choices": [
+      { "choice": "Split the pooler in two", "why": "Connection setup happens near the Worker, where round trips are short, while the pool and cache live next to the database, so neither side pays for the distance more than once." },
+      { "choice": "Transaction-mode pooling", "why": "Session mode would give each Worker its own connection and quickly exhaust the database; transaction mode lets many isolates share a small pool, at the cost of resetting session state." },
+      { "choice": "Don’t charge for it", "why": "Cloudflare argued at GA that paying six or more round trips per request to reach a traditional database “just isn’t right”, so pooling and caching are part of the Workers plans." }
+    ],
+    "timeline": [
+      { "year": "2023", "text": "Open beta on 28 September for PostgreSQL" },
+      { "year": "2024", "text": "Generally available on 1 April, free on the Workers Paid plan" },
+      { "year": "2025", "text": "Free plan and MySQL support on 8 April" },
+      { "year": "2026", "text": "MySQL support generally available on 7 August" },
+      { "year": "2026", "text": "Python Workers support on 16 September" }
+    ],
+    "sources": [
+      { "label": "Cloudflare blog: Hyperdrive, making databases feel like they’re global (28 September 2023)", "url": "https://blog.cloudflare.com/hyperdrive-making-regional-databases-feel-distributed/" },
+      { "label": "Cloudflare blog: Making state easy with D1 GA, Hyperdrive, Queues and Workers Analytics Engine updates (1 April 2024)", "url": "https://blog.cloudflare.com/making-full-stack-easier-d1-ga-hyperdrive-queues/" },
+      { "label": "Cloudflare blog: Pools across the sea, how Hyperdrive speeds up access to databases and why we’re making it free (8 April 2025)", "url": "https://blog.cloudflare.com/how-hyperdrive-speeds-up-database-access/" },
+      { "label": "Cloudflare changelog: Hyperdrive introduces support for MySQL and MySQL-compatible databases (8 April 2025)", "url": "https://developers.cloudflare.com/changelog/post/2025-04-08-hyperdrive-mysql-support/" },
+      { "label": "Cloudflare changelog: Hyperdrive (MySQL GA on 7 August 2026, Python Workers on 16 September 2026)", "url": "https://developers.cloudflare.com/changelog/product/hyperdrive/" }
+    ]
+  },
+  "sources": [
+    { "label": "Hyperdrive docs: How Hyperdrive works", "url": "https://developers.cloudflare.com/hyperdrive/concepts/how-hyperdrive-works/" },
+    { "label": "Hyperdrive docs: Query caching (what is cached, defaults, read-after-write)", "url": "https://developers.cloudflare.com/hyperdrive/concepts/query-caching/" },
+    { "label": "Hyperdrive docs: Limits", "url": "https://developers.cloudflare.com/hyperdrive/platform/limits/" },
+    { "label": "Hyperdrive docs: Pricing", "url": "https://developers.cloudflare.com/hyperdrive/platform/pricing/" },
+    { "label": "Hyperdrive docs: Supported databases and features", "url": "https://developers.cloudflare.com/hyperdrive/reference/supported-databases-and-features/" },
+    { "label": "Hyperdrive docs: Overview and driver examples", "url": "https://developers.cloudflare.com/hyperdrive/" },
+    { "label": "Cloudflare changelog: Hyperdrive Free plan (8 April 2025)", "url": "https://developers.cloudflare.com/changelog/post/2025-04-08-hyperdrive-free-plan/" }
+  ],
+  "checked": "2026-10-12"
+}

@@ -1,0 +1,91 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Cloudflare Basin Pipelines",
+  "concepts": ["stream-processing"],
+  "uses": ["etl"],
+  "provider": "vendor",
+  "vendor": "Cloudflare, Inc.",
+  "license": "Proprietary",
+  "website": "https://developers.cloudflare.com/basin-pipelines/",
+  "status": { "stage": "renamed", "note": "Called Cloudflare Pipelines until 1 October 2026, when it became generally available as Basin Pipelines; existing resources and configurations keep working.", "since": "2026-10-01" },
+  "summary": "Cloudflare’s managed streaming ingestion service, called Cloudflare Pipelines until October 2026, that takes events over HTTP or a Workers binding, transforms them with SQL and writes them to R2 as Apache Iceberg tables, Parquet or JSON.",
+  "intro": [
+    "A setup has three parts. A stream is a durable, buffered queue that accepts JSON events from an HTTP endpoint, a Worker binding (`env.STREAM.send(records)`) or Cloudflare Logpush, and can validate them against a schema. A pipeline is a SQL statement, `INSERT INTO sink SELECT … FROM stream`, that filters, reshapes, casts or hashes each event on the way through. A sink writes the result with exactly-once delivery, either as Iceberg tables in Basin Catalog or as JSON or Parquet files in an R2 bucket, rolling a new file by size (5 MB or more) or time (every 10 seconds or more). One stream can feed several pipelines. The engine underneath comes from Arroyo, the Rust stream processor Cloudflare bought in 2025.",
+    "Transforms are stateless for now: no windows, joins or aggregations, which Cloudflare lists as planned. An account can have 20 streams, 20 pipelines and 20 sinks, a request can carry 5 MB, and the limits page allows 1 GB/s per stream. It needs the Workers Paid plan. Ingesting into a stream is free; SQL transforms cost $0.04 per GB beyond 50 GB a month, and sinks $0.03 per GB for JSON or $0.06 per GB for Parquet and Iceberg beyond 50 GB, measured on uncompressed data, plus normal R2 and Basin Catalog charges. In Cloudflare’s example, 500 GB a month filtered down to 300 GB of Iceberg costs $33."
+  ],
+  "strengths": [
+    "No Kafka, Flink or Spark to run: events go from a Worker or HTTP call to a queryable Iceberg table with one SQL statement",
+    "Exactly-once delivery into Iceberg, Parquet or JSON on R2, with schema validation and typed Worker bindings that catch mismatches before deploy",
+    "Free ingestion and per-GB pricing for transforms and sinks, with no hourly charges",
+    "Cloudflare Logpush can feed a stream, so Cloudflare’s own logs can be filtered and stored as Iceberg tables"
+  ],
+  "limits": [
+    "Stateless SQL only: no windowed aggregations, joins or materialized views yet",
+    "Low default quotas (20 streams, pipelines and sinks per account) and 5 MB per ingestion request",
+    "Writes only to R2 and Basin Catalog; streams accept JSON events only",
+    "Pipelines created before 25 September 2025 are on a deprecation path, and the October 2026 rename means older `wrangler pipelines` guides are out of date"
+  ],
+  "worksWith": [
+    { "id": "arroyo", "how": "is built on" },
+    { "id": "basin-catalog", "how": "commits Iceberg tables through" },
+    { "id": "r2", "how": "writes JSON and Parquet files to" },
+    { "id": "cloudflare-workers", "how": "receives events through a binding from" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Create a stream, a SQL pipeline and an Iceberg sink, then send events",
+    "source": [
+      "# interactive: creates the stream (with schema), the Basin Catalog sink and the SQL",
+      "npx wrangler basin pipelines setup --name ecommerce",
+      "",
+      "# the pipeline is one SQL statement, for example:",
+      "#   INSERT INTO ecommerce_sink",
+      "#   SELECT user_id, event_type, product_id, amount",
+      "#   FROM ecommerce_stream WHERE event_type = 'purchase';",
+      "",
+      "curl -X POST \"https://$STREAM_ID.ingest.cloudflare.com\" \\",
+      "  -H \"Content-Type: application/json\" \\",
+      "  -d '[{\"user_id\": \"user_12345\", \"event_type\": \"purchase\", \"product_id\": \"widget-001\", \"amount\": 29.99}]'",
+      "",
+      "# from a Worker instead: \"pipelines\": [{ \"binding\": \"STREAM\", \"stream\": \"<STREAM_ID>\" }]",
+      "#   await env.STREAM.send([{ user_id: \"user_12345\", event_type: \"purchase\" }]);"
+    ]
+  },
+  "history": {
+    "story": [
+      "Arroyo was started in 2023 by Micah Wylde, who had worked on stream processing at Lyft and Splunk, to make real-time pipelines usable by people who aren’t streaming experts. Apache Flink had the power but, in Micah Wylde’s words, an API too hard and low-level for most users and stateful services that needed endless operations. Arroyo answered with SQL as the interface, Rust instead of the JVM, and state kept in object storage, and was open-sourced in the summer of 2023.",
+      "On 10 April 2025 Cloudflare put Pipelines into open beta, at first a way to batch JSON events into R2, and announced it had acquired Arroyo to bring SQL transforms and Iceberg output to it. On 25 September 2025 it relaunched Pipelines on the new architecture, with streams, SQL pipelines and sinks into R2 Data Catalog, as part of the Cloudflare Data Platform alongside R2 SQL.",
+      "On 1 October 2026 the platform became generally available as Cloudflare Basin, and Pipelines became Basin Pipelines, by then with tens of thousands of pipelines created, Logpush as a source, typed bindings and Terraform support."
+    ],
+    "choices": [
+      { "choice": "SQL as the only transformation language", "why": "Arroyo’s founders chose SQL because it is easy to use, widely known and declarative, and Cloudflare kept it so that validation and reshaping happen at ingestion, “shifting left” before data lands in storage." },
+      { "choice": "Separate streams, pipelines and sinks", "why": "The September 2025 architecture made the buffer, the transform and the destination distinct resources, so one stream can be read by several pipelines that route the same data to different tables or files." },
+      { "choice": "Stateless transforms first", "why": "Filtering and reshaping cover most ingestion; Cloudflare said it would bring Arroyo’s stateful features (aggregations, joins, materialized views) later and may price them separately." }
+    ],
+    "timeline": [
+      { "year": "2023", "text": "Arroyo, the engine it is built on, is open-sourced" },
+      { "year": "2025", "text": "Pipelines open beta and Arroyo acquisition on 10 April" },
+      { "year": "2025", "text": "Rebuilt with SQL transforms and Iceberg sinks on 25 September" },
+      { "year": "2026", "text": "Generally available and renamed Basin Pipelines on 1 October" }
+    ],
+    "sources": [
+      { "label": "Cloudflare blog: Just landed, streaming ingestion on Cloudflare with Arroyo and Pipelines (10 April 2025)", "url": "https://blog.cloudflare.com/cloudflare-acquires-arroyo-pipelines-streaming-ingestion-beta/" },
+      { "label": "Cloudflare blog: Announcing the Cloudflare Data Platform (25 September 2025)", "url": "https://blog.cloudflare.com/cloudflare-data-platform/" },
+      { "label": "Cloudflare blog: Introducing Cloudflare Basin, an open, serverless data platform, now generally available (1 October 2026)", "url": "https://blog.cloudflare.com/cloudflare-basin/" },
+      { "label": "Cloudflare changelog: Cloudflare Basin is now generally available (1 October 2026)", "url": "https://developers.cloudflare.com/changelog/post/2026-10-01-basin-ga/" }
+    ]
+  },
+  "sources": [
+    { "label": "Cloudflare docs: Basin Pipelines overview (formerly Cloudflare Pipelines, now generally available)", "url": "https://developers.cloudflare.com/basin-pipelines/" },
+    { "label": "Cloudflare docs: Basin Pipelines, Streams", "url": "https://developers.cloudflare.com/basin-pipelines/streams/" },
+    { "label": "Cloudflare docs: Basin Pipelines, Writing to streams (Worker binding, HTTP)", "url": "https://developers.cloudflare.com/basin-pipelines/streams/writing-to-streams/" },
+    { "label": "Cloudflare docs: Basin Pipelines, Pipelines (SQL transformations)", "url": "https://developers.cloudflare.com/basin-pipelines/pipelines/" },
+    { "label": "Cloudflare docs: Basin Pipelines, Sinks", "url": "https://developers.cloudflare.com/basin-pipelines/sinks/" },
+    { "label": "Cloudflare docs: Basin Pipelines, Getting started (setup, rolling policy, HTTP ingest)", "url": "https://developers.cloudflare.com/basin-pipelines/getting-started/" },
+    { "label": "Cloudflare docs: Basin Pipelines limits", "url": "https://developers.cloudflare.com/basin-pipelines/platform/limits/" },
+    { "label": "Cloudflare docs: Basin Pipelines pricing", "url": "https://developers.cloudflare.com/basin-pipelines/platform/pricing/" },
+    { "label": "Cloudflare docs: Basin Pipelines, Legacy pipelines", "url": "https://developers.cloudflare.com/basin-pipelines/reference/legacy-pipelines/" },
+    { "label": "Cloudflare blog: Introducing Cloudflare Basin, an open, serverless data platform, now generally available (1 October 2026)", "url": "https://blog.cloudflare.com/cloudflare-basin/" }
+  ],
+  "checked": "2026-10-12"
+}

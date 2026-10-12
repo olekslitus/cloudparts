@@ -1,0 +1,103 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Cloudflare K2",
+  "concepts": ["stream"],
+  "uses": ["pubsub"],
+  "provider": "vendor",
+  "vendor": "Cloudflare, Inc.",
+  "license": "Proprietary",
+  "website": "https://developers.cloudflare.com/k2/",
+  "status": { "stage": "beta", "note": "In public beta for Workers Paid accounts since 1 October 2026; usage isn’t billed during the beta, and Cloudflare will give 30 days’ notice before billing starts.", "since": "2026-10-01" },
+  "summary": "Cloudflare’s serverless event stream: a durable log stored in R2 that Workers and HTTP clients append to, read through independent subscriptions that lease out batches of records.",
+  "intro": [
+    "A K2 stream is a durable, append-only log of records. Each record is a binary `content` payload plus optional string headers, up to 1 MB in all. Producers write records in batches, and each batch is stored atomically: all of it or none. They write over HTTP, with a `POST` to the stream’s `/produce` endpoint (with or without an API token, and from browsers if the stream’s CORS settings allow), or from a Worker by calling `send()` on a `k2` binding, which needs no token. K2 stamps each record with the time it arrived and keeps it for the stream’s retention period, from 1 hour to 30 days (7 days by default), whether or not anyone has read it.",
+    "Reading goes through subscriptions. A subscription starts at the `earliest` retained record or at the `latest` one, and every subscription receives every record, so giving each application its own subscription is pub/sub fan-out. Workers that share one subscription split its records between them instead. A consumer `POST`s to `/consume` and gets a batch leased to its `worker_id` for 5 minutes; it then acks the batch, nacks it for redelivery, or extends the lease. Acks cover whole batches, delivery is at least once, and K2 doesn’t deduplicate, so consumers should be idempotent. Consuming is an HTTP pull with an API token; there is no consumer binding and no Kafka protocol yet.",
+    "Under the hood K2 is a partitioned log on R2 object storage. R2 can’t append to an object, so an edge service collects writes in memory for a moment, writes them out as one segment file, and uses R2’s atomic operations to keep records in order with strictly increasing offsets, without a separate coordination service. That makes long retention cheap and lets storage scale apart from compute, at the cost of about 1 second of produce latency at the 99th percentile. Cloudflare places it between its other async products: Queues for individual work items that need retries, delays and dead-letter queues, Basin Pipelines when events should end up as files or Iceberg tables in R2, and K2 for moving lots of data to several consumers or to custom processing. Planned prices are $0.04 per GB produced, $0.04 per GB consumed per subscription, and $0.02 per GB-month retained."
+  ],
+  "strengths": [
+    "Fan-out and replay built in: up to 100 subscriptions per stream each read every record, and a new subscription started at `earliest` reads everything still retained, so a bug fix or a new consumer can reprocess history",
+    "Nothing to size or run: no brokers, partitions or disks to provision, with up to 30 MB/s of produce per stream during the beta and data kept in R2",
+    "Priced by data volume rather than message count: 100 GB a month produced, read by one subscription and averaging 25 GB stored comes to $8.50 at the planned prices; each extra subscription adds $4",
+    "Easy to produce to: a Worker binding with no token, a plain JSON `POST`, or even a browser page, with atomic batches of up to 5 MB"
+  ],
+  "limits": [
+    "Beta caps: 10 GB stored per account, 20 streams per account, 30 MB/s of produce per stream and at most 30 days of retention, with higher limits by request; a subscription that falls further behind than the retention period loses the records it hadn’t read",
+    "Not low latency: writes wait for a segment to fill and land in object storage, about 1 second at p99, and consumers poll for batches rather than getting records pushed to them",
+    "No ordering across workers sharing a subscription, no message keys yet, acks and redelivery only per batch (no per-record retries), and no deduplication on produce or consume",
+    "No Kafka API and no push-based Worker consumers yet (both are on the roadmap), so existing Kafka clients can’t connect; an unauthenticated HTTP input, which browsers need, lets anyone who knows the stream ID write to it"
+  ],
+  "worksWith": [
+    { "id": "cloudflare-workers", "how": "takes records through a binding from" },
+    { "id": "r2", "how": "stores its log as segment files in" },
+    { "id": "cloudflare-pipelines", "how": "was first built as the buffer for" }
+  ],
+  "snippet": {
+    "lang": "ts",
+    "title": "Produce an event from a Worker through a K2 binding",
+    "source": [
+      "// wrangler.jsonc: \"k2\": [{ \"binding\": \"EVENTS\", \"stream\": \"<STREAM_ID>\" }]",
+      "export default {",
+      "  async fetch(request, env): Promise<Response> {",
+      "    const event = { event: \"page_view\", path: new URL(request.url).pathname };",
+      "",
+      "    // Content is bytes; send() takes a batch and stores it atomically",
+      "    const result = await env.EVENTS.send([",
+      "      {",
+      "        content: new TextEncoder().encode(JSON.stringify(event)),",
+      "        headers: { \"content-type\": \"application/json\" },",
+      "      },",
+      "    ]);",
+      "",
+      "    // send() returns a result instead of throwing",
+      "    if (!result.success) {",
+      "      return new Response(result.error.message, {",
+      "        status: result.error.retryable ? 503 : 500,",
+      "      });",
+      "    }",
+      "    return new Response(\"Event recorded\");",
+      "  },",
+      "} satisfies ExportedHandler<Env>;",
+      "",
+      "// Consumers then pull leased batches over HTTP:",
+      "//   POST https://<STREAM_ID>.k2.cloudflarestorage.com/subscriptions/<ID>/consume",
+      "//   POST .../batches/<BATCH_ID>/ack   (or /nack, or /extend)"
+    ]
+  },
+  "history": {
+    "story": [
+      "When services call each other directly, producers and consumers have to keep pace: if consumers fall behind or go down, events are dropped, and it gets worse when several consumers, such as an analytics system and a fraud detection service, need the same events. The usual fix is a log in the middle that absorbs writes and lets each reader go at its own speed, and most companies run Apache Kafka for that.",
+      "Cloudflare needed such a buffer for Pipelines, the event ingestion service it launched in September 2025 on Arroyo, a stream processor it had bought that year. Arroyo pulls events, so something has to hold them durably until they’re read. Kafka didn’t fit Cloudflare’s network, which spans servers in over 335 cities, where a stateful service gets small, short-lived slices of machines and often talks over the public Internet. So the team built the buffer on R2, which already handled durability and consistency, and then turned it into a product of its own.",
+      "K2 launched in public beta on 1 October 2026, during Birthday Week, the same day Cloudflare’s data platform became generally available as Basin and Pipelines became Basin Pipelines. The launch post by Micah Wylde and Marc Selwan lists what comes next: multi-GB/s streams, message keys with key-based ordering, push-based Worker consumers, a lower-latency Express tier and drop-in support for Apache Kafka clients."
+    ],
+    "choices": [
+      { "choice": "A log on R2 instead of a broker cluster", "why": "Object storage is extremely durable (eleven nines) and strongly consistent, so leaving replication and consensus to R2 made K2 itself simpler, cheaper and faster, and let storage scale separately from compute." },
+      { "choice": "Buffer writes into segment files", "why": "R2 can’t append to an object, so K2 holds writes in memory briefly and writes whole segments, using R2’s atomic operations for ordering and offsets instead of a coordination service. The cost is about 1 second of produce latency at p99." },
+      { "choice": "Batches and subscriptions instead of per-message tracking", "why": "K2 is meant for high-volume data movement, long retention and fan-out, so records are produced and consumed in batches for efficiency, giving up the per-message retries, delays and dead-letter queues that Cloudflare Queues offers." },
+      { "choice": "Records are just bytes with headers", "why": "Applications choose their own encoding, and headers let readers route, filter or annotate records without decoding the content." }
+    ],
+    "timeline": [
+      { "year": "2025", "text": "Cloudflare acquires Arroyo, the stream processor behind Pipelines" },
+      { "year": "2025", "text": "Pipelines enters open beta on 25 September, with durable streams buffering incoming events" },
+      { "year": "2026", "text": "Cloudflare’s data platform becomes generally available as Basin on 1 October; Pipelines becomes Basin Pipelines" },
+      { "year": "2026", "text": "K2 launches in public beta on 1 October for Workers Paid accounts" }
+    ],
+    "sources": [
+      { "label": "Cloudflare blog: Announcing Cloudflare K2, serverless event streams (1 October 2026)", "url": "https://blog.cloudflare.com/cloudflare-k2-streams/" },
+      { "label": "Cloudflare blog: Announcing the Cloudflare Data Platform (25 September 2025)", "url": "https://blog.cloudflare.com/cloudflare-data-platform/" },
+      { "label": "Cloudflare changelog: Cloudflare Basin is now generally available (1 October 2026)", "url": "https://developers.cloudflare.com/changelog/post/2026-10-01-basin-ga/" }
+    ]
+  },
+  "sources": [
+    { "label": "Cloudflare blog: Announcing Cloudflare K2, serverless event streams (1 October 2026)", "url": "https://blog.cloudflare.com/cloudflare-k2-streams/" },
+    { "label": "Cloudflare docs: K2 concepts (streams, records, subscriptions, leases)", "url": "https://developers.cloudflare.com/k2/concepts/" },
+    { "label": "Cloudflare docs: K2, Get started", "url": "https://developers.cloudflare.com/k2/get-started/" },
+    { "label": "Cloudflare docs: K2 configuration (inputs, authentication, CORS, retention)", "url": "https://developers.cloudflare.com/k2/configuration/" },
+    { "label": "Cloudflare docs: K2, Produce records (HTTP and Workers binding)", "url": "https://developers.cloudflare.com/k2/features/produce/" },
+    { "label": "Cloudflare docs: K2, Consume records (subscriptions, leases, ack, nack, extend)", "url": "https://developers.cloudflare.com/k2/features/consume/" },
+    { "label": "Cloudflare docs: K2 delivery guarantees", "url": "https://developers.cloudflare.com/k2/reference/delivery-guarantees/" },
+    { "label": "Cloudflare docs: K2 limits", "url": "https://developers.cloudflare.com/k2/platform/limits/" },
+    { "label": "Cloudflare docs: K2 pricing (beta, planned rates, billing examples)", "url": "https://developers.cloudflare.com/k2/platform/pricing/" },
+    { "label": "Cloudflare docs: Choose a data or storage product (K2 vs Queues vs Basin Pipelines)", "url": "https://developers.cloudflare.com/workers/platform/storage-options/" }
+  ],
+  "checked": "2026-10-12"
+}

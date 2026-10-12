@@ -1,0 +1,106 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Cloudflare Agents SDK",
+  "concepts": ["actors"],
+  "parent": { "id": "durable-objects", "as": "extension" },
+  "provider": "oss",
+  "vendor": "Cloudflare, Inc.",
+  "license": "MIT",
+  "website": "https://developers.cloudflare.com/agents/",
+  "repo": "https://github.com/cloudflare/agents",
+  "summary": "A TypeScript framework (npm `agents`) in which every AI agent is a Durable Object: one addressable instance per user or task, with its own SQL state, WebSocket clients, scheduled jobs and MCP tools.",
+  "intro": [
+    "You extend the `Agent` class, which sits on PartyKit’s `partyserver` `Server`, which in turn extends `DurableObject`. Each instance is addressed by a name such as a user ID, ticket number or email address, and the same name always reaches the same instance anywhere on Cloudflare’s network, so there’s no session store to run. `this.setState()` saves state to the instance’s embedded SQLite database and broadcasts it to every connected WebSocket client, which can update it too; `this.sql` queries the database directly. `this.schedule()` takes a delay, a date or a cron string and wakes the agent through Durable Object alarms, methods marked `@callable()` become RPC calls from the browser, and `useAgent()` connects a React app.",
+    "The rest is built on top: chat agents with streaming and human-in-the-loop approval, Workflows for steps that run longer than 30 seconds, sub-agents, a Linux sandbox tool backed by Containers, browser tools, and MCP. Its `McpAgent` class (March 2025) was how Cloudflare first hosted remote MCP servers; it is now deprecated in favor of a stateless `createMcpHandler`. Project Think, introduced in April 2026, adds an opinionated harness for long-running agents. The code is MIT-licensed, but it only runs on Cloudflare’s Workers runtime; billing is ordinary Workers and Durable Objects usage."
+  ],
+  "strengths": [
+    "One agent instance per user, chat or task, scaling to tens of millions running at once, with up to 1 GB of state each and no external database",
+    "Real-time by default: state changes sync to all connected clients over WebSockets, and an idle agent can hibernate and wake on the next request or message",
+    "Scheduling, retries, Workflows, sub-agents and MCP come in the box, so long-running and multi-step agents need little extra infrastructure",
+    "Model-agnostic: Workers AI by default (no API key in the starter), or OpenAI, Anthropic, Gemini and others"
+  ],
+  "limits": [
+    "Tied to Cloudflare: agents are Durable Objects and need the Workers runtime, so the MIT code can’t run on another cloud as is",
+    "30 seconds of CPU time per request, message or scheduled task, so heavy or long jobs belong in Workflows or a sandbox",
+    "Still pre-1.0 (0.28 on npm) with fast-moving APIs: `McpAgent` is already deprecated and feature-frozen, and the original `agents-sdk` package name has changed",
+    "Each instance is single-threaded, so one very busy agent can become a bottleneck; spread work across many instances"
+  ],
+  "worksWith": [
+    { "id": "workers-ai", "how": "calls models by default on" },
+    { "id": "cloudflare-workflows", "how": "hands tasks over 30 seconds to" },
+    { "id": "cloudflare-containers", "how": "runs agents’ shell commands in" },
+    { "id": "browser-rendering", "how": "browses the web through" }
+  ],
+  "snippet": {
+    "lang": "ts",
+    "title": "An agent per user with synced state, a daily schedule and an RPC method",
+    "source": [
+      "import { Agent, callable, routeAgentRequest } from \"agents\";",
+      "",
+      "type State = { todos: string[] };",
+      "",
+      "export class TodoAgent extends Agent<Env, State> {",
+      "  initialState: State = { todos: [] };",
+      "",
+      "  async onStart() {",
+      "    await this.schedule(\"0 8 * * *\", \"morningDigest\"); // cron, via DO alarms",
+      "  }",
+      "",
+      "  @callable() // agent.stub.add(\"…\") from the browser",
+      "  async add(todo: string) {",
+      "    this.setState({ todos: [...this.state.todos, todo] }); // saved + broadcast",
+      "  }",
+      "",
+      "  async morningDigest() {",
+      "    console.log(`${this.name} has ${this.state.todos.length} todos`);",
+      "  }",
+      "}",
+      "",
+      "export default {",
+      "  async fetch(request: Request, env: Env) {",
+      "    return (await routeAgentRequest(request, env)) || new Response(\"Not found\", { status: 404 });",
+      "  },",
+      "} satisfies ExportedHandler<Env>;"
+    ]
+  },
+  "history": {
+    "story": [
+      "When Cloudflare built Durable Objects, “Agents” was one of the names proposed for them. The company says it didn’t predict AI agents, but single-threaded, addressable objects with their own storage, alarms and WebSockets turned out to fit them well: an agent needs to remember a conversation, wait on slow model calls, run tasks later and talk to clients in real time.",
+      "On February 25, 2025, Rita Kozlov, Sunil Pai and Matt Silverlock released `agents-sdk`, a JavaScript framework for building agents and deploying them on Durable Objects. Even the first release offered real-time client connections, persisted state with `setState` and SQL, scheduled tasks, Workflows, email, web browsing and human-in-the-loop, plus a `useAgent` React hook. A month later `McpAgent` let developers deploy remote MCP servers on Cloudflare.",
+      "The package now ships as `agents` from the `cloudflare/agents` repository under the MIT license. In April 2026 Sunil Pai introduced Project Think, “the next generation of the Agents SDK”, with durable execution, sub-agents, sandboxed code execution and persistent sessions for long-running agents, after coding agents like Claude Code and Codex showed what an LLM that can read files and run code can do."
+    ],
+    "choices": [
+      { "choice": "Every agent is a Durable Object", "why": "The launch post argued that a framework that leaves out durable state, long-running loops and horizontal scale only gets you so far; Durable Objects give each agent a stateful micro-server that scales to tens of millions." },
+      { "choice": "State that syncs to clients", "why": "Broadcasting `setState` changes over WebSockets lets a front end and an agent share one source of truth without bespoke sync code." },
+      { "choice": "Hand long work to Workflows", "why": "Agents handle real-time communication and state; Workflows add retries, recovery and waiting for events, so the docs split chat from multi-step background jobs." }
+    ],
+    "timeline": [
+      { "year": "2025", "text": "`agents-sdk` released on February 25" },
+      { "year": "2025", "text": "`McpAgent` for remote MCP servers on Cloudflare, March 25" },
+      { "year": "2026", "text": "Project Think, the next generation of the SDK, on April 15" },
+      { "year": "2026", "text": "`McpAgent` deprecated in favor of stateless `createMcpHandler`" }
+    ],
+    "sources": [
+      { "label": "Cloudflare Blog: Making Cloudflare the best platform for building AI Agents (Feb 2025)", "url": "https://blog.cloudflare.com/build-ai-agents-on-cloudflare/" },
+      { "label": "Cloudflare Blog: Build and deploy Remote Model Context Protocol (MCP) servers to Cloudflare (Mar 2025)", "url": "https://blog.cloudflare.com/remote-model-context-protocol-servers-mcp/" },
+      { "label": "Cloudflare Blog: Project Think: building the next generation of AI agents on Cloudflare (Apr 2026)", "url": "https://blog.cloudflare.com/project-think/" },
+      { "label": "Cloudflare Agents docs: McpAgent (deprecated)", "url": "https://developers.cloudflare.com/agents/model-context-protocol/apis/agent-api/" },
+      { "label": "cloudflare/agents on GitHub", "url": "https://github.com/cloudflare/agents" }
+    ]
+  },
+  "sources": [
+    { "label": "Cloudflare docs: Build Agents on Cloudflare", "url": "https://developers.cloudflare.com/agents/" },
+    { "label": "Cloudflare Agents docs: Agents API", "url": "https://developers.cloudflare.com/agents/runtime/agents-api/" },
+    { "label": "Cloudflare Agents docs: Agent class internals (DurableObject > Server > Agent)", "url": "https://developers.cloudflare.com/agents/runtime/lifecycle/agent-class/" },
+    { "label": "Cloudflare Agents docs: Store and sync state", "url": "https://developers.cloudflare.com/agents/runtime/lifecycle/state/" },
+    { "label": "Cloudflare Agents docs: Schedule tasks", "url": "https://developers.cloudflare.com/agents/runtime/execution/schedule-tasks/" },
+    { "label": "Cloudflare Agents docs: WebSockets", "url": "https://developers.cloudflare.com/agents/runtime/communication/websockets/" },
+    { "label": "Cloudflare Agents docs: Callable methods", "url": "https://developers.cloudflare.com/agents/runtime/lifecycle/callable-methods/" },
+    { "label": "Cloudflare Agents docs: Run Workflows", "url": "https://developers.cloudflare.com/agents/runtime/execution/run-workflows/" },
+    { "label": "Cloudflare Agents docs: Sandbox tool", "url": "https://developers.cloudflare.com/agents/tools/sandbox/" },
+    { "label": "Cloudflare Agents docs: MCP handler APIs", "url": "https://developers.cloudflare.com/agents/model-context-protocol/apis/handler-api/" },
+    { "label": "Cloudflare Agents docs: Limits", "url": "https://developers.cloudflare.com/agents/platform/limits/" },
+    { "label": "agents on npm (latest version)", "url": "https://www.npmjs.com/package/agents" }
+  ],
+  "checked": "2026-10-12"
+}

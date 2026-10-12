@@ -1,0 +1,102 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Durable Objects",
+  "concepts": ["actors"],
+  "uses": ["coordination"],
+  "provider": "vendor",
+  "vendor": "Cloudflare, Inc.",
+  "license": "Proprietary",
+  "website": "https://developers.cloudflare.com/durable-objects/",
+  "summary": "Single-threaded JavaScript objects on Cloudflare’s network, each with a globally unique name and its own private SQLite database, that any Worker can call to coordinate state.",
+  "intro": [
+    "A Durable Object is an instance of a class you write, addressed by an ID or a name. Any Worker anywhere that knows the name reaches the same single instance, which runs in one data center on a single thread, like an actor working through its mailbox. It is created on first use near the first caller (a `locationHint` or an `eu`, `us` or `fedramp` jurisdiction can steer that), stays in memory while busy, and is evicted when idle. Workers call it over HTTP, WebSockets or plain JavaScript RPC. That makes it the natural place for things that need one owner: a chat room, a document being edited, a game session, a rate limiter, an AI agent’s memory.",
+    "Each object has its own storage, private to it. In SQLite-backed objects (the default, and the only kind on the Free plan) SQLite runs as a library in the same thread, so queries return synchronously in microseconds, and the database can hold 10 GB on the paid plan. Writes are confirmed once three of five follower machines in other data centers have the change, then batched to object storage, which also lets you restore an object to any point in the last 30 days. An object can set one alarm at a time, retried with backoff if the handler throws, and with the WebSocket Hibernation API it can drop out of memory while clients stay connected and wake when a message arrives. Paid usage costs $0.15 per million requests, $12.50 per million GB-seconds of duration, and D1’s row prices plus $0.20 per GB-month for storage."
+  ],
+  "strengths": [
+    "Strongly consistent, transactional state with no lock service: one single-threaded instance per name",
+    "Storage in the same thread as the code, so reads and writes often take microseconds",
+    "Scales out to millions of objects with no capacity planning; there is no limit on objects per class",
+    "WebSocket hibernation and alarms let idle rooms and scheduled work cost nothing in duration"
+  ],
+  "limits": [
+    "One object is one thread on one machine: a soft limit of about 1,000 requests per second, so hot keys must be split across objects",
+    "An object stays where it was created; callers far from it pay the round trip, and location hints are best-effort",
+    "10 GB of SQLite storage per object (1 GB on Free), and key plus value may not exceed 2 MB",
+    "Duration is billed at 128 MB of memory whenever the object is active and cannot hibernate, so holding WebSockets open without hibernation gets expensive"
+  ],
+  "worksWith": [
+    { "id": "cloudflare-workers", "how": "is called over RPC, HTTP or WebSocket by" },
+    { "id": "sqlite", "how": "gives each object a private database with" }
+  ],
+  "snippet": {
+    "lang": "ts",
+    "title": "One counter per room, called over RPC from a Worker",
+    "source": [
+      "import { DurableObject } from \"cloudflare:workers\";",
+      "",
+      "export class Room extends DurableObject {",
+      "  constructor(ctx: DurableObjectState, env: Env) {",
+      "    super(ctx, env);",
+      "    ctx.storage.sql.exec(\"CREATE TABLE IF NOT EXISTS hits (id INTEGER PRIMARY KEY, n INTEGER)\");",
+      "  }",
+      "",
+      "  // single-threaded, and the SQL API is synchronous",
+      "  async hit(): Promise<number> {",
+      "    const sql = this.ctx.storage.sql;",
+      "    sql.exec(\"INSERT INTO hits VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET n = n + 1\");",
+      "    return sql.exec(\"SELECT n FROM hits WHERE id = 1\").one().n as number;",
+      "  }",
+      "}",
+      "",
+      "export default {",
+      "  async fetch(request: Request, env: Env): Promise<Response> {",
+      "    const name = new URL(request.url).pathname;       // every caller of /lobby reaches one object",
+      "    const room = env.ROOM.get(env.ROOM.idFromName(name));",
+      "    return Response.json({ hits: await room.hit() });",
+      "  },",
+      "};",
+      "",
+      "// wrangler.jsonc:",
+      "//   \"durable_objects\": { \"bindings\": [{ \"name\": \"ROOM\", \"class_name\": \"Room\" }] },",
+      "//   \"migrations\": [{ \"tag\": \"v1\", \"new_sqlite_classes\": [\"Room\"] }]"
+    ]
+  },
+  "history": {
+    "story": [
+      "Workers ran stateless code everywhere, and Workers KV gave them eventually consistent storage, but there was no way to hold strongly consistent state or to make two clients talk to the same instance: each request was load-balanced to a random isolate. Anything that needed coordination, such as chat, collaborative editing or game sessions, still needed a server somewhere else.",
+      "On 28 September 2020 Kenton Varda announced Durable Objects in closed beta, together with WebSocket support in Workers. The name breaks down as objects in the object-oriented sense, unique (one instance in the world per ID) and durable (with private persistent storage). They opened to all paid Workers users on 31 March 2021 and became generally available on 15 November 2021, with key-value storage.",
+      "On 26 September 2024 Cloudflare added SQLite storage in each object, running in the same thread as the code and persisted by a new Storage Relay Service that already ran D1. SQLite storage became generally available with 10 GB per object on 7 April 2025, when Durable Objects also came to the Free plan, pitched as the base for AI agents. Cloudflare has since built D1, Queues, Workflows and its Agents SDK on them."
+    ],
+    "choices": [
+      { "choice": "Route by name to one instance instead of load-balancing", "why": "Coordination needs every client of a room or document to reach the same code, so Cloudflare made the object, not the request, the unit of placement." },
+      { "choice": "Storage private to each object", "why": "Splitting one big database into many small logical units keeps storage next to the code, so access can be very fast while staying strongly and transactionally consistent, and the system scales out by adding objects." },
+      { "choice": "Synchronous SQLite in the same thread", "why": "With no network hop a query often finishes in microseconds, and not awaiting I/O avoids races where other events run mid-transaction; output gates hold replies until writes are confirmed so speed does not cost durability." }
+    ],
+    "timeline": [
+      { "year": "2020", "text": "Announced in closed beta on 28 September, with WebSockets for Workers" },
+      { "year": "2021", "text": "Open beta on 31 March; generally available on 15 November" },
+      { "year": "2024", "text": "SQLite storage in every object, in beta from 26 September" },
+      { "year": "2025", "text": "SQLite storage generally available with 10 GB per object; free tier added on 7 April" },
+      { "year": "2026", "text": "Billing for SQLite storage starts in January" }
+    ],
+    "sources": [
+      { "label": "Cloudflare blog: Workers Durable Objects Beta, a new approach to stateful serverless (28 September 2020)", "url": "https://blog.cloudflare.com/introducing-workers-durable-objects/" },
+      { "label": "Cloudflare blog: Durable Objects, now in open beta (31 March 2021)", "url": "https://blog.cloudflare.com/durable-objects-open-beta/" },
+      { "label": "Cloudflare blog: Durable Objects, now generally available (15 November 2021)", "url": "https://blog.cloudflare.com/durable-objects-ga/" },
+      { "label": "Cloudflare blog: Zero-latency SQLite storage in every Durable Object (26 September 2024)", "url": "https://blog.cloudflare.com/sqlite-in-durable-objects/" },
+      { "label": "Cloudflare blog: Piecing together the Agent puzzle, including the Durable Objects free tier (7 April 2025)", "url": "https://blog.cloudflare.com/building-ai-agents-with-mcp-authn-authz-and-durable-objects/" },
+      { "label": "Durable Objects docs: Pricing (SQLite storage billing from January 2026)", "url": "https://developers.cloudflare.com/durable-objects/platform/pricing/" }
+    ]
+  },
+  "sources": [
+    { "label": "Durable Objects docs: What are Durable Objects? (actor model, in-memory state, alarms, WebSockets, RPC)", "url": "https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/" },
+    { "label": "Durable Objects docs: Limits", "url": "https://developers.cloudflare.com/durable-objects/platform/limits/" },
+    { "label": "Durable Objects docs: Pricing", "url": "https://developers.cloudflare.com/durable-objects/platform/pricing/" },
+    { "label": "Durable Objects docs: Use WebSockets (Hibernation API)", "url": "https://developers.cloudflare.com/durable-objects/best-practices/websockets/" },
+    { "label": "Durable Objects docs: Alarms", "url": "https://developers.cloudflare.com/durable-objects/api/alarms/" },
+    { "label": "Durable Objects docs: Data location (jurisdictions and location hints)", "url": "https://developers.cloudflare.com/durable-objects/reference/data-location/" },
+    { "label": "Durable Objects docs: SQLite-backed storage API", "url": "https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/" },
+    { "label": "Cloudflare blog: Zero-latency SQLite storage in every Durable Object (26 September 2024)", "url": "https://blog.cloudflare.com/sqlite-in-durable-objects/" }
+  ],
+  "checked": "2026-10-12"
+}

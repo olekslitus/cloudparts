@@ -1,0 +1,858 @@
+{
+  "$schema": "../../.astro/collections/foundations.schema.json",
+  "type": "company",
+  "name": "Cloudflare, Inc.",
+  "vendor": "Cloudflare, Inc.",
+  "website": "https://www.cloudflare.com/",
+  "summary": "The company behind the Cloudflare proxy, the Cloudflare One Zero Trust products and the Workers developer platform, all of which run on one global network and connect to each other through Worker bindings.",
+  "intro": [
+    "Cloudflare runs one global anycast network and sells three kinds of things on top of it. The first is the reverse proxy in front of websites: DNS, caching, DDoS protection and the WAF, described on the Cloudflare page. The second is Cloudflare One, its Secure Access Service Edge (SASE) platform: Access puts an identity check in front of internal apps, Gateway filters the traffic employees’ devices send through the Cloudflare One Client (formerly WARP), and Tunnel connects private networks without a public IP. The third is the Developer Platform: Workers for code, plus storage, queues, AI inference and analytics. Workers run on thousands of machines in hundreds of locations, each machine runs the Workers runtime, and a request that reaches any Cloudflare data center can invoke a Worker right there.",
+    "One idea ties the Developer Platform together: a Worker reaches every other service through a binding. Its `env` object holds live objects, each attached at deploy time to one resource. `env.DB` is a D1 database, `env.UPLOADS` an R2 bucket and `env.CARTS` a Durable Object namespace, and the code calls methods on them, with no URL, client setup or API key. KV, Queues, Workflows, Vectorize, Workers AI, Hyperdrive and other Workers all work the same way. So one `wrangler.jsonc` file lists everything a Worker can touch, and the platform knows which Worker uses which resource.",
+    "“Region: Earth” describes the compute, not the data. By default a Worker runs in the data center that received the request. Workers KV stores data in a few central data centers and caches it where it is read. A D1 database has a primary copy created near wherever you created it, a Durable Object lives in one data center, and a Postgres or MySQL database you already run stays in its cloud region, reached through Hyperdrive. Most of the design work on this platform is choosing which piece holds which data, and where the Worker should run relative to it."
+  ],
+  "sections": [
+    {
+      "type": "model",
+      "title": "How a request moves through it",
+      "intro": "One Worker with six bindings. Every box inside the dashed area is a Cloudflare product reached from the same code through `env`; only the database on the right lives outside Cloudflare.",
+      "diagram": {
+        "caption": "Requests hit the Cloudflare edge, which answers some from cache and passes the rest to a Worker. The Worker picks a binding by what the request needs: a config value from KV, a row from D1, a file from R2, a chat room’s Durable Object, or a query to PostgreSQL through Hyperdrive, which answers repeated reads itself. Separately, the Worker drops background jobs on a Queue, and a consumer Worker drains them in batches.",
+        "w": 880,
+        "h": 370,
+        "zones": [
+          {
+            "x": 122,
+            "y": 6,
+            "w": 520,
+            "h": 356,
+            "label": "Cloudflare network: code and bindings"
+          },
+          {
+            "x": 664,
+            "y": 240,
+            "w": 206,
+            "h": 110,
+            "label": "Your cloud region"
+          }
+        ],
+        "nodes": [
+          {
+            "id": "users",
+            "x": 60,
+            "y": 150,
+            "label": "Users",
+            "sub": "browsers & apps",
+            "emit": {
+              "every": 420,
+              "jitter": 0.4,
+              "req": true,
+              "types": [
+                "config",
+                "sql",
+                "file",
+                "room",
+                "pg"
+              ],
+              "colorByType": {
+                "config": 1,
+                "sql": 0,
+                "file": 2,
+                "room": 3,
+                "pg": 0
+              }
+            },
+            "out": [
+              "edge"
+            ]
+          },
+          {
+            "id": "edge",
+            "x": 205,
+            "y": 150,
+            "label": "Cloudflare edge",
+            "sub": "WAF · cache",
+            "tech": "cloudflare",
+            "mode": "cache",
+            "p": 0.25,
+            "out": [
+              "worker"
+            ]
+          },
+          {
+            "id": "worker",
+            "x": 360,
+            "y": 150,
+            "label": "Worker",
+            "sub": "env.* bindings",
+            "tech": "cloudflare-workers",
+            "route": "type",
+            "rules": {
+              "config": [
+                "kv"
+              ],
+              "sql": [
+                "d1"
+              ],
+              "file": [
+                "r2"
+              ],
+              "room": [
+                "do"
+              ],
+              "pg": [
+                "hd"
+              ]
+            },
+            "emit": {
+              "every": 900,
+              "jitter": 0.3,
+              "color": 1,
+              "type": "job",
+              "to": [
+                "queue"
+              ]
+            },
+            "out": [
+              "kv",
+              "d1",
+              "r2",
+              "do",
+              "hd",
+              "queue"
+            ]
+          },
+          {
+            "id": "kv",
+            "x": 545,
+            "y": 40,
+            "label": "Workers KV",
+            "sub": "env.CONFIG",
+            "tech": "workers-kv",
+            "mode": "reply",
+            "delay": 10
+          },
+          {
+            "id": "d1",
+            "x": 545,
+            "y": 105,
+            "label": "D1",
+            "sub": "env.DB",
+            "tech": "d1",
+            "mode": "reply",
+            "delay": 45
+          },
+          {
+            "id": "r2",
+            "x": 545,
+            "y": 170,
+            "label": "R2",
+            "sub": "env.UPLOADS",
+            "tech": "r2",
+            "mode": "reply",
+            "delay": 50
+          },
+          {
+            "id": "do",
+            "x": 545,
+            "y": 235,
+            "label": "Durable Object",
+            "sub": "env.ROOMS",
+            "tech": "durable-objects",
+            "mode": "reply",
+            "delay": 20
+          },
+          {
+            "id": "hd",
+            "x": 545,
+            "y": 300,
+            "label": "Hyperdrive",
+            "sub": "pool · query cache",
+            "tech": "hyperdrive",
+            "mode": "cache",
+            "p": 0.5,
+            "out": [
+              "pg"
+            ]
+          },
+          {
+            "id": "queue",
+            "x": 360,
+            "y": 262,
+            "label": "Queues",
+            "sub": "env.JOBS",
+            "tech": "cloudflare-queues",
+            "kind": "queue",
+            "cap": 6,
+            "gap": 500,
+            "out": [
+              "consumer"
+            ]
+          },
+          {
+            "id": "consumer",
+            "x": 205,
+            "y": 300,
+            "label": "Consumer Worker",
+            "sub": "queue() handler",
+            "tech": "cloudflare-workers",
+            "kind": "pool",
+            "max": 2,
+            "work": 700,
+            "idle": 3000,
+            "cold": 0
+          },
+          {
+            "id": "pg",
+            "x": 767,
+            "y": 300,
+            "label": "PostgreSQL",
+            "sub": "aws:us-east-1",
+            "tech": "postgresql",
+            "mode": "reply",
+            "delay": 160
+          }
+        ]
+      }
+    },
+    {
+      "type": "table",
+      "title": "Which product does which job",
+      "intro": "The Developer Platform and the network products most applications touch, by the job they do. Names are current as of October 2026: Browser Rendering became Browser Run in April 2026, and on 1 October 2026 Cloudflare Pipelines, R2 Data Catalog and R2 SQL became Basin Pipelines, Basin Catalog and Basin SQL.",
+      "corner": "Job",
+      "columns": [
+        "Cloudflare product",
+        "Generic idea",
+        "Reach it through"
+      ],
+      "rows": [
+        {
+          "label": "Run code",
+          "values": [
+            "Workers",
+            "Serverless functions, in V8 isolates rather than containers",
+            "A route or custom domain runs its `fetch()` handler; other Workers call it through a service binding"
+          ]
+        },
+        {
+          "label": "Key-value",
+          "values": [
+            "Workers KV",
+            "Eventually consistent key-value store, cached where it is read",
+            "`kv_namespaces` binding"
+          ]
+        },
+        {
+          "label": "SQL",
+          "values": [
+            "D1",
+            "Managed database with SQLite’s SQL semantics",
+            "`d1_databases` binding, or an HTTP API"
+          ]
+        },
+        {
+          "label": "Objects and files",
+          "values": [
+            "R2",
+            "Object storage with no egress fees",
+            "`r2_buckets` binding, or the S3 API"
+          ]
+        },
+        {
+          "label": "Coordination and state",
+          "values": [
+            "Durable Objects",
+            "One addressable object per ID, with its own SQLite storage",
+            "`durable_objects` binding, which returns a stub to call"
+          ]
+        },
+        {
+          "label": "Background work",
+          "values": [
+            "Queues",
+            "Message queue with at-least-once delivery and batching",
+            "`queues.producers` binding to send; a `queue()` handler to consume"
+          ]
+        },
+        {
+          "label": "Event streams",
+          "values": [
+            "Cloudflare K2",
+            "Event stream: a log on R2 that each subscription reads at its own pace (public beta)",
+            "`k2` binding to produce; subscriptions pull batches over HTTP"
+          ]
+        },
+        {
+          "label": "Long-running jobs",
+          "values": [
+            "Workflows",
+            "Durable execution: steps that retry and keep their results",
+            "`workflows` binding"
+          ]
+        },
+        {
+          "label": "Containers",
+          "values": [
+            "Containers",
+            "Container images started on demand",
+            "Each container is linked to a Durable Object class that starts and routes to it"
+          ]
+        },
+        {
+          "label": "Vector search",
+          "values": [
+            "Vectorize",
+            "Vector database for embeddings",
+            "`vectorize` binding"
+          ]
+        },
+        {
+          "label": "AI inference",
+          "values": [
+            "Workers AI",
+            "Serverless GPU inference on open models",
+            "`ai` binding, or the REST API"
+          ]
+        },
+        {
+          "label": "Analytics",
+          "values": [
+            "Workers Analytics Engine",
+            "High-cardinality metrics written from code, queried with SQL",
+            "`analytics_engine_datasets` binding to write; SQL API to read"
+          ]
+        },
+        {
+          "label": "Lakehouse",
+          "values": [
+            "Basin Pipelines, Basin Catalog, Basin SQL",
+            "Streaming ingestion, a managed Apache Iceberg catalog on R2, and a distributed SQL engine",
+            "Pipelines: a Worker binding or HTTP endpoint. Catalog: the Iceberg REST API. SQL: Wrangler or the API"
+          ]
+        },
+        {
+          "label": "Existing database",
+          "values": [
+            "Hyperdrive",
+            "Connection pooling and read-query caching for Postgres and MySQL",
+            "`hyperdrive` binding, which hands your driver a connection string"
+          ]
+        },
+        {
+          "label": "Private origins",
+          "values": [
+            "Cloudflare Tunnel, Workers VPC",
+            "Outbound-only connector, so the origin needs no public IP",
+            "`cloudflared` on the server; from a Worker, a VPC Service binding over the tunnel"
+          ]
+        },
+        {
+          "label": "Access control",
+          "values": [
+            "Cloudflare Access",
+            "Identity-aware proxy (Zero Trust)",
+            "A policy on the hostname; the origin checks the signed `Cf-Access-Jwt-Assertion` header"
+          ]
+        },
+        {
+          "label": "Load balancing",
+          "values": [
+            "Cloudflare Load Balancing",
+            "Global load balancer across endpoints",
+            "An add-on on the proxied hostname"
+          ]
+        },
+        {
+          "label": "Local development",
+          "values": [
+            "Wrangler, Miniflare, workerd",
+            "CLI, local simulator, open-source runtime",
+            "`wrangler dev` runs Miniflare on workerd with local copies of bindings, or remote bindings to real ones"
+          ]
+        }
+      ],
+      "notes": [
+        "Binding keys are those in Wrangler’s configuration reference. Some resources can be created for you: when a KV, R2, D1 or Queues binding has no ID, Wrangler provisions the resource on deploy."
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Bindings: one way in",
+      "body": [
+        "A binding is a name on the Worker’s `env` object that points at one resource, declared in the Wrangler file and attached when the Worker is deployed. Cloudflare’s docs call it “a permission and an API in one piece”: declaring an R2 binding is what grants the Worker the right to read and write that bucket, and `env.MY_BUCKET.put(key, body)` is how it does so. The underlying credential never reaches the Worker’s code. Every Worker starts with no access and gets exactly the bindings it declares.",
+        "Cloudflare’s Kenton Varda explained the choice in an April 2024 post. Compared with a hostname plus an API key in an environment variable, a binding removes the key, so there is nothing for a stray log line to leak. It closes server-side request forgery: no URL an attacker supplies can reach an internal service, because the only way in is the binding. And it removes the second half of the usual two-step setup, pointing the service at a resource and then granting the resource to the service in an ACL, since declaring the binding does both. Because the platform sees every binding, it can answer which Workers use a given resource. Varda calls bindings “very much inspired by capability-based security”, but not yet a complete capability system, since a Worker can’t hand a binding to another Worker.",
+        "Bindings also make the same code run against different resources. Wrangler environments bind the same names to staging namespaces and databases (bindings are not inherited between environments, so each one lists its own), and `wrangler dev` runs the Worker locally in Miniflare on workerd, the same runtime used in production, with locally simulated KV, R2, D1, Queues and Durable Objects. Remote bindings point a local Worker at the real resources instead. One catch from the docs: when a deploy changes only bindings, Cloudflare may keep running isolates that already exist, so a client built from `env` and cached in global scope can outlive the value it was built from. Build such clients per request."
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Where code runs, and where data lives",
+      "body": [
+        "Calls between Workers cost almost nothing: by default both Workers of a service binding run on the same thread of the same server. Calls to data are different, because the data has a location. Cloudflare’s own example is a user in Sydney whose Worker makes several round trips to a database in Frankfurt; each trip crosses the planet. The 2023 Smart Placement launch post measured a Worker making three round trips to a Frankfurt database from Sydney and found it 4 to 8 times faster once the Worker ran near the database instead of near the user.",
+        "There are three ways to move the Worker. Smart Placement (`\"mode\": \"smart\"`, still beta) measures request duration in different locations and forwards requests to one that is significantly faster; it needs steady traffic from several locations, can take 15 minutes to decide, leaves 1% of requests unplaced as a baseline, and only affects `fetch` handlers, not RPC methods. Placement Hints name the target directly: a cloud region such as `\"aws:us-east-1\"`, or, experimentally, a host or hostname that Cloudflare probes. The docs say this can cut each query from 20 to 30 milliseconds to 1 to 3. The third way is to leave the Worker near the user and put Hyperdrive in front of the database, which keeps pools of open database connections across Cloudflare’s network and caches read queries; its launch post counts up to seven round trips just to open a Postgres connection without it.",
+        "Cloudflare’s own stores have the same question. A D1 primary is created near wherever the create request came from, and queries go to it unless you use the Sessions API with read replicas. A Durable Object is created near its first caller (or where a location hint says) and, per the docs, does not currently move afterwards. So a design usually puts per-user or per-room state in Durable Objects near those users, shared reference data in KV, and the system of record wherever it already lives, with the Worker placed next to whichever of those it talks to most."
+      ]
+    },
+    {
+      "type": "code",
+      "title": "One Worker, six bindings",
+      "intro": "A `wrangler.jsonc` in the format of the current configuration reference. Each block becomes one property of `env`; the comments show the call the code makes. With a compatibility date of 2026-08-04 or later, the Node.js compatibility that database drivers need is on by default.",
+      "lang": "json",
+      "source": [
+        "{",
+        "  \"$schema\": \"./node_modules/wrangler/config-schema.json\",",
+        "  \"name\": \"shop-api\",",
+        "  \"main\": \"src/index.ts\",",
+        "  \"compatibility_date\": \"2026-10-12\",",
+        "  // run near the Postgres primary instead of near each user",
+        "  \"placement\": { \"region\": \"aws:us-east-1\" },",
+        "",
+        "  // env.CONFIG.get(\"flags\")",
+        "  \"kv_namespaces\": [{ \"binding\": \"CONFIG\", \"id\": \"<KV_NAMESPACE_ID>\" }],",
+        "  // env.DB.prepare(\"SELECT ...\").bind(id).first()",
+        "  \"d1_databases\": [",
+        "    { \"binding\": \"DB\", \"database_name\": \"shop\", \"database_id\": \"<D1_DATABASE_ID>\" }",
+        "  ],",
+        "  // env.UPLOADS.put(key, request.body)",
+        "  \"r2_buckets\": [{ \"binding\": \"UPLOADS\", \"bucket_name\": \"shop-uploads\" }],",
+        "  // env.CARTS.getByName(userId) returns a stub to call",
+        "  \"durable_objects\": {",
+        "    \"bindings\": [{ \"name\": \"CARTS\", \"class_name\": \"Cart\" }]",
+        "  },",
+        "  \"exports\": {",
+        "    \"Cart\": { \"type\": \"durable-object\", \"storage\": \"sqlite\" }",
+        "  },",
+        "  // env.EMAILS.send({ orderId }); this Worker also consumes the queue",
+        "  \"queues\": {",
+        "    \"producers\": [{ \"binding\": \"EMAILS\", \"queue\": \"order-emails\" }],",
+        "    \"consumers\": [",
+        "      { \"queue\": \"order-emails\", \"max_batch_size\": 10, \"dead_letter_queue\": \"order-emails-dlq\" }",
+        "    ]",
+        "  },",
+        "  // new pg.Client({ connectionString: env.PG.connectionString })",
+        "  \"hyperdrive\": [{ \"binding\": \"PG\", \"id\": \"<HYPERDRIVE_CONFIG_ID>\" }]",
+        "}"
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Other pieces that fit in",
+      "intro": "Products without a page of their own here that often sit next to the ones above.",
+      "items": [
+        {
+          "name": "WAF",
+          "tag": "all plans",
+          "text": "Checks incoming web and API requests against rulesets written in Cloudflare’s Rules language (IP, path, headers, body) before they reach a Worker or an origin."
+        },
+        {
+          "name": "Turnstile",
+          "tag": "CAPTCHA alternative",
+          "text": "Embeds in a page and runs small non-interactive JavaScript challenges, such as proof-of-work and proof-of-space, to tell people from bots without a puzzle. It works on any site, even one not proxied through Cloudflare."
+        },
+        {
+          "name": "Images",
+          "tag": "binding",
+          "text": "Resizes, optimizes and transforms images at the edge so you store one original instead of a copy per device. A Worker can call it through an `images` binding."
+        },
+        {
+          "name": "Stream",
+          "tag": "video",
+          "text": "Uploads, stores, encodes and delivers live and on-demand video through one API, as H.264 adaptive-bitrate streams from 360p to 1080p. Workers can reach it through a Stream binding."
+        },
+        {
+          "name": "Email Service",
+          "tag": "sending in beta",
+          "text": "Email Routing forwards mail sent to your domain to mailboxes or to a Worker that processes it; Email Sending (beta, Workers Paid) sends transactional mail. It requires Cloudflare DNS, and entered public beta in April 2026."
+        },
+        {
+          "name": "Realtime",
+          "tag": "WebRTC",
+          "text": "RealtimeKit adds audio and video calls with prebuilt UI and SDKs; the Realtime SFU API gives lower-level control over who publishes and receives audio, video and data."
+        },
+        {
+          "name": "Gateway and the Cloudflare One Client",
+          "tag": "Zero Trust",
+          "text": "Gateway is Cloudflare’s Secure Web Gateway: URL filtering, malware scanning, data loss prevention and HTTPS inspection for outbound traffic. The Cloudflare One Client, formerly WARP, sends a device’s traffic to it over WireGuard or MASQUE, its DNS over HTTPS, and reports device posture for Access and Gateway policies."
+        },
+        {
+          "name": "Registrar",
+          "tag": "at cost",
+          "text": "Registers and renews domains at the registry’s price with no markup, with WHOIS redacted by default. A Registrar API entered beta in April 2026."
+        },
+        {
+          "name": "Workers for Platforms",
+          "tag": "multi-tenant",
+          "text": "Runs code written by your customers, or by AI, each in its own isolated Worker inside a dispatch namespace, with per-customer CPU and subrequest limits. Your platform can hand each customer Worker its own KV, D1 or R2 bindings."
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Where it strains",
+      "body": [
+        "Bindings tie code to Cloudflare. `env.DB.prepare()` and `env.CARTS.getByName()` are Cloudflare APIs, so moving a Worker elsewhere means rewriting those calls. The exits are at the data layer: R2 speaks the S3 API, Basin Catalog is a standard Iceberg REST catalog, and Hyperdrive fronts a Postgres or MySQL database you own. The open-source workerd runtime can self-host Workers code, but its README warns that it is not a hardened sandbox for untrusted code.",
+        "Workers is not Node.js. Code runs in V8 isolates with 128 MB of memory each. The runtime implements a subset of Node APIs, some only partially, and for others Wrangler adds polyfills whose methods throw when called, so some npm packages that assume a full Node process won’t work. Containers exist for code that needs a full runtime, at container prices.",
+        "Each product bills by its own unit, which makes costs hard to compare across a design. Workers charge per request and per CPU millisecond, with no charge for wall-clock time; Durable Objects charge for requests and for wall-clock GB-seconds while active; KV per key read or written; D1 per row read and written; Queues per 64 KB operation, usually three per message; R2 for storage and two classes of operations, with no egress fees. Containers, unlike R2 and Queues, do charge for egress: $0.025 per GB in North America and Europe after 1 TB a month."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In September 2017 Cloudflare was, in Kenton Varda’s words, “an HTTP cache that runs in 117 locations worldwide”, plus fixed features such as DNS, SSL, attack protection and load balancing. Fixed features could never cover every use case, so Cloudflare made the edge programmable with Workers: JavaScript on V8, written against the browser’s Service Worker API. Giving every customer a virtual machine or container in every location wasn’t workable, while V8 already ran mutually untrusted code safely in Chrome. Workers opened to everyone in March 2018.",
+      "Storage came one product at a time, each attached through a binding. Workers KV (September 2018) launched with a namespace “bound” to a variable in the Worker. Durable Objects (beta, September 2020) added strong consistency and a single place to coordinate clients, which eventually consistent KV couldn’t give. R2 (2021) brought S3-compatible object storage with zero egress fees, D1 (May 2022) a SQLite-based SQL database, and Queues (September 2022) messaging. In May 2023 Cloudflare acknowledged that running next to the user can be slower when the data is far away and launched Smart Placement, and in September added Workers AI, Vectorize, and Hyperdrive for databases that live outside Cloudflare.",
+      "Later products reused the same pieces. Workflows (open beta, October 2024) is durable execution built on Workers, and Containers (public beta, June 2025) are started and addressed through Durable Objects. In 2026 the pitch turned to AI agents: April’s Agents Week made Sandboxes generally available, renamed Browser Rendering to Browser Run and put Email Service into public beta. Birthday Week, marking the company’s 16th birthday from 28 September to 2 October, made the data platform generally available as Basin, announced K2 event streams on R2 and Workers KV Instant, and rebuilt Containers for agent sandboxes."
+    ],
+    "choices": [
+      {
+        "choice": "Isolates, not containers or virtual machines",
+        "why": "Cloudflare wanted every customer’s code in every location. Per-customer VMs or containers in 117 locations wouldn’t scale, while V8 isolates share one runtime process, start about a hundred times faster than a Node process and use an order of magnitude less memory."
+      },
+      {
+        "choice": "Web standard APIs",
+        "why": "The Service Worker API was already built to intercept and answer web requests, so anyone who had written a Service Worker could write a Worker, and the platform didn’t need its own request model."
+      },
+      {
+        "choice": "Bindings instead of URLs and keys",
+        "why": "Resources are attached as live objects at deploy time, so there are no credentials in code, no SSRF path to internal services, no separate ACL to keep in sync, and the same code can be deployed against test or production resources."
+      },
+      {
+        "choice": "“Region: Earth”, with placement as the exception",
+        "why": "Durable Objects were placed automatically so developers wouldn’t think in regions, and Containers deploy the same way. When the data sits in one cloud region, Smart Placement and Placement Hints move the Worker toward it instead of asking developers to pick regions for everything."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "2017",
+        "text": "Workers announced on September 29, on a network of 117 locations"
+      },
+      {
+        "year": "2018",
+        "text": "Workers open to everyone in March; Workers KV launches in September"
+      },
+      {
+        "year": "2020",
+        "text": "Durable Objects enter closed beta in September"
+      },
+      {
+        "year": "2021",
+        "text": "R2 announced: S3-compatible object storage with no egress fees"
+      },
+      {
+        "year": "2022",
+        "text": "D1 announced in May; Queues private beta in September"
+      },
+      {
+        "year": "2023",
+        "text": "Smart Placement in May; Workers AI, Vectorize and Hyperdrive in September"
+      },
+      {
+        "year": "2025",
+        "text": "Containers public beta in June, controlled from Workers through Durable Objects"
+      },
+      {
+        "year": "2026",
+        "text": "Agents Week in April; Basin generally available and K2 announced on October 1"
+      }
+    ],
+    "sources": [
+      {
+        "label": "Cloudflare blog: Introducing Cloudflare Workers (September 29, 2017)",
+        "url": "https://blog.cloudflare.com/introducing-cloudflare-workers/"
+      },
+      {
+        "label": "Cloudflare blog: Introducing Workers KV (September 28, 2018)",
+        "url": "https://blog.cloudflare.com/introducing-workers-kv/"
+      },
+      {
+        "label": "Cloudflare blog: Workers Durable Objects Beta (September 28, 2020)",
+        "url": "https://blog.cloudflare.com/introducing-workers-durable-objects/"
+      },
+      {
+        "label": "Cloudflare blog: Announcing Cloudflare R2 Storage (September 28, 2021)",
+        "url": "https://blog.cloudflare.com/introducing-r2-object-storage/"
+      },
+      {
+        "label": "Cloudflare blog: Announcing D1, our first SQL database (May 11, 2022)",
+        "url": "https://blog.cloudflare.com/introducing-d1/"
+      },
+      {
+        "label": "Cloudflare blog: Cloudflare Queues (September 27, 2022)",
+        "url": "https://blog.cloudflare.com/introducing-cloudflare-queues/"
+      },
+      {
+        "label": "Cloudflare blog: Smart Placement (May 16, 2023)",
+        "url": "https://blog.cloudflare.com/announcing-workers-smart-placement/"
+      },
+      {
+        "label": "Cloudflare blog: Workers AI (September 27, 2023)",
+        "url": "https://blog.cloudflare.com/workers-ai/"
+      },
+      {
+        "label": "Cloudflare blog: Vectorize open beta (September 27, 2023)",
+        "url": "https://blog.cloudflare.com/vectorize-vector-database-open-beta/"
+      },
+      {
+        "label": "Cloudflare blog: Hyperdrive (September 28, 2023)",
+        "url": "https://blog.cloudflare.com/hyperdrive-making-regional-databases-feel-distributed/"
+      },
+      {
+        "label": "Cloudflare blog: Why Workers environment variables contain live objects (April 1, 2024)",
+        "url": "https://blog.cloudflare.com/workers-environment-live-object-bindings/"
+      },
+      {
+        "label": "Cloudflare blog: Workflows open beta (October 24, 2024)",
+        "url": "https://blog.cloudflare.com/building-workflows-durable-execution-on-workers/"
+      },
+      {
+        "label": "Cloudflare blog: Containers public beta (June 24, 2025)",
+        "url": "https://blog.cloudflare.com/containers-are-available-in-public-beta-for-simple-global-and-programmable/"
+      },
+      {
+        "label": "Cloudflare blog: Everything we launched during Agents Week 2026 (April 20, 2026)",
+        "url": "https://blog.cloudflare.com/agents-week-in-review/"
+      },
+      {
+        "label": "Cloudflare blog: Everything we launched during Birthday Week 2026 (October 5, 2026)",
+        "url": "https://blog.cloudflare.com/birthday-week-2026-wrap-up/"
+      },
+      {
+        "label": "Cloudflare blog: Introducing Cloudflare Basin (October 1, 2026)",
+        "url": "https://blog.cloudflare.com/cloudflare-basin/"
+      },
+      {
+        "label": "Cloudflare Docs: How Workers works (isolates)",
+        "url": "https://developers.cloudflare.com/workers/reference/how-workers-works/"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "Cloudflare Docs: Bindings (env)",
+      "url": "https://developers.cloudflare.com/workers/runtime-apis/bindings/"
+    },
+    {
+      "label": "Cloudflare Docs: How Workers works",
+      "url": "https://developers.cloudflare.com/workers/reference/how-workers-works/"
+    },
+    {
+      "label": "Cloudflare Docs: Wrangler configuration",
+      "url": "https://developers.cloudflare.com/workers/wrangler/configuration/"
+    },
+    {
+      "label": "Cloudflare Docs: Placement (Smart Placement and Placement Hints)",
+      "url": "https://developers.cloudflare.com/workers/configuration/placement/"
+    },
+    {
+      "label": "Cloudflare Docs: Service bindings",
+      "url": "https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/"
+    },
+    {
+      "label": "Cloudflare Docs: Local development",
+      "url": "https://developers.cloudflare.com/workers/local-development/"
+    },
+    {
+      "label": "Cloudflare Docs: Node.js compatibility",
+      "url": "https://developers.cloudflare.com/workers/runtime-apis/nodejs/"
+    },
+    {
+      "label": "Cloudflare Docs: Workers limits",
+      "url": "https://developers.cloudflare.com/workers/platform/limits/"
+    },
+    {
+      "label": "Cloudflare Docs: Workers pricing (Workers, KV, Queues, D1, Durable Objects, R2, Containers)",
+      "url": "https://developers.cloudflare.com/workers/platform/pricing/"
+    },
+    {
+      "label": "Cloudflare Docs: D1 data location",
+      "url": "https://developers.cloudflare.com/d1/configuration/data-location/"
+    },
+    {
+      "label": "Cloudflare Docs: D1 global read replication",
+      "url": "https://developers.cloudflare.com/d1/best-practices/read-replication/"
+    },
+    {
+      "label": "Cloudflare Docs: Durable Objects data location",
+      "url": "https://developers.cloudflare.com/durable-objects/reference/data-location/"
+    },
+    {
+      "label": "Cloudflare Docs: Durable Objects",
+      "url": "https://developers.cloudflare.com/durable-objects/"
+    },
+    {
+      "label": "Cloudflare Docs: D1",
+      "url": "https://developers.cloudflare.com/d1/"
+    },
+    {
+      "label": "Cloudflare Docs: D1 Database API (prepare, bind, first)",
+      "url": "https://developers.cloudflare.com/d1/worker-api/d1-database/"
+    },
+    {
+      "label": "Cloudflare Docs: Durable Object namespace API (getByName)",
+      "url": "https://developers.cloudflare.com/durable-objects/api/namespace/"
+    },
+    {
+      "label": "Cloudflare Docs: Queues JavaScript APIs (send)",
+      "url": "https://developers.cloudflare.com/queues/configuration/javascript-apis/"
+    },
+    {
+      "label": "Cloudflare blog: Workers Durable Objects Beta (KV described as eventually consistent)",
+      "url": "https://blog.cloudflare.com/introducing-workers-durable-objects/"
+    },
+    {
+      "label": "Cloudflare Docs: Queues",
+      "url": "https://developers.cloudflare.com/queues/"
+    },
+    {
+      "label": "Cloudflare Docs: Hyperdrive",
+      "url": "https://developers.cloudflare.com/hyperdrive/"
+    },
+    {
+      "label": "Cloudflare Docs: Hyperdrive get started (Node.js compatibility by compatibility date)",
+      "url": "https://developers.cloudflare.com/hyperdrive/get-started/"
+    },
+    {
+      "label": "Cloudflare Docs: Workflows",
+      "url": "https://developers.cloudflare.com/workflows/"
+    },
+    {
+      "label": "Cloudflare Docs: Containers",
+      "url": "https://developers.cloudflare.com/containers/"
+    },
+    {
+      "label": "Cloudflare Docs: Vectorize",
+      "url": "https://developers.cloudflare.com/vectorize/"
+    },
+    {
+      "label": "Cloudflare Docs: Workers AI",
+      "url": "https://developers.cloudflare.com/workers-ai/"
+    },
+    {
+      "label": "Cloudflare Docs: Workers Analytics Engine",
+      "url": "https://developers.cloudflare.com/analytics/analytics-engine/"
+    },
+    {
+      "label": "Cloudflare Docs: Basin (formerly Cloudflare Data Platform)",
+      "url": "https://developers.cloudflare.com/basin/"
+    },
+    {
+      "label": "Cloudflare Docs: Basin Pipelines",
+      "url": "https://developers.cloudflare.com/basin-pipelines/"
+    },
+    {
+      "label": "Cloudflare Docs: Basin Catalog",
+      "url": "https://developers.cloudflare.com/basin-catalog/"
+    },
+    {
+      "label": "Cloudflare Docs: Basin SQL",
+      "url": "https://developers.cloudflare.com/basin-sql/"
+    },
+    {
+      "label": "Cloudflare Docs: Browser Run (formerly Browser Rendering)",
+      "url": "https://developers.cloudflare.com/browser-run/"
+    },
+    {
+      "label": "Cloudflare Docs: Cloudflare Tunnel",
+      "url": "https://developers.cloudflare.com/tunnel/"
+    },
+    {
+      "label": "Cloudflare Docs: Workers VPC",
+      "url": "https://developers.cloudflare.com/workers-vpc/"
+    },
+    {
+      "label": "Cloudflare Docs: Cloudflare One",
+      "url": "https://developers.cloudflare.com/cloudflare-one/"
+    },
+    {
+      "label": "Cloudflare Docs: Access, validate JWTs",
+      "url": "https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/"
+    },
+    {
+      "label": "Cloudflare Docs: Traffic policies (Secure Web Gateway)",
+      "url": "https://developers.cloudflare.com/cloudflare-one/traffic-policies/"
+    },
+    {
+      "label": "Cloudflare Docs: Cloudflare One Client (formerly WARP)",
+      "url": "https://developers.cloudflare.com/cloudflare-one/team-and-resources/devices/cloudflare-one-client/"
+    },
+    {
+      "label": "Cloudflare Docs: Load Balancing",
+      "url": "https://developers.cloudflare.com/load-balancing/"
+    },
+    {
+      "label": "Cloudflare Docs: Wrangler",
+      "url": "https://developers.cloudflare.com/workers/wrangler/"
+    },
+    {
+      "label": "Cloudflare Docs: Miniflare",
+      "url": "https://developers.cloudflare.com/workers/testing/miniflare/"
+    },
+    {
+      "label": "cloudflare/workerd README",
+      "url": "https://github.com/cloudflare/workerd"
+    },
+    {
+      "label": "Cloudflare Docs: Web Application Firewall",
+      "url": "https://developers.cloudflare.com/waf/"
+    },
+    {
+      "label": "Cloudflare Docs: Turnstile",
+      "url": "https://developers.cloudflare.com/turnstile/"
+    },
+    {
+      "label": "Cloudflare Docs: Images",
+      "url": "https://developers.cloudflare.com/images/"
+    },
+    {
+      "label": "Cloudflare Docs: Stream",
+      "url": "https://developers.cloudflare.com/stream/"
+    },
+    {
+      "label": "Cloudflare Docs: Email Service",
+      "url": "https://developers.cloudflare.com/email-service/"
+    },
+    {
+      "label": "Cloudflare Docs: Email Service, route emails",
+      "url": "https://developers.cloudflare.com/email-service/get-started/route-emails/"
+    },
+    {
+      "label": "Cloudflare Docs: Realtime",
+      "url": "https://developers.cloudflare.com/realtime/"
+    },
+    {
+      "label": "Cloudflare Docs: Registrar",
+      "url": "https://developers.cloudflare.com/registrar/"
+    },
+    {
+      "label": "Cloudflare Docs: Workers for Platforms",
+      "url": "https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/"
+    },
+    {
+      "label": "Cloudflare blog: Why Workers environment variables contain live objects (April 1, 2024)",
+      "url": "https://blog.cloudflare.com/workers-environment-live-object-bindings/"
+    },
+    {
+      "label": "Cloudflare blog: Smart Placement (May 16, 2023)",
+      "url": "https://blog.cloudflare.com/announcing-workers-smart-placement/"
+    },
+    {
+      "label": "Cloudflare blog: Hyperdrive (September 28, 2023)",
+      "url": "https://blog.cloudflare.com/hyperdrive-making-regional-databases-feel-distributed/"
+    },
+    {
+      "label": "Cloudflare blog: Announcing Cloudflare R2 Storage (S3 API compatibility)",
+      "url": "https://blog.cloudflare.com/introducing-r2-object-storage/"
+    },
+    {
+      "label": "Cloudflare blog: Everything we launched during Agents Week 2026",
+      "url": "https://blog.cloudflare.com/agents-week-in-review/"
+    },
+    {
+      "label": "Cloudflare blog: Everything we launched during Birthday Week 2026 (K2, Workers KV Instant)",
+      "url": "https://blog.cloudflare.com/birthday-week-2026-wrap-up/"
+    },
+    {
+      "label": "Cloudflare K2 docs: Consume",
+      "url": "https://developers.cloudflare.com/k2/features/consume/"
+    }
+  ],
+  "checked": "2026-10-12"
+}

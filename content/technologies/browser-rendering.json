@@ -1,0 +1,98 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Cloudflare Browser Run",
+  "concepts": ["serverless"],
+  "uses": ["testing"],
+  "provider": "vendor",
+  "vendor": "Cloudflare, Inc.",
+  "license": "Proprietary (the Puppeteer and Playwright forks are open source)",
+  "website": "https://developers.cloudflare.com/browser-run/",
+  "status": { "stage": "renamed", "note": "Called Browser Rendering (Workers Browser Rendering API) until 15 April 2026; some API paths still use the old name.", "since": "2026-04-15" },
+  "summary": "Headless Chrome on demand in Cloudflare’s network, called Browser Rendering until April 2026: one HTTP call for a screenshot, PDF, Markdown or crawl, or a full browser session driven by Puppeteer, Playwright, CDP or an AI agent.",
+  "intro": [
+    "Cloudflare keeps a pool of Chrome browsers in its network and hands them out per request. There are two ways in. Quick Actions are stateless REST endpoints (`/screenshot`, `/pdf`, `/markdown`, `/content`, `/scrape`, `/links`, `/json` for AI extraction, `/crawl` for whole sites) that load a URL or raw HTML and return the result, with nothing to deploy. Browser Sessions give you the browser itself: a Worker launches one through a `browser` binding with Cloudflare’s forks of Puppeteer or Playwright, or any client connects to its Chrome DevTools Protocol endpoint over a WebSocket, including MCP clients such as Claude Desktop and Cursor. A browser closes after 60 seconds idle unless `keep_alive` extends that to 10 minutes, and sessions can be reused across requests.",
+    "Billing counts browser hours: the Workers Paid plan includes 10 hours a month, then $0.09 an hour; Browser Sessions also count concurrent browsers, 10 included (averaged over the month), then $2.00 each. The Free plan gets 10 minutes a day and 3 concurrent browsers. Paid accounts can run 200 browsers at once, start 3 new ones a second and send 30 Quick Actions a second by default. In April 2026 the product was renamed Browser Run, because “Browser Rendering never fully captured what the product does,” and gained Live View, human-in-the-loop handoff, session recordings and WebMCP for AI agents."
+  ],
+  "strengths": [
+    "No Chrome fleet to run: screenshots, PDFs and Markdown take one REST call, and browsers scale to hundreds in parallel",
+    "Existing Puppeteer, Playwright and CDP scripts port with minimal changes, which suits end-to-end tests and automation in CI",
+    "Built for agents: MCP and CDP access, Live View, session recordings and human-in-the-loop handoff when a login page blocks the agent",
+    "Cheap at low volume: 10 browser hours a month included on Workers Paid, then $0.09 an hour"
+  ],
+  "limits": [
+    "Browsers close after 60 seconds idle by default and 10 minutes at most with `keep_alive`, unless the session keeps sending commands",
+    "Requests are always identified as bots, so sites with bot protection may block it; allowlisting your own site needs an Enterprise plan",
+    "Chrome only, through Cloudflare’s forks of Puppeteer (v1.1.0, based on Puppeteer 22.13.1) and Playwright, which trail the upstream releases",
+    "The Free plan is tiny: 10 browser minutes a day, 3 concurrent browsers and one new browser every 20 seconds"
+  ],
+  "worksWith": [
+    { "id": "cloudflare-workers", "how": "is launched through a browser binding from" },
+    { "id": "durable-objects", "how": "can keep sessions open between requests in" }
+  ],
+  "snippet": {
+    "lang": "ts",
+    "title": "Screenshot any page from a Worker through a browser binding",
+    "source": [
+      "import puppeteer from \"@cloudflare/puppeteer\";",
+      "",
+      "interface Env {",
+      "  MYBROWSER: Fetcher;",
+      "}",
+      "",
+      "export default {",
+      "  async fetch(request, env): Promise<Response> {",
+      "    const target = new URL(request.url).searchParams.get(\"url\") ?? \"https://example.com\";",
+      "    const browser = await puppeteer.launch(env.MYBROWSER);",
+      "    const page = await browser.newPage();",
+      "    await page.goto(target);",
+      "    const png = await page.screenshot();",
+      "    await browser.close();",
+      "    return new Response(png, { headers: { \"content-type\": \"image/png\" } });",
+      "  },",
+      "} satisfies ExportedHandler<Env>;"
+    ]
+  },
+  "history": {
+    "story": [
+      "Taking screenshots, generating PDFs, crawling pages and testing web applications all need a real browser, and running Chrome fleets is tedious. Cloudflare’s answer was the Workers Browser Rendering API, which gave a Worker a binding to a Chromium instance in its network. Celso Martinho announced the open beta on May 19, 2023. Under the hood it exposed a WebSocket endpoint speaking the Chrome DevTools Protocol, and Cloudflare published a lightly patched fork of Puppeteer, `@cloudflare/puppeteer`, so developers could use a familiar API instead of writing a DevTools client.",
+      "It left beta for all paid Workers plans in April 2024, with session management for reusing browsers. In 2025 a REST API for one-call tasks (screenshots, PDFs, Markdown, JSON extraction) became generally available with a free tier, Playwright support arrived and went GA, and billing began on August 20, 2025 at $0.09 per browser hour.",
+      "On April 15, 2026, during Agents Week, Kathy Liao announced the rename to Browser Run and repositioned it as the browser for AI agents: a direct CDP endpoint, MCP client support, WebMCP, Live View, human-in-the-loop handoff and session recordings, with concurrency limits raised from 30 to 120 browsers. By August 2026 the default rose to 200."
+    ],
+    "choices": [
+      { "choice": "Fork Puppeteer instead of inventing an API", "why": "Puppeteer was already one of the most popular ways to drive Chrome over DevTools. Patching it to connect to Cloudflare’s browsers kept changes minimal, so developers can use the full Puppeteer API as on a standard setup." },
+      { "choice": "Expose the DevTools Protocol", "why": "CDP is how tools and agents control browsers; exposing it directly means existing CDP scripts and MCP clients work against Cloudflare’s browsers from any environment." },
+      { "choice": "A new name for an agent-era product", "why": "Cloudflare said “Browser Rendering” never captured what the product does: running full sessions, driven by code or AI, with recording, crawling, live debugging and human handoff." }
+    ],
+    "timeline": [
+      { "year": "2023", "text": "Workers Browser Rendering API enters open beta on May 19, with `@cloudflare/puppeteer`" },
+      { "year": "2024", "text": "Out of beta for all paid Workers plans in April, with session reuse" },
+      { "year": "2025", "text": "REST API generally available with a free tier on April 7; billing at $0.09 per browser hour from August 20" },
+      { "year": "2025", "text": "Playwright support generally available in September" },
+      { "year": "2026", "text": "Renamed Browser Run on April 15, with CDP, MCP, Live View and session recordings" },
+      { "year": "2026", "text": "Default limits raised to 200 concurrent browsers in August" }
+    ],
+    "sources": [
+      { "label": "Cloudflare Blog: Workers Browser Rendering API enters open beta (May 2023)", "url": "https://blog.cloudflare.com/browser-rendering-open-beta/" },
+      { "label": "Cloudflare Blog: Browser Rendering API GA, rolling out Cloudflare Snippets, SWR, and bringing Workers for Platforms to all users (Apr 2024)", "url": "https://blog.cloudflare.com/browser-rendering-api-ga-rolling-out-cloudflare-snippets-swr-and-bringing-workers-for-platforms-to-our-paygo-plans/" },
+      { "label": "Cloudflare Changelog: Browser Rendering REST API is generally available, with new endpoints and a free tier (Apr 2025)", "url": "https://developers.cloudflare.com/changelog/post/2025-04-07-br-free-ga-playwright/" },
+      { "label": "Cloudflare Changelog: Introducing pricing for the Browser Rendering API, $0.09 per browser hour (Jul 2025)", "url": "https://developers.cloudflare.com/changelog/post/2025-07-28-br-pricing/" },
+      { "label": "Cloudflare Changelog: Browser Rendering Playwright GA, Stagehand support (Beta), and higher limits (Sep 2025)", "url": "https://developers.cloudflare.com/changelog/post/2025-09-25-br-playwright-ga-stagehand-limits/" },
+      { "label": "Cloudflare Blog: Browser Run: give your agents a browser (Apr 2026)", "url": "https://blog.cloudflare.com/browser-run-for-ai-agents/" },
+      { "label": "Cloudflare Changelog: Browser Rendering is now Browser Run (Apr 2026)", "url": "https://developers.cloudflare.com/changelog/post/2026-04-15-br-rename/" },
+      { "label": "Cloudflare Changelog: Run more headless browsers concurrently with Browser Run (Aug 2026)", "url": "https://developers.cloudflare.com/changelog/post/2026-08-20-limits-increase/" }
+    ]
+  },
+  "sources": [
+    { "label": "Cloudflare docs: Browser Run (formerly Browser Rendering), overview and use cases", "url": "https://developers.cloudflare.com/browser-run/" },
+    { "label": "Cloudflare Browser Run docs: Quick Actions", "url": "https://developers.cloudflare.com/browser-run/quick-actions/" },
+    { "label": "Cloudflare Browser Run docs: Screenshot endpoint", "url": "https://developers.cloudflare.com/browser-run/quick-actions/screenshot-endpoint/" },
+    { "label": "Cloudflare Browser Run docs: Puppeteer (keep_alive, fork version)", "url": "https://developers.cloudflare.com/browser-run/puppeteer/" },
+    { "label": "Cloudflare Browser Run docs: Playwright", "url": "https://developers.cloudflare.com/browser-run/playwright/" },
+    { "label": "Cloudflare Browser Run docs: Chrome DevTools Protocol", "url": "https://developers.cloudflare.com/browser-run/cdp/" },
+    { "label": "Cloudflare Browser Run docs: Limits", "url": "https://developers.cloudflare.com/browser-run/limits/" },
+    { "label": "Cloudflare Browser Run docs: Pricing", "url": "https://developers.cloudflare.com/browser-run/pricing/" },
+    { "label": "Cloudflare Browser Run docs: FAQ (bot detection)", "url": "https://developers.cloudflare.com/browser-run/faq/" },
+    { "label": "Cloudflare Changelog: Browser Rendering is now Browser Run (Apr 2026)", "url": "https://developers.cloudflare.com/changelog/post/2026-04-15-br-rename/" }
+  ],
+  "checked": "2026-10-12"
+}

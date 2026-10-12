@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils';
 type Logo = NonNullable<NavData['groups'][number]['technologies'][number]['logo']>;
 interface Entry {
   key: string;
-  type: 'Topic' | 'Concept' | 'Kind' | 'Technology' | 'Architecture' | 'Comparison';
+  type: 'Topic' | 'Concept' | 'Kind' | 'Technology' | 'Architecture' | 'Comparison' | 'Company' | 'Foundation';
   name: string;
   /** Shown under the name. */
   sub: string;
@@ -25,7 +25,7 @@ interface Entry {
 }
 
 // A small lead for the broader page: a topic or concept before the products and kinds under it.
-const TYPE_BONUS: Record<Entry['type'], number> = { Topic: 6, Concept: 6, Technology: 3, Kind: 1, Architecture: 0, Comparison: 0 };
+const TYPE_BONUS: Record<Entry['type'], number> = { Topic: 6, Concept: 6, Technology: 3, Kind: 1, Architecture: 0, Comparison: 0, Company: 2, Foundation: 2 };
 const STOP = new Set(['a', 'an', 'and', 'or', 'of', 'for', 'the', 'on', 'in', 'to', 'vs']);
 // "Apache Kafka" is "Kafka" to most people, "AWS Lambda" is "Lambda".
 const VENDOR = /^(apache|amazon|aws|google cloud|google|azure|microsoft|cloudflare|hashicorp|alibaba cloud|eclipse|oracle|red hat) /;
@@ -81,6 +81,10 @@ function entries(nav: NavData): Entry[] {
     ...nav.architectures.map((a): Entry => ({
       key: `arch:${a.id}`, type: 'Architecture', name: a.name, sub: a.summary, path: `architectures/${a.id}/`, icon: 'network',
       aliases: `${a.id} architecture stack`, text: `${a.summary} ${a.terms}`,
+    })),
+    ...nav.makers.map((f): Entry => ({
+      key: `maker:${f.id}`, type: f.company ? 'Company' : 'Foundation', name: f.name, sub: f.summary, path: f.path,
+      icon: f.company ? 'building-2' : 'landmark', aliases: `${f.id} ${f.company ? 'company vendor platform' : 'foundation'}`, text: `${f.summary} ${f.terms}`,
     })),
     ...nav.comparisons.map((m): Entry => ({
       key: `compare:${m.id}`, type: 'Comparison', name: m.title, sub: '', path: `compare/${m.id}/`, icon: 'arrow-left-right',

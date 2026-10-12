@@ -1,0 +1,110 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Cloudflare Sandbox SDK",
+  "concepts": ["containers"],
+  "parent": { "id": "cloudflare-containers", "as": "extension" },
+  "provider": "vendor",
+  "vendor": "Cloudflare, Inc.",
+  "license": "Apache 2.0 (the SDK); the Containers it runs on are a proprietary service",
+  "website": "https://developers.cloudflare.com/sandbox/",
+  "repo": "https://github.com/cloudflare/sandbox-sdk",
+  "summary": "A way to run untrusted or AI-generated code on Cloudflare: each sandbox is a Linux container in its own microVM, started, fed commands and files, and cut off from the network by a Durable Object you write.",
+  "intro": [
+    "A sandbox has three parts: a name, a Durable Object and a container instance. Your Worker authenticates the caller, derives a sandbox name from them, and calls `getByName()`; that Durable Object starts a container with `ctx.container.start()`, choosing the image, the instance size and whether the internet is reachable (it isn’t by default). It then runs processes with `exec()`, which takes an argument array and starts no shell unless you ask for one, and moves files with the `Files` helper from `@cloudflare/sandbox`. Each container runs in a Firecracker microVM with its own kernel, so one user’s code can’t reach another’s sandbox. A preview of a web server running inside is served by having your Worker forward requests, such as `/previews/<name>/`, to the sandbox’s port, behind your own hostname and authentication.",
+    "Credentials stay outside: an outbound handler in your Worker can add a token to HTTPS requests after they leave the container, and allow a package registry while blocking everything else. The instance runs while its Durable Object is active and for an inactivity timeout of up to 6 hours after that; when it stops, its disk and processes are gone unless you saved a snapshot or synced files to R2. Sandbox SDK 1.0 (September 30, 2026) turned the old `Sandbox` class into this do-it-yourself model, cutting the median time from `start()` to the first command from about 4 seconds to under 600 ms. Billing is ordinary Containers, Workers and Durable Objects usage on the Workers Paid plan."
+  ],
+  "strengths": [
+    "Strong isolation per user or per job: every sandbox is a microVM with its own kernel and network, with the internet off unless you turn it on",
+    "Secrets never enter the sandbox: outbound handlers in your Worker add credentials and decide which hosts the code may reach",
+    "Starts fast on a prepared image (median under 600 ms to the first command in 1.0), and each `start()` can pick its own image and size",
+    "Works with existing tools: Claude Code, Codex, Devin and other coding agents have guides for running inside a sandbox"
+  ],
+  "limits": [
+    "1.0 is a thin library: your Durable Object handles lifetime, retries, timeouts, preview routing and snapshot bookkeeping, and it needs the `durable_object` scheduling policy, still in public beta",
+    "Code running inside doesn’t count as activity, so a long build stops when the inactivity timeout (at most 6 hours) ends unless an alarm or request keeps the Durable Object busy",
+    "Every process in a sandbox has root-equivalent capabilities, so the sandbox is the smallest unit of trust; two users must never share one",
+    "Moving from 0.x is a one-way switch that `wrangler rollback` can’t undo; 0.x gets only bug and security fixes until 2026-12-31"
+  ],
+  "worksWith": [
+    { "id": "durable-objects", "how": "is controlled by your own class in" },
+    { "id": "r2", "how": "can mount buckets and back up files to" }
+  ],
+  "snippet": {
+    "lang": "ts",
+    "title": "Run a command in a per-user Linux sandbox with no internet access (SDK 1.0)",
+    "source": [
+      "import { DurableObject } from \"cloudflare:workers\";",
+      "",
+      "export class MySandbox extends DurableObject<Env> {",
+      "  async run(argv: string[]) {",
+      "    const container = this.ctx.container!;",
+      "    if (!container.running) {",
+      "      container.start({",
+      "        image: \"cloudflare/debian-trixie\",",
+      "        entrypoint: [\"sleep\", \"infinity\"], // keep it running between commands",
+      "        enableInternet: false,",
+      "      });",
+      "      await container.setInactivityTimeout(10 * 60 * 1000);",
+      "    }",
+      "    const proc = await container.exec(argv); // no shell unless you start one",
+      "    const out = await proc.output();",
+      "    return { stdout: new TextDecoder().decode(out.stdout), exitCode: out.exitCode };",
+      "  }",
+      "}",
+      "",
+      "export default {",
+      "  async fetch(request: Request, env: Env) {",
+      "    const user = await authenticate(request); // derive the sandbox name from identity",
+      "    const { argv } = await request.json<{ argv: string[] }>();",
+      "    return Response.json(await env.MY_SANDBOX.getByName(user.id).run(argv));",
+      "  },",
+      "};"
+    ]
+  },
+  "history": {
+    "story": [
+      "The first Cloudflare Containers announcement, in April 2025, led with one use case: a platform where users run code an LLM wrote, which is untrusted, so each user needs a secure sandbox of their own. The `cloudflare/sandbox-sdk` repository appeared on GitHub in June 2025, as Containers entered public beta, and a major release on August 5, 2025 turned it into a full execution platform: streamed output, persistent Python and JavaScript code interpreters, file access, Git operations, background processes and public preview URLs for running services.",
+      "Containers and Sandboxes became generally available together on April 13, 2026, by which point the SDK had added browser terminals, backup and restore of workspaces, and file watching. In June 2026 Cloudflare deprecated several features, saying the SDK had shipped many experiments as agent workflows developed: a Linux desktop for computer use was removed for low adoption, `exposePort()` gave way to Cloudflare Tunnel, and a default shell session shared across `exec()` calls was dropped because it confused agents and caused hard-to-trace bugs.",
+      "Sandbox SDK 1.0, released on September 30, 2026 during Birthday Week alongside a rebuild of Containers for agent sandboxes, moved control into the developer’s own Durable Object: the package no longer starts, stops or tracks containers, and keeps only helpers such as `Files`. In exchange, each sandbox can choose its image and size at start time, deploys no longer restart running sandboxes, and start-up got roughly seven times faster."
+    ],
+    "choices": [
+      { "choice": "A container in a microVM, not an isolate, for Linux code", "why": "Most existing tools expect an operating system: `npm test` needs Node.js, files and child processes, and preview servers keep processes listening on ports. Cloudflare offers Dynamic Workers for code that only calls known methods, and Containers for everything that needs Linux." },
+      { "choice": "Your Durable Object, not the SDK, owns each sandbox (1.0)", "why": "How long a sandbox runs, what it can reach and whether a failed command is safe to rerun depend on the application. A cancelled command may already have changed files, and only the application knows whether running it again is safe." },
+      { "choice": "Commands as argument arrays with no shared session", "why": "In 1.0 `exec()` starts a process without a shell, so text in an argument can’t start a second command, and each call sets its own working directory and environment. A session carried between calls had confused agents." }
+    ],
+    "timeline": [
+      { "year": "2025", "text": "Containers announced in April with per-user sandboxes for LLM-generated code as the lead example" },
+      { "year": "2025", "text": "The `sandbox-sdk` repository is published in June, as Containers enter public beta" },
+      { "year": "2025", "text": "August 5: code interpreters, Git, background processes and preview URLs" },
+      { "year": "2026", "text": "Containers and Sandboxes generally available on April 13" },
+      { "year": "2026", "text": "June 9: desktop, `exposePort()` and default sessions deprecated" },
+      { "year": "2026", "text": "Sandbox SDK 1.0 on September 30: control moves into your own Durable Object" }
+    ],
+    "sources": [
+      { "label": "Cloudflare Blog: Simple, scalable, and global: Containers are coming to Cloudflare Workers in June 2025 (Apr 2025)", "url": "https://blog.cloudflare.com/cloudflare-containers-coming-2025/" },
+      { "label": "cloudflare/sandbox-sdk on GitHub", "url": "https://github.com/cloudflare/sandbox-sdk" },
+      { "label": "Cloudflare Changelog: Sandbox SDK adds streaming, code interpreter, Git support, process control and more (Aug 2025)", "url": "https://developers.cloudflare.com/changelog/post/2025-08-05-sandbox-sdk-major-update/" },
+      { "label": "Cloudflare Changelog: Containers and Sandboxes are now generally available (Apr 2026)", "url": "https://developers.cloudflare.com/changelog/post/2026-04-13-containers-sandbox-ga/" },
+      { "label": "Cloudflare Changelog: Deprecating Sandbox SDK features (Jun 2026)", "url": "https://developers.cloudflare.com/changelog/post/2026-06-09-deprecating-sandbox-sdk-features/" },
+      { "label": "Cloudflare Changelog: Sandbox SDK 1.0: control every sandbox from your own Durable Object (Sep 2026)", "url": "https://developers.cloudflare.com/changelog/post/2026-09-30-sandbox-sdk-1-0/" },
+      { "label": "Cloudflare Sandbox docs: Changes in Sandbox SDK 1.0", "url": "https://developers.cloudflare.com/sandbox/sdk/migrate/changes-in-1-0/" },
+      { "label": "Cloudflare Blog: Cloudflare Containers, rebuilt to scale agent sandboxes (Sep 2026)", "url": "https://blog.cloudflare.com/faster-agent-sandboxes/" }
+    ]
+  },
+  "sources": [
+    { "label": "Cloudflare docs: Sandboxes on Cloudflare", "url": "https://developers.cloudflare.com/sandbox/" },
+    { "label": "Cloudflare Sandbox docs: Choose a sandbox environment (Containers vs Dynamic Workers)", "url": "https://developers.cloudflare.com/sandbox/concepts/" },
+    { "label": "Cloudflare Sandbox docs: Run a Linux command", "url": "https://developers.cloudflare.com/sandbox/get-started/" },
+    { "label": "Cloudflare Sandbox docs: Sandbox lifetime", "url": "https://developers.cloudflare.com/sandbox/concepts/lifetime/" },
+    { "label": "Cloudflare Sandbox docs: Sandbox security", "url": "https://developers.cloudflare.com/sandbox/concepts/security/" },
+    { "label": "Cloudflare Sandbox docs: Preview a web application", "url": "https://developers.cloudflare.com/sandbox/previews/" },
+    { "label": "Cloudflare Sandbox docs: Mount an R2 bucket", "url": "https://developers.cloudflare.com/sandbox/files/mount-an-r2-bucket/" },
+    { "label": "Cloudflare Sandbox docs: Back up a directory to R2", "url": "https://developers.cloudflare.com/sandbox/files/back-up-a-directory-to-r2/" },
+    { "label": "Cloudflare Sandbox docs: Coding agents (Claude Code, Codex, Devin and others)", "url": "https://developers.cloudflare.com/sandbox/coding-agents/" },
+    { "label": "Cloudflare Sandbox docs: @cloudflare/sandbox reference", "url": "https://developers.cloudflare.com/sandbox/reference/" },
+    { "label": "Cloudflare Sandbox docs: Migrate from Sandbox SDK 0.x (start-up times, 0.x support)", "url": "https://developers.cloudflare.com/sandbox/sdk/migrate/" },
+    { "label": "Cloudflare Containers docs: Durable Object Container API", "url": "https://developers.cloudflare.com/containers/api/durable-object-container/" },
+    { "label": "Cloudflare Containers docs: Scheduling policies (durable_object policy in public beta)", "url": "https://developers.cloudflare.com/containers/configuration/scheduling-policy/" }
+  ],
+  "checked": "2026-10-12"
+}

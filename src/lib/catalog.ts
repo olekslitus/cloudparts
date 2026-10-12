@@ -43,6 +43,8 @@ export interface CatalogComparison extends Comparison {
 }
 export interface CatalogFoundation extends Foundation {
   id: string;
+  /** Where its page lives: foundations/<id>/ or companies/<id>/. */
+  path: string;
   /** Technologies whose "vendor" is this foundation, by name. */
   projects: CatalogTech[];
 }
@@ -211,6 +213,7 @@ async function load(): Promise<Catalog> {
   const foundations: CatalogFoundation[] = fdnEntries.map(f => ({
     ...f.data,
     id: f.id,
+    path: `${f.data.type === 'company' ? 'companies' : 'foundations'}/${f.id}/`,
     projects: technologies.filter(t => t.vendor === f.data.vendor).sort((a, b) => a.name.localeCompare(b.name)),
   }));
 

@@ -1,0 +1,99 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Cloudflare Access",
+  "concepts": ["remote-access"],
+  "uses": ["authentication"],
+  "provider": "vendor",
+  "vendor": "Cloudflare, Inc.",
+  "license": "Proprietary",
+  "website": "https://developers.cloudflare.com/cloudflare-one/access-controls/",
+  "summary": "The identity-aware proxy in Cloudflare One: every request to a protected app must carry a signed token that says who the user is and that a policy allowed them in.",
+  "intro": [
+    "Access sits in Cloudflare’s reverse proxy in front of a hostname. Every application is deny by default. When a request arrives without a valid `CF_Authorization` cookie, the user is sent to your identity provider (Okta, Microsoft Entra ID, Google, GitHub, any SAML or OIDC provider, or a one-time PIN by email). Access then checks the policies: Allow, Block, Bypass or Service Auth actions, built from Include (OR), Require (AND) and Exclude (NOT) rules over selectors such as email domain, IdP group, country, IP range, client certificate or device posture. Non-identity selectors are checked again on every request during the session.",
+    "If the user passes, Access issues a JSON Web Token: a global session token on your `<team>.cloudflareaccess.com` domain, which gives single sign-on across apps (24 hours by default), and an application token on the app’s own domain. Cloudflare forwards the token to the origin in a `Cf-Access-Jwt-Assertion` header, signed with RS256 keys published at `/cdn-cgi/access/certs` and rotated every six weeks, so the origin can verify the user itself. Machines use service tokens (a client ID and secret) or mutual TLS instead of a login. Pair it with Cloudflare Tunnel and the app needs no public IP at all; SSH, RDP and other TCP apps work through client-side `cloudflared`."
+  ],
+  "strengths": [
+    "Replaces a VPN for web apps: users sign in with the IdP they already have, and every request is checked, not just the network connection",
+    "Origins can verify the signed JWT themselves, so a request that skipped Access is easy to reject",
+    "Policies combine identity with context (country, IP, device posture, certificates) and support service tokens and mTLS for automation",
+    "Works with any SAML or OIDC identity provider, and several at once for contractors or partners"
+  ],
+  "limits": [
+    "Billed per seat: a user takes a seat on their first login and keeps it until an admin removes them",
+    "Protected hostnames must be on a domain active in your Cloudflare account, or a Cloudflare for SaaS custom hostname",
+    "Default caps of 500 applications, 50 identity providers and 50 service tokens per account, which Enterprise accounts can raise",
+    "A Bypass policy turns off all Access checks and logging for matching traffic, and an Include “Everyone” rule in an Allow policy lets anyone in"
+  ],
+  "worksWith": [
+    { "id": "cloudflare-tunnel", "how": "guards apps published through" },
+    { "id": "cloudflare", "how": "runs in the reverse proxy of" }
+  ],
+  "snippet": {
+    "lang": "ts",
+    "title": "Verify the Access JWT in a Worker that sits behind Access (from the docs)",
+    "source": [
+      "import { jwtVerify, createRemoteJWKSet } from \"jose\";",
+      "",
+      "interface Env {",
+      "  POLICY_AUD: string;   // the application's AUD tag",
+      "  TEAM_DOMAIN: string;  // https://<team>.cloudflareaccess.com",
+      "}",
+      "",
+      "export default {",
+      "  async fetch(request: Request, env: Env): Promise<Response> {",
+      "    const token = request.headers.get(\"cf-access-jwt-assertion\");",
+      "    if (!token) return new Response(\"Missing required CF Access JWT\", { status: 403 });",
+      "",
+      "    const JWKS = createRemoteJWKSet(new URL(`${env.TEAM_DOMAIN}/cdn-cgi/access/certs`));",
+      "    try {",
+      "      const { payload } = await jwtVerify(token, JWKS, {",
+      "        issuer: env.TEAM_DOMAIN,",
+      "        audience: env.POLICY_AUD,",
+      "      });",
+      "      return new Response(`Hello ${payload.email || \"authenticated user\"}!`);",
+      "    } catch {",
+      "      return new Response(\"Invalid token\", { status: 403 });",
+      "    }",
+      "  },",
+      "};"
+    ]
+  },
+  "history": {
+    "story": [
+      "Most companies trusted anything on the corporate network and nothing outside it. Once a firewall or VPN server was breached, as the launch post put it, “the attacker gets immediate, easy and trusted access to everything”, and employees outside the office paid for the VPN in slow page loads. Google had moved its internal apps onto the internet with BeyondCorp, where no connection is trusted and everyone has to prove who they are.",
+      "On January 17, 2018, Venkat Viswanathan announced Cloudflare Access: “like BeyondCorp, but you don’t have to be a Google employee to use it.” It was a reverse proxy in Cloudflare’s 120+ data centers that authenticated each request against Google, Azure Active Directory or Okta, could require a client certificate, and was free for one user and $3 per seat per month beyond that. The same post suggested Argo Tunnel for apps that should have no public IP.",
+      "In 2020 Access became one half of Cloudflare for Teams, next to the Gateway secure web gateway, and on October 13, 2020 a Free plan covered up to 50 users of both. Today the dashboard files it under Zero Trust and the docs under Cloudflare One, where Access protects self-hosted web apps, SaaS apps, private networks and infrastructure."
+    ],
+    "choices": [
+      { "choice": "Check every request at a reverse proxy", "why": "Instead of trusting a network, Access makes sure each request is authenticated, authorized and encrypted, so there is no inside to break into." },
+      { "choice": "Use the customer’s existing identity provider", "why": "Teams could keep the users and groups already defined in Google, Azure AD or Okta and write policies against them, rather than managing a second directory." },
+      { "choice": "Price it for small teams too", "why": "Cloudflare’s stated mission was to “democratize the tools of the internet giants”: Access started at $3 a seat, and the 2020 Teams Free plan covered up to 50 users." }
+    ],
+    "timeline": [
+      { "year": "2018", "text": "Cloudflare Access launches on January 17" },
+      { "year": "2020", "text": "Part of Cloudflare for Teams; a Free plan covers up to 50 users from October 13" },
+      { "year": "2021", "text": "Cloudflare Tunnel becomes free, so apps behind Access need no public IP at no extra cost" },
+      { "year": "2026", "text": "Documented as the access controls of Cloudflare One, with policies for web, SaaS, private network and MCP portal apps" }
+    ],
+    "sources": [
+      { "label": "Cloudflare Blog: Introducing Cloudflare Access, like BeyondCorp (Jan 2018)", "url": "https://blog.cloudflare.com/introducing-cloudflare-access/" },
+      { "label": "Cloudflare Blog: Zero Trust for everyone, Teams plans (Oct 2020)", "url": "https://blog.cloudflare.com/teams-plans/" },
+      { "label": "Cloudflare Blog: A boring announcement, free Tunnels for everyone (Apr 2021)", "url": "https://blog.cloudflare.com/tunnel-for-everyone/" },
+      { "label": "Cloudflare One docs: Account limits (MCP portals)", "url": "https://developers.cloudflare.com/cloudflare-one/account-limits/" },
+      { "label": "Cloudflare One docs: Publish a self-hosted application (Zero Trust dashboard)", "url": "https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/self-hosted-public-app/" }
+    ]
+  },
+  "sources": [
+    { "label": "Cloudflare One docs: Access policies (actions, rule types, selectors, order)", "url": "https://developers.cloudflare.com/cloudflare-one/access-controls/policies/" },
+    { "label": "Cloudflare One docs: Publish a self-hosted application (deny by default, domain requirements)", "url": "https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/self-hosted-public-app/" },
+    { "label": "Cloudflare One docs: Authorization cookie (global and application tokens)", "url": "https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/" },
+    { "label": "Cloudflare One docs: Validate JWTs (header, signing keys, rotation, Worker example)", "url": "https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/" },
+    { "label": "Cloudflare One docs: Session management (global session default 24 hours)", "url": "https://developers.cloudflare.com/cloudflare-one/access-controls/access-settings/session-management/" },
+    { "label": "Cloudflare One docs: Identity providers", "url": "https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/" },
+    { "label": "Cloudflare One docs: Service tokens", "url": "https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/" },
+    { "label": "Cloudflare One docs: Seat management", "url": "https://developers.cloudflare.com/cloudflare-one/team-and-resources/users/seat-management/" },
+    { "label": "Cloudflare One docs: Account limits", "url": "https://developers.cloudflare.com/cloudflare-one/account-limits/" },
+    { "label": "Cloudflare Tunnel docs: Routing (non-HTTP services need client-side cloudflared)", "url": "https://developers.cloudflare.com/tunnel/concepts/routing/" }
+  ],
+  "checked": "2026-10-12"
+}

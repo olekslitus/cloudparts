@@ -1,0 +1,93 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "workerd",
+  "concepts": ["serverless"],
+  "provider": "oss",
+  "vendor": "Cloudflare, Inc.",
+  "license": "Apache 2.0",
+  "website": "https://github.com/cloudflare/workerd",
+  "repo": "https://github.com/cloudflare/workerd",
+  "summary": "The open-source JavaScript and WebAssembly server runtime behind Cloudflare Workers, which you can run yourself as an application server, a local dev server or a programmable HTTP proxy.",
+  "intro": [
+    "`workerd` (“worker-dee”, a Unix daemon name) shares most of its code with the runtime that runs Cloudflare Workers. It is server-first: your code does not open sockets, the runtime pushes events such as HTTP requests to it, and its built-in APIs are web standards like `fetch()`, URL and WebCrypto, implemented in native code so every isolate shares one copy. A single process runs many Workers as nanoservices: each has its own V8 isolate and global scope, but when one calls another, the callee runs in the same thread, more like a function call than a network hop. Because they are so light, the design favors homogeneous deployment: put every service on every machine and load-balance across the whole cluster, as Cloudflare does on its own servers.",
+    "Configuration is a Cap’n Proto text file listing services (Workers, disk directories, external servers, the network) and sockets to listen on. A Worker starts with no access to anything; it gets capability bindings, named objects on `env` that point at specific services, so code calls `env.AUTH.fetch()` instead of an internal URL, and the global `fetch()` can be limited to public addresses, which blocks SSRF. Each Worker pins a compatibility date, and the version number of `workerd` is itself a date, so upgrading never changes how old code behaves. Prebuilt binaries ship on npm (`npx workerd serve config.capnp`), and Wrangler and Miniflare use it for local development."
+  ],
+  "strengths": [
+    "Bug-for-bug compatible with Cloudflare Workers, so code written for Workers can be self-hosted or tested locally on the same runtime",
+    "Nanoservices: many Workers in one process with in-thread calls between them, cheap enough to run hundreds or thousands on one server",
+    "Capability bindings make every dependency explicit in config, easy to mock in tests, and immune to SSRF by default",
+    "Always backward compatible: a newer `workerd` emulates the API as it was on each Worker’s compatibility date"
+  ],
+  "limits": [
+    "Not a hardened sandbox on its own: to run code you don’t trust, wrap it in a VM, because it lacks the extra defenses Cloudflare adds against V8 bugs and Spectre",
+    "Not an edge platform: deployment, orchestration and the storage behind KV, R2 or D1 are not included, and Durable Objects in the samples are in-memory only",
+    "Developed primarily for Cloudflare’s needs; outside contributions are reviewed after internal work, and internal interfaces can change without notice",
+    "Prebuilt binaries need glibc 2.35+ on Linux or macOS 13.5+, and a CPU with SSE4.2 and CLMUL (x86-64) or CRC (arm64)"
+  ],
+  "worksWith": [
+    { "id": "cloudflare-workers", "how": "is the open-source runtime of" },
+    { "id": "capnproto", "how": "is configured in" }
+  ],
+  "snippet": {
+    "lang": "text",
+    "title": "config.capnp from the repo’s static-files-from-disk sample (trimmed)",
+    "source": [
+      "using Workerd = import \"/workerd/workerd.capnp\";",
+      "",
+      "const config :Workerd.Config = (",
+      "  services = [",
+      "    (name = \"site-worker\", worker = .siteWorker),",
+      "    (name = \"site-files\", disk = \"content-dir\"),   # read-only directory",
+      "  ],",
+      "  sockets = [ ( name = \"http\", address = \"*:8080\", http = (), service = \"site-worker\" ) ],",
+      ");",
+      "",
+      "const siteWorker :Workerd.Worker = (",
+      "  compatibilityDate = \"2023-02-28\",",
+      "  modules = [ (name = \"static.js\", esModule = embed \"static.js\") ],",
+      "  bindings = [",
+      "    (name = \"files\", service = \"site-files\"),   # only this Worker can read the files",
+      "    (name = \"config\", json = \"{\\\"hideHtmlExtension\\\": true}\")",
+      "  ],",
+      ");",
+      "",
+      "# workerd serve config.capnp --directory-path site-files=/path/to/files"
+    ]
+  },
+  "history": {
+    "story": [
+      "Cloudflare Workers had run customer JavaScript on its own runtime, built directly on V8 rather than Node.js, since 2017. That runtime was closed, so developers tested locally with Miniflare, which simulated the Workers API in Node.js and did not always behave the same. Code written for Workers also had no exact way to run anywhere else.",
+      "On September 27, 2022, Kenton Varda introduced the first beta of `workerd` under the Apache 2.0 license: not a new runtime but the Workers runtime itself, made portable, with three intended uses: self-hosting Workers applications, realistic local testing, and programmable forward or reverse proxies. Varda was explicit about what it is not: not a secure sandbox on its own, not an independent community project, and not an off-the-shelf edge platform, since Cloudflare’s service adds security layers, deployment and orchestration that are tied to its network.",
+      "Miniflare 3 was rebuilt on `workerd` that November, and Wrangler v3 made it the default for local development in May 2023. The repository is the canonical source Cloudflare uses for Workers, and in October 2026 Deno’s team, joining Cloudflare, said it would work toward integrating its `rusty_v8` library into `workerd`."
+    ],
+    "choices": [
+      { "choice": "Nanoservices in one process", "why": "Microservices pay for every call with a network hop and configuration; running each service in its own isolate but in the same thread keeps independent deployment at close to library-call cost." },
+      { "choice": "Capability bindings instead of global names", "why": "If internal services are reachable only through configured bindings, the global `fetch()` can be restricted to public URLs, which makes SSRF impossible and lets every dependency be listed, swapped or mocked from config." },
+      { "choice": "A compatibility date as the version number", "why": "Workers has a hard rule against breaking live code, so each Worker pins the API of a date, and updating `workerd` itself is always safe." },
+      { "choice": "Built-in APIs in native code", "why": "Implementing them in native code rather than JavaScript means isolates share one copy instead of loading their own, keeping the per-service overhead small enough for nanoservices." }
+    ],
+    "timeline": [
+      { "year": "2017", "text": "Cloudflare Workers launches on a closed runtime built on V8" },
+      { "year": "2022", "text": "`workerd` open-sourced in beta under Apache 2.0 on September 27" },
+      { "year": "2022", "text": "Miniflare 3 rebuilt on `workerd` in November" },
+      { "year": "2023", "text": "Wrangler v3 runs `workerd` locally by default from May 17" },
+      { "year": "2026", "text": "Deno’s team joins Cloudflare and plans to integrate `rusty_v8` into `workerd`" }
+    ],
+    "sources": [
+      { "label": "Cloudflare Blog: Introducing workerd, the Open Source Workers runtime (Sep 2022)", "url": "https://blog.cloudflare.com/workerd-open-source-workers-runtime/" },
+      { "label": "Cloudflare Blog: Introducing Cloudflare Workers (Sep 2017)", "url": "https://blog.cloudflare.com/introducing-cloudflare-workers/" },
+      { "label": "Cloudflare Blog: Doubling down on local development with Workers, Miniflare meets workerd (Nov 2022)", "url": "https://blog.cloudflare.com/miniflare-and-workerd/" },
+      { "label": "Cloudflare Blog: Improved local development with wrangler and workerd (May 2023)", "url": "https://blog.cloudflare.com/wrangler3/" },
+      { "label": "Deno Blog: Deno is joining Cloudflare (Oct 2026)", "url": "https://deno.com/blog/cloudflare" }
+    ]
+  },
+  "sources": [
+    { "label": "workerd README on GitHub (design principles, sandbox warning, config, running, platforms)", "url": "https://github.com/cloudflare/workerd" },
+    { "label": "Cloudflare Blog: Introducing workerd, the Open Source Workers runtime (Sep 2022)", "url": "https://blog.cloudflare.com/workerd-open-source-workers-runtime/" },
+    { "label": "workerd sample: static-files-from-disk/config.capnp", "url": "https://github.com/cloudflare/workerd/blob/main/samples/static-files-from-disk/config.capnp" },
+    { "label": "workerd sample: durable-objects-chat/config.capnp (in-memory Durable Objects)", "url": "https://github.com/cloudflare/workerd/blob/main/samples/durable-objects-chat/config.capnp" },
+    { "label": "Cloudflare Workers docs: Compatibility dates", "url": "https://developers.cloudflare.com/workers/configuration/compatibility-dates/" },
+    { "label": "Cloudflare Workers docs: Local development (Miniflare runs Workers in workerd)", "url": "https://developers.cloudflare.com/workers/development-testing/" }
+  ],
+  "checked": "2026-10-12"
+}

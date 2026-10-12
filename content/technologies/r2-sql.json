@@ -1,0 +1,88 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Cloudflare Basin SQL",
+  "concepts": ["query-engines"],
+  "provider": "vendor",
+  "vendor": "Cloudflare, Inc.",
+  "license": "Proprietary",
+  "website": "https://developers.cloudflare.com/basin-sql/",
+  "status": { "stage": "renamed", "note": "Called R2 SQL until 1 October 2026, when it became generally available as Basin SQL; existing R2 SQL APIs still work but will be deprecated.", "since": "2026-10-01" },
+  "summary": "Cloudflare’s serverless, distributed SQL engine for Apache Iceberg tables in Basin Catalog on R2, called R2 SQL until it became generally available on 1 October 2026, billed by the data it scans.",
+  "intro": [
+    "You send a SQL query to an API endpoint or run `wrangler basin sql query <warehouse> \"…\"`, and there is no cluster to size or start. The server that takes the query becomes its coordinator. It walks the Iceberg metadata from Basin Catalog top down: the manifest list’s partition ranges rule out whole manifests, then per-file min/max and null counts rule out individual Parquet files, so it knows which row groups and byte ranges to read before touching any data. It then hands batches of row groups, with their exact byte offsets, to query workers on healthy servers across Cloudflare’s network. Each worker runs Apache DataFusion over its row groups with ranged reads from R2 and filters pushed down into the Parquet scan, and returns Apache Arrow results that the coordinator merges.",
+    "At its beta launch in September 2025 it handled mainly filter queries. By general availability it supported joins of all kinds, subqueries, CTEs, window functions with `QUALIFY`, grouping sets, set operations, approximate aggregates and more than 190 functions. It is read-only (no `INSERT`, DDL or `OFFSET`) and reads Parquet only. Pricing is a single dimension, compressed data scanned: 10 GB a month included, then $0.0025 per GB ($2.50 per TB), with a 10 MB minimum per query and free metadata commands such as `EXPLAIN`. R2 reads count as R2 operations, and there are no egress fees."
+  ],
+  "strengths": [
+    "No clusters or warehouses: compute spreads across Cloudflare’s network per query and costs nothing when idle",
+    "Pruning on Iceberg partition and column statistics means a well-partitioned table with a time filter reads only a small part of the data",
+    "$2.50 per TB scanned with no egress, next to the data it queries in R2",
+    "The same tables stay open to DuckDB, Spark, Snowflake or PyIceberg through Basin Catalog"
+  ],
+  "limits": [
+    "Read-only and Parquet-only: tables are created and written by Basin Pipelines or another Iceberg engine",
+    "Memory-heavy queries (three or more large joins, `COUNT(DISTINCT)`, `ARRAY_AGG`, big sorts) may time out or be rejected up front with a 400",
+    "No `OFFSET`, named `WINDOW`, `UNNEST`, `PIVOT` or `LATERAL`",
+    "Only queries tables in Basin Catalog, needs an R2 subscription with a payment card, and older R2 SQL names are being deprecated after the October 2026 rename"
+  ],
+  "worksWith": [
+    { "id": "basin-catalog", "how": "plans queries from table metadata in" },
+    { "id": "r2", "how": "reads Parquet row groups by byte range from" },
+    { "id": "iceberg", "how": "queries tables in" },
+    { "id": "datafusion", "how": "executes each query worker’s share with" },
+    { "id": "arrow", "how": "passes results between workers as" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Query an Iceberg table with Wrangler and the REST API",
+    "source": [
+      "# token needs Basin SQL read, Basin Catalog read and R2 storage permissions",
+      "export WRANGLER_BASIN_SQL_AUTH_TOKEN=\"<token>\"",
+      "",
+      "npx wrangler basin sql query \"$WAREHOUSE\" \\",
+      "  \"SELECT product_id, sum(amount) AS revenue, approx_distinct(user_id) AS buyers",
+      "   FROM default.ecommerce",
+      "   WHERE event_type = 'purchase'",
+      "   GROUP BY product_id ORDER BY revenue DESC LIMIT 10\"",
+      "",
+      "curl -X POST \\",
+      "  \"https://api.sql.cloudflarestorage.com/api/v1/accounts/$ACCOUNT_ID/basin-sql/query/$BUCKET\" \\",
+      "  -H \"Authorization: Bearer $WRANGLER_BASIN_SQL_AUTH_TOKEN\" \\",
+      "  -H \"Content-Type: application/json\" \\",
+      "  -d '{\"query\": \"EXPLAIN SELECT * FROM default.ecommerce LIMIT 10\"}'"
+    ]
+  },
+  "history": {
+    "story": [
+      "Cloudflare launched R2 Data Catalog in April 2025, a managed Iceberg catalog inside R2 buckets. It gave tables a reliable catalog but no way to query them: users had to run Spark, Trino or another engine themselves, provisioning clusters just to read their own data.",
+      "On 25 September 2025 Cloudflare announced its Data Platform: Pipelines to ingest events, R2 Data Catalog to hold the tables, and R2 SQL, an in-house distributed engine, in open beta and initially focused on filter queries. A deep-dive post the same day explained the design: a planner that prunes with Iceberg statistics, and query workers on Cloudflare’s network running Apache DataFusion over Parquet row groups in R2.",
+      "Over the following year it gained joins, aggregations, window functions and the rest of the analytical SQL surface. On 1 October 2026 the platform became generally available under the name Basin, and R2 SQL became Basin SQL; existing R2 SQL APIs keep working for now."
+    ],
+    "choices": [
+      { "choice": "Prune with Iceberg metadata before reading data", "why": "Object storage holds a table as possibly millions of files, so the cheapest bytes are the ones never read; partition and column statistics let the planner skip whole manifests and files." },
+      { "choice": "Spread work over Cloudflare’s whole network", "why": "A query may need huge compute for a few seconds and then none, so instead of a cluster, the coordinator borrows healthy servers across the network as query workers." },
+      { "choice": "Build on DataFusion and Arrow", "why": "DataFusion treats each Parquet row group as a partition to process in parallel with vectorized execution and pushes filters into the scan, and Arrow IPC carries results back to the coordinator over gRPC." }
+    ],
+    "timeline": [
+      { "year": "2025", "text": "R2 Data Catalog enters public beta in April" },
+      { "year": "2025", "text": "Cloudflare acquires Arroyo and opens Pipelines in beta on 10 April, building toward a data platform" },
+      { "year": "2025", "text": "R2 SQL announced in open beta with the Cloudflare Data Platform on 25 September" },
+      { "year": "2026", "text": "Generally available and renamed Basin SQL on 1 October" }
+    ],
+    "sources": [
+      { "label": "Cloudflare blog: Just landed, streaming ingestion on Cloudflare with Arroyo and Pipelines (10 April 2025)", "url": "https://blog.cloudflare.com/cloudflare-acquires-arroyo-pipelines-streaming-ingestion-beta/" },
+      { "label": "Cloudflare blog: Announcing the Cloudflare Data Platform (25 September 2025)", "url": "https://blog.cloudflare.com/cloudflare-data-platform/" },
+      { "label": "Cloudflare blog: R2 SQL, a deep dive into our new distributed query engine (25 September 2025)", "url": "https://blog.cloudflare.com/r2-sql-deep-dive/" },
+      { "label": "Cloudflare blog: Introducing Cloudflare Basin, an open, serverless data platform, now generally available (1 October 2026)", "url": "https://blog.cloudflare.com/cloudflare-basin/" },
+      { "label": "Cloudflare changelog: Cloudflare Basin is now generally available (1 October 2026)", "url": "https://developers.cloudflare.com/changelog/post/2026-10-01-basin-ga/" }
+    ]
+  },
+  "sources": [
+    { "label": "Cloudflare docs: Basin SQL overview (formerly R2 SQL, now generally available)", "url": "https://developers.cloudflare.com/basin-sql/" },
+    { "label": "Cloudflare docs: Basin SQL, Query data (Wrangler, REST API, tokens)", "url": "https://developers.cloudflare.com/basin-sql/query-data/" },
+    { "label": "Cloudflare docs: Basin SQL, Limitations and best practices", "url": "https://developers.cloudflare.com/basin-sql/reference/limitations-best-practices/" },
+    { "label": "Cloudflare docs: Basin SQL pricing", "url": "https://developers.cloudflare.com/basin-sql/platform/pricing/" },
+    { "label": "Cloudflare blog: R2 SQL, a deep dive into our new distributed query engine (25 September 2025)", "url": "https://blog.cloudflare.com/r2-sql-deep-dive/" },
+    { "label": "Cloudflare blog: Introducing Cloudflare Basin, an open, serverless data platform, now generally available (1 October 2026)", "url": "https://blog.cloudflare.com/cloudflare-basin/" }
+  ],
+  "checked": "2026-10-12"
+}

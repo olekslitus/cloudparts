@@ -25,6 +25,8 @@ export interface NavData {
   }[];
   architectures: (NavItem & { terms: string })[];
   comparisons: { id: string; title: string }[];
+  /** Foundations and companies, whose pages list the technologies they make. */
+  makers: { id: string; name: string; summary: string; path: string; company: boolean; terms: string }[];
 }
 
 export const PROVIDER_NAMES = { aws: 'AWS', gcp: 'Google Cloud', azure: 'Azure', oss: 'Open source', vendor: 'Commercial' } as const;
@@ -128,6 +130,10 @@ export function navData(c: Catalog, logo: (id: string) => NavData['groups'][numb
       terms: a.techs.map(t => c.tech(t).name).join(' '),
     })),
     comparisons: c.comparisons.map(m => ({ id: m.id, title: m.title })),
+    makers: c.foundations.map(f => ({
+      id: f.id, name: f.name, summary: f.summary, path: f.path, company: f.type === 'company',
+      terms: f.projects.map(t => t.name).join(' '),
+    })),
   };
 }
 

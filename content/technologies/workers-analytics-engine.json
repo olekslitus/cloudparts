@@ -1,0 +1,90 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Workers Analytics Engine",
+  "concepts": ["tsdb"],
+  "provider": "vendor",
+  "vendor": "Cloudflare, Inc.",
+  "license": "Proprietary",
+  "website": "https://developers.cloudflare.com/analytics/analytics-engine/",
+  "summary": "Cloudflare’s time-series analytics store for Workers: a non-blocking `writeDataPoint()` call to record events with unlimited cardinality, adaptive sampling to keep it cheap, and a SQL API to query them.",
+  "intro": [
+    "A Worker gets a dataset through a binding and calls `writeDataPoint()` with up to 20 blobs (strings to group and filter by), 20 doubles (numbers to aggregate) and one index, a sampling key such as a customer ID. The call returns immediately and the runtime writes in the background; each row is stamped with a `timestamp`. Columns are positional (`blob1`, `double2`), so you keep the order consistent yourself. You query with SQL over HTTP (`POST /accounts/{id}/analytics_engine/sql`), from Grafana, or through the GraphQL API. Data is kept for three months.",
+    "What makes it cheap is sampling. When one index value is written very fast, Analytics Engine stores only a share of its points, but keeps every point for rare index values (“equitable sampling”), so small customers stay visible next to big ones. Each stored row has a `_sample_interval` saying how many events it stands for, and queries must weight by it: `SUM(_sample_interval)` instead of `COUNT()`. Queries over large ranges are sampled again at read time, so they take about the same time whatever the size. It runs on the same ClickHouse-based system Cloudflare uses for its own analytics. Announced prices are $0.25 per million data points beyond 10 million a month and $1.00 per million queries beyond 1 million, with no extra cost for cardinality or query complexity, but the docs say usage is not billed yet."
+  ],
+  "strengths": [
+    "Unlimited cardinality: a blob or index can be a user ID, URL or IP without the label explosion that hurts Prometheus-style metrics",
+    "`writeDataPoint()` does not block the request, so it can sit on hot code paths",
+    "Flat pricing per data point and per query, with no charge for more dimensions or heavier queries",
+    "Plain SQL over HTTP with time functions, so dashboards in Grafana or a Worker can read it directly"
+  ],
+  "limits": [
+    "Results are estimates once sampling kicks in, and every query has to multiply by `_sample_interval` to be correct",
+    "Only three months of retention, and positional columns (`blob1`, `double1`) with no named schema",
+    "One index per data point (96 bytes), 20 blobs totalling 16 KB, 20 doubles, and 250 data points per Worker invocation",
+    "A data point with more than one index is not recorded at all, and you must keep the order of fields consistent yourself"
+  ],
+  "worksWith": [
+    { "id": "cloudflare-workers", "how": "records data points through a binding in" },
+    { "id": "clickhouse", "how": "runs on a Cloudflare system built on" },
+    { "id": "grafana", "how": "can be charted through its SQL API in" }
+  ],
+  "snippet": {
+    "lang": "ts",
+    "title": "Record a reading per request, then query it with sampling-aware SQL",
+    "source": [
+      "// wrangler.jsonc: \"analytics_engine_datasets\": [{ \"binding\": \"WEATHER\", \"dataset\": \"weather\" }]",
+      "export default {",
+      "  async fetch(request, env): Promise<Response> {",
+      "    const { city, country, temp, humidity, customer } = await request.json();",
+      "    env.WEATHER.writeDataPoint({",
+      "      blobs: [city, country],      // blob1, blob2: dimensions",
+      "      doubles: [temp, humidity],   // double1, double2: values",
+      "      indexes: [customer],         // sampling key, one per point",
+      "    });                            // no await: written in the background",
+      "    return new Response(\"OK\");",
+      "  },",
+      "} satisfies ExportedHandler<{ WEATHER: AnalyticsEngineDataset }>;",
+      "",
+      "// POST https://api.cloudflare.com/client/v4/accounts/{account_id}/analytics_engine/sql",
+      "//   SELECT blob1 AS city,",
+      "//          SUM(_sample_interval * double2) / SUM(_sample_interval) AS avg_humidity",
+      "//   FROM weather",
+      "//   WHERE timestamp >= NOW() - INTERVAL '1' DAY AND double1 > 0",
+      "//   GROUP BY city ORDER BY avg_humidity DESC LIMIT 10"
+    ]
+  },
+  "history": {
+    "story": [
+      "Teams inside Cloudflare building on Workers needed telemetry about their own services. The R2 team, an early user, wanted to count reads and writes, the users making them, bytes transferred and how long operations took. Data like this has far more distinct values (high cardinality) than traditional metrics systems such as Prometheus handle well.",
+      "Cloudflare announced Workers Analytics Engine on 12 May 2022, built on the same technology behind the analytics it shows millions of customers, which handles tens of millions of events per second. It opened to all developers on 30 September 2022 with clearer SQL errors and a SQL reference, and Cloudflare described using it to monitor its own Instant Logs backend.",
+      "It became generally available on 1 April 2024, when Cloudflare said it is backed by its ClickHouse-based analytics system, that nearly every request to its network writes at least one data point to that system, and published prices based only on data points written and queries run."
+    ],
+    "choices": [
+      { "choice": "Sample instead of storing every event", "why": "The necessary sample size depends on the variance and the subgroups you analyze, not on the total volume, so storing fewer rows lets Cloudflare accept huge write rates at a low, predictable price." },
+      { "choice": "Equitable sampling by index", "why": "Usage tends to follow a Pareto distribution; a plain 1% sample would keep large customers accurate but round small ones to zero, so each index value keeps a similar number of rows." },
+      { "choice": "Price by writes and queries only", "why": "Cloudflare wanted “napkin math”: cost follows how often a Worker calls `writeDataPoint()` and how often you query, with no penalty for cardinality or query complexity." }
+    ],
+    "timeline": [
+      { "year": "2022", "text": "Announced in closed beta on 12 May" },
+      { "year": "2022", "text": "Open beta on 30 September" },
+      { "year": "2022", "text": "Cloudflare describes instrumenting Analytics Engine with itself (18 November)" },
+      { "year": "2024", "text": "Generally available on 1 April, with pricing announced" }
+    ],
+    "sources": [
+      { "label": "Cloudflare blog: Introducing Workers Analytics Engine (12 May 2022)", "url": "https://blog.cloudflare.com/workers-analytics-engine/" },
+      { "label": "Cloudflare blog: Don’t roll your own high cardinality analytics, use Workers Analytics Engine (30 September 2022)", "url": "https://blog.cloudflare.com/analytics-engine-open-beta/" },
+      { "label": "Cloudflare blog: How Cloudflare instruments services using Workers Analytics Engine (18 November 2022)", "url": "https://blog.cloudflare.com/using-analytics-engine-to-improve-analytics-engine/" },
+      { "label": "Cloudflare blog: Making state easy with D1 GA, Hyperdrive, Queues and Workers Analytics Engine updates (1 April 2024)", "url": "https://blog.cloudflare.com/making-full-stack-easier-d1-ga-hyperdrive-queues/" }
+    ]
+  },
+  "sources": [
+    { "label": "Workers Analytics Engine docs: Overview", "url": "https://developers.cloudflare.com/analytics/analytics-engine/" },
+    { "label": "Workers Analytics Engine docs: Get started (binding, `writeDataPoint()`, SQL API)", "url": "https://developers.cloudflare.com/analytics/analytics-engine/get-started/" },
+    { "label": "Workers Analytics Engine docs: Sampling with WAE", "url": "https://developers.cloudflare.com/analytics/analytics-engine/sampling/" },
+    { "label": "Workers Analytics Engine docs: Limits and data retention", "url": "https://developers.cloudflare.com/analytics/analytics-engine/limits/" },
+    { "label": "Workers Analytics Engine docs: Pricing", "url": "https://developers.cloudflare.com/analytics/analytics-engine/pricing/" },
+    { "label": "Workers Analytics Engine docs: SQL API", "url": "https://developers.cloudflare.com/analytics/analytics-engine/sql-api/" },
+    { "label": "Cloudflare blog: Making state easy with D1 GA, Hyperdrive, Queues and Workers Analytics Engine updates (1 April 2024)", "url": "https://blog.cloudflare.com/making-full-stack-easier-d1-ga-hyperdrive-queues/" }
+  ],
+  "checked": "2026-10-12"
+}

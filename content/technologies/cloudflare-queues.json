@@ -1,0 +1,99 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Cloudflare Queues",
+  "concepts": ["queue"],
+  "provider": "vendor",
+  "vendor": "Cloudflare, Inc.",
+  "license": "Proprietary",
+  "website": "https://developers.cloudflare.com/queues/",
+  "summary": "A message queue built into Cloudflare Workers: Workers send messages through a binding, and Queues delivers them in batches to a consumer Worker or to any HTTP client that pulls them, at least once.",
+  "intro": [
+    "A producer is any Worker with a queue binding: it calls `send()` or `sendBatch()` and the call returns once the message is stored. A queue has one consumer, of one of two types. A consumer Worker is push-based: Queues invokes its `queue()` handler with a batch of up to 100 messages, waiting at most 60 seconds to fill it (10 messages and 5 seconds by default), and starts more copies of the consumer, up to 250 at once, when the backlog grows. A pull consumer instead calls the Queues HTTP API from anywhere, takes a batch with a visibility timeout of up to 12 hours, then acknowledges or retries each message.",
+    "Delivery is at least once, with no ordering guarantee, so consumers should be idempotent. A batch that throws is redelivered whole unless messages were acknowledged one by one with `ack()`; `retry()` can also delay a message by up to 24 hours. After `max_retries` (3 by default, up to 100) a message is deleted, or moved to a dead-letter queue if one is set. Billing counts operations: each 64 KB written, read or deleted is one, so a typical message costs three. The Workers Paid plan includes 1 million a month, then $0.40 per million, and there are no egress or bandwidth charges."
+  ],
+  "strengths": [
+    "No servers or connection strings: a Worker sends with a binding and consumes with a `queue()` handler, and consumers scale out to 250 concurrent invocations without configuration",
+    "Per-message `ack()` and `retry()` with delays up to 24 hours, plus dead-letter queues, cover partial batch failures and rate-limited upstream APIs",
+    "Simple pricing: $0.40 per million operations after 1 million free a month on Workers Paid, about $1.20 per million messages delivered, with no egress fees",
+    "Pull consumers let services outside Cloudflare read the same queue over HTTP, up to 5,000 messages per second per queue"
+  ],
+  "limits": [
+    "No ordering guarantee and at-least-once delivery, so duplicates are possible and FIFO processing has to be built elsewhere",
+    "Messages are capped at 128 KB, batches at 100 messages, and each queue at 5,000 messages per second and a 25 GB backlog",
+    "One consumer per queue: fan-out to several independent consumers means writing to several queues yourself",
+    "Messages are kept for 4 days by default and 14 days at most (24 hours, fixed, on the Free plan), so a long consumer outage can lose data"
+  ],
+  "worksWith": [
+    { "id": "cloudflare-workers", "how": "delivers batches of messages to" },
+    { "id": "r2", "how": "receives bucket event notifications from" },
+    { "id": "durable-objects", "how": "was built by Cloudflare on" }
+  ],
+  "snippet": {
+    "lang": "ts",
+    "title": "One Worker that produces to a queue and consumes from it",
+    "source": [
+      "interface Env {",
+      "  JOBS: Queue; // producer binding: \"queues.producers\" in wrangler config",
+      "}",
+      "",
+      "export default {",
+      "  async fetch(request, env): Promise<Response> {",
+      "    await env.JOBS.send({ url: request.url, at: Date.now() });",
+      "    return new Response(\"Queued\", { status: 202 });",
+      "  },",
+      "",
+      "  // consumer: \"queues.consumers\" sets max_batch_size, max_retries, dead_letter_queue",
+      "  async queue(batch, env): Promise<void> {",
+      "    for (const msg of batch.messages) {",
+      "      const res = await fetch(\"https://api.example.com/jobs\", {",
+      "        method: \"POST\",",
+      "        body: JSON.stringify(msg.body),",
+      "      });",
+      "      if (res.ok) msg.ack();",
+      "      else msg.retry({ delaySeconds: 60 }); // try again in a minute",
+      "    }",
+      "  },",
+      "} satisfies ExportedHandler<Env>;"
+    ]
+  },
+  "history": {
+    "story": [
+      "By 2022 Cloudflare’s developer platform had compute (Workers) and storage (KV, Durable Objects, R2), but no way to hand work from one service to another reliably. Developers who wanted to defer a task, buffer calls to a slow API or batch events had to build retries and backoff themselves. On September 27, 2022, Ashcon Partovi announced a private beta of Cloudflare Queues, “a global message queuing service” with at-least-once delivery, batching and no egress fees, priced at $0.40 per million operations.",
+      "Cloudflare built Queues out of its own products. The consumer Worker is invoked with dynamic dispatch, the mechanism behind Workers for Platforms, so Queues can call a customer’s Worker without a second trip through the network. Messages are stored with Durable Objects, so each one is written to disk in several locations before the send is confirmed. An open beta for all paid Workers accounts followed on November 14, 2022, limited to ten queues per account.",
+      "Over the next two years Queues added batch sends, explicit acknowledgement, automatic consumer concurrency, delayed messages and HTTP pull consumers. It became generally available on September 26, 2024, when per-queue throughput rose from 400 to 5,000 messages per second and the consumer limit from 20 to 250 concurrent invocations."
+    ],
+    "choices": [
+      { "choice": "At-least-once delivery instead of exactly once", "why": "Stronger guarantees need more acknowledgements and round trips per message, which adds latency and cuts throughput. Cloudflare chose to never lose a message and asks consumers to deduplicate with an idempotency key." },
+      { "choice": "Routing in code instead of routing keys", "why": "Rather than static configuration that defines routing patterns, the launch post has consumers filter and fan out in JavaScript, sending each message on to whichever queues they choose." },
+      { "choice": "Build on Durable Objects and dynamic dispatch", "why": "Two hard problems, invoking a customer’s Worker securely and keeping strongly consistent state at scale, were already solved by existing Cloudflare products, which shortened the time to the open beta." },
+      { "choice": "Charge per operation, with no egress fees", "why": "The launch post contrasts its pricing with Amazon SQS and Google Pub/Sub: three operations deliver a message, so the cost is easy to predict at $1.20 per million messages." }
+    ],
+    "timeline": [
+      { "year": "2022", "text": "Private beta announced on September 27; open beta on November 14" },
+      { "year": "2023", "text": "Explicit acknowledgement and automatic consumer concurrency in March" },
+      { "year": "2024", "text": "Delayed messages and HTTP pull consumers in March" },
+      { "year": "2024", "text": "Generally available on September 26, at 5,000 messages per second per queue" },
+      { "year": "2025", "text": "Retention configurable up to 14 days in February; pull consumers reach 5,000 messages per second in April" }
+    ],
+    "sources": [
+      { "label": "Cloudflare Blog: Cloudflare Queues: globally distributed queues without the egress fees (Sep 2022)", "url": "https://blog.cloudflare.com/introducing-cloudflare-queues/" },
+      { "label": "Cloudflare Blog: Build applications of any size on Cloudflare with the Queues open beta (Nov 2022)", "url": "https://blog.cloudflare.com/cloudflare-queues-open-beta/" },
+      { "label": "Cloudflare Queues docs: Changelog", "url": "https://developers.cloudflare.com/queues/platform/changelog/" },
+      { "label": "Cloudflare Queues docs: Delivery guarantees", "url": "https://developers.cloudflare.com/queues/reference/delivery-guarantees/" }
+    ]
+  },
+  "sources": [
+    { "label": "Cloudflare Queues docs: How Queues works", "url": "https://developers.cloudflare.com/queues/reference/how-queues-works/" },
+    { "label": "Cloudflare Queues docs: Batching, retries and delays", "url": "https://developers.cloudflare.com/queues/configuration/batching-retries/" },
+    { "label": "Cloudflare Queues docs: Dead letter queues", "url": "https://developers.cloudflare.com/queues/configuration/dead-letter-queues/" },
+    { "label": "Cloudflare Queues docs: Pull consumers", "url": "https://developers.cloudflare.com/queues/configuration/pull-consumers/" },
+    { "label": "Cloudflare Queues docs: Consumer concurrency", "url": "https://developers.cloudflare.com/queues/configuration/consumer-concurrency/" },
+    { "label": "Cloudflare Queues docs: Configure Queues (retention and delivery delay)", "url": "https://developers.cloudflare.com/queues/configuration/configure-queues/" },
+    { "label": "Cloudflare Queues docs: Delivery guarantees", "url": "https://developers.cloudflare.com/queues/reference/delivery-guarantees/" },
+    { "label": "Cloudflare Queues docs: Limits", "url": "https://developers.cloudflare.com/queues/platform/limits/" },
+    { "label": "Cloudflare Queues docs: Pricing", "url": "https://developers.cloudflare.com/queues/platform/pricing/" },
+    { "label": "Cloudflare Queues docs: Changelog (pull consumer limits, Apr 2025)", "url": "https://developers.cloudflare.com/queues/platform/changelog/" },
+    { "label": "Cloudflare R2 docs: Event notifications (sent to a queue)", "url": "https://developers.cloudflare.com/r2/buckets/event-notifications/" }
+  ],
+  "checked": "2026-10-12"
+}

@@ -394,7 +394,11 @@ export const technology = z.strictObject({
 
 export const foundation = z.strictObject({
   $schema: z.string().optional(),
-  name: text.describe('e.g. "The Apache Software Foundation".'),
+  type: z
+    .enum(['foundation', 'company'])
+    .default('foundation')
+    .describe('foundation: a non-profit that hosts open-source projects, at /foundations/<id>/. company: a vendor whose products fit together, at /companies/<id>/.'),
+  name: text.describe('e.g. "The Apache Software Foundation" or "Cloudflare, Inc.".'),
   vendor: text.describe('The exact "vendor" value its projects use on their pages. They’re listed here automatically and link back.'),
   website: z.url(),
   summary: text.describe('One line shown under the title.'),
