@@ -4,8 +4,8 @@
   "icon": "list-ordered",
   "category": "data",
   "order": 65,
-  "summary": "A second structure, kept in step with a table, that lets the database find matching rows without reading the whole table, paid for on every write.",
-  "howItWorks": "Without an index, a query that filters on a column reads every page of the table: a sequential scan. An index is a separate structure that maps values to where their rows are, and the database updates it with every insert, delete and update that touches an indexed column. The default almost everywhere is a B-tree: keys kept sorted in pages a few levels deep, so finding one key or a range of keys reads a handful of pages instead of the whole table. Other kinds give up generality for size or answer new questions. A hash index answers only equality. An inverted index (GIN in PostgreSQL) lists, for each word, array element or JSON key, the rows that contain it. Spatial trees (R-trees, GiST, SP-GiST) search by overlap and distance. A block-range index (BRIN) keeps only the minimum and maximum of each run of 128 pages, which makes it tiny but useful only when the table’s physical order follows the column. Bloom filter indexes keep a small lossy signature per row or per block. The planner uses an index only when it estimates that reading the index and then the matching rows beats scanning the table, and that depends on statistics from `ANALYZE`.",
+  "summary": "A structure kept in step with a table that lets the database find matching rows without reading the whole table, paid for on every write.",
+  "howItWorks": "Without an index, a query that filters on a column reads every page of the table: a sequential scan. An index is a separate structure that maps values to where their rows are, and the database updates it with every insert, delete and update that touches an indexed column. The default almost everywhere is a B-tree: keys kept sorted in pages a few levels deep, so finding one key or a range of keys reads a handful of pages instead of the whole table. Other kinds give up generality for size or answer new questions. A hash index answers only equality. An inverted index (GIN in PostgreSQL) lists, for each word, array element or JSON key, the rows that contain it. Spatial trees (R-trees, GiST, SP-GiST) search by overlap and distance. A block-range index (BRIN) keeps only the minimum and maximum of each run of 128 pages, which makes it tiny but useful only when the table’s physical order follows the column. Bloom filter indexes keep a small lossy signature per row or per block. The planner uses an index only when it estimates that reading the index and then the matching rows beats scanning the table, and that depends on statistics from `ANALYZE`. Apart from its kind, an index is either clustered, holding the table’s rows in key order, or non-clustered, holding keys that point to rows stored elsewhere.",
   "analogy": "The index at the back of a book: look up “vacuum” on a few alphabetised pages and jump straight to pages 212 and 340 instead of reading the book. A BRIN index is more like the date labels on a shelf of binders. “January to March” tells you which binder to open, but only because the binders were shelved in date order.",
   "useWhen": [
     "Queries that pick out a small share of a big table: `WHERE customer_id = ?`, a date range, a join key, `ORDER BY ... LIMIT 10`",
@@ -158,6 +158,129 @@
             "Wide tables filtered on arbitrary column combinations"
           ]
         }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Clustered or non-clustered",
+      "intro": "The kinds above say how an index is searched. Separately, an index either holds the table’s rows itself (clustered) or holds keys that point to rows stored somewhere else (non-clustered, also called secondary). A table can be stored in only one order, so it has at most one clustered index.",
+      "columns": [
+        "Clustered index",
+        "Non-clustered (secondary) index"
+      ],
+      "rows": [
+        {
+          "label": "Its leaves hold",
+          "values": [
+            "The table’s rows themselves, sorted by the index key",
+            "The key and a pointer to the row: its physical location in a heap, or its clustered key"
+          ]
+        },
+        {
+          "label": "How many per table",
+          "values": [
+            "One",
+            "As many as you need"
+          ]
+        },
+        {
+          "label": "Finding one row",
+          "values": [
+            "The search ends on the page that holds the row",
+            "A second lookup follows the pointer to the row, unless the index covers every column the query needs"
+          ]
+        },
+        {
+          "label": "Reading a range",
+          "values": [
+            "Neighboring keys sit on neighboring pages",
+            "Matching rows can be anywhere in the table, so each may cost a random read"
+          ]
+        },
+        {
+          "label": "Inserting",
+          "values": [
+            "Each row goes where its key sorts: an ever-increasing key appends at the end, a random one splits pages in the middle",
+            "Every insert, and every change to an indexed column, also updates this index"
+          ]
+        },
+        {
+          "label": "Key size",
+          "values": [
+            "Copied into every secondary index in InnoDB and SQL Server, so a short key keeps all of them small",
+            "Its own columns plus the pointer"
+          ]
+        },
+        {
+          "label": "SQL Server",
+          "values": [
+            "Created for the `PRIMARY KEY` by default; a table without one is a heap",
+            "`UNIQUE` constraints and `CREATE NONCLUSTERED INDEX`"
+          ]
+        },
+        {
+          "label": "MySQL (InnoDB)",
+          "values": [
+            "Always present: the primary key, else the first unique index on `NOT NULL` columns, else a hidden 6-byte row ID",
+            "Every other index; each entry stores the primary key columns"
+          ]
+        },
+        {
+          "label": "PostgreSQL",
+          "values": [
+            "None kept in order: tables are heaps, and `CLUSTER` reorders one once without keeping new rows in order",
+            "Every index, the primary key included"
+          ]
+        },
+        {
+          "label": "Oracle",
+          "values": [
+            "`ORGANIZATION INDEX` tables, stored in a B-tree by primary key; the default is a heap",
+            "Secondary indexes, which find rows by a logical rowid built from the primary key"
+          ]
+        },
+        {
+          "label": "SQLite",
+          "values": [
+            "Every ordinary table, clustered on its 64-bit rowid; `WITHOUT ROWID` tables cluster on the declared primary key",
+            "Every `CREATE INDEX`, and the primary key of an ordinary table unless it is an `INTEGER PRIMARY KEY`"
+          ]
+        }
+      ],
+      "notes": [
+        "SQL Server’s guidance for a clustered key is narrow, unique, ever-increasing and never updated. A 16-byte `uniqueidentifier` key is wider than an 8-byte `bigint` and isn’t ever-increasing unless its values are generated sequentially.",
+        "Because PostgreSQL indexes are all secondary, an ordinary index scan reads both the index and the heap, often at random. An index-only scan skips the heap when the index holds every column the query needs."
+      ]
+    },
+    {
+      "type": "code",
+      "title": "Clustered and not, side by side in SQLite",
+      "intro": "The same 100,000 users stored twice. The ordinary table finds a row through a separate index on `email`, which gives a rowid to look up in the table; the `WITHOUT ROWID` table is clustered on `email`, so the search ends on the row. Its secondary index is bigger, because each entry carries the email instead of a rowid.",
+      "lang": "sql",
+      "source": [
+        "-- SQLite 3.54: the same users, stored two ways",
+        "CREATE TABLE users_heap (email TEXT PRIMARY KEY, name TEXT, plan TEXT);",
+        "CREATE TABLE users_clustered (email TEXT PRIMARY KEY, name TEXT, plan TEXT) WITHOUT ROWID;",
+        "CREATE INDEX users_heap_plan ON users_heap (plan);",
+        "CREATE INDEX users_clustered_plan ON users_clustered (plan);",
+        "",
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 100000)",
+        "INSERT INTO users_heap",
+        "SELECT 'user' || i || '@example.com', 'User ' || i, CASE WHEN i % 10 = 0 THEN 'pro' ELSE 'free' END FROM n;",
+        "INSERT INTO users_clustered SELECT * FROM users_heap;",
+        "",
+        "EXPLAIN QUERY PLAN SELECT name FROM users_heap WHERE email = 'user42@example.com';",
+        "-- SEARCH users_heap USING INDEX sqlite_autoindex_users_heap_1 (email=?)",
+        "",
+        "EXPLAIN QUERY PLAN SELECT name FROM users_clustered WHERE email = 'user42@example.com';",
+        "-- SEARCH users_clustered USING PRIMARY KEY (email=?)",
+        "",
+        "SELECT name, sum(pgsize) / 1024 AS kb FROM dbstat GROUP BY name;",
+        "-- users_heap                      4420  <- rows, keyed by rowid",
+        "-- sqlite_autoindex_users_heap_1   3196  <- email -> rowid",
+        "-- users_heap_plan                 1412  <- plan -> rowid",
+        "-- users_clustered                 4504  <- rows, keyed by email: no separate email index",
+        "-- users_clustered_plan            3340  <- plan -> email"
       ]
     },
     {
@@ -797,6 +920,22 @@
     {
       "label": "PostGIS workshop: Spatial indexing (bounding boxes, R-tree on GiST)",
       "url": "https://postgis.net/workshops/postgis-intro/indexing.html"
+    },
+    {
+      "label": "Microsoft Learn: Clustered and nonclustered indexes (one clustered index per table, heaps, row locators, primary key creates a clustered index)",
+      "url": "https://learn.microsoft.com/en-us/sql/relational-databases/indexes/clustered-and-nonclustered-indexes-described"
+    },
+    {
+      "label": "Microsoft Learn: Index architecture and design guide (clustered key: narrow, unique, ever-increasing, immutable; page splits)",
+      "url": "https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-index-design-guide"
+    },
+    {
+      "label": "SQLite: Clustered indexes and the WITHOUT ROWID optimization",
+      "url": "https://www.sqlite.org/withoutrowid.html"
+    },
+    {
+      "label": "SQLite: Rowid tables (the rowid is the B-tree key; PRIMARY KEY is a unique index unless INTEGER PRIMARY KEY)",
+      "url": "https://www.sqlite.org/rowidtable.html"
     }
   ]
 }
