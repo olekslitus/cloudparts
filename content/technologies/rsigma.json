@@ -1,0 +1,111 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "RSigma",
+  "concepts": ["threat-detection"],
+  "provider": "oss",
+  "vendor": "Tiger Data (formerly Timescale)",
+  "license": "MIT",
+  "website": "https://rsigma.io/",
+  "repo": "https://github.com/timescale/rsigma",
+  "summary": "A Rust toolkit that parses Sigma rules, compiles them into matchers and evaluates them against log events in real time, correlations included, as one self-contained binary.",
+  "intro": [
+    "Most Sigma tooling converts rules into some other system’s query language. RSigma runs them itself. It parses Sigma YAML into a strongly typed syntax tree, so a structural mistake is a parse error rather than a rule that silently never matches, then compiles each rule into an optimized matcher and checks events against it as they arrive. Correlation rules are evaluated in the same process: it keeps sliding, tumbling or session windows per `group-by` key, with matched events stored compressed and the state capped, and can persist that state to SQLite so it survives restarts.",
+    "Events come in as JSON, syslog (RFC 3164 and 5424), logfmt, CEF, Windows EVTX files, plain text or OTLP, with the format detected automatically by default. Any OpenTelemetry agent (Grafana Alloy, Vector, Fluent Bit, the OTel Collector) can send logs over OTLP by HTTP or gRPC, and the daemon also reads stdin, HTTP posts, NATS JetStream and Unix sockets. Before rules are compiled, pySigma-compatible processing pipelines rename fields, so a rule written for `CommandLine` matches `process.command_line` in ECS-shaped data. `rsigma engine eval` does one-shot runs for hunting or CI; `rsigma engine daemon` is the long-running service with hot reload, Prometheus metrics and outputs to files, NATS, OTLP or webhooks.",
+    "Around the engine sits detection-engineering tooling: a linter with 91 checks from the Sigma 2.1.0 specification (14 with safe auto-fixes), a language server for editors, an MCP server so AI agents can parse, lint, evaluate and convert rules, `rule backtest` for replaying event corpora against expected matches in CI, and a GitHub Action that wraps them. It can also convert rules into PostgreSQL/TimescaleDB SQL, LynxDB and Fibratus natively, handing other targets to sigma-cli. The project lives in Tiger Data’s `timescale` GitHub organization."
+  ],
+  "strengths": [
+    "Fast for a single process: on an Apple M4 Pro the project measures 1.12 million events per second through the JSON pipeline with 100 rules, and 501,000 per second for temporal and event-count correlations",
+    "Covers the Sigma specification broadly: all 7 correlation types and all 26 pySigma pipeline transformation types since its first feature-complete release",
+    "Treats rules as code: linting, auto-fix, editor diagnostics, `engine explain` for why a rule did or didn’t match, and backtests that emit JSON or JUnit XML for CI",
+    "Plugs into existing log pipelines over OTLP, NATS JetStream or HTTP, and ships as prebuilt binaries and signed multi-arch Docker images"
+  ],
+  "limits": [
+    "Not a SIEM: in its author’s words, it does not store logs, build search indices or provide a query interface; you keep a log store next to it",
+    "Young and moving fast: first released in February 2026, at version 0.24.0 by October 2026, and only the latest release gets security fixes",
+    "Several features are behind Cargo feature flags: a default `cargo install` reads only JSON, syslog and plain text; logfmt, CEF, EVTX, OTLP and the MCP server need the prebuilt binaries, the Docker image or extra features",
+    "Native conversion covers only PostgreSQL/TimescaleDB, LynxDB and Fibratus; other targets such as Splunk go through sigma-cli, which must be installed separately"
+  ],
+  "worksWith": [
+    { "id": "sigma", "how": "parses and evaluates rules written in" },
+    { "id": "opentelemetry", "how": "receives logs over OTLP from" },
+    { "id": "postgresql", "how": "converts rules into SQL hunts for" },
+    { "id": "timescaledb", "how": "converts rules into SQL hunts for" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Evaluate rules once, run them as a daemon, or hunt in PostgreSQL",
+    "source": [
+      "cargo install --locked rsigma",
+      "",
+      "# evaluate one event against a folder of Sigma rules",
+      "rsigma engine eval -r rules/ -e '{\"CommandLine\": \"cmd /c whoami\"}'",
+      "",
+      "# stream NDJSON through the rules, mapping fields to ECS first",
+      "cat events.ndjson | rsigma engine eval -r rules/ -p ecs_windows",
+      "",
+      "# long-running daemon: events over HTTP, hot reload, Prometheus metrics",
+      "rsigma engine daemon -r rules/ --input http --api-addr 127.0.0.1:9090",
+      "",
+      "# lint rules, then convert them to SQL for a historical hunt",
+      "rsigma rule lint rules/ --fail-level warning",
+      "rsigma backend convert rules/ -t postgres"
+    ]
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "One parser, several ways to run",
+      "intro": "Every command starts from the same parsed rule, shared through an intermediate representation in the `rsigma-ir` crate.",
+      "items": [
+        { "name": "engine eval", "tag": "one-shot", "text": "Reads inline JSON, an NDJSON or EVTX file, or stdin, prints one JSON result per match and exits; exit codes make it usable as a CI gate." },
+        { "name": "engine daemon", "tag": "streaming", "text": "Keeps the compiled engine in memory, reads from stdin, HTTP, NATS, a Unix socket or OTLP, writes detections to one or more sinks, and reloads rules on file changes, SIGHUP or an API call." },
+        { "name": "backend convert, hunt run", "tag": "historical", "text": "Turns rules into SQL for PostgreSQL/TimescaleDB (or LynxDB and Fibratus formats) and runs them read-only against an archive." },
+        { "name": "LSP and MCP servers", "tag": "authoring", "text": "Give editors diagnostics, completions and quick fixes, and give AI agents typed tools such as `parse_rule`, `lint_rules` and `evaluate_events` that return JSON." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Sigma rules were mostly used by converting them into another product’s query language. Commercial platforms evaluated rules in real time, but only inside their own systems and rule languages. Mostafa Moradian started RSigma in Tiger Data’s `timescale` GitHub organization in February 2026 to do both in the open: evaluate Sigma rules directly on a stream, correlations included, and convert them when the data already sits in a database.",
+      "Version 0.2.0, the first feature-complete release, shipped on February 17, 2026 with a parser, evaluation engine, a 65-rule linter, an LSP server, pySigma-compatible pipelines and a correlation engine. A daemon with hot reload and SQLite state followed nine days later. Moradian wrote a series of articles walking through it, and in March 2026 Zack Allen’s Detection Engineering Weekly called it “essentially a SIEM.” Moradian drew a narrower line: a streaming detection engine that plugs into the pipeline a team already has.",
+      "Later releases added an MCP server for AI agents (0.16.0, June 2026), backtesting, coverage reports, risk-based alerting and an alert pipeline modeled on Alertmanager. Building it surfaced gaps in Sigma itself, and Moradian sent proposals to SigmaHQ for array matching and a rule-level version field, while withdrawing a third, dynamic correlation windows, after a maintainer argued the windowing choice belongs to whoever converts a rule for a specific backend."
+    ],
+    "choices": [
+      { "choice": "Parse into a typed tree and compile before evaluating", "why": "Structural mistakes surface as parse or compile errors, such as a condition naming a detection that doesn’t exist, instead of a rule that silently never fires; compiled matchers keep per-event work small." },
+      { "choice": "Correlation state in-process, compressed and capped", "why": "Keeping windows in the engine means no SIEM is needed to join events, and compressed, bounded storage keeps memory from growing with traffic." },
+      { "choice": "A detection engine, not a collector or log store", "why": "Shippers such as Alloy, Vector and Fluent Bit already collect and route logs well, so RSigma supports a few receiver protocols and spends its complexity on detection." },
+      { "choice": "Pipelines compatible with pySigma", "why": "Anything written for pySigma works in RSigma, and most pipelines from the SigmaHQ backends do too, so field mappings don’t have to be rewritten." }
+    ],
+    "timeline": [
+      { "year": "2026", "text": "First commits in February; 0.2.0, the first feature-complete release, on February 17" },
+      { "year": "2026", "text": "0.5.0 adds daemon mode with hot reload and SQLite state persistence on February 26" },
+      { "year": "2026", "text": "Detection Engineering Weekly #149 covers it in March" },
+      { "year": "2026", "text": "0.16.0 adds the MCP server on June 15" },
+      { "year": "2026", "text": "0.24.0 released on October 5" }
+    ],
+    "sources": [
+      { "label": "Mostafa Moradian: The State of RSigma (June 16, 2026)", "url": "https://itnext.io/the-state-of-rsigma-7ba0a99020d9" },
+      { "label": "Mostafa Moradian: The State of RSigma, Part Two: The Loop (July 6, 2026)", "url": "https://itnext.io/the-state-of-rsigma-part-two-the-loop-c114f379dd78" },
+      { "label": "RSigma CHANGELOG (0.1.0 and 0.2.0 Feb 17, 0.5.0 Feb 26, 0.16.0 June 15, 0.24.0 Oct 5, 2026)", "url": "https://github.com/timescale/rsigma/blob/main/CHANGELOG.md" },
+      { "label": "timescale/rsigma commit history (first commits by Mostafa Moradian, February 2026)", "url": "https://github.com/timescale/rsigma/commits/main/" },
+      { "label": "timescale/rsigma README (press: Detection Engineering Weekly #149, March 2026)", "url": "https://github.com/timescale/rsigma" },
+      { "label": "RSigma docs: Processing Pipelines (pySigma compatibility)", "url": "https://rsigma.io/guide/processing-pipelines/" }
+    ]
+  },
+  "sources": [
+    { "label": "timescale/rsigma README (features, input formats, crates, performance, MIT license)", "url": "https://github.com/timescale/rsigma" },
+    { "label": "timescale/rsigma LICENSE (MIT)", "url": "https://github.com/timescale/rsigma/blob/main/LICENSE" },
+    { "label": "Tiger Data organization on GitHub (timescale)", "url": "https://github.com/timescale" },
+    { "label": "RSigma CHANGELOG (7 correlation types, 26 pySigma transformation types, 0.24.0)", "url": "https://github.com/timescale/rsigma/blob/main/CHANGELOG.md" },
+    { "label": "RSigma SECURITY.md (only the latest release is supported)", "url": "https://github.com/timescale/rsigma/blob/main/SECURITY.md" },
+    { "label": "RSigma docs: Evaluating Rules (engine eval input modes, pipelines, exit codes)", "url": "https://rsigma.io/guide/evaluating-rules/" },
+    { "label": "RSigma docs: Streaming Detection (daemon inputs, sinks, hot reload, state)", "url": "https://rsigma.io/guide/streaming-detection/" },
+    { "label": "RSigma docs: Input Formats (seven formats, feature flags)", "url": "https://rsigma.io/guide/input-formats/" },
+    { "label": "RSigma docs: Processing Pipelines (pySigma-compatible, builtin pipelines)", "url": "https://rsigma.io/guide/processing-pipelines/" },
+    { "label": "RSigma docs: Linting Rules (91 checks, 14 auto-fixes, severities)", "url": "https://rsigma.io/guide/linting-rules/" },
+    { "label": "RSigma docs: MCP Server (added in v0.16.0)", "url": "https://rsigma.io/guide/mcp-server/" },
+    { "label": "RSigma docs: CI/CD (exit codes, backtest, GitHub Action)", "url": "https://rsigma.io/guide/ci-cd/" },
+    { "label": "Mostafa Moradian: The State of RSigma (not a full SIEM; benchmarks; design)", "url": "https://itnext.io/the-state-of-rsigma-7ba0a99020d9" }
+  ],
+  "checked": "2026-10-12"
+}

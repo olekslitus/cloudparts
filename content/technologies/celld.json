@@ -1,0 +1,96 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "celld",
+  "concepts": ["actors"],
+  "uses": ["serverless"],
+  "provider": "oss",
+  "vendor": "Deno Land Inc.",
+  "license": "Apache 2.0",
+  "website": "https://celld.dev/",
+  "repo": "https://github.com/denoland/celld",
+  "status": { "stage": "beta", "note": "v0.6.2 is a beta release; on 9 October 2026 the Deno team joined Cloudflare, which plans to merge celld’s code and ideas into workerd." },
+  "summary": "A self-hosted, distributed implementation of Cloudflare Durable Objects that runs an unchanged Workers app across your own machines, with its durable state in an object storage bucket you own.",
+  "intro": [
+    "celld is one Rust binary that embeds V8 and runs Cloudflare Workers code. Each Durable Object becomes a cell: a named, single-threaded object with its own private SQLite database, one per user, document, chat room or AI agent. You run one celld process (a node) per machine, and all nodes that share one bucket form a fleet; any node can serve any cell, so you add capacity by starting another node. The bucket can be Amazon S3, Cloudflare R2, Tigris, Google Cloud Storage or Azure Blob Storage. There is no consensus service or membership list: a node claims a cell with a conditional write of an ownership record to the bucket, and every claim advances a fencing epoch. Each cell’s SQLite changes are written in Litestream’s LTX format under a prefix named for that epoch, so a node that has lost a cell can only write into a superseded prefix, and nodes hold leases in the bucket that expire after 10 seconds by default, after which a cut-off node fences itself and exits. KV namespaces, queues, D1 databases and Workflows are cells too, with the same ownership and failover, and R2 bindings read and write objects in the fleet bucket.",
+    "celld promises RPO 0: it holds every response, error or outbound side effect until the writes it could reveal are durable. In the default fleet mode the owner sends each write to one or two other nodes and answers once they have fsynced it or the bucket upload finishes, whichever is first; a lab fleet measured about 25 ms for that, against about 600 ms for a proof through the bucket alone, which is what a one-node fleet always waits for. The claim is tested by killing nodes with SIGKILL mid-write and deleting their local databases, freezing owners, cutting nodes off from the bucket and throttling the bucket, then fetching every cell through other nodes and comparing it with a ledger; the testing page reports zero lost messages across runs. The coordination protocol is also model-checked in TLA+, which found four bugs and a split-brain in v0.1.0, and runs through millions of seeded simulation schedules.",
+    "Cells hibernate. An idle cell can leave memory after a set time, a hibernated one keeps its WebSocket clients connected on its node, and a cell no node holds is just objects in the bucket, costing almost nothing until its next request restores it. The docs put one 8 GB node at 1,000 resident cells, about $0.05 per resident cell a month (the site’s chart uses 2,500 cells per node and about $0.02), and the site contrasts that with Durable Objects billed at about $4.15 per resident object-month. A request to a warm cell touches no bucket at all: about 1.1 ms at p50 and 7 ms at p99 on a fixed host."
+  ],
+  "strengths": [
+    "Runs existing Wrangler projects: `celld deploy` reads `wrangler.json` and supports Workers, Durable Objects and Facets, KV, Queues, D1, R2, Workflows, Cron Triggers, static assets and Dynamic Workers, and stops on any key it doesn’t understand",
+    "No acknowledged write is lost (RPO 0), backed by fault injection on live fleets, TLA+ model checking and deterministic simulation; ten 4 vCPU / 8 GB nodes held 10,000 resident cells and 20,000 WebSockets, and with two stopped every cell was back in about 11 s",
+    "Only one external dependency, a bucket you own, so cell state is plain SQLite and LTX files you can inspect with `sqlite3`, and inactive cells cost almost nothing",
+    "Cheap at scale by its own numbers: a few cents per resident cell a month on a commodity 8 GB node, against $4.15 per resident Durable Object a month"
+  ],
+  "limits": [
+    "Beta (v0.6.2), with several stop-the-fleet upgrades so far; it is being folded into workerd now that the Deno team has joined Cloudflare",
+    "Nothing that needs Cloudflare’s network or hardware: no Workers AI, Vectorize, Hyperdrive, Browser Rendering or Email Workers, an always-miss Cache API, no `wrangler.toml` or `routes`, and Python Workers only partly",
+    "You operate it: no TLS termination, plaintext peer traffic that needs a private network or WireGuard-style overlay, a supervisor that always restarts nodes, and Linux or Apple Silicon only (no Windows)",
+    "The bucket must support conditional writes: S3, R2, Tigris, Cloud Storage and Azure qualify, but Backblaze B2, Hetzner and DigitalOcean Spaces don’t; a single node waits for the bucket on every write, and one cell takes at most 64 concurrent requests by default"
+  ],
+  "worksWith": [
+    { "id": "durable-objects", "how": "runs code written for" },
+    { "id": "cloudflare-workers", "how": "runs unchanged Worker scripts written for" },
+    { "id": "workerd", "how": "is conformance-tested against" },
+    { "id": "sqlite", "how": "gives each cell its own database in" },
+    { "id": "s3", "how": "can keep all fleet state in a bucket on" },
+    { "id": "r2", "how": "can keep all fleet state in a bucket on" },
+    { "id": "gcs", "how": "can keep all fleet state in a bucket on" },
+    { "id": "azure-blob", "how": "can keep all fleet state in a container on" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Run the counter example locally, then deploy it to a fleet bucket on R2",
+    "source": [
+      "curl -fsSL https://celld.dev/install.sh | sh   # or: docker run ghcr.io/denoland/celld",
+      "git clone https://github.com/denoland/celld && cd celld/examples/counter",
+      "celld dev            # local object store + one node on http://127.0.0.1:9876",
+      "",
+      "export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_REGION=auto",
+      "export S3_ENDPOINT=https://ACCOUNT_ID.r2.cloudflarestorage.com",
+      "export CELLD_BUCKET=s3://YOUR-BUCKET",
+      "celld deploy . --bucket \"$CELLD_BUCKET\" --endpoint \"$S3_ENDPOINT\" --region \"$AWS_REGION\"",
+      "",
+      "# On each machine: a public listener behind your load balancer and TLS,",
+      "# and an internal listener on a private network for peer traffic",
+      "celld --bucket \"$CELLD_BUCKET\" --endpoint \"$S3_ENDPOINT\" --region \"$AWS_REGION\" \\",
+      "  --listen 0.0.0.0:8080 --internal-listen 10.0.0.12:8081 --advertise node-a.internal:8081"
+    ]
+  },
+  "history": {
+    "story": [
+      "Cloudflare’s Durable Objects give each named object a single thread and its own SQLite database, so an app built from one object per chat room or user is sharded from the start. Cloudflare open-sourced its Workers runtime, workerd, in 2022, but workerd runs Durable Objects only as a single instance, fine for testing and unable to scale, and Kenton Varda wrote that Cloudflare’s own routing for them depends on many external services run by a team of site reliability engineers, not something a self-hoster would want. Ryan Dahl, who created Node.js and Deno, wanted the distributed version: objects spread across machines, with placement, routing and storage handled for you. Running Deno Deploy had shown the Deno team how tangled cloud infrastructure gets, so Dahl set out to build celld as one Rust binary whose only external dependency is object storage.",
+      "Deno Land released celld as open source on 5 August 2026 and shipped releases every week or two, reaching v0.6.2 on 7 October. Two days later Cloudflare and Deno announced that the whole Deno team was joining Cloudflare: Ryan Dahl and Bert Belder will lead an effort to make self-hosted workerd a first-class option, merging code and ideas from celld into it, while the Deno runtime gets one more year of maintenance releases."
+    ],
+    "choices": [
+      { "choice": "The bucket as the only coordinator", "why": "Instead of a consensus service, a conditional write to the bucket decides which node owns a cell, and the epoch in each storage path fences stale owners, so a fleet is just processes and one bucket." },
+      { "choice": "Keep the Durable Objects model and Wrangler config unchanged", "why": "Dahl saw Durable Objects as the abstraction that makes scaling part of the programming model, and matching Cloudflare’s APIs, checked by running the same programs on workerd and comparing outputs, lets existing apps move without rewrites." },
+      { "choice": "Hold responses until writes are durable, and use peers to make that fast", "why": "Waiting for an object store round trip on every write is slow, so from v0.3.0 the default proves durability by fsync on one or two follower nodes, with the bucket upload racing it, and falls back to the bucket alone when no peer is available." }
+    ],
+    "timeline": [
+      { "year": "2022", "text": "Cloudflare open-sources workerd, with single-instance Durable Objects" },
+      { "year": "2026", "text": "celld v0.1.0 released as open source on 5 August" },
+      { "year": "2026", "text": "v0.3.0 makes peer (fleet) durability the default on 20 August" },
+      { "year": "2026", "text": "v0.6.2 beta on 7 October" },
+      { "year": "2026", "text": "Deno team joins Cloudflare to merge celld into workerd, 9 October" }
+    ],
+    "sources": [
+      { "label": "Cloudflare blog: Deno is joining Cloudflare, by Kenton Varda and Ryan Dahl (9 October 2026)", "url": "https://blog.cloudflare.com/deno-joins-cloudflare/" },
+      { "label": "Deno blog: Deno is joining Cloudflare (9 October 2026)", "url": "https://deno.com/blog/cloudflare" },
+      { "label": "GitHub: denoland/celld releases (v0.1.0 to v0.6.2)", "url": "https://github.com/denoland/celld/releases" },
+      { "label": "celld docs: Overview (upgrade notes per release)", "url": "https://celld.dev/docs" },
+      { "label": "celld docs: Testing (conformance against workerd)", "url": "https://celld.dev/docs/testing" }
+    ]
+  },
+  "sources": [
+    { "label": "celld docs: Overview (cells, nodes, lifecycle, ownership, durability modes, storage setup, operations)", "url": "https://celld.dev/docs" },
+    { "label": "celld docs: What celld guarantees (bucket requirements, epoch fencing, RPO 0, self-fencing)", "url": "https://celld.dev/docs/guarantees" },
+    { "label": "celld docs: Testing (conformance, TLA+, simulation, live-fleet fault injection, measurements)", "url": "https://celld.dev/docs/testing" },
+    { "label": "celld docs: Cloudflare compatibility (supported and missing services and APIs)", "url": "https://celld.dev/docs/cloudflare-compat" },
+    { "label": "celld docs: Limitations (v0.6.2 beta)", "url": "https://celld.dev/docs/limitations" },
+    { "label": "celld docs: Durable Objects / Cells", "url": "https://celld.dev/docs/services/durable-objects" },
+    { "label": "celld site: key characteristics and cost comparison with Durable Objects", "url": "https://celld.dev/" },
+    { "label": "GitHub: denoland/celld README and Apache 2.0 license", "url": "https://github.com/denoland/celld" },
+    { "label": "Cloudflare blog: Deno is joining Cloudflare (9 October 2026)", "url": "https://blog.cloudflare.com/deno-joins-cloudflare/" }
+  ],
+  "checked": "2026-10-12"
+}

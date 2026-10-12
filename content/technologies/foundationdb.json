@@ -1,0 +1,103 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "FoundationDB",
+  "concepts": ["key-value"],
+  "provider": "oss",
+  "vendor": "Apple Inc.",
+  "license": "Apache 2.0",
+  "website": "https://www.foundationdb.org/",
+  "repo": "https://github.com/apple/foundationdb",
+  "summary": "An ordered, distributed key-value store with strictly serializable ACID transactions across the whole cluster, built as a small core that other databases are layered on.",
+  "intro": [
+    "FoundationDB keeps every key in one sorted byte keyspace, spread across a cluster, and every read and write happens inside a transaction that can touch any keys on any machines. Transactions are strictly serializable: the result is as if they ran one at a time, in an order that matches real time. It does this without locks. A client first gets a read version from a GRV proxy, then reads straight from the storage servers at that version (multiversion concurrency control) and buffers its writes locally. At commit, a commit proxy gets a commit version from the sequencer (the docs call this role the master), and resolvers check whether any key the transaction read was written by someone else since its read version. If so, the commit fails with `not_committed` and the client retries (optimistic concurrency); if not, the writes go to the transaction logs, which fsync them before the commit is acknowledged. Storage servers, the vast majority of processes, then pull the mutations from the logs. Coordinators elect a cluster controller that assigns these roles, so reads scale with storage servers and writes with proxies, resolvers and logs. Storage engines are pluggable: a B-tree based on SQLite (`ssd`), the newer Redwood B-tree, RocksDB, or an in-memory engine.",
+    "The core deliberately does almost nothing else: no query language, no schema, no secondary indexes. Those come from “layers”, libraries that map a data model onto ordered keys and use transactions to keep it consistent. An index is just a second key such as `eye_color/blue/alice` written in the same transaction as the record, and finding everyone with blue eyes is a range read over that prefix. The FoundationDB Record Layer, a Java library from the same project, adds records, indexes and a SQL interface this way, JanusGraph can run as a layer, and the 2021 paper notes CouchDB was being rebuilt on it. The 2021 SIGMOD paper describes it as the underpinning of cloud infrastructure at Apple, Snowflake and other companies; Apple’s CloudKit alone ran it for more than 0.5 million disk-years without a data corruption event.",
+    "Its testing is as much its identity as its design. Before writing the database, its authors built Flow, an actor-style extension to C++, and a deterministic simulator that runs a whole cluster in one single-threaded process, with fake network, disks and clocks. Each night tens of thousands of simulations inject failures such as dropped connections, full disks, reboots and “swizzle-clogging” (stopping a random set of nodes’ connections one by one, then restoring them in random order), and any failure replays exactly from its seed. The project estimates the equivalent of roughly one trillion CPU-hours of simulation. The price is a set of hard limits: transactions can’t run longer than 5 seconds, because resolvers and storage servers only keep the last 5 seconds of history in memory."
+  ],
+  "strengths": [
+    "Strictly serializable transactions across any keys on any machines, so layers can keep data and indexes consistent without their own locking",
+    "Ordered keys make prefix and range scans cheap, which is what lets one cluster host documents, records, graphs or queues as layers",
+    "Deterministic simulation testing from day one; CloudKit reports more than 0.5 million disk-years without data corruption and no inconsistent replicas found",
+    "Roles scale independently: add storage servers for reads and data, proxies, resolvers and logs for commit throughput; Apple upgrades clusters by restarting every process at once, which takes seconds"
+  ],
+  "limits": [
+    "Transactions can’t run longer than 5 seconds from their first read; after that reads and commits fail with `transaction_too_old`, so long jobs must be split into short transactions",
+    "A transaction may touch at most 10,000,000 bytes, and the docs advise redesigning anything over 1 MB; keys are capped at 10,000 bytes and values at 100,000 bytes",
+    "No access control: anyone who can connect can read and write every key, so the network has to be the security boundary",
+    "Tested with clusters of up to 500 processes and databases up to 100 TB; a hot key is served by its three replicas only, on the order of 100,000 reads per second"
+  ],
+  "worksWith": [
+    { "id": "sqlite", "how": "builds its ssd B-tree engine on" },
+    { "id": "rocksdb", "how": "can store data on disk with" },
+    { "id": "snowflake", "how": "underpins cloud infrastructure for" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "A transactional function from the class-scheduling tutorial: retried automatically on conflict",
+    "source": [
+      "import fdb",
+      "fdb.api_version(730)  # the API version your client library supports (730 = 7.3)",
+      "",
+      "db = fdb.open()  # reads the cluster file, which lists the coordinators",
+      "scheduling = fdb.directory.create_or_open(db, ('scheduling',))",
+      "course = scheduling['class']",
+      "attends = scheduling['attends']",
+      "",
+      "@fdb.transactional",
+      "def signup(tr, s, c):",
+      "    rec = attends.pack((s, c))",
+      "    if tr[rec].present(): return  # already signed up",
+      "",
+      "    seats_left = fdb.tuple.unpack(tr[course.pack((c,))])[0]",
+      "    if not seats_left: raise Exception('No remaining seats')",
+      "",
+      "    tr[course.pack((c,))] = fdb.tuple.pack((seats_left - 1,))",
+      "    tr[rec] = b''",
+      "",
+      "# Two students racing for the last seat: one commit wins, the other",
+      "# conflicts, is retried by the decorator and sees no seats left.",
+      "signup(db, 'alice', '9:00 chem for dummies')"
+    ]
+  },
+  "history": {
+    "story": [
+      "In the early 2010s, NoSQL databases scaled out by giving up transactions and settling for eventual consistency, which left developers to reason about interleaved updates themselves. Dave Rosenthal, Nick Lavezzo and Dave Scherer started FoundationDB as a company in 2009 to show that a distributed store could scale and still offer full ACID transactions, under the motto “NoSQL, YesACID”. They began by building a deterministic simulator, and only then the database, and they named it for the foundational building blocks they thought higher-level systems needed. A public beta followed in March 2013 and version 1.0 in August 2013.",
+      "On 24 March 2015, TechCrunch reported that Apple had bought the company; the FoundationDB site stopped offering downloads. Apple kept developing it as the storage behind services such as CloudKit, and on 19 April 2018 released the core as open source under the Apache 2.0 license, with a public forum, a design-document process and the goal of growing an ecosystem of layers. In 2021 engineers from Apple, Snowflake and Antithesis described the system in a SIGMOD paper. Apple still runs the project on GitHub; the 7.3 branch is the supported production line."
+    ],
+    "choices": [
+      { "choice": "A minimal core, with data models as layers", "why": "Most databases bundle a storage engine, data model and query language, so a new model means a new database. FoundationDB asked what it could take away, kept an ordered transactional key-value store, and left indexes, documents and SQL to layers that use its transactions to stay consistent." },
+      { "choice": "Build the simulator before the database", "why": "Bugs that need several failures in a particular order are nearly impossible to reproduce on real clusters. Writing all code in Flow against abstract network, disk and clock interfaces let a single process simulate a whole cluster deterministically, so every bug found replays exactly. The team later replaced Apache ZooKeeper with its own Paxos in Flow after fault injection found two ZooKeeper bugs around 2010." },
+      { "choice": "Optimistic concurrency with a 5-second window", "why": "Checking read sets against recent writes at commit avoids locks entirely. Keeping only the last 5 seconds of writes in the resolvers and of versions on storage servers bounds the memory this needs, at the cost of capping transaction length." },
+      { "choice": "Recover by reconfiguring instead of masking with quorums", "why": "The paper says that detecting failures and recruiting a new transaction system lets FoundationDB tolerate f failures with f + 1 replicas rather than 2f + 1, and makes whole-cluster restarts fast enough to use for every upgrade." }
+    ],
+    "timeline": [
+      { "year": "2009", "text": "FoundationDB is founded by Dave Rosenthal, Nick Lavezzo and Dave Scherer" },
+      { "year": "2013", "text": "Public beta on 4 March, version 1.0 on 20 August" },
+      { "year": "2015", "text": "Apple acquires the company in March and downloads are withdrawn" },
+      { "year": "2018", "text": "Apple open-sources the core under Apache 2.0 on 19 April" },
+      { "year": "2021", "text": "SIGMOD paper by Apple, Snowflake and Antithesis engineers" },
+      { "year": "2026", "text": "7.3.77 is the latest production release, in April" }
+    ],
+    "sources": [
+      { "label": "TechCrunch: Apple Acquires Durable Database Company FoundationDB (24 March 2015)", "url": "https://techcrunch.com/2015/03/24/apple-acquires-durable-database-company-foundationdb/" },
+      { "label": "FoundationDB blog: FoundationDB is Open Source (19 April 2018)", "url": "https://www.foundationdb.org/blog/foundationdb-is-open-source/" },
+      { "label": "Zhou et al.: FoundationDB, A Distributed Unbundled Transactional Key Value Store (SIGMOD 2021)", "url": "https://www.foundationdb.org/files/fdb-paper.pdf" },
+      { "label": "FoundationDB docs: Layer Concept", "url": "https://apple.github.io/foundationdb/layer-concept.html" },
+      { "label": "Wikipedia: FoundationDB (beta and 1.0 dates)", "url": "https://en.wikipedia.org/wiki/FoundationDB" },
+      { "label": "GitHub: apple/foundationdb README (supported release branches)", "url": "https://github.com/apple/foundationdb/blob/main/README.md" },
+      { "label": "GitHub: apple/foundationdb releases (7.3.77, 16 April 2026)", "url": "https://github.com/apple/foundationdb/releases/tag/7.3.77" }
+    ]
+  },
+  "sources": [
+    { "label": "FoundationDB docs: Architecture (roles, read versions, commit path)", "url": "https://apple.github.io/foundationdb/architecture.html" },
+    { "label": "FoundationDB docs: Known Limitations (5-second transactions, 10 MB transactions, key and value sizes, cluster and database size)", "url": "https://apple.github.io/foundationdb/known-limitations.html" },
+    { "label": "FoundationDB docs: Simulation and Testing", "url": "https://apple.github.io/foundationdb/testing.html" },
+    { "label": "FoundationDB docs: Consistency (strict serializability)", "url": "https://apple.github.io/foundationdb/consistency.html" },
+    { "label": "FoundationDB docs: Layer Concept", "url": "https://apple.github.io/foundationdb/layer-concept.html" },
+    { "label": "FoundationDB docs: Configuration (storage engines)", "url": "https://apple.github.io/foundationdb/configuration.html" },
+    { "label": "FoundationDB docs: Class Scheduling tutorial (Python)", "url": "https://apple.github.io/foundationdb/class-scheduling.html" },
+    { "label": "Zhou et al.: FoundationDB, A Distributed Unbundled Transactional Key Value Store (SIGMOD 2021)", "url": "https://www.foundationdb.org/files/fdb-paper.pdf" },
+    { "label": "GitHub: FoundationDB Record Layer README", "url": "https://github.com/FoundationDB/fdb-record-layer" },
+    { "label": "GitHub: apple/foundationdb README and Apache 2.0 license", "url": "https://github.com/apple/foundationdb" }
+  ],
+  "checked": "2026-10-12"
+}

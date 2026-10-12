@@ -1,0 +1,247 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Threat detection (SIEM)",
+  "icon": "radar",
+  "category": "security",
+  "order": 60,
+  "summary": "Collecting security logs from many systems in one place and running detection rules over them, so that suspicious activity becomes an alert an analyst can act on.",
+  "howItWorks": "Agents and connectors ship security-relevant logs to one place: cloud audit trails such as AWS CloudTrail, Windows event logs, sign-ins from an identity provider, firewall and DNS logs. A parser turns each line into named fields, and a rule engine runs detection rules over the stream. The simplest rule matches a single event: a CloudTrail call made with the AWS root user, or `whoami.exe` started with `/all`. A correlation rule looks across a time window, grouped by a field such as user or host: 10 or more failed logons by one user within 10 minutes, followed by a successful one. Rules run either on each event as it arrives or as a scheduled query over a lookback window; Microsoft Sentinel’s scheduled rules, for example, run every 5 minutes to every 14 days. A match becomes an alert with a severity and tags, such as the MITRE ATT&CK technique it points to, and goes to an analyst to triage, while the raw logs stay stored for investigations and hunts. Each SIEM has its own query language (KQL in Sentinel, YARA-L in Google Security Operations, SPL in Splunk), so a rule written for one doesn’t run on another. Shared rule formats fix that. A Sigma rule is written once in YAML against generic field names and a log source such as `product: windows`, `category: process_creation`; pySigma backends then convert it into each SIEM’s query, with processing pipelines mapping the field names, or an engine such as RSigma evaluates it directly on the event stream.",
+  "analogy": "A security desk in a large building. Cameras and badge readers on every floor feed one wall of screens. The guard keeps a short list of things to watch for (“the same badge failing at a door ten times, then opening it”, “anyone in the server room at 3 a.m.”) and calls for help only when one of them happens. A shared rulebook lets guards in other buildings, with other camera brands, watch for the same things.",
+  "useWhen": [
+    "Attacks show up only in logs: credentials used from an unusual place, root or admin accounts used directly, a system process started from an odd directory",
+    "Activity is spread across many systems, so one event looks harmless and only the sequence means something, such as many failed logins and then a success",
+    "Regulations such as PCI DSS or HIPAA expect security events to be logged and reviewed centrally",
+    "You run more than one SIEM, or may switch: keep rules in Sigma and convert them instead of maintaining a copy per query language"
+  ],
+  "avoidWhen": [
+    "Collecting every log with no rules or owner: a SIEM only finds what its rules look for, and alerts nobody reads protect nobody",
+    "Treating a managed detection service as a SIEM: Amazon GuardDuty analyzes CloudTrail, VPC flow and DNS logs with AWS’s threat intelligence and ML models, then discards those logs, so they aren’t kept for your own searches",
+    "Assuming a converted rule behaves the same everywhere: field names and log sources differ between data sets, so conversion needs a pipeline that maps them, and some Sigma modifiers, such as `re` for regular expressions, only work where the backend supports them"
+  ],
+  "example": "A company forwards the Windows Security event log from its servers to its SIEM and keeps its detections in Git as Sigma YAML, following the example in the Sigma correlation specification. Rule `failed_login` matches event ID 4625 (529 on old systems); rule `successful_login` matches 4624 (or 528). An `event_count` correlation counts `failed_login` events per `User` and fires at 10 or more within 10 minutes. A `temporal_ordered` correlation, at level high, fires when that is followed by a successful login for the same user in the same 10-minute window: a password guessed by brute force. CI converts them with `sigma convert` into the SIEM’s query language. Ordinary logons match nothing. One account with 14 failures and then a success raises a single high-severity alert, which an analyst picks up, while the individual failed logons stay in storage for the investigation.",
+  "providers": {
+    "aws": "Amazon GuardDuty (managed threat detection over CloudTrail management events, VPC flow logs and DNS logs; Extended Threat Detection for multi-stage attack sequences); AWS Security Hub CSPM gathers findings from GuardDuty, Inspector and Macie; Amazon Security Lake centralizes security logs in your own S3 buckets as Parquet in the OCSF schema",
+    "gcp": "Google Security Operations (Google SecOps, formerly Chronicle): YARA-L 2.0 rules over normalized UDM events, single-event or multi-event with a `match` time window; curated detections",
+    "azure": "Microsoft Sentinel: scheduled analytics rules, each a KQL query run every 5 minutes to 14 days over a lookback window, with an alert threshold; rule templates from Microsoft and solution vendors",
+    "oss": "Sigma rules (converted with pySigma and sigma-cli, or evaluated by RSigma); Wazuh (3,000+ built-in rules and decoders); Falco (YAML rules over Linux syscalls, a CNCF graduated project); source-available: Elastic Security’s detection-rules repo (Elastic License v2)"
+  },
+  "snippet": {
+    "lang": "yaml",
+    "source": [
+      "# Sigma correlation example from the specification (trimmed): many failed logins, then a success",
+      "title: Correlation - Multiple Failed Logins Followed by Successful Login",
+      "correlation:",
+      "    type: temporal_ordered",
+      "    rules:",
+      "        - multiple_failed_login",
+      "        - successful_login",
+      "    group-by:",
+      "        - User",
+      "    timespan: 10m",
+      "level: high",
+      "---",
+      "title: Multiple failed logons",
+      "name: multiple_failed_login",
+      "correlation:",
+      "    type: event_count",
+      "    rules:",
+      "        - failed_login",
+      "    group-by:",
+      "        - User",
+      "    timespan: 10m",
+      "    condition:",
+      "        gte: 10",
+      "---",
+      "title: Single failed login",
+      "name: failed_login",
+      "logsource:",
+      "    product: windows",
+      "    service: security",
+      "detection:",
+      "    selection:",
+      "        EventID:",
+      "            - 529",
+      "            - 4625",
+      "    condition: selection",
+      "---",
+      "title: Successful login",
+      "name: successful_login",
+      "logsource:",
+      "    product: windows",
+      "    service: security",
+      "detection:",
+      "    selection:",
+      "        EventID:",
+      "            - 528",
+      "            - 4624",
+      "    condition: selection"
+    ]
+  },
+  "related": ["logs", "alerting", "incidents", "cve", "structured-logging"],
+  "diagram": {
+    "caption": "Three log sources feed a collector, which parses each line and sends a copy to storage and to the rule engine. Almost every event (green) matches no rule and is only kept for later searches. The rare suspicious one (red) matches a detection rule and becomes an alert for an analyst.",
+    "h": 270,
+    "nodes": [
+      {
+        "id": "cloud",
+        "x": 95,
+        "y": 50,
+        "label": "Cloud audit log",
+        "sub": "API calls",
+        "concept": "logs",
+        "emit": { "every": 700, "jitter": 0.4, "types": ["ok", "ok", "ok", "ok", "ok", "ok", "ok", "ok", "ok", "bad"], "colorByType": { "ok": 0, "bad": 3 } },
+        "out": ["collector"]
+      },
+      {
+        "id": "hosts",
+        "x": 95,
+        "y": 135,
+        "label": "Endpoints",
+        "sub": "process, logon events",
+        "concept": "logs",
+        "emit": { "every": 500, "jitter": 0.4, "types": ["ok", "ok", "ok", "ok", "ok", "ok", "ok", "ok", "ok", "ok", "ok", "bad"], "colorByType": { "ok": 0, "bad": 3 } },
+        "out": ["collector"]
+      },
+      {
+        "id": "idp",
+        "x": 95,
+        "y": 220,
+        "label": "Identity provider",
+        "sub": "sign-ins",
+        "concept": "logs",
+        "emit": { "every": 900, "jitter": 0.4, "types": ["ok", "ok", "ok", "ok", "ok", "ok", "ok", "bad"], "colorByType": { "ok": 0, "bad": 3 } },
+        "out": ["collector"]
+      },
+      {
+        "id": "collector",
+        "x": 275,
+        "y": 135,
+        "label": "Collector",
+        "sub": "parse into fields",
+        "route": "fanout",
+        "out": ["rules", "store"]
+      },
+      {
+        "id": "rules",
+        "x": 465,
+        "y": 70,
+        "label": "Rule engine",
+        "sub": "detections, correlations",
+        "mode": "gate",
+        "allowTypes": ["bad"],
+        "allowText": "rule match",
+        "quiet": true,
+        "out": ["alerts"]
+      },
+      {
+        "id": "store",
+        "x": 465,
+        "y": 210,
+        "label": "Log storage",
+        "sub": "kept for hunts",
+        "mode": "sink"
+      },
+      {
+        "id": "alerts",
+        "x": 655,
+        "y": 70,
+        "label": "Alert",
+        "sub": "to an analyst",
+        "concept": "alerting",
+        "mode": "sink"
+      }
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "One idea, many rule languages",
+      "intro": "Every SIEM runs detection rules over stored or streaming events, but each writes them in its own language. Sigma sits across them as a shared format.",
+      "corner": "Platform",
+      "columns": ["Rules are written in", "Runs over", "Ready-made rules"],
+      "rows": [
+        { "label": "Sigma", "values": ["YAML: `logsource`, `detection`, `condition`; separate correlation rules with `group-by` and `timespan`", "Any log source, after conversion to a SIEM query or in an engine such as RSigma", "The SigmaHQ repository: more than 3,000 rules under the Detection Rule License 1.1"] },
+        { "label": "Microsoft Sentinel", "values": ["KQL, in scheduled analytics rules that run every 5 minutes to 14 days", "Data collected into the Sentinel workspace, over a lookback window of 5 minutes to 14 days", "Templates written by Microsoft or by the vendor of a solution"] },
+        { "label": "Google Security Operations", "values": ["YARA-L 2.0: `events`, an optional `match` window such as `$user over 5m`, and `condition`", "Events normalized into the Unified Data Model (UDM)", "Curated detections"] },
+        { "label": "Elastic Security", "values": ["One TOML file per rule, with the query (mostly KQL when the repo opened in 2020) and metadata such as the scheduling interval", "Data that follows the Elastic Common Schema (ECS)", "elastic/detection-rules, under the Elastic License v2"] },
+        { "label": "Wazuh", "values": ["XML rules and decoders", "Logs that its decoders have parsed", "More than 3,000 rules and decoders out of the box"] },
+        { "label": "Falco", "values": ["YAML rules files", "Linux syscalls, plus other sources such as CloudTrail through plugins", "A default rule set"] }
+      ],
+      "notes": [
+        "pySigma backends exist for many of these targets, among them Splunk SPL, Elasticsearch (Lucene, EQL), Kusto Query Language for Sentinel and Microsoft Defender XDR, and Google SecOps UDM search and YARA-L 2.0 (the last in beta)."
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Detection as code",
+      "body": [
+        "Rules are small text files, so teams keep them in Git and review changes like code. Elastic said in 2020 that it had moved its rules to a repository with automated tests that validate query syntax, schema use and metadata on every contribution. Sigma’s own site pitches the same workflow: version control over detections and deployment from a CI/CD pipeline straight into the SIEM.",
+        "There are two ways to run a shared rule. Conversion turns it into the target’s own query: `sigma convert -t splunk -p sysmon rules/` uses a backend for the query language and a processing pipeline that maps Sigma’s generic field names, such as `CommandLine`, to the names in your data. Direct evaluation skips the SIEM query language: an engine such as RSigma compiles the rules into matchers, applies the same kind of pipeline and checks each event as it arrives, keeping correlation windows in memory.",
+        "Tests close the loop. A rule should fire on a known-bad sample and stay quiet on a day of normal traffic. RSigma’s `rule backtest` replays event files against per-rule expectations and writes a JUnit report for CI, and its linter checks rules against the Sigma specification before they ship."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Security log tools were first sold as two kinds of product: security information management (SIM), for long-term storage, analysis and reporting of log data, and security event management (SEM), for real-time monitoring, correlation of events and notifications. In 2005, Gartner analysts Mark Nicolett and Amrit Williams named the combination security information and event management (SIEM). NIST later defined a SIEM tool as an application that gathers security data from information system components and presents it as actionable information through a single interface.",
+      "For years the detection logic stayed locked inside each product, in its own query language. Florian Roth and Thomas Patzke felt that pain while handling incidents: good searches could not be shared with teams on other SIEMs. Roth committed the first Sigma rules on December 24, 2016, the two refined the format for two to three months, and Sigma was released in 2017 as a generic YAML signature format for log events, with a converter to SIEM queries. Its README puts it this way: “Sigma is for log files what Snort is for network traffic and YARA is for files.”",
+      "Detection as code followed. In June 2020, Elastic opened its detection rules to the public as TOML files with automated tests. Sigma’s specification 2.0 (August 2024) replaced the old aggregation expressions with correlation rules, and the `sigmac` converter was retired in favor of pySigma. Cloud providers built their own detection services and rule languages, such as YARA-L in Google Security Operations and KQL analytics rules in Microsoft Sentinel, while open engines such as RSigma (2026) evaluate Sigma rules directly on a stream."
+    ],
+    "choices": [
+      { "choice": "Generic log sources and field names, mapped later", "why": "A Sigma rule names a log source such as `category: process_creation` instead of Sysmon, Windows Security auditing and every other product-specific source. The specification calls this abstraction the advantage: the rule isn’t tied to one telemetry source, and converters map it to indexes and fields." },
+      { "choice": "Simple searches and a few common correlations, not a full query language", "why": "Sigma’s design philosophy trades expressiveness for portability: basic searches and a few common correlations (such as counts) cover more than 90% of day-to-day detection needs, and keeping to them means a detection can be shared across all sorts of security environments." },
+      { "choice": "Correlations as separate rules that reference other rules", "why": "A correlation names the rules it counts or orders, so correlations can be chained, and single matches can stay low or informational while the correlation raises the level." },
+      { "choice": "Rules as plain files", "why": "Sigma chose YAML because it is easy to read and write; files in Git get version control, review and deployment through CI/CD, the same path Elastic took for its rules in 2020." }
+    ],
+    "timeline": [
+      { "year": "2005", "text": "Gartner analysts Mark Nicolett and Amrit Williams introduce the term SIEM" },
+      { "year": "2016", "text": "Florian Roth commits the first Sigma rules on December 24" },
+      { "year": "2017", "text": "Sigma is released; MISP adds native Sigma support in version 2.4.70 (March)" },
+      { "year": "2020", "text": "Elastic opens its public detection-rules repository on June 30" },
+      { "year": "2024", "text": "Sigma specification 2.0 adds correlation rules; `sigmac` reaches end of life on August 1" },
+      { "year": "2025", "text": "Sigma specification 2.1 adds value sum, average and percentile correlations" },
+      { "year": "2026", "text": "RSigma ships its first feature-complete release on February 17" }
+    ],
+    "sources": [
+      { "label": "Wikipedia: Security information and event management (SIM, SEM, Gartner 2005)", "url": "https://en.wikipedia.org/wiki/Security_information_and_event_management" },
+      { "label": "NIST CSRC Glossary: security information and event management (SIEM) tool", "url": "https://csrc.nist.gov/glossary/term/security_information_and_event_management_tool" },
+      { "label": "SOC Prime: Interview with Developer Thomas Patzke (Oct 2019)", "url": "https://socprime.com/blog/interview-with-developer-thomas-patzke/" },
+      { "label": "SigmaHQ/sigma on GitHub: First Example Set commit by Florian Roth (Dec 24, 2016)", "url": "https://github.com/SigmaHQ/sigma/commit/87deb349adb22331aae1b923420d382fea278d2c" },
+      { "label": "Sigma docs: About Sigma (released in 2017, design philosophy, why YAML)", "url": "https://sigmahq.io/docs/guide/about.html" },
+      { "label": "SigmaHQ/sigma README (Snort and YARA comparison, MISP 2.4.70)", "url": "https://github.com/SigmaHQ/sigma" },
+      { "label": "Sigma specification: changes from 1.0 to 2.0 (correlations, sigmac end of life)", "url": "https://github.com/SigmaHQ/sigma-specification/blob/main/other/version-1.0-2.0.md" },
+      { "label": "Sigma Correlation Rules Specification (history: 2.0.0 August 2024, 2.1.0 August 2025)", "url": "https://github.com/SigmaHQ/sigma-specification/blob/main/specification/sigma-correlation-rules-specification.md" },
+      { "label": "Elastic blog: Elastic Security opens public detection rules repo (June 30, 2020)", "url": "https://www.elastic.co/blog/elastic-security-opens-public-detection-rules-repo" },
+      { "label": "RSigma CHANGELOG (0.2.0, first feature-complete release, Feb 17, 2026)", "url": "https://github.com/timescale/rsigma/blob/main/CHANGELOG.md" }
+    ]
+  },
+  "sources": [
+    { "label": "NIST CSRC Glossary: security information and event management (SIEM) tool", "url": "https://csrc.nist.gov/glossary/term/security_information_and_event_management_tool" },
+    { "label": "Wikipedia: Security information and event management (SIM vs SEM, PCI DSS and HIPAA)", "url": "https://en.wikipedia.org/wiki/Security_information_and_event_management" },
+    { "label": "Sigma Rules Specification 2.1.0 (logsource, detection, condition, modifiers)", "url": "https://github.com/SigmaHQ/sigma-specification/blob/main/specification/sigma-rules-specification.md" },
+    { "label": "Sigma Correlation Rules Specification (event_count, value_count, temporal, failed-logins example)", "url": "https://github.com/SigmaHQ/sigma-specification/blob/main/specification/sigma-correlation-rules-specification.md" },
+    { "label": "SigmaHQ/sigma README (more than 3,000 rules, DRL 1.1)", "url": "https://github.com/SigmaHQ/sigma" },
+    { "label": "SigmaHQ rule: AWS Root Credentials (CloudTrail, ATT&CK tags)", "url": "https://github.com/SigmaHQ/sigma/blob/master/rules/cloud/aws/cloudtrail/aws_root_account_usage.yml" },
+    { "label": "SigmaHQ rule: Enumerate All Information With Whoami.EXE", "url": "https://github.com/SigmaHQ/sigma/blob/master/rules/windows/process_creation/proc_creation_win_whoami_all_execution.yml" },
+    { "label": "Sigma docs: About Sigma (technology-agnostic rules, CI/CD)", "url": "https://sigmahq.io/docs/guide/about.html" },
+    { "label": "Sigma docs: Backends (pySigma backends, pipelines, sigma plugin list)", "url": "https://sigmahq.io/docs/digging-deeper/backends.html" },
+    { "label": "SigmaHQ/sigma-cli README (sigma convert -t splunk -p sysmon)", "url": "https://github.com/SigmaHQ/sigma-cli" },
+    { "label": "AttackIQ/pySigma-backend-kusto (KQL for Microsoft XDR, Sentinel ASIM, Azure Monitor)", "url": "https://github.com/AttackIQ/pySigma-backend-kusto" },
+    { "label": "AttackIQ/pySigma-backend-secops (Google SecOps UDM and YARA-L 2.0, beta)", "url": "https://github.com/AttackIQ/pySigma-backend-secops" },
+    { "label": "SigmaHQ/pySigma-backend-elasticsearch (Lucene, EQL, ECS pipelines)", "url": "https://github.com/SigmaHQ/pySigma-backend-elasticsearch" },
+    { "label": "AWS docs: What is Amazon GuardDuty? (threat intelligence, ML, Extended Threat Detection)", "url": "https://docs.aws.amazon.com/guardduty/latest/ug/what-is-guardduty.html" },
+    { "label": "AWS docs: GuardDuty foundational data sources (CloudTrail, VPC flow logs, DNS logs; logs discarded)", "url": "https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_data-sources.html" },
+    { "label": "AWS docs: Introduction to AWS Security Hub CSPM", "url": "https://docs.aws.amazon.com/securityhub/latest/userguide/what-is-securityhub.html" },
+    { "label": "AWS docs: What is Amazon Security Lake? (S3, Parquet, OCSF)", "url": "https://docs.aws.amazon.com/security-lake/latest/userguide/what-is-security-lake.html" },
+    { "label": "Google Cloud docs: Single and multiple event rules in YARA-L", "url": "https://docs.cloud.google.com/chronicle/docs/yara-l/yara-l-2-0-examples" },
+    { "label": "Microsoft Learn: Scheduled analytics rules in Microsoft Sentinel (5 minutes to 14 days, thresholds, templates)", "url": "https://learn.microsoft.com/en-us/azure/sentinel/scheduled-rules-overview" },
+    { "label": "Microsoft Learn: What is Microsoft Sentinel?", "url": "https://learn.microsoft.com/en-us/azure/sentinel/overview" },
+    { "label": "Wazuh docs: Data analysis, ruleset (3,000+ rules and decoders)", "url": "https://documentation.wazuh.com/current/user-manual/ruleset/index.html" },
+    { "label": "Falco docs: What is Falco? (syscalls, plugins, CNCF graduated)", "url": "https://falco.org/docs/" },
+    { "label": "Falco docs: Falco Rules (rules files are YAML)", "url": "https://falco.org/docs/concepts/rules/" },
+    { "label": "elastic/detection-rules README (Elastic License v2, detections as code)", "url": "https://github.com/elastic/detection-rules" },
+    { "label": "Elastic blog: Elastic Security opens public detection rules repo (June 30, 2020)", "url": "https://www.elastic.co/blog/elastic-security-opens-public-detection-rules-repo" },
+    { "label": "timescale/rsigma README (direct evaluation, correlation, backtesting)", "url": "https://github.com/timescale/rsigma" },
+    { "label": "RSigma docs: Processing Pipelines (pySigma-compatible field mapping)", "url": "https://rsigma.io/guide/processing-pipelines/" }
+  ]
+}
