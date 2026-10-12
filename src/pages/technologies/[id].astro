@@ -1,6 +1,6 @@
 ---
 import { Code } from 'astro:components';
-import { ArchiveIcon, ArrowLeftRightIcon, CheckIcon, CodeIcon, ExternalLinkIcon, NetworkIcon, PencilIcon, ShapesIcon, XIcon } from 'lucide-react';
+import { ArchiveIcon, ArrowLeftRightIcon, CheckIcon, CodeIcon, ExternalLinkIcon, PencilIcon, XIcon } from 'lucide-react';
 import ArchCard from '@/components/ArchCard.astro';
 import BenchmarkList from '@/components/BenchmarkList.astro';
 import Breadcrumbs from '@/components/Breadcrumbs.astro';
@@ -10,14 +10,16 @@ import LiveModel from '@/components/LiveModel';
 import Md from '@/components/Md.astro';
 import ResourceList from '@/components/ResourceList.astro';
 import SectionLabel from '@/components/SectionLabel.astro';
-import SourceList from '@/components/SourceList.astro';
+import PageToc from '@/components/PageToc.astro';
+import Sources from '@/components/Sources.astro';
+import StatusBadge from '@/components/StatusBadge.astro';
 import TechCard from '@/components/TechCard.astro';
 import TechGraph from '@/components/TechGraph.astro';
 import TechSection from '@/components/TechSection.astro';
 import Base from '@/layouts/Base.astro';
 import { getCatalog, type CatalogTech } from '@/lib/catalog';
 import { diagramHere, diagramLinks } from '@/lib/links';
-import { href, PROVIDER_NAMES, RELATION_GROUPS, relationLabel, REPO_URL } from '@/lib/nav';
+import { href, PROVIDER_TYPES, RELATION_GROUPS, relationLabel, REPO_URL, STAGE_LABELS } from '@/lib/nav';
 
 export async function getStaticPaths() {
   const c = await getCatalog();
@@ -44,7 +46,8 @@ const peers = parent
 const alternatives = [...recommended, ...peers.filter(x => !recommended.includes(x))];
 const commonPath = kind ? `concepts/${primary.id}/${kind.id}/` : `concepts/${primary.id}/`;
 const commonName = (kind ?? primary).name.toLowerCase();
-const since = t.archived && new Date(`${t.archived.since}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+const longDate = (d: string) => new Date(`${d}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+const since = t.archived && longDate(t.archived.since);
 const foundation = c.foundationOf(t);
 const resources = c.resourcesAbout('technologies', t.id);
 const benchmarks = c.benchmarksAbout('technologies', t.id);
@@ -52,12 +55,30 @@ const compares = c.comparisons.filter(m => m.technologies.includes(t.id));
 const linked = c.edges.some(e => e.from === t.id || e.to === t.id);
 const anchors = t.sections.map(s => s.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''));
 const repo = REPO_URL;
-const pill = 'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs';
+const pill = 'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-sm transition hover:bg-muted';
+const toc = [
+  { id: 'overview', label: 'What it is' },
+  { id: 'pick', label: 'Why teams pick it' },
+  { id: 'watch', label: 'Watch out for' },
+  ...(family.length ? [{ id: 'family', label: `The ${t.name} family` }] : []),
+  ...(alternatives.length ? [{ id: 'alternatives', label: t.archived ? 'Alternatives' : parent ? `More of the ${parent.name} family` : 'Alternatives' }] : []),
+  ...(linked ? [{ id: 'fits', label: 'How it fits' }] : []),
+  ...(t.snippet ? [{ id: 'code', label: 'In code' }] : []),
+  ...t.sections.map((s, i) => ({ id: anchors[i], label: s.title })),
+  { id: 'stack', label: 'In a real stack' },
+  ...(compares.length ? [{ id: 'compared', label: 'Compared side by side' }] : []),
+  ...(resources.length ? [{ id: 'resources', label: 'Worth exploring' }] : []),
+  ...(benchmarks.length ? [{ id: 'benchmarks', label: 'Benchmarks' }] : []),
+  ...(t.history ? [{ id: 'history', label: 'Where it came from' }] : []),
+  { id: 'sources', label: 'Sources' },
+];
+const factRow = 'grid gap-0.5 px-4 py-2.5 sm:grid-cols-[150px_minmax(0,1fr)] sm:gap-4';
+const factLabel = 'text-sm text-muted-foreground';
 ---
 
-<Base title={t.name} description={t.summary} active={t.id} section="technologies">
-  <article>
-    <header class="max-w-3xl">
+<Base title={t.name} description={t.summary} active={t.id} section="technologies" toc={toc}>
+  <article class="max-w-[50rem]">
+    <header>
       <Breadcrumbs items={[
         { label: part.name, path: `concepts/#${part.id}` },
         { label: cat.name, path: `topics/${cat.id}/` },
@@ -65,30 +86,67 @@ const pill = 'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5
         ...(kind ? [{ label: kind.name, path: `concepts/${primary.id}/${kind.id}/` }] : []),
         ...(parent ? [{ label: parent.name, path: `technologies/${parent.id}/` }] : []),
       ]} />
-      <h1 class="text-4xl font-semibold tracking-tight text-balance sm:text-5xl">{t.name}</h1>
+      <h1 class="flex flex-wrap items-center gap-x-3 gap-y-2 text-4xl font-semibold tracking-tight text-balance sm:text-5xl">{t.name}<StatusBadge tech={t} large /></h1>
       <p class="mt-3 text-lg leading-relaxed text-pretty text-muted-foreground"><Md text={t.summary} /></p>
-      <div class="mt-5 flex flex-wrap items-center gap-2">
-        {parent && (
-          <a href={href(`technologies/${parent.id}/`)} class="inline-flex items-center gap-1.5 rounded-full bg-foreground px-2.5 py-0.5 text-xs font-medium text-background transition hover:opacity-85">
-            <NetworkIcon className="size-3" />{relationLabel(t.parent!.as, parent.name)}
-          </a>
-        )}
-        {t.concepts.map(id => (
-          <a href={href(`concepts/${id}/`)} class="inline-flex items-center gap-1.5 rounded-full bg-brand-soft px-2.5 py-0.5 text-xs font-medium text-brand transition hover:ring-1 hover:ring-brand/40">
-            <ShapesIcon className="size-3" />{c.concept(id).name}
-          </a>
-        ))}
-        {foundation
-          ? <a href={href(`foundations/${foundation.id}/`)} class:list={[pill, 'transition hover:bg-muted']} title={`What it means to be a project of ${foundation.name}`}>{PROVIDER_NAMES[t.provider]}<span class="text-muted-foreground underline decoration-dotted underline-offset-2">· {t.vendor}</span></a>
-          : <span class={pill}>{PROVIDER_NAMES[t.provider]}{t.vendor && <span class="text-muted-foreground">· {t.vendor}</span>}</span>}
-        {t.license && <span class={pill}><span class="text-muted-foreground">Licence</span> {t.license}</span>}
-        <a href={t.website} class:list={[pill, 'transition hover:bg-muted']} rel="noopener">Website <ExternalLinkIcon className="size-3" /></a>
-        {t.repo && <a href={t.repo} class:list={[pill, 'transition hover:bg-muted']} rel="noopener"><CodeIcon className="size-3" />Source code{t.archived && ' (archived)'} <ExternalLinkIcon className="size-3" /></a>}
-      </div>
     </header>
 
+    <dl class="mt-6 divide-y overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10" aria-label="Key facts">
+      <div class={factRow}>
+        <dt class={factLabel}>What it is</dt>
+        <dd class="flex flex-wrap gap-x-1 text-[15px]">
+          {t.concepts.map((id, i) => <span><a href={href(`concepts/${id}/`)} class="font-medium text-brand underline-offset-4 hover:underline">{c.concept(id).name}</a>{kind && i === 0 && <span class="text-muted-foreground"> ({kind.name.toLowerCase()})</span>}{i < t.concepts.length - 1 && ','}</span>)}
+        </dd>
+      </div>
+      {parent && (
+        <div class={factRow}>
+          <dt class={factLabel}>Part of</dt>
+          <dd class="text-[15px]"><a href={href(`technologies/${parent.id}/`)} class="font-medium underline-offset-4 hover:underline">{relationLabel(t.parent!.as, parent.name)}</a></dd>
+        </div>
+      )}
+      <div class={factRow}>
+        <dt class={factLabel}>Type</dt>
+        <dd class="text-[15px]">{PROVIDER_TYPES[t.provider]}</dd>
+      </div>
+      {t.vendor && (
+        <div class={factRow}>
+          <dt class={factLabel}>Made by</dt>
+          <dd class="text-[15px]">{foundation
+            ? <a href={href(`foundations/${foundation.id}/`)} class="underline decoration-dotted underline-offset-4 hover:text-brand" title={`What it means to be a project of ${foundation.name}`}>{t.vendor}</a>
+            : t.vendor}</dd>
+        </div>
+      )}
+      {t.license && (
+        <div class={factRow}>
+          <dt class={factLabel}>License</dt>
+          <dd class="text-[15px] leading-snug"><Md text={t.license} /></dd>
+        </div>
+      )}
+      {t.status && (
+        <div class={factRow}>
+          <dt class={factLabel}>Status</dt>
+          <dd class="text-[15px] leading-snug"><span class="font-medium">{STAGE_LABELS[t.status.stage]}</span>{t.status.since && !t.status.note.includes(t.status.since.slice(0, 4)) && <span class="text-muted-foreground"> since {longDate(t.status.since)}</span>}. <Md text={t.status.note} /></dd>
+        </div>
+      )}
+      {t.archived && (
+        <div class={factRow}>
+          <dt class={factLabel}>Status</dt>
+          <dd class="text-[15px]"><span class="font-medium text-(--warn)">Archived</span> since {since}</dd>
+        </div>
+      )}
+      <div class={factRow}>
+        <dt class={factLabel}>Facts checked</dt>
+        <dd class="text-[15px]"><a href="#sources" class="underline-offset-4 hover:underline">{longDate(t.checked)}</a></dd>
+      </div>
+      <div class="flex flex-wrap gap-2 px-4 py-3">
+        <a href={t.website} class={pill} rel="noopener">Website <ExternalLinkIcon className="size-3.5" /></a>
+        {t.repo && <a href={t.repo} class={pill} rel="noopener"><CodeIcon className="size-3.5" />Source code{t.archived && ' (archived)'} <ExternalLinkIcon className="size-3.5" /></a>}
+      </div>
+    </dl>
+
+    <PageToc items={toc} />
+
     {t.archived && (
-      <aside class="mt-8 max-w-3xl rounded-xl border-l-4 border-(--warn) bg-(--warn)/10 px-4 py-3.5" aria-label="Archived">
+      <aside class="mt-8 rounded-xl border-l-4 border-(--warn) bg-(--warn)/10 px-4 py-3.5" aria-label="Archived">
         <p class="flex items-center gap-2 font-semibold text-(--warn)"><ArchiveIcon className="size-4" />Archived since {since}</p>
         <p class="mt-1.5 leading-relaxed"><Md text={t.archived.reason} /></p>
         <p class="mt-3 flex flex-wrap items-center gap-2 text-sm">
@@ -100,60 +158,46 @@ const pill = 'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5
       </aside>
     )}
 
-    {linked && (
-      <section class="mt-10">
-        <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-          <SectionLabel class="mb-0">How it fits with other technologies</SectionLabel>
-          <span class="hidden text-sm text-muted-foreground sm:inline">Each arrow reads left to right as a sentence</span>
-        </div>
-        <TechGraph tech={t} catalog={c} />
-      </section>
-    )}
+    <section id="overview" class="mt-12 scroll-mt-20">
+      <SectionLabel>What it is</SectionLabel>
+      <div class="space-y-4 text-[17px] leading-relaxed">
+        {t.intro.map(p => <p><Md text={p} /></p>)}
+      </div>
+    </section>
 
-    <div class="mt-12 grid gap-10 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
-      <section>
-        <SectionLabel>What it is</SectionLabel>
-        <div class="space-y-4 text-[17px] leading-relaxed">
-          {t.intro.map(p => <p><Md text={p} /></p>)}
-        </div>
-      </section>
-      <section class="grid content-start gap-8">
-        <div>
-          <SectionLabel>Why teams pick it</SectionLabel>
-          <ul class="space-y-2.5">
-            {t.strengths.map(u => (
-              <li class="flex gap-2.5 leading-snug">
-                <span class="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-(--ok)/15 text-(--ok)"><CheckIcon className="size-3.5" /></span>
-                <span><Md text={u} /></span>
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div>
-          <SectionLabel>Watch out for</SectionLabel>
-          <ul class="space-y-2.5">
-            {t.limits.map(u => (
-              <li class="flex gap-2.5 leading-snug">
-                <span class="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-(--bad)/15 text-(--bad)"><XIcon className="size-3.5" /></span>
-                <span><Md text={u} /></span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </section>
-    </div>
+    <section id="pick" class="mt-10 scroll-mt-20">
+      <SectionLabel>Why teams pick it</SectionLabel>
+      <ul class="space-y-2.5">
+        {t.strengths.map(u => (
+          <li class="flex gap-2.5 leading-snug">
+            <span class="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-(--ok)/15 text-(--ok)"><CheckIcon className="size-3.5" /></span>
+            <span><Md text={u} /></span>
+          </li>
+        ))}
+      </ul>
+    </section>
+
+    <section id="watch" class="mt-10 scroll-mt-20">
+      <SectionLabel>Watch out for</SectionLabel>
+      <ul class="space-y-2.5">
+        {t.limits.map(u => (
+          <li class="flex gap-2.5 leading-snug">
+            <span class="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-(--bad)/15 text-(--bad)"><XIcon className="size-3.5" /></span>
+            <span><Md text={u} /></span>
+          </li>
+        ))}
+      </ul>
+    </section>
 
     {family.length > 0 && (
-      <section class="mt-12">
-        <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-          <SectionLabel class="mb-0">The {t.name} family</SectionLabel>
-          <span class="text-sm text-muted-foreground">{children.length} technologies built from or on {t.name}</span>
-        </div>
+      <section id="family" class="mt-12 scroll-mt-20">
+        <SectionLabel>The {t.name} family</SectionLabel>
+        <p class="-mt-1 mb-4 text-sm text-muted-foreground">{children.length} technologies built from or on {t.name}</p>
         <div class="grid gap-6">
           {family.map(g => (
             <div>
               <h3 class="mb-2 text-sm font-medium">{RELATION_GROUPS[g.as]}</h3>
-              <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <div class="grid gap-2">
                 {g.techs.map(x => <TechCard tech={x} />)}
               </div>
             </div>
@@ -162,32 +206,25 @@ const pill = 'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5
       </section>
     )}
 
-    <section class="mt-12">
-      <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-        <SectionLabel class="mb-0">See it in a real stack</SectionLabel>
-        {featured && <a href={href(`architectures/${featured.id}/`)} class="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">{featured.title} →</a>}
-      </div>
-      {featured ? (
-        <>
-          <LiveModel client:visible diagram={featured.diagram} links={diagramLinks(c, featured.diagram, { tech: t.id })} highlight={diagramHere(featured.diagram, { tech: t.id })}>
-            <a href={href(`playground/?a=${featured.id}`)} class="hidden h-7 items-center rounded-md border px-2.5 text-[13px] font-medium transition hover:bg-muted sm:inline-flex">Open in playground</a>
-          </LiveModel>
-          {archs.length > 1 && (
-            <div class="mt-4 grid gap-3 sm:grid-cols-2">
-              {archs.slice(1).map(a => <ArchCard arch={a} catalog={c} highlight={t.id} />)}
-            </div>
-          )}
-        </>
-      ) : (
-        <a href={href('playground/')} class="flex items-center justify-between gap-3 rounded-xl border border-dashed px-5 py-4 text-sm text-muted-foreground transition hover:border-foreground/30 hover:text-foreground">
-          <span>No architecture uses {t.name} yet. Drop it into the playground and wire it up yourself.</span>
-          <span class="shrink-0 font-medium">Open playground →</span>
-        </a>
-      )}
-    </section>
+    {alternatives.length > 0 && (
+      <section id="alternatives" class="mt-12 scroll-mt-20">
+        <SectionLabel>{t.archived ? 'Alternatives, recommended first' : parent ? `More of the ${parent.name} family` : 'Alternatives'}</SectionLabel>
+        <a href={href(commonPath)} class="-mt-1 mb-4 inline-block text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">What all {commonName} have in common →</a>
+        <div class="grid gap-2">
+          {alternatives.map(a => <TechCard tech={a} family={c.childrenOf(a.id)} note={parent && a.parent ? RELATION_GROUPS[a.parent.as] : undefined} />)}
+        </div>
+      </section>
+    )}
+
+    {linked && (
+      <section id="fits" class="mt-12 scroll-mt-20">
+        <SectionLabel>How it fits with other technologies</SectionLabel>
+        <TechGraph tech={t} catalog={c} />
+      </section>
+    )}
 
     {t.snippet && (
-      <section class="mt-12" data-codebox>
+      <section id="code" class="mt-12 scroll-mt-20" data-codebox>
         <div class="mb-3 flex items-center justify-between gap-2">
           <SectionLabel class="mb-0">{t.snippet.title ?? 'In code'} · {t.snippet.lang}</SectionLabel>
           <button type="button" data-copy class="inline-flex h-7 items-center gap-1.5 rounded-md border bg-background px-2.5 text-xs font-medium transition hover:bg-muted">Copy</button>
@@ -198,22 +235,36 @@ const pill = 'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5
       </section>
     )}
 
-    {t.history && <History history={t.history} />}
-
-    {alternatives.length > 0 && (
-      <section class="mt-12">
-        <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-          <SectionLabel class="mb-0">{t.archived ? 'Alternatives, recommended first' : parent ? `More of the ${parent.name} family` : 'Alternatives'}</SectionLabel>
-          <a href={href(commonPath)} class="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">What all {commonName} have in common →</a>
-        </div>
-        <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {alternatives.map(a => <TechCard tech={a} family={c.childrenOf(a.id)} note={parent && a.parent ? RELATION_GROUPS[a.parent.as] : undefined} />)}
-        </div>
-      </section>
+    {t.sections.length > 0 && (
+      <div class="mt-16 border-t pt-4">
+        {t.sections.map((s, i) => <TechSection section={s} anchor={anchors[i]} catalog={c} />)}
+      </div>
     )}
 
+    <section id="stack" class="mt-14 scroll-mt-20">
+      <SectionLabel>See it in a real stack</SectionLabel>
+      {featured ? (
+        <>
+          <a href={href(`architectures/${featured.id}/`)} class="-mt-1 mb-3 inline-block text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">{featured.title} →</a>
+          <LiveModel client:visible diagram={featured.diagram} links={diagramLinks(c, featured.diagram, { tech: t.id })} highlight={diagramHere(featured.diagram, { tech: t.id })}>
+            <a href={href(`playground/?a=${featured.id}`)} class="hidden h-7 items-center rounded-md border px-2.5 text-[13px] font-medium transition hover:bg-muted sm:inline-flex">Open in playground</a>
+          </LiveModel>
+          {archs.length > 1 && (
+            <div class="mt-4 grid gap-2">
+              {archs.slice(1).map(a => <ArchCard arch={a} catalog={c} highlight={t.id} />)}
+            </div>
+          )}
+        </>
+      ) : (
+        <a href={href('playground/')} class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed px-5 py-4 text-sm text-muted-foreground transition hover:border-foreground/30 hover:text-foreground">
+          <span>No architecture uses {t.name} yet. Drop it into the playground and wire it up yourself.</span>
+          <span class="shrink-0 font-medium">Open playground →</span>
+        </a>
+      )}
+    </section>
+
     {compares.length > 0 && (
-      <section class="mt-12">
+      <section id="compared" class="mt-12 scroll-mt-20">
         <SectionLabel>Compared side by side</SectionLabel>
         <div class="flex flex-wrap gap-2">
           {compares.map(m => (
@@ -226,48 +277,32 @@ const pill = 'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5
     )}
 
     {resources.length > 0 && (
-      <section class="mt-12">
-        <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-          <SectionLabel class="mb-0">Worth exploring</SectionLabel>
-          <a href={href('resources/')} class="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">All resources →</a>
-        </div>
+      <section id="resources" class="mt-12 scroll-mt-20">
+        <SectionLabel>Worth exploring</SectionLabel>
         <ResourceList resources={resources} />
+        <a href={href('resources/')} class="mt-3 inline-block text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">All resources →</a>
       </section>
     )}
 
     {benchmarks.length > 0 && (
-      <section class="mt-12">
-        <div class="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-          <SectionLabel class="mb-0">Benchmarks</SectionLabel>
-          <a href={href('benchmarks/')} class="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">How to read a benchmark →</a>
-        </div>
+      <section id="benchmarks" class="mt-12 scroll-mt-20">
+        <SectionLabel>Benchmarks</SectionLabel>
         <BenchmarkList benchmarks={benchmarks} catalog={c} tech={t.id} />
+        <a href={href('benchmarks/')} class="mt-3 inline-block text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">How to read a benchmark →</a>
       </section>
     )}
 
-    {t.sections.length > 0 && (
-      <div class="mt-16 border-t pt-10">
-        <SectionLabel>In depth</SectionLabel>
-        <nav class="flex flex-wrap gap-2" aria-label="On this page">
-          {t.sections.map((s, i) => (
-            <a href={`#${anchors[i]}`} class="rounded-full border px-3 py-1 text-sm text-muted-foreground transition hover:border-foreground/30 hover:text-foreground">{s.title}</a>
-          ))}
-        </nav>
-        {t.sections.map((s, i) => <TechSection section={s} anchor={anchors[i]} catalog={c} />)}
-      </div>
-    )}
+    {t.history && <History history={t.history} />}
 
-    <section class="mt-14 border-t pt-6 text-sm">
-      <SectionLabel>Sources · facts checked {t.checked}</SectionLabel>
-      <SourceList sources={t.sources} />
-      {repo && (
-        <p class="mt-6 text-muted-foreground">
-          <a href={`${repo}/edit/main/content/technologies/${t.id}.json`} class="inline-flex items-center gap-1.5 underline-offset-4 hover:text-foreground hover:underline">
-            <PencilIcon className="size-3.5" />Improve this page on GitHub
-          </a>
-        </p>
-      )}
-    </section>
+    <Sources sources={t.sources} checked={t.checked} />
+
+    {repo && (
+      <p class="mt-6 text-sm text-muted-foreground">
+        <a href={`${repo}/edit/main/content/technologies/${t.id}.json`} class="inline-flex items-center gap-1.5 underline-offset-4 hover:text-foreground hover:underline">
+          <PencilIcon className="size-3.5" />Improve this page on GitHub
+        </a>
+      </p>
+    )}
   </article>
 </Base>
 

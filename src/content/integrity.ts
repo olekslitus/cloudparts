@@ -75,6 +75,24 @@ export function findProblems({ parts, categories, concepts, technologies, archit
     }
   }
 
+  // groups: only for concepts without kinds, naming each top-level technology of the concept at most once
+  for (const { id, data } of concepts) {
+    if (!data.groups.length) continue;
+    const where = `content/concepts/${id}.json`;
+    if (data.kinds.length) problems.push(`${where}: has both "kinds" and "groups"; kinds already group its technologies`);
+    const seen = new Set<string>();
+    for (const g of data.groups) {
+      for (const t of g.technologies) {
+        const tech = technologies.find(x => x.id === t);
+        if (!tech) problems.push(`${where}: group "${g.name}" has unknown technology "${t}"`);
+        else if (!tech.data.concepts.includes(id)) problems.push(`${where}: group "${g.name}" lists "${t}", which doesn't list this concept`);
+        else if (tech.data.parent) problems.push(`${where}: group "${g.name}" lists "${t}", which is shown under its parent "${tech.data.parent.id}"`);
+        if (seen.has(t)) problems.push(`${where}: "${t}" is in two groups`);
+        seen.add(t);
+      }
+    }
+  }
+
   for (const { id, data } of technologies) {
     const where = `content/technologies/${id}.json`;
     for (const c of data.concepts) {
@@ -87,6 +105,7 @@ export function findProblems({ parts, categories, concepts, technologies, archit
       if (seen.has(w.id)) problems.push(`${where}: "worksWith" lists "${w.id}" twice`);
       seen.add(w.id);
     }
+    if (data.archived && data.status) problems.push(`${where}: set "archived" or "status", not both`);
     for (const a of data.archived?.alternatives ?? []) {
       if (a === id) problems.push(`${where}: "archived.alternatives" lists the technology itself`);
       else if (!techIds.has(a)) problems.push(`${where}: "archived.alternatives" has unknown technology "${a}"`);

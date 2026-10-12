@@ -2,7 +2,7 @@ import { ChevronRightIcon, MenuIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
-import type { NavData } from '@/lib/nav';
+import { STAGE_LABELS, STAGE_WARN, type NavData } from '@/lib/nav';
 import { cn } from '@/lib/utils';
 
 type Tech = NavData['groups'][number]['technologies'][number];
@@ -39,7 +39,7 @@ function Techs({ techs, base, active }: { techs: Tech[]; base: string; active?: 
   const link = (t: Tech) => (
     <a href={`${base}technologies/${t.id}/`} aria-current={t.id === active ? 'page' : undefined} className={itemClass(t.id === active)}>
       <span className="truncate">{t.name}</span>
-      {t.archived && <span className="ml-auto font-mono text-[10px] text-(--warn) uppercase">Archived</span>}
+      {t.stage && <span className={cn('ml-auto font-mono text-[10px] uppercase', STAGE_WARN.has(t.stage) ? 'text-(--warn)' : 'text-brand')}>{STAGE_LABELS[t.stage]}</span>}
     </a>
   );
   return techs.filter(t => !t.parent || !techs.some(x => x.id === t.parent)).map(t => {
@@ -94,14 +94,13 @@ export default function MobileNav({ nav, base, active, page, activePart, activeC
                   return (
                     <div key={g.id} className="mt-2 ml-[15px] border-l pl-1">
                       <a href={`${base}topics/${g.id}/`} aria-current={on ? 'page' : undefined} className={cn(heading, 'ml-[18px] rounded-md py-1 hover:bg-muted hover:text-foreground', on && 'bg-brand-soft text-foreground')}>
-                        <span>{g.name}</span><span>{g.code}</span>
+                        {g.name}
                       </a>
                       {g.concepts.map(p => {
                         const techs = g.technologies.filter(t => t.conceptId === p.id);
                         const here = page === 'concept' && p.id === active;
                         const link = (
                           <a href={`${base}concepts/${p.id}/`} aria-current={here ? 'page' : undefined} className={itemClass(here)}>
-                            <span className="w-12 shrink-0 font-mono text-[11px] text-muted-foreground">{p.code}</span>
                             <span className="min-w-0 flex-1">{p.name}</span>
                             {techs.length > 0 && <span className="font-mono text-[10px] text-muted-foreground">{techs.length}</span>}
                           </a>

@@ -51,6 +51,7 @@ This is the most common contribution. Copy `content/technologies/ducklake.json` 
 | `provider` | `aws`, `gcp` or `azure` for that cloud's own service; `oss` for open source; `vendor` for a commercial product from another company. |
 | `vendor`, `license`, `website` | Who makes it, under what licence, and its homepage. |
 | `repo` | The official source repository, if the code is public, e.g. `"https://github.com/apache/kafka"`. Leave it out for closed services. |
+| `status` | Optional lifecycle badge for a maintained technology: `stage` (`preview`, `beta`, `experimental`, `incubating`, `renamed`, `dormant` or `deprecated`), a one-sentence `note` with the facts, and `since` (`YYYY-MM-DD`) if a source dates it. Only set it when the page’s sources say so; leave it out for stable, generally available products. See `basin-catalog.json`. |
 | `archived` | Only when the project is no longer maintained or can’t be installed the usual way: `since` (`YYYY-MM-DD`), a `reason`, and `alternatives`, ids of maintained technologies, best fit first. The page shows a banner and the sidebar tags it. See `minio.json`. |
 | `summary` | One plain sentence. |
 | `intro` | One to three short paragraphs on how it works and what makes it different. |
@@ -105,6 +106,7 @@ Concepts are the vendor-neutral ideas, so new ones are rarer.
    | `diagram` | The live model. See below. Optional: leave it out when moving packets can’t show the idea. |
    | `sections` | Optional deep-dive sections (`text`, `table`, `cards`, `model`, `code`), as on technologies, shown after the example. |
    | `kinds` | Optional. Sub-types, each with its own page at `/concepts/<concept>/<kind>/`: an `id` (unique across concepts), `name`, `summary`, one to three `body` paragraphs and `sources`. Every technology that lists the concept then names one of them. See `file-formats.json`. |
+   | `groups` | Optional, for concepts without kinds that list many technologies: headings that sort them by role, each with a `name`, an optional one-line `summary` and the `technologies` it holds, in order. Technologies left out appear under “Other”. See `query-engines.json`. |
    | `history` | Where the idea came from. See [History](#history) below. |
    | `sources` | Direct sources for the facts on the page, such as each provider’s docs page and the relevant RFC or paper. See [Sources](#sources). |
 

@@ -252,7 +252,7 @@ export const concept = z.strictObject({
   $schema: z.string().optional(),
   name: text.describe('Display name, e.g. "Message queues".'),
   category: id.describe('Id from content/categories.json.'),
-  order: z.number().describe('Position within the category. Codes like MSG-02 follow this order.'),
+  order: z.number().describe('Position within the category.'),
   summary: text.describe('One line shown in lists and under the title.'),
   howItWorks: text,
   analogy: text.describe('An everyday comparison.'),
@@ -276,6 +276,14 @@ export const concept = z.strictObject({
     .array(kind)
     .default([])
     .describe('Sub-types, in reading order, each with its own page. Every technology that lists this concept then names one in its "kinds".'),
+  groups: z
+    .array(z.strictObject({
+      name: text.describe('e.g. "Distributed SQL engines".'),
+      summary: text.optional().describe('One line on what the group has in common.'),
+      technologies: z.array(id).min(1).describe('Ids of technologies listed under this concept, in the order to show them.'),
+    }))
+    .default([])
+    .describe('Optional headings that sort a long list of technologies by role, e.g. libraries vs managed services. Only for concepts without kinds; technologies left out appear under “Other”.'),
   history,
   sources,
 });
@@ -304,6 +312,9 @@ export const PROVIDERS = ['aws', 'gcp', 'azure', 'oss', 'vendor'] as const;
 
 /** How a technology relates to the one it's listed under. */
 export const RELATIONS = ['managed', 'distribution', 'fork', 'local', 'tool', 'extension'] as const;
+
+/** Where a maintained technology is in its life, shown as a badge next to its name. */
+export const STAGES = ['preview', 'beta', 'experimental', 'incubating', 'renamed', 'dormant', 'deprecated'] as const;
 
 /** Simulation settings a technology brings into the playground. Missing fields fall back to its concept’s defaults. */
 export const play = nodeFields.pick({
@@ -339,6 +350,14 @@ export const technology = z.strictObject({
     })
     .optional()
     .describe('Set when the project is no longer maintained or can no longer be installed the usual way.'),
+  status: z
+    .strictObject({
+      stage: z.enum(STAGES).describe('preview or beta: not generally available yet. experimental: its makers say the API may change. incubating: still in a foundation’s incubator. renamed: now sold or released under another name. dormant: no longer actively developed, but not archived. deprecated: its makers tell users to move off it.'),
+      note: text.describe('One short sentence with the facts behind the badge, e.g. "Called R2 Data Catalog until 1 October 2026."'),
+      since: date.optional().describe('When it reached this stage, if a source gives the date.'),
+    })
+    .optional()
+    .describe('A lifecycle badge for a maintained technology. Leave it out for stable, generally available products; use archived instead for unmaintained ones.'),
   repo: z.url().optional().describe('Source code repository, e.g. "https://github.com/apache/kafka". Leave out for closed-source services.'),
   summary: text.describe('One line shown in lists and under the title.'),
   intro: z.array(text).min(1).describe('What it is and how it works, in one to three paragraphs.'),

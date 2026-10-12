@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { ArrowLeftRightIcon, BoxIcon, LayersIcon, LibraryIcon, NetworkIcon, SearchIcon } from 'lucide-react';
+import { ArrowLeftRightIcon, BoxIcon, LayersIcon, LibraryIcon, NetworkIcon, SearchIcon, ShapesIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Kbd } from '@/components/ui/kbd';
-import type { NavData } from '@/lib/nav';
+import { STAGE_LABELS, type NavData } from '@/lib/nav';
 
 // Every word must appear somewhere (name, id, summary or a product name); name matches rank first.
 function filter(value: string, search: string, keywords: string[] = []) {
@@ -16,6 +16,7 @@ function filter(value: string, search: string, keywords: string[] = []) {
 
 export default function Search({ nav, base }: { nav: NavData; base: string }) {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -25,8 +26,18 @@ export default function Search({ nav, base }: { nav: NavData; base: string }) {
         setOpen(o => !o);
       }
     };
+    // Other parts of the page (the home page's search box and example chips) open search with an optional query.
+    const onOpen = (e: Event) => {
+      setQuery(typeof (e as CustomEvent).detail === 'string' ? (e as CustomEvent<string>).detail : '');
+      setOpen(true);
+    };
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    document.addEventListener('open-search', onOpen);
+    document.documentElement.dataset.search = 'ready';
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('open-search', onOpen);
+    };
   }, []);
 
   const go = (path: string) => {
@@ -47,14 +58,14 @@ export default function Search({ nav, base }: { nav: NavData; base: string }) {
       </Button>
       <CommandDialog open={open} onOpenChange={setOpen} title="Search Cloud Parts" description="Find a topic, concept, technology or architecture, such as delivery, event loop or Kafka.">
         <Command filter={filter}>
-          <CommandInput placeholder="Try observability, event loop, Kafka…" />
+          <CommandInput placeholder="Try observability, event loop, Kafka…" value={query} onValueChange={setQuery} />
           <CommandList className="max-h-[min(60vh,420px)]">
             <CommandEmpty>Nothing matches. Try a topic like delivery, or a product like Kafka.</CommandEmpty>
             <CommandGroup heading="Topics">
               {nav.groups.map(g => (
                 <CommandItem
                   key={g.id}
-                  value={`${g.name} ${g.code}`}
+                  value={g.name}
                   keywords={[g.id, g.blurb, nav.parts.find(x => x.id === g.part)?.name ?? '', 'topic']}
                   onSelect={() => go(`topics/${g.id}/`)}
                 >
@@ -71,12 +82,12 @@ export default function Search({ nav, base }: { nav: NavData; base: string }) {
                 {g.concepts.map(p => (
                   <CommandItem
                     key={p.id}
-                    value={`${p.name} ${p.code}`}
+                    value={p.name}
                     keywords={[p.id, p.summary, p.products]}
                     onSelect={() => go(`concepts/${p.id}/`)}
                     className="items-start"
                   >
-                    <span className="mt-0.5 w-12 shrink-0 font-mono text-[11px] text-muted-foreground">{p.code}</span>
+                    <span className="mt-0.5 flex w-12 shrink-0 text-muted-foreground"><ShapesIcon /></span>
                     <span className="min-w-0">
                       <span className="block font-medium">{p.name}</span>
                       <span className="block truncate text-xs text-muted-foreground">{p.products}</span>
@@ -109,7 +120,7 @@ export default function Search({ nav, base }: { nav: NavData; base: string }) {
                     <span className="mt-0.5 flex w-12 shrink-0 text-muted-foreground"><BoxIcon /></span>
                     <span className="min-w-0">
                       <span className="block font-medium">{t.name}</span>
-                      <span className="block truncate text-xs text-muted-foreground">{t.context} · {t.summary}</span>
+                      <span className="block truncate text-xs text-muted-foreground">{t.stage && `${STAGE_LABELS[t.stage]} · `}{t.context} · {t.summary}</span>
                     </span>
                   </CommandItem>
                 ))}

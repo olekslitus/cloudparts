@@ -1,4 +1,4 @@
-import type { Relation } from '@/content/schema';
+import type { Relation, STAGES } from '@/content/schema';
 import type { Catalog } from './catalog';
 
 interface NavItem { id: string; name: string; summary: string }
@@ -19,6 +19,7 @@ export interface NavData {
       as?: Relation;
       terms: string;
       archived: boolean;
+      stage?: Stage;
     })[];
   }[];
   architectures: (NavItem & { terms: string })[];
@@ -27,6 +28,33 @@ export interface NavData {
 
 export const PROVIDER_NAMES = { aws: 'AWS', gcp: 'Google Cloud', azure: 'Azure', oss: 'Open source', vendor: 'Commercial' } as const;
 export const PROVIDER_SHORT = { aws: 'AWS', gcp: 'GCP', azure: 'Azure', oss: 'OSS', vendor: 'SaaS' } as const;
+/** What kind of offering it is, for fact boxes and tables. */
+export const PROVIDER_TYPES = {
+  aws: 'Managed service on AWS',
+  gcp: 'Managed service on Google Cloud',
+  azure: 'Managed service on Azure',
+  oss: 'Open source',
+  vendor: 'Commercial product',
+} as const;
+
+export type Stage = (typeof STAGES)[number] | 'archived';
+export const STAGE_LABELS: Record<Stage, string> = {
+  preview: 'Preview',
+  beta: 'Beta',
+  experimental: 'Experimental',
+  incubating: 'Incubating',
+  renamed: 'Renamed',
+  dormant: 'Dormant',
+  deprecated: 'Deprecated',
+  archived: 'Archived',
+};
+/** Stages that should make a reader think twice, shown in the warning color. */
+export const STAGE_WARN = new Set<Stage>(['dormant', 'deprecated', 'archived']);
+
+/** The badge a technology carries, if any: archived wins over a status. */
+export function stageOf(t: { archived?: unknown; status?: { stage: Stage } }): Stage | undefined {
+  return t.archived ? 'archived' : t.status?.stage;
+}
 
 /** Headings for a technology's children, grouped by how they relate to it. */
 export const RELATION_GROUPS: Record<Relation, string> = {
@@ -77,6 +105,7 @@ export function navData(c: Catalog): NavData {
           parent: t.parent?.id,
           as: t.parent?.as,
           archived: !!t.archived,
+          stage: stageOf(t),
           // concept and kind names, vendor and deep-dive headings, so "glacier" finds S3 and "lakehouse" finds DuckLake
           terms: [
             ...t.concepts.map(id => c.concept(id).name),
