@@ -336,7 +336,8 @@ export const play = nodeFields.pick({
 export const technology = z.strictObject({
   $schema: z.string().optional(),
   name: text.describe('Product name, e.g. "Apache Kafka".'),
-  concepts: z.array(id).min(1).describe('Concepts this is an example of. The first one decides where it’s listed.'),
+  concepts: z.array(id).min(1).describe('What it is: concepts this is an example of, e.g. ["key-value"] for Redis. The first one decides where it’s listed.'),
+  uses: z.array(id).default([]).describe('What it’s for: concepts it is used for without being one, e.g. ["cache", "queue"] for Redis, a key-value store. Listed under those concepts too.'),
   kinds: z
     .array(id)
     .default([])

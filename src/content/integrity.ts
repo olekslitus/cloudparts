@@ -95,6 +95,10 @@ export function findProblems({ parts, categories, concepts, technologies, archit
 
   for (const { id, data } of technologies) {
     const where = `content/technologies/${id}.json`;
+    for (const c of data.uses) {
+      if (!conceptIds.has(c)) problems.push(`${where}: "uses" has unknown concept "${c}"`);
+      else if (data.concepts.includes(c)) problems.push(`${where}: "${c}" is in both "concepts" and "uses"; keep it in "concepts" if it is one, in "uses" if it is only used for it`);
+    }
     for (const c of data.concepts) {
       if (!conceptIds.has(c)) problems.push(`${where}: "concepts" has unknown concept "${c}"`);
     }

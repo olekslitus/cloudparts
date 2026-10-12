@@ -45,7 +45,8 @@ This is the most common contribution. Copy `content/technologies/ducklake.json` 
 | Field | What goes there |
 |-------|-----------------|
 | `name` | The official product name, e.g. `"Apache Kafka"`. |
-| `concepts` | Concept ids it's an example of. The first decides where it's listed, e.g. `["stream"]`. |
+| `concepts` | What it is: concept ids it's an example of. The first decides where it's listed, e.g. `["stream"]` for Kafka. |
+| `uses` | Optional. What it's for: concepts it is used for without being one, e.g. `["cache", "queue"]` for Redis, which is a key-value store. It is listed under those concepts too, in an “Also used for this” group, and its page says “Used for”. A concept goes in one list or the other, never both: RabbitMQ *is* a message queue, Kafka is an event stream *used as* one. |
 | `kinds` | Needed when one of its concepts is split into kinds: one kind id per such concept, e.g. `["columnar-files"]` for a file format. The validator lists the choices. |
 | `parent` | Optional. Lists it under another technology with the same first concept instead of beside it: `{ "id": "kubernetes", "as": "managed" }`. `as` is `managed` (a cloud service that runs it), `distribution`, `fork`, `local` (runs it on a laptop or in CI), `tool` (installs or manages it) or `extension` (built on it). The parent's page then shows a family section. See `eks.json`. |
 | `provider` | `aws`, `gcp` or `azure` for that cloud's own service; `oss` for open source; `vendor` for a commercial product from another company. |

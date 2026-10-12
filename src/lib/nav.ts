@@ -113,6 +113,7 @@ export function navData(c: Catalog, logo: (id: string) => NavData['groups'][numb
           // concept and kind names, vendor and deep-dive headings, so "glacier" finds S3 and "lakehouse" finds DuckLake
           terms: [
             ...t.concepts.map(id => c.concept(id).name),
+            ...t.uses.map(id => c.concept(id).name),
             ...t.kinds.map(id => c.kind(id).name),
             t.parent ? c.tech(t.parent.id).name : '',
             t.vendor ?? '',

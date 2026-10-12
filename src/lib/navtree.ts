@@ -1,6 +1,6 @@
 // The sidebar as one tree: every section of the site, and under Concepts the whole handbook
 // (area › topic › concept › kind › technology › managed versions), each item shaped the same way.
-import type { Catalog, CatalogTech } from '@/lib/catalog';
+import type { Catalog, CatalogConcept, CatalogTech } from '@/lib/catalog';
 import { href, STAGE_LABELS, STAGE_WARN, stageOf } from '@/lib/nav';
 
 export interface NavNode {
@@ -28,7 +28,7 @@ export interface Where {
 }
 
 /** Icons the site uses outside the content: sections, kinds, comparisons, architectures, benchmarks. */
-export const SITE_ICONS = ['house', 'shapes', 'box', 'arrow-left-right', 'network', 'square-mouse-pointer', 'bookmark', 'gauge', 'folder'];
+export const SITE_ICONS = ['house', 'shapes', 'box', 'arrow-left-right', 'network', 'square-mouse-pointer', 'bookmark', 'gauge', 'folder', 'repeat'];
 
 export function navTree(c: Catalog, { section, page, active }: Where): NavNode[] {
   const on = (kind: Where['page'], id: string) => page === kind && active === id;
@@ -55,25 +55,36 @@ export function navTree(c: Catalog, { section, page, active }: Where): NavNode[]
         });
       });
 
+  // Technologies used for a concept without being one (Redis for caching): listed again under it,
+  // but never highlighted there, so only the technology's own branch opens.
+  const usedFor = (p: CatalogConcept, alongside: boolean): NavNode[] => {
+    const nodes = c.usedFor(p.id).map((t): NavNode => ({
+      key: `use:${p.id}:${t.id}`, label: t.name, href: href(`technologies/${t.id}/`), tech: t, muted: !!t.archived, children: [],
+    }));
+    if (!nodes.length || !alongside) return nodes;
+    return [{ key: `uses:${p.id}`, label: 'Also used for this', href: href(`concepts/${p.id}/#used-for`), icon: 'repeat', children: nodes }];
+  };
+
   const concepts = (catId: string): NavNode[] =>
     c.concepts.filter(p => p.category === catId).map(p => {
       const mine = c.technologies.filter(t => t.concepts[0] === p.id);
+      const own: NavNode[] = p.kinds.length
+        ? p.kinds.map(k => branch({
+            key: `kind:${p.id}:${k.id}`,
+            label: k.name,
+            href: href(`concepts/${p.id}/${k.id}/`),
+            icon: 'folder',
+            current: on('kind', k.id),
+            children: techs(mine.filter(t => t.kind === k.id)),
+          }))
+        : techs(mine);
       return branch({
         key: `concept:${p.id}`,
         label: p.name,
         href: href(`concepts/${p.id}/`),
         icon: p.icon,
         current: on('concept', p.id),
-        children: p.kinds.length
-          ? p.kinds.map(k => branch({
-              key: `kind:${p.id}:${k.id}`,
-              label: k.name,
-              href: href(`concepts/${p.id}/${k.id}/`),
-              icon: 'folder',
-              current: on('kind', k.id),
-              children: techs(mine.filter(t => t.kind === k.id)),
-            }))
-          : techs(mine),
+        children: [...own, ...usedFor(p, own.length > 0)],
       });
     });
 

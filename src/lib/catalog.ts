@@ -108,6 +108,8 @@ export interface Catalog {
   benchmarksAbout: (field: 'concepts' | 'technologies', id: string) => CatalogBenchmark[];
   /** Technologies that list this concept, primary ones first. */
   techsFor: (conceptId: string) => CatalogTech[];
+  /** Technologies used for a concept without being one, e.g. Redis for caching. */
+  usedFor: (conceptId: string) => CatalogTech[];
   /** Architectures whose diagram uses this technology. */
   archsWithTech: (techId: string) => CatalogArch[];
   /** Architectures that use this concept directly or through one of its technologies. */
@@ -262,6 +264,7 @@ async function load(): Promise<Catalog> {
     foundationOf: t => foundations.find(f => f.vendor === t.vendor),
     resourcesAbout: (field, id) => resources.filter(r => r[field].includes(id)),
     benchmarksAbout: (field, id) => benchmarks.filter(b => b[field].includes(id)),
+    usedFor: id => technologies.filter(t => t.uses.includes(id)),
     techsFor: id => [
       ...technologies.filter(t => t.concepts[0] === id),
       ...technologies.filter(t => t.concepts.indexOf(id) > 0),
