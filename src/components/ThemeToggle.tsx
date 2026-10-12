@@ -98,7 +98,7 @@ export default function ThemeToggle({ up = false }: { up?: boolean }) {
                 role="radio"
                 aria-checked={state.mode === id}
                 onClick={() => set({ mode: id })}
-                className="flex flex-col items-center gap-1 rounded-sm border px-1 py-1.5 font-mono text-[10px] tracking-wide text-muted-foreground uppercase transition hover:text-foreground aria-checked:border-brand aria-checked:bg-brand-soft aria-checked:text-foreground"
+                className="flex flex-col items-center gap-1 rounded-sm border px-1 py-1.5 font-mono text-[10px] tracking-wide text-muted-foreground uppercase transition hover:text-foreground aria-checked:border-foreground/40 aria-checked:bg-foreground/10 aria-checked:text-foreground"
               >
                 <Icon className="size-3.5" />{name}
               </button>
