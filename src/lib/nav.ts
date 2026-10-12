@@ -20,6 +20,7 @@ export interface NavData {
       terms: string;
       archived: boolean;
       stage?: Stage;
+      logo?: { src: string; tone?: 'dark' | 'light' };
     })[];
   }[];
   architectures: (NavItem & { terms: string })[];
@@ -78,7 +79,8 @@ export function relationLabel(as: Relation, parent: string): string {
   }[as];
 }
 
-export function navData(c: Catalog): NavData {
+/** `logo` finds a technology's logo (see src/lib/glyphs.ts, which is server-only and so passed in). */
+export function navData(c: Catalog, logo: (id: string) => NavData['groups'][number]['technologies'][number]['logo'] = () => undefined): NavData {
   return {
     parts: c.parts.map(p => ({ id: p.id, name: p.name })),
     groups: c.categories.map(cat => ({
@@ -106,6 +108,7 @@ export function navData(c: Catalog): NavData {
           as: t.parent?.as,
           archived: !!t.archived,
           stage: stageOf(t),
+          logo: logo(t.id),
           // concept and kind names, vendor and deep-dive headings, so "glacier" finds S3 and "lakehouse" finds DuckLake
           terms: [
             ...t.concepts.map(id => c.concept(id).name),

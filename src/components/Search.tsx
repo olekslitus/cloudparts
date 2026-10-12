@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Kbd } from '@/components/ui/kbd';
 import { STAGE_LABELS, type NavData } from '@/lib/nav';
+import { cn } from '@/lib/utils';
 
 // Every word must appear somewhere (name, id, summary or a product name); name matches rank first.
 function filter(value: string, search: string, keywords: string[] = []) {
@@ -118,7 +119,9 @@ export default function Search({ nav, base }: { nav: NavData; base: string }) {
                     onSelect={() => go(`technologies/${t.id}/`)}
                     className="items-start"
                   >
-                    <span className="mt-0.5 flex w-12 shrink-0 text-muted-foreground"><BoxIcon /></span>
+                    <span className="mt-0.5 flex w-12 shrink-0 text-muted-foreground">
+                      {t.logo ? <img src={t.logo.src} alt="" className={cn('size-4 object-contain', t.logo.tone && `logo-${t.logo.tone}`)} /> : <BoxIcon />}
+                    </span>
                     <span className="min-w-0">
                       <span className="block font-medium">{t.name}</span>
                       <span className="block truncate text-xs text-muted-foreground">{t.stage && `${STAGE_LABELS[t.stage]} · `}{t.context} · {t.summary}</span>

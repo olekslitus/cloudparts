@@ -2,6 +2,7 @@
 // time and to generate the JSON Schema files that editors use for autocomplete
 // (the "$schema" line at the top of each content file).
 import { z } from 'astro/zod';
+import { icons as lucideIcons } from 'lucide-react';
 
 const id = z
   .string()
@@ -152,8 +153,15 @@ const source = z
   .describe('The code, as one string or one string per line.')
   .transform(s => (Array.isArray(s) ? s.join('\n') : s));
 
+// A Lucide icon name in kebab case (see lucide.dev/icons), checked against the installed icon set.
+const icon = z
+  .string()
+  .refine(n => n.split('-').map(w => w[0]?.toUpperCase() + w.slice(1)).join('') in lucideIcons, { message: 'Not a Lucide icon name; see https://lucide.dev/icons' })
+  .describe('A Lucide icon name, e.g. "inbox" (see https://lucide.dev/icons).');
+
 export const part = z.strictObject({
   id,
+  icon,
   name: text,
   blurb: text,
   order: z.number(),
@@ -161,6 +169,7 @@ export const part = z.strictObject({
 
 export const category = z.strictObject({
   id,
+  icon,
   code: z.string().regex(/^[A-Z]{3}$/, 'Three capital letters, e.g. "CMP"'),
   name: text,
   blurb: text,
@@ -251,6 +260,7 @@ export const kind = z.strictObject({
 export const concept = z.strictObject({
   $schema: z.string().optional(),
   name: text.describe('Display name, e.g. "Message queues".'),
+  icon: icon.describe('Shown next to the name in the sidebar and lists, and next to technologies without a logo. A Lucide icon name, e.g. "inbox" (see https://lucide.dev/icons).'),
   category: id.describe('Id from content/categories.json.'),
   order: z.number().describe('Position within the category.'),
   summary: text.describe('One line shown in lists and under the title.'),

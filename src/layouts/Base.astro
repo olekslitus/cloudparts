@@ -1,14 +1,14 @@
 ---
 import '@/styles/global.css';
-import { PanelLeftCloseIcon, PanelLeftOpenIcon, SearchIcon } from 'lucide-react';
-import HandbookNav from '@/components/HandbookNav.astro';
-import MobileNav from '@/components/MobileNav';
+import { MenuIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, SearchIcon } from 'lucide-react';
+import NavTree from '@/components/NavTree.astro';
 import Outline from '@/components/Outline.astro';
 import Search from '@/components/Search';
 import ThemeToggle from '@/components/ThemeToggle';
 import { getCatalog } from '@/lib/catalog';
-import { SECTION_ICONS, type SectionIcon } from '@/lib/icons';
+import { logoOf } from '@/lib/glyphs';
 import { href, navData, REPO_URL } from '@/lib/nav';
+import { navTree, type Where } from '@/lib/navtree';
 
 export type Section = 'home' | 'concepts' | 'topics' | 'kinds' | 'technologies' | 'architectures' | 'compare' | 'resources' | 'benchmarks' | 'playground';
 
@@ -24,37 +24,17 @@ interface Props {
 
 const { title, description, active, section, outline } = Astro.props;
 const full = section === 'playground';
-const sidebar = section === 'architectures' ? 'architectures' : 'handbook';
 const catalog = await getCatalog();
-const nav = navData(catalog);
+const nav = navData(catalog, logoOf);
 const base = href();
 const repo = REPO_URL;
 const fullTitle = title ? `${title} · Cloud Parts` : 'Cloud Parts: Handbook for Modern Software Engineering';
 const desc = description ?? 'Cloud Parts, a handbook for modern software engineering: how code, systems, delivery and teams work, with live models, plain-language explanations and sources for every fact.';
-// every section of the site, at the top of the sidebar and in the phone menu
-const sections: { label: string; path: string; icon: SectionIcon; on: boolean }[] = [
-  { label: 'Home', path: '', icon: 'home', on: section === 'home' },
-  { label: 'Concepts', path: 'concepts/', icon: 'concepts', on: ['concepts', 'topics', 'kinds'].includes(section) },
-  { label: 'Technologies', path: 'technologies/', icon: 'technologies', on: section === 'technologies' },
-  { label: 'Compare', path: 'compare/', icon: 'compare', on: section === 'compare' },
-  { label: 'Architectures', path: 'architectures/', icon: 'architectures', on: section === 'architectures' },
-  { label: 'Playground', path: 'playground/', icon: 'playground', on: section === 'playground' },
-  { label: 'Resources', path: 'resources/', icon: 'resources', on: section === 'resources' },
-  { label: 'Benchmarks', path: 'benchmarks/', icon: 'benchmarks', on: section === 'benchmarks' },
-];
-// where the current page sits, so its branch of the sidebar starts open
-const page = !active ? undefined
-  : ({ topics: 'topic', concepts: 'concept', kinds: 'kind', technologies: 'tech' } as const)[section as string];
-const activeConcept = page === 'concept' ? active
-  : page === 'kind' ? catalog.kind(active!).concept
-  : page === 'tech' ? catalog.tech(active!).concepts[0]
+// the page being shown, so its item in the sidebar is highlighted and its branch starts open
+const page = active
+  ? ({ topics: 'topic', concepts: 'concept', kinds: 'kind', technologies: 'tech', compare: 'compare', architectures: 'architecture', benchmarks: 'benchmark' } as const)[section as string] as Where['page']
   : undefined;
-const activeCat = page === 'topic' ? active : activeConcept && catalog.concept(activeConcept).category;
-const activePart = activeCat && catalog.category(activeCat).part;
-const linkClass = (on: boolean) => [
-  'flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors hover:bg-muted',
-  on ? 'bg-brand-soft font-medium text-foreground' : 'text-foreground/80',
-];
+const tree = navTree(catalog, { section, page, active });
 const iconButton = 'inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground';
 ---
 
@@ -69,9 +49,17 @@ const iconButton = 'inline-flex size-8 items-center justify-center rounded-md te
     <meta property="og:description" content={desc} />
     <link rel="icon" href={href('favicon.svg')} type="image/svg+xml" />
     <style is:global>
-      /* The sidebar can be hidden on wide screens; the choice is set on <html> before first paint. */
-      html[data-sidebar='closed'] [data-sidebar-panel] { display: none !important; }
-      html:not([data-sidebar='closed']) [data-sidebar-open] { display: none !important; }
+      /* On wide screens the sidebar can be hidden; the choice is set on <html> before first paint.
+         On narrow screens it is a drawer, opened from the menu button. */
+      @media (min-width: 64rem) {
+        html[data-sidebar='closed'] [data-sidebar-panel] { display: none !important; }
+        html:not([data-sidebar='closed']) [data-sidebar-open] { display: none !important; }
+      }
+      @media (max-width: 63.99rem) {
+        html[data-drawer] [data-sidebar-panel], html[data-drawer] [data-drawer-backdrop] { display: flex !important; }
+        html[data-drawer] body { overflow: hidden; }
+      }
+      [data-nav][open] > summary [data-chev] { transform: rotate(90deg); }
     </style>
     <script is:inline>
       try {
@@ -85,7 +73,7 @@ const iconButton = 'inline-flex size-8 items-center justify-center rounded-md te
   </head>
   <body class="min-h-screen antialiased">
     <header class="sticky top-0 z-40 flex h-14 items-center gap-2 border-b bg-background/80 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/70 lg:hidden">
-      <MobileNav client:idle nav={nav} base={base} active={active} page={page} activePart={activePart} activeConcept={activeConcept} section={sidebar} links={sections.map(({ label, path, icon, on }) => ({ label, path, icon, on }))} />
+      <button type="button" data-drawer-open class={iconButton} aria-label="Open navigation" aria-expanded="false"><MenuIcon className="size-4" /></button>
       <a href={base} class="flex items-center gap-2" aria-label="Cloud Parts, home">
         <svg width="22" height="22" viewBox="0 0 26 26" aria-hidden="true" class="shrink-0 text-foreground">
             <rect x="1" y="1" width="24" height="24" rx="6" fill="none" stroke="currentColor" stroke-width="1.6"></rect>
@@ -107,7 +95,8 @@ const iconButton = 'inline-flex size-8 items-center justify-center rounded-md te
     </button>
 
     <div class="flex">
-      <aside data-sidebar-panel class="sticky top-0 hidden h-screen w-[280px] shrink-0 flex-col border-r bg-sidebar lg:flex" aria-label="Site navigation">
+      <div data-drawer-backdrop class="fixed inset-0 z-40 hidden bg-black/40 lg:hidden" aria-hidden="true"></div>
+      <aside data-sidebar-panel class="fixed inset-y-0 left-0 z-50 hidden h-dvh w-[min(300px,85vw)] shrink-0 flex-col border-r bg-sidebar shadow-xl lg:sticky lg:top-0 lg:flex lg:h-screen lg:w-[280px] lg:shadow-none" aria-label="Site navigation">
         <div class="flex items-center gap-2 px-3 pt-3 pb-2">
           <a href={base} class="flex min-w-0 items-center gap-2 rounded-md px-1.5 py-1 hover:bg-muted" aria-label="Cloud Parts, home">
             <svg width="22" height="22" viewBox="0 0 26 26" aria-hidden="true" class="shrink-0 text-foreground">
@@ -124,36 +113,9 @@ const iconButton = 'inline-flex size-8 items-center justify-center rounded-md te
           </button>
         </div>
         <div class="px-3 pb-2"><Search client:idle nav={nav} base={base} /></div>
-        <nav class="px-3" aria-label="Sections">
-          <ul class="grid gap-px">
-            {sections.map(l => {
-              const Icon = SECTION_ICONS[l.icon];
-              return (
-                <li>
-                  <a href={href(l.path)} aria-current={l.on ? 'page' : undefined} class:list={linkClass(l.on)}>
-                    <Icon className="size-4 shrink-0 text-muted-foreground" />{l.label}
-                  </a>
-                </li>
-              );
-            })}
-          </ul>
+        <nav class="min-h-0 flex-1 overflow-y-auto px-2 pt-1 pb-6" aria-label="Site" data-sidebar-scroll>
+          <NavTree nodes={tree} />
         </nav>
-        <div class="mt-3 min-h-0 flex-1 overflow-y-auto border-t px-3 pt-3 pb-6" data-sidebar-scroll>
-          {sidebar === 'handbook' && <HandbookNav catalog={catalog} page={page} active={active} activePart={activePart} activeConcept={activeConcept} />}
-          {sidebar === 'architectures' && (
-            <div>
-              <h3 class="mb-1 px-2 font-mono text-[11px] font-medium tracking-wider text-muted-foreground uppercase">Architectures</h3>
-              <ul>
-                {nav.architectures.map(a => (
-                  <li>
-                    <a href={href(`architectures/${a.id}/`)} aria-current={a.id === active ? 'page' : undefined} class:list={linkClass(a.id === active)}>{a.name}</a>
-                  </li>
-                ))}
-              </ul>
-              <a href={href('playground/')} class="mt-4 flex items-center gap-2 rounded-md border border-dashed px-2 py-2 text-sm text-muted-foreground transition hover:border-foreground/30 hover:text-foreground">Design your own in the playground →</a>
-            </div>
-          )}
-        </div>
         <div class="flex items-center gap-1 border-t px-3 py-2">
           <ThemeToggle client:load />
           {repo && <a href={repo} class={iconButton} aria-label="Source on GitHub" title="Source on GitHub"><svg viewBox="0 0 16 16" class="size-4" fill="currentColor" aria-hidden="true"><path d="M6.766 11.328c-2.063-.25-3.516-1.734-3.516-3.656 0-.781.281-1.625.75-2.188-.203-.515-.172-1.609.063-2.062.625-.078 1.468.25 1.968.703.594-.187 1.219-.281 1.985-.281.765 0 1.39.094 1.953.265.484-.437 1.344-.765 1.969-.687.218.422.25 1.515.046 2.047.5.593.766 1.39.766 2.203 0 1.922-1.453 3.375-3.547 3.64.531.344.89 1.094.89 1.954v1.625c0 .468.391.734.86.547C13.781 14.359 16 11.53 16 8.03 16 3.61 12.406 0 7.984 0 3.563 0 0 3.61 0 8.031a7.88 7.88 0 0 0 5.172 7.422c.422.156.828-.125.828-.547v-1.25c-.219.094-.5.156-.75.156-1.031 0-1.64-.562-2.078-1.609-.172-.422-.36-.672-.719-.719-.187-.015-.25-.093-.25-.187 0-.188.313-.328.625-.328.453 0 .844.281 1.25.86.313.452.64.655 1.031.655s.641-.14 1-.5c.266-.265.47-.5.657-.656" /></svg></a>}
@@ -182,7 +144,10 @@ const iconButton = 'inline-flex size-8 items-center justify-center rounded-md te
         if (open) delete document.documentElement.dataset.sidebar; else document.documentElement.dataset.sidebar = 'closed';
         try { localStorage.setItem('sidebar', open ? 'open' : 'closed'); } catch {}
       };
-      document.querySelector('[data-sidebar-close]')?.addEventListener('click', () => setSidebar(false));
+      // On narrow screens the same button closes the drawer instead.
+      document.querySelector('[data-sidebar-close]')?.addEventListener('click', () => {
+        if (matchMedia('(min-width: 64rem)').matches) setSidebar(false); else drawer(false);
+      });
       document.querySelector('[data-sidebar-open]')?.addEventListener('click', () => setSidebar(true));
 
       // Anything marked data-open-search opens the search dialog, with its value typed in.
@@ -202,21 +167,32 @@ const iconButton = 'inline-flex size-8 items-center justify-center rounded-md te
         b.addEventListener('click', () => openSearch(b.dataset.openSearch ?? ''));
       }
 
-      // Keeps the parts and concepts you expanded in the sidebar open from page to page.
-      const KEY = 'nav-open';
+      // Opens and closes the sidebar drawer on narrow screens.
+      const drawer = (open: boolean) => {
+        if (open) document.documentElement.dataset.drawer = ''; else delete document.documentElement.dataset.drawer;
+        document.querySelector('[data-drawer-open]')?.setAttribute('aria-expanded', String(open));
+        if (open) document.querySelector<HTMLElement>('[data-sidebar-scroll] [aria-current="page"]')?.scrollIntoView({ block: 'center' });
+      };
+      document.querySelector('[data-drawer-open]')?.addEventListener('click', () => drawer(true));
+      document.querySelector('[data-drawer-backdrop]')?.addEventListener('click', () => drawer(false));
+      addEventListener('keydown', e => { if (e.key === 'Escape' && 'drawer' in document.documentElement.dataset) drawer(false); });
+
+      // Remembers which items in the sidebar you opened or folded, from page to page. The branch
+      // holding the current page always opens.
+      const KEY = 'nav-folds';
       const boxes = [...document.querySelectorAll<HTMLDetailsElement>('aside details[data-nav]')];
-      if (boxes.length) {
-        let open = new Set<string>();
-        try { open = new Set(JSON.parse(sessionStorage.getItem(KEY) ?? '[]')); } catch {}
-        for (const d of boxes) if (open.has(d.dataset.nav!)) d.open = true;
-        for (const d of boxes) {
-          d.addEventListener('toggle', () => {
-            if (d.open) open.add(d.dataset.nav!); else open.delete(d.dataset.nav!);
-            try { sessionStorage.setItem(KEY, JSON.stringify([...open])); } catch {}
-          });
-        }
-        document.querySelector('[data-sidebar-scroll] [aria-current="page"]')?.scrollIntoView({ block: 'nearest' });
+      let folds: Record<string, boolean> = {};
+      try { folds = JSON.parse(sessionStorage.getItem(KEY) ?? '{}'); } catch {}
+      const here = document.querySelector('[data-sidebar-scroll] [aria-current="page"]');
+      for (const d of boxes) {
+        const key = d.dataset.nav!;
+        if (key in folds && !d.contains(here) ) d.open = folds[key];
+        d.addEventListener('toggle', () => {
+          folds[key] = d.open;
+          try { sessionStorage.setItem(KEY, JSON.stringify(folds)); } catch {}
+        });
       }
+      here?.scrollIntoView({ block: 'nearest' });
 
       // Opens a collapsed section (history, sources) when a link points into it.
       const reveal = () => {

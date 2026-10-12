@@ -49,8 +49,9 @@ This is the most common contribution. Copy `content/technologies/ducklake.json` 
 | `kinds` | Needed when one of its concepts is split into kinds: one kind id per such concept, e.g. `["columnar-files"]` for a file format. The validator lists the choices. |
 | `parent` | Optional. Lists it under another technology with the same first concept instead of beside it: `{ "id": "kubernetes", "as": "managed" }`. `as` is `managed` (a cloud service that runs it), `distribution`, `fork`, `local` (runs it on a laptop or in CI), `tool` (installs or manages it) or `extension` (built on it). The parent's page then shows a family section. See `eks.json`. |
 | `provider` | `aws`, `gcp` or `azure` for that cloud's own service; `oss` for open source; `vendor` for a commercial product from another company. |
-| `vendor`, `license`, `website` | Who makes it, under what licence, and its homepage. |
+| `vendor`, `license`, `website` | Who makes it, under what license, and its homepage. |
 | `repo` | The official source repository, if the code is public, e.g. `"https://github.com/apache/kafka"`. Leave it out for closed services. |
+| Logo | Not a field: save the product’s square logo as `public/logos/<id>.svg` (or a 64px `.png`), taken from [Simple Icons](https://simpleicons.org/), [Devicon](https://devicon.dev/) or the product’s own site. Name it `<id>.dark.svg` if it is near-black (it is inverted in dark mode) or `<id>.light.svg` if it is very pale (it gets a thin outline in light mode). Without one, the concept’s icon is shown. |
 | `status` | Optional lifecycle badge for a maintained technology: `stage` (`preview`, `beta`, `experimental`, `incubating`, `renamed`, `dormant` or `deprecated`), a one-sentence `note` with the facts, and `since` (`YYYY-MM-DD`) if a source dates it. Only set it when the page’s sources say so; leave it out for stable, generally available products. See `basin-catalog.json`. |
 | `archived` | Only when the project is no longer maintained or can’t be installed the usual way: `since` (`YYYY-MM-DD`), a `reason`, and `alternatives`, ids of maintained technologies, best fit first. The page shows a banner and the sidebar tags it. See `minio.json`. |
 | `summary` | One plain sentence. |
@@ -93,8 +94,9 @@ Concepts are the vendor-neutral ideas, so new ones are rarer.
    | Field | What goes there |
    |-------|-----------------|
    | `name` | Display name, e.g. `"Service mesh"`. |
+   | `icon` | A [Lucide](https://lucide.dev/icons) icon name, e.g. `"inbox"`, shown next to the name and next to its technologies that have no logo. The validator checks that it exists. |
    | `category` | An id from `categories.json`: `code`, `design`, `compute`, `network`, `messaging`, `storage`, `data`, `modeling`, `analytics`, `delivery`, `observe`, `security` or `org`. Each category belongs to a part (its `part` field) and gets a topic page at `/topics/<id>/` listing its concepts, technologies, comparisons and stacks. |
-   | `order` | Position within the category. Codes like `NET-03` follow this order. Existing concepts use 10, 20, 30..., so you can slot in between with 25. |
+   | `order` | Position within the category. Existing concepts use 10, 20, 30..., so you can slot in between with 25. |
    | `summary` | One plain sentence. Shown in lists and under the title. |
    | `howItWorks` | A short paragraph on the mechanism. |
    | `analogy` | An everyday comparison. |
