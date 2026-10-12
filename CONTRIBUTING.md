@@ -97,7 +97,8 @@ Concepts are the vendor-neutral ideas, so new ones are rarer.
    | `name` | Display name, e.g. `"Service mesh"`. |
    | `icon` | A [Lucide](https://lucide.dev/icons) icon name, e.g. `"inbox"`, shown next to the name and next to its technologies that have no logo. The validator checks that it exists. |
    | `category` | An id from `categories.json`: `code`, `design`, `compute`, `network`, `messaging`, `storage`, `data`, `modeling`, `analytics`, `delivery`, `observe`, `security` or `org`. Each category belongs to a part (its `part` field) and gets a topic page at `/topics/<id>/` listing its concepts, technologies, comparisons and stacks. |
-   | `order` | Position within the category. Existing concepts use 10, 20, 30..., so you can slot in between with 25. |
+   | `order` | Position within the category (or within its parent). Existing concepts use 10, 20, 30..., so you can slot in between with 25. Orders must be unique within the category. |
+   | `parent` | Optional. The id of a broader concept in the same category that this one sits under, like a section in a book chapter: `"cache"` for in-process caches, `"indexes"` for LSM trees. The sidebar, the topic page and the concepts list nest it there, its breadcrumb goes through the parent, and the parent's page lists it under “More on …”. |
    | `summary` | One plain sentence. Shown in lists and under the title. |
    | `howItWorks` | A short paragraph on the mechanism. |
    | `analogy` | An everyday comparison. |

@@ -93,6 +93,10 @@ export interface Catalog {
   concept: (id: string) => CatalogConcept;
   tech: (id: string) => CatalogTech;
   kind: (id: string) => CatalogKind;
+  /** The concepts directly under this one, in order. */
+  subconcepts: (id: string) => CatalogConcept[];
+  /** The concepts this one sits under, outermost first. */
+  ancestors: (id: string) => CatalogConcept[];
   /** Technologies of this kind: those listed under it first, then ones that also belong to it. */
   techsOfKind: (kindId: string) => CatalogTech[];
   /** Technologies listed under this one, by relation, then name. */
@@ -149,12 +153,16 @@ async function load(): Promise<Catalog> {
     throw new Error(`Content has ${problems.length} problem(s):\n  - ${problems.join('\n  - ')}`);
   }
 
+  // in reading order, like a book: each concept is followed by the ones that sit under it
   const concepts: CatalogConcept[] = [];
   for (const cat of categories) {
-    conceptEntries
-      .filter(p => p.data.category === cat.id)
-      .sort((a, b) => a.data.order - b.data.order)
-      .forEach((p, i) => concepts.push({ ...p.data, id: p.id, code: `${cat.code}-${String(i + 1).padStart(2, '0')}` }));
+    const inCat = conceptEntries.filter(p => p.data.category === cat.id).sort((a, b) => a.data.order - b.data.order);
+    const add = (parent?: string) => inCat.filter(p => p.data.parent === parent).forEach(p => {
+      concepts.push({ ...p.data, id: p.id, code: '' });
+      add(p.id);
+    });
+    add();
+    concepts.filter(p => p.category === cat.id).forEach((p, i) => (p.code = `${cat.code}-${String(i + 1).padStart(2, '0')}`));
   }
   const conceptMap = new Map(concepts.map(p => [p.id, p]));
   const conceptRank = new Map(concepts.map((p, i) => [p.id, i]));
@@ -253,6 +261,12 @@ async function load(): Promise<Catalog> {
     concept: id => conceptMap.get(id)!,
     tech: id => techMap.get(id)!,
     kind: id => kindMap.get(id)!,
+    subconcepts: id => concepts.filter(p => p.parent === id),
+    ancestors: id => {
+      const up: CatalogConcept[] = [];
+      for (let p = conceptMap.get(id)!; p.parent; p = conceptMap.get(p.parent)!) up.unshift(conceptMap.get(p.parent)!);
+      return up;
+    },
     techsOfKind: id => [
       ...technologies.filter(t => t.kind === id),
       ...technologies.filter(t => t.kind !== id && t.kinds.includes(id)),

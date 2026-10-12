@@ -66,6 +66,17 @@ export function findProblems({ parts, categories, concepts, technologies, archit
       if (r === id) problems.push(`${where}: "related" lists the concept itself`);
       else if (!conceptIds.has(r)) problems.push(`${where}: "related" has unknown concept "${r}"`);
     }
+    if (data.parent) {
+      const parent = concepts.find(p => p.id === data.parent);
+      if (!parent) problems.push(`${where}: "parent" has unknown concept "${data.parent}"`);
+      else if (parent.data.category !== data.category) problems.push(`${where}: "parent" is "${data.parent}", which is in ${parent.data.category}, not ${data.category}`);
+      // walk up: a concept can't end up under itself
+      const up = new Set([id]);
+      for (let at = parent; at?.data.parent; at = concepts.find(p => p.id === at!.data.parent)) {
+        if (up.has(at.data.parent)) { problems.push(`${where}: "parent" makes a loop through "${at.data.parent}"`); break; }
+        up.add(at.data.parent);
+      }
+    }
     if (data.diagram) links(where, data.diagram);
     tables(where, data.sections);
     for (const k of data.kinds) {

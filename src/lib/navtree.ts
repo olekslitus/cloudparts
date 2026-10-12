@@ -1,5 +1,6 @@
-// The sidebar as one tree: every section of the site, and under Concepts the whole handbook
-// (area › topic › concept › kind › technology › managed versions), each item shaped the same way.
+// The sidebar as one tree: every section of the site, each item shaped the same way. Concepts holds the
+// handbook as a book (area › topic › concept › the concepts and kinds under it); Technologies holds every
+// product once, by what it is (topic › type › kind › product › managed versions).
 import type { Catalog, CatalogConcept, CatalogTech } from '@/lib/catalog';
 import { href, STAGE_LABELS, STAGE_WARN, stageOf } from '@/lib/nav';
 
@@ -28,7 +29,7 @@ export interface Where {
 }
 
 /** Icons the site uses outside the content: sections, kinds, comparisons, architectures, benchmarks. */
-export const SITE_ICONS = ['house', 'shapes', 'box', 'arrow-left-right', 'network', 'square-mouse-pointer', 'bookmark', 'gauge', 'folder', 'repeat'];
+export const SITE_ICONS = ['house', 'shapes', 'box', 'arrow-left-right', 'network', 'square-mouse-pointer', 'bookmark', 'gauge', 'folder'];
 
 export function navTree(c: Catalog, { section, page, active }: Where): NavNode[] {
   const on = (kind: Where['page'], id: string) => page === kind && active === id;
@@ -55,38 +56,20 @@ export function navTree(c: Catalog, { section, page, active }: Where): NavNode[]
         });
       });
 
-  // Technologies used for a concept without being one (Redis for caching): listed again under it,
-  // but never highlighted there, so only the technology's own branch opens.
-  const usedFor = (p: CatalogConcept, alongside: boolean): NavNode[] => {
-    const nodes = c.usedFor(p.id).map((t): NavNode => ({
-      key: `use:${p.id}:${t.id}`, label: t.name, href: href(`technologies/${t.id}/`), tech: t, muted: !!t.archived, children: [],
-    }));
-    if (!nodes.length || !alongside) return nodes;
-    return [{ key: `uses:${p.id}`, label: 'Also used for this', href: href(`concepts/${p.id}/#used-for`), icon: 'repeat', children: nodes }];
-  };
-
-  const concepts = (catId: string): NavNode[] =>
-    c.concepts.filter(p => p.category === catId).map(p => {
-      const mine = c.technologies.filter(t => t.concepts[0] === p.id);
-      const own: NavNode[] = p.kinds.length
-        ? p.kinds.map(k => branch({
-            key: `kind:${p.id}:${k.id}`,
-            label: k.name,
-            href: href(`concepts/${p.id}/${k.id}/`),
-            icon: 'folder',
-            current: on('kind', k.id),
-            children: techs(mine.filter(t => t.kind === k.id)),
-          }))
-        : techs(mine);
-      return branch({
-        key: `concept:${p.id}`,
-        label: p.name,
-        href: href(`concepts/${p.id}/`),
-        icon: p.icon,
-        current: on('concept', p.id),
-        children: [...own, ...usedFor(p, own.length > 0)],
-      });
-    });
+  // Concepts read like a book: area › topic › concept › the concepts and kinds under it. No products here.
+  const concept = (p: CatalogConcept): NavNode => branch({
+    key: `concept:${p.id}`,
+    label: p.name,
+    href: href(`concepts/${p.id}/`),
+    icon: p.icon,
+    current: on('concept', p.id),
+    children: [
+      ...p.kinds.map(k => ({
+        key: `kind:${p.id}:${k.id}`, label: k.name, href: href(`concepts/${p.id}/${k.id}/`), icon: 'folder', current: on('kind', k.id), children: [],
+      })),
+      ...c.subconcepts(p.id).map(concept),
+    ],
+  });
 
   const handbook = c.parts.map(part => branch({
     key: `part:${part.id}`,
@@ -99,9 +82,34 @@ export function navTree(c: Catalog, { section, page, active }: Where): NavNode[]
       href: href(`topics/${cat.id}/`),
       icon: cat.icon,
       current: on('topic', cat.id),
-      children: concepts(cat.id),
+      children: c.concepts.filter(p => p.category === cat.id && !p.parent).map(concept),
     })),
   }));
+
+  // Every product once, under what it is: topic › type (the concept it's an example of) › kind › product.
+  // The topic, type and kind rows only lead to their pages, which the Concepts tree highlights.
+  const catalog = c.categories.map(cat => branch({
+    key: `techs:${cat.id}`,
+    label: cat.name,
+    href: href(`topics/${cat.id}/#technologies`),
+    icon: cat.icon,
+    children: c.concepts.filter(p => p.category === cat.id).flatMap(p => {
+      const mine = c.technologies.filter(t => t.concepts[0] === p.id);
+      if (!mine.length) return [];
+      const kinds = p.kinds.filter(k => mine.some(t => t.kind === k.id));
+      return [branch({
+        key: `type:${p.id}`,
+        label: p.name,
+        href: href(`concepts/${p.id}/#technologies`),
+        icon: p.icon,
+        children: kinds.length
+          ? kinds.map(k => branch({
+              key: `type:${p.id}:${k.id}`, label: k.name, href: href(`concepts/${p.id}/${k.id}/`), icon: 'folder', children: techs(mine.filter(t => t.kind === k.id)),
+            }))
+          : techs(mine),
+      })];
+    }),
+  })).filter(n => n.children.length);
 
   const leaf = (key: string, label: string, path: string, icon: string, current = false): NavNode =>
     ({ key, label, href: href(path), icon, current, children: [] });
@@ -109,7 +117,7 @@ export function navTree(c: Catalog, { section, page, active }: Where): NavNode[]
   return [
     leaf('home', 'Home', '', 'house', section === 'home'),
     branch({ ...leaf('concepts', 'Concepts', 'concepts/', 'shapes', section === 'concepts' && !active), open: true, children: handbook }),
-    leaf('technologies', 'Technologies', 'technologies/', 'box', section === 'technologies' && !active),
+    branch({ ...leaf('technologies', 'Technologies', 'technologies/', 'box', section === 'technologies' && !active), children: catalog }),
     branch({
       ...leaf('compare', 'Compare', 'compare/', 'arrow-left-right', section === 'compare' && !active),
       children: c.comparisons.map(m => leaf(`compare:${m.id}`, m.title, `compare/${m.id}/`, 'arrow-left-right', on('compare', m.id))),
