@@ -2,6 +2,7 @@ import { ChevronRightIcon, MenuIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
+import { partIcon, SECTION_ICONS, type SectionIcon } from '@/lib/icons';
 import { STAGE_LABELS, STAGE_WARN, type NavData } from '@/lib/nav';
 import { cn } from '@/lib/utils';
 
@@ -18,9 +19,8 @@ interface Props {
   activeConcept?: string;
   /** Which tree to show under the section links. */
   section: 'handbook' | 'architectures';
-  links: { label: string; path: string; on: boolean }[];
-  /** Smaller sections, listed after the main ones. */
-  more: { label: string; path: string; on: boolean }[];
+  /** Every section of the site, with its icon. */
+  links: { label: string; path: string; icon: SectionIcon; on: boolean }[];
 }
 
 const itemClass = (on: boolean) => cn('flex min-w-0 flex-1 items-baseline gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted', on && 'bg-brand-soft font-medium');
@@ -56,7 +56,7 @@ function Techs({ techs, base, active }: { techs: Tech[]; base: string; active?: 
   });
 }
 
-export default function MobileNav({ nav, base, active, page, activePart, activeConcept, section, links, more }: Props) {
+export default function MobileNav({ nav, base, active, page, activePart, activeConcept, section, links }: Props) {
   const handbook = section === 'handbook';
   return (
     <Sheet>
@@ -71,22 +71,20 @@ export default function MobileNav({ nav, base, active, page, activePart, activeC
         </SheetHeader>
         <ScrollArea className="min-h-0 flex-1">
           <nav className="px-3 pt-2 pb-8">
-            {links.map(l => (
-              <a key={l.path} href={base + l.path} aria-current={l.on ? 'page' : undefined} className={cn('block rounded-md px-2 py-1.5 text-sm font-medium hover:bg-muted', l.on && 'text-brand')}>
-                {l.label}
-              </a>
-            ))}
-            <div className="mt-1 flex flex-wrap gap-x-1 border-t pt-1">
-              {more.map(l => (
-                <a key={l.path} href={base + l.path} aria-current={l.on ? 'page' : undefined} className={cn('rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground', l.on && 'text-brand')}>
-                  {l.label}
+            {links.map(l => {
+              const Icon = SECTION_ICONS[l.icon];
+              return (
+                <a key={l.path} href={base + l.path} aria-current={l.on ? 'page' : undefined} className={cn('flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted', l.on && 'bg-brand-soft font-medium')}>
+                  <Icon className="size-4 shrink-0 text-muted-foreground" />{l.label}
                 </a>
-              ))}
-            </div>
+              );
+            })}
+            <div className="mt-2 border-t" />
             {handbook && nav.parts.map(part => (
               <details key={part.id} open={part.id === activePart} className="group/part mt-3">
                 <summary className={partSummary}>
                   <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open/part:rotate-90" />
+                  {(() => { const Icon = partIcon(part.id); return <Icon className="size-4 shrink-0 text-muted-foreground" />; })()}
                   {part.name}
                 </summary>
                 {nav.groups.filter(g => g.part === part.id).map(g => {

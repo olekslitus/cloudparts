@@ -14,6 +14,7 @@ function filter(value: string, search: string, keywords: string[] = []) {
   return words.every(w => name.includes(w)) ? 1 : 0.5;
 }
 
+/** The search button and dialog. Render it once per page: it also listens for ⌘K and "open-search" events. */
 export default function Search({ nav, base }: { nav: NavData; base: string }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -50,11 +51,11 @@ export default function Search({ nav, base }: { nav: NavData; base: string }) {
       <Button
         variant="outline"
         onClick={() => setOpen(true)}
-        className="h-8 w-full justify-start gap-2 bg-muted/40 px-2.5 font-normal text-muted-foreground shadow-none sm:w-56 lg:w-44 xl:w-64"
+        className="h-8 w-full justify-start gap-2 bg-muted/40 px-2.5 font-normal text-muted-foreground shadow-none"
       >
         <SearchIcon />
-        <span className="hidden sm:inline">Search…</span>
-                <Kbd className="ml-auto hidden sm:inline-flex">⌘K</Kbd>
+        <span>Search…</span>
+        <Kbd className="ml-auto">⌘K</Kbd>
       </Button>
       <CommandDialog open={open} onOpenChange={setOpen} title="Search Cloud Parts" description="Find a topic, concept, technology or architecture, such as delivery, event loop or Kafka.">
         <Command filter={filter}>
