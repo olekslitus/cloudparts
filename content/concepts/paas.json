@@ -1,0 +1,212 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Platform as a service (PaaS)",
+  "icon": "rocket",
+  "category": "compute",
+  "order": 10,
+  "parent": "cloud-service-models",
+  "summary": "You hand the platform your code or a container image, and it builds it, runs it as a set of long-lived processes, routes requests to them, restarts them when they fail and scales them, so you never manage servers or an operating system.",
+  "howItWorks": "You push source code, usually with `git push`, plus a short declaration of what to run: on Heroku and Dokku a `Procfile` with lines such as `web: java -jar lib/foobar.jar $PORT`. A build step turns the code into something runnable. Buildpacks do this without a Dockerfile: each one runs `detect` (a Python buildpack looks for `requirements.txt`, a Node.js one for a lockfile) and then `build`, which downloads dependencies, compiles the code and sets the start command. The result is a slug (a tarball of the app and its runtime) or, with Cloud Native Buildpacks, an OCI container image. The platform combines that build with the app’s config, which it injects as environment variables, into a numbered, append-only release, so rolling back means starting an older release. It then starts the release as processes on its own machines: Heroku calls them dynos, Cloud Foundry app instances on Diego cells. You scale by setting a count per process type (`web=3 worker=2`), or let an autoscaler do it. A router owns the public hostname and spreads incoming HTTP requests over the healthy `web` processes; Heroku’s routers pick a dyno at random. A process manager restarts crashed processes, moves them off failing hardware and replaces all of them on every deploy. Because any process can be killed and replaced, local disk is ephemeral: anything worth keeping lives in an attached backing service, such as a database whose URL arrives in `DATABASE_URL`. This is the contract the twelve-factor app methodology, written at Heroku, spells out.",
+  "analogy": "A serviced office instead of a building. You bring your team and your work; the landlord runs the reception desk that sends visitors to a free desk, the cleaning, the heating and the repairs, and adds desks when you grow. You can’t knock down walls or keep things on a desk overnight, because the desk you get tomorrow may be a different one, so anything important goes in the filing room down the hall.",
+  "useWhen": [
+    "A web app or API with ordinary needs: HTTP in, a database and a cache out, a background worker or two",
+    "A small team that would rather not patch operating systems, configure load balancers or run Kubernetes",
+    "You want deploys to be one `git push` or one CLI command, with releases you can roll back",
+    "The app already follows the twelve-factor rules: config in environment variables, no state on local disk"
+  ],
+  "avoidWhen": [
+    "The app needs local state that must survive a restart, such as files written to disk: every Heroku dyno gets a fresh filesystem and loses its writes when it stops or restarts",
+    "Requests run long: Heroku’s router ends any request that takes more than 30 seconds, and the limit can’t be changed, so long work belongs in a worker or a queue",
+    "You need control below the app: kernel settings, special hardware, unusual networking or a sidecar per process. Use VMs or container orchestration instead",
+    "Traffic is rare and bursty and you only want to pay per request: serverless functions scale to zero by design, while most PaaS processes are always on"
+  ],
+  "example": "A team runs a Python web app with a background worker. Its `Procfile` has two lines, `web` and `worker`, and a `git push heroku main` sends the code to Heroku. The Python buildpack detects `requirements.txt`, runs `pip install` and produces a build, and Heroku pairs it with the config vars as release v1. The team runs `heroku ps:scale web=3 worker=1` on Standard-1X dynos (0.5 GB each, $25 a month per dyno on the Common Runtime), so $100 a month for compute. A Postgres add-on sets `DATABASE_URL` and a Key-Value Store add-on sets `REDIS_URL`; the code reads both from the environment. Heroku’s routers send each request to one of the 3 web dynos at random. Report exports took 2 minutes and kept failing with the router’s 30-second timeout, so the web dyno now pushes them onto the Redis queue and the worker builds them. Each deploy creates a new release and replaces every dyno; one bad deploy was undone with `heroku releases:rollback`.",
+  "providers": {
+    "aws": "AWS Elastic Beanstalk (Standard mode runs apps on EC2, Cluster mode on EKS; no charge beyond the resources it creates); AWS App Runner (source code or an image to a scaling web service; closed to new customers, and AWS points new users to Amazon ECS Express Mode)",
+    "gcp": "App Engine (services, versions and instances scaled on demand; Google now recommends Cloud Run for new apps); Cloud Run (stateless container instances that scale on requests; `gcloud run deploy --source` builds the image with Google Cloud’s buildpacks)",
+    "azure": "Azure App Service (.NET, Java, Node.js, Python and PHP on Windows or Linux, or a custom container); Azure Container Apps (serverless containers that scale on HTTP traffic, events, CPU or memory, or any KEDA scaler)",
+    "oss": "Cloud Foundry (`cf push`, buildpacks, Diego); Dokku (a single-host “mini-Heroku” built on Docker, MIT); Coolify (self-hostable, Apache 2.0); CapRover (Docker and nginx); hosted: Heroku (Salesforce)"
+  },
+  "snippet": {
+    "lang": "bash",
+    "source": [
+      "# Procfile at the repository root: one process type per line",
+      "#   web: java -jar lib/foobar.jar $PORT",
+      "#   queue: java -jar lib/queue-processor.jar",
+      "",
+      "git push heroku main                      # build with a buildpack, create a release, start dynos",
+      "heroku ps:scale web=3 queue=2             # three web processes behind the router, two workers",
+      "heroku config:set ENCRYPTION_KEY=secret   # new release; the app reads it from ENV",
+      "heroku addons:create heroku-redis:mini    # attach a backing service; REDIS_URL is set for you",
+      "heroku releases:rollback v102             # start an earlier build and config again"
+    ]
+  },
+  "related": ["cloud-service-models", "serverless", "containers", "orchestration", "vm"],
+  "diagram": {
+    "caption": "Requests reach the platform’s router, which spreads them over a pool of identical app instances. A burst makes the platform start more instances (amber while they boot); when it passes, the extra instances are stopped and two stay running. Every instance talks to the same attached database, because none of them keeps data on its own disk.",
+    "h": 260,
+    "zones": [
+      { "x": 205, "y": 30, "w": 375, "h": 200, "label": "Run by the platform" }
+    ],
+    "nodes": [
+      {
+        "id": "users",
+        "x": 100,
+        "y": 130,
+        "label": "Users",
+        "sub": "HTTPS requests",
+        "emit": { "req": true, "color": 0, "jitter": 0.35, "phases": [[3500, 700], [3000, 140], [3500, 600]] },
+        "out": ["router"]
+      },
+      {
+        "id": "router",
+        "x": 285,
+        "y": 130,
+        "label": "Router",
+        "sub": "app.example.com",
+        "concept": "lb",
+        "out": ["app"]
+      },
+      {
+        "id": "app",
+        "x": 470,
+        "y": 130,
+        "kind": "pool",
+        "label": "App instances",
+        "sub": "web process · release v42",
+        "min": 2,
+        "max": 6,
+        "work": 600,
+        "idle": 3000,
+        "cold": 1200,
+        "coldText": "starting",
+        "concept": "autoscaling",
+        "out": ["db"]
+      },
+      {
+        "id": "db",
+        "x": 665,
+        "y": 130,
+        "label": "Database",
+        "sub": "attached via DATABASE_URL",
+        "concept": "relational",
+        "mode": "reply",
+        "delay": 60
+      }
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Where PaaS sits",
+      "intro": "The service models differ in what you hand over and what the provider runs for you. PaaS sits between renting machines or containers and handing over single functions.",
+      "corner": "Model",
+      "columns": ["You hand over", "The provider runs", "Scaling", "Example"],
+      "rows": [
+        { "label": "Virtual machines (IaaS)", "values": ["A machine image and everything inside it", "Hardware and the hypervisor", "You add machines, or configure an autoscaling group", "Amazon EC2"] },
+        { "label": "Containers and orchestration", "values": ["Container images plus a description of how to run them", "The cluster, if it is a managed service", "Replica counts and autoscalers you configure", "Kubernetes, Amazon EKS"] },
+        { "label": "Platform as a service", "values": ["Source code (or an image) and a list of process types", "The build, the OS, the router, restarts, logs and scaling", "A count per process type, or an autoscaler", "Heroku, Cloud Foundry, App Engine"] },
+        { "label": "Functions (FaaS)", "values": ["One function per event or request", "Everything, including when an instance exists at all", "Per request, from zero", "AWS Lambda"] }
+      ],
+      "notes": [
+        "The lines blur. Cloud Run and Azure Container Apps take a container image but run it the PaaS way, with routing and request-based scaling built in. Heroku’s Fir generation and Elastic Beanstalk’s Cluster mode run on Kubernetes underneath, and Heroku’s Eco dynos sleep after 30 minutes without traffic, like a function scaled to zero."
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Long-running processes, not functions",
+      "body": [
+        "A PaaS runs your app the way you would run it on your laptop: a process starts, binds to the port in `$PORT` and serves request after request until it is stopped. One web process can hold connections open, keep a warm in-memory cache and use a connection pool. You pay for each process while it runs, whether it is busy or not: Heroku lists dynos from $7 a month (Basic) to $1,500 a month (Performance-2XL) and bills them by usage.",
+        "Serverless functions turn that around. The platform starts an instance when an event arrives, may run one request per instance, and removes idle instances, so you pay per invocation and nothing when idle, at the cost of cold starts and limits on run time. If your app is a normal web server, a PaaS fits it without changes; if it is a handful of handlers that run now and then, functions are cheaper."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "The twelve-factor contract",
+      "intro": "The twelve-factor app, written by Heroku co-founder Adam Wiggins in 2011, lists what an app must do so that a platform can run it without knowing anything about it. These five factors carry most of the weight.",
+      "items": [
+        { "name": "Config in the environment", "tag": "III", "text": "Database URLs, credentials and hostnames live in environment variables, not in the code or in per-environment config files. The test: could the code be open-sourced at any moment without leaking a credential?" },
+        { "name": "Backing services as attached resources", "tag": "IV", "text": "A database, a queue or an SMTP server is a resource reached through a URL in the config. Swapping a local MySQL for Amazon RDS, or a failing database for a restored copy, changes the config and not the code." },
+        { "name": "Stateless processes", "tag": "VI", "text": "Memory and local disk are only a scratchpad for one request or job. A restart, a deploy or a move to another machine wipes them, and the next request may land on a different process anyway, so sticky sessions are out." },
+        { "name": "Port binding", "tag": "VII", "text": "The app brings its own web server library and listens on a port. The platform’s routing layer maps the public hostname to those ports." },
+        { "name": "Disposability", "tag": "IX", "text": "Processes start in seconds and shut down cleanly on `SIGTERM`: web processes stop accepting requests and finish the current ones, workers return their job to the queue. That is what lets the platform scale, deploy and move them at any moment." }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "PaaS in 2026",
+      "body": [
+        "The idea won, but several of the original platforms are now in maintenance. On February 6, 2026, Heroku moved to a “sustaining engineering model focused on stability, security, reliability, and support” and stopped offering Enterprise Account contracts to new customers; it still ships smaller features such as 1 GB slugs and Heroku Postgres Advanced. AWS closed App Runner to new customers, keeping it running for existing ones without new features, and recommends Amazon ECS Express Mode instead. Google’s own App Engine overview recommends Cloud Run to new users.",
+        "Meanwhile the parts PaaS invented became standards. Cloud Native Buildpacks, started by Pivotal and Heroku in 2018, graduated in the CNCF on August 11, 2026, and turn source code into an OCI image that any container platform can run. Heroku’s Fir generation runs dynos on Kubernetes (Amazon EKS), Elastic Beanstalk added a Cluster mode on EKS, and an SAP team showed an unchanged Cloud Foundry running on any Kubernetes cluster. The developer experience stays: push code, get a URL."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Before PaaS, putting a web app online meant running the infrastructure stack yourself: servers or virtual machines, the software on them, deploys and scaling. Heroku, founded in 2007 by James Lindenbaum, Adam Wiggins and Orion Henry, started as a place to run Ruby apps where none of that was your job. When Salesforce agreed to buy it in December 2010 for about $212 million, its press release summed up the pitch: “there are no virtual machines to manage, no software to install, and no hardware to manage and tune.” Heroku then ran more than 105,000 apps.",
+      "Others arrived quickly. Google launched a preview of App Engine on April 7, 2008, for the first 10,000 developers: web apps on Google’s infrastructure, with storage built on Bigtable and GFS, automatic scaling and load balancing. On April 12, 2011, VMware released Cloud Foundry as an open-source PaaS: the code went on GitHub under Apache 2.0, and VMware said it was built to be “multi-cloud”, working across private and public environments. The same year, Heroku conceived buildpacks, the scripts that turn source code into a runnable build, and Wiggins wrote down the lessons from hundreds of thousands of Heroku apps as the twelve-factor app.",
+      "Containers then changed what a platform builds and runs. In 2018 Pivotal and Heroku started Cloud Native Buildpacks, which produce standard OCI images instead of platform-specific slugs, and it graduated in the CNCF in 2026. Heroku ended its free plans in November 2022, citing fraud and abuse. By 2026 the big platforms were consolidating: Heroku moved to sustaining engineering, AWS closed App Runner to new customers and Google pointed App Engine users to Cloud Run, while the model itself lives on in container platforms that build from source and route requests for you."
+    ],
+    "choices": [
+      { "choice": "Build from source with buildpacks, not from a machine image or a Dockerfile", "why": "Each buildpack detects its language from files such as `requirements.txt` and knows how to install dependencies and compile, so developers only push code. Cloud Native Buildpacks say the same knowledge then sits with one specialized team instead of in every project’s Dockerfile." },
+      { "choice": "Config in environment variables", "why": "Twelve-factor picked env vars because they are easy to change between deploys without changing code, unlikely to be checked into the repository by mistake, and a language- and OS-agnostic standard, unlike config files or Java system properties." },
+      { "choice": "Stateless processes with an ephemeral filesystem", "why": "If no process holds data that matters, the platform can restart one daily, replace all of them on a deploy, move them off failing hardware or add more at any moment. Twelve-factor notes that a restart usually wipes local memory and disk anyway." },
+      { "choice": "Backing services attached through a URL", "why": "Treating a database or a mail server as an attached resource, located by a URL in the config, lets a platform provision it as an add-on or a service binding and hand it to the app, and lets operators swap it without touching code." }
+    ],
+    "timeline": [
+      { "year": "2007", "text": "Heroku is founded to run Ruby web apps" },
+      { "year": "2008", "text": "Google App Engine opens as a preview on April 7" },
+      { "year": "2010", "text": "Salesforce agrees to buy Heroku for about $212 million on December 8" },
+      { "year": "2011", "text": "VMware releases Cloud Foundry as open source (April 12); Heroku conceives buildpacks; Adam Wiggins writes the twelve-factor app" },
+      { "year": "2018", "text": "Pivotal and Heroku start Cloud Native Buildpacks, which joins the CNCF in October" },
+      { "year": "2022", "text": "Heroku stops offering free plans from November 28" },
+      { "year": "2026", "text": "Heroku moves to sustaining engineering (February 6); Cloud Native Buildpacks graduates in the CNCF (August 11)" }
+    ],
+    "sources": [
+      { "label": "Salesforce: Salesforce.com Signs Definitive Agreement to Acquire Heroku (Dec 8, 2010)", "url": "https://www.salesforce.com/news/press-releases/2010/12/08/salesforce-com-signs-definitive-agreement-to-acquire-heroku/" },
+      { "label": "Wikipedia: Heroku (founders, 2007)", "url": "https://en.wikipedia.org/wiki/Heroku" },
+      { "label": "Google App Engine Blog: Introducing Google App Engine + our new blog (Apr 7, 2008)", "url": "http://googleappengine.blogspot.com/2008/04/introducing-google-app-engine-our-new.html" },
+      { "label": "InfoQ: VMware Introduces Cloud Foundry (Apr 12, 2011)", "url": "https://www.infoq.com/news/2011/04/VMWare-Cloud-Foundry/" },
+      { "label": "Cloud Native Buildpacks: History (Heroku 2011, Pivotal and Heroku 2018, graduation Aug 11, 2026)", "url": "https://buildpacks.io/history/" },
+      { "label": "Heroku blog: Heroku Open Sources the Twelve-Factor App Definition (Nov 12, 2024)", "url": "https://www.heroku.com/blog/heroku-open-sources-twelve-factor-app-definition/" },
+      { "label": "The Twelve-Factor App: Introduction and background", "url": "https://12factor.net/" },
+      { "label": "Heroku blog: Heroku’s Next Chapter (free plans end Nov 28, 2022)", "url": "https://www.heroku.com/blog/next-chapter/" },
+      { "label": "Heroku blog: An Update on Heroku (Feb 6, 2026)", "url": "https://www.heroku.com/blog/an-update-on-heroku/" },
+      { "label": "AWS docs: AWS App Runner availability change", "url": "https://docs.aws.amazon.com/apprunner/latest/dg/apprunner-availability-change.html" },
+      { "label": "Google Cloud docs: An overview of App Engine (Cloud Run recommended for new users)", "url": "https://cloud.google.com/appengine/docs/an-overview-of-app-engine" }
+    ]
+  },
+  "sources": [
+    { "label": "Heroku Dev Center: How Heroku Works (Procfile, slugs and OCI images, releases, dyno manager, ephemeral filesystem, add-ons, routing)", "url": "https://devcenter.heroku.com/articles/how-heroku-works" },
+    { "label": "Heroku Dev Center: Dynos (ephemeral filesystem, scaling, Eco and Basic limits)", "url": "https://devcenter.heroku.com/articles/dynos" },
+    { "label": "Heroku Dev Center: Dyno Types (sizes and monthly prices)", "url": "https://devcenter.heroku.com/articles/dyno-types" },
+    { "label": "Heroku Dev Center: HTTP Routing (random dyno selection)", "url": "https://devcenter.heroku.com/articles/http-routing" },
+    { "label": "Heroku Dev Center: Request Timeout (30 seconds, not configurable)", "url": "https://devcenter.heroku.com/articles/request-timeout" },
+    { "label": "Heroku Dev Center: Heroku Generations (Cedar and Fir, Kubernetes, EKS)", "url": "https://devcenter.heroku.com/articles/generations" },
+    { "label": "Heroku blog: Heroku March 2026 Update (sustaining engineering, 1 GB slugs)", "url": "https://www.heroku.com/blog/march-2026-update/" },
+    { "label": "Heroku blog: October 2026 Update (Heroku Postgres Advanced, CNBs on Cedar)", "url": "https://www.heroku.com/blog/october-2026-update-heroku-innovations-features/" },
+    { "label": "Heroku blog: An Update on Heroku (Feb 6, 2026)", "url": "https://www.heroku.com/blog/an-update-on-heroku/" },
+    { "label": "Cloud Native Buildpacks docs: What is a buildpack? (detect and build)", "url": "https://buildpacks.io/docs/for-app-developers/concepts/buildpack/" },
+    { "label": "Cloud Native Buildpacks docs: Getting Started (OCI images, CNCF)", "url": "https://buildpacks.io/docs/" },
+    { "label": "Cloud Native Buildpacks: History (graduation Aug 11, 2026)", "url": "https://buildpacks.io/history/" },
+    { "label": "Heroku blog: Heroku Open Sources the Twelve-Factor App Definition (Adam Wiggins, 2011)", "url": "https://www.heroku.com/blog/heroku-open-sources-twelve-factor-app-definition/" },
+    { "label": "The Twelve-Factor App: III. Config", "url": "https://12factor.net/config" },
+    { "label": "The Twelve-Factor App: IV. Backing services", "url": "https://12factor.net/backing-services" },
+    { "label": "The Twelve-Factor App: VI. Processes", "url": "https://12factor.net/processes" },
+    { "label": "The Twelve-Factor App: VII. Port binding", "url": "https://12factor.net/port-binding" },
+    { "label": "The Twelve-Factor App: IX. Disposability", "url": "https://12factor.net/disposability" },
+    { "label": "Cloud Foundry docs: How Diego stages buildpack apps and Docker images (droplets)", "url": "https://docs.cloudfoundry.org/concepts/how-applications-are-staged.html" },
+    { "label": "Cloud Foundry blog: Running Cloud Foundry on any Kubernetes (Oct 6, 2026)", "url": "https://www.cloudfoundry.org/blog/cloud-foundry-kubernetes-kind-eks/" },
+    { "label": "AWS docs: What is AWS Elastic Beanstalk? (Standard and Cluster modes, pricing)", "url": "https://docs.aws.amazon.com/elasticbeanstalk/latest/dg/Welcome.html" },
+    { "label": "AWS docs: What is AWS App Runner? (closed to new customers)", "url": "https://docs.aws.amazon.com/apprunner/latest/dg/what-is-apprunner.html" },
+    { "label": "AWS docs: AWS App Runner availability change (ECS Express Mode)", "url": "https://docs.aws.amazon.com/apprunner/latest/dg/apprunner-availability-change.html" },
+    { "label": "Google Cloud docs: An overview of App Engine", "url": "https://cloud.google.com/appengine/docs/an-overview-of-app-engine" },
+    { "label": "Google Cloud docs: What is Cloud Run (request-based autoscaling, scale to zero)", "url": "https://cloud.google.com/run/docs/overview/what-is-cloud-run" },
+    { "label": "Google Cloud docs: Deploy services from source code (Google Cloud’s buildpacks)", "url": "https://cloud.google.com/run/docs/deploying-source-code" },
+    { "label": "Microsoft Learn: App Service overview", "url": "https://learn.microsoft.com/en-us/azure/app-service/overview" },
+    { "label": "Microsoft Learn: Azure Container Apps overview", "url": "https://learn.microsoft.com/en-us/azure/container-apps/overview" },
+    { "label": "Dokku docs: Getting Started with Dokku", "url": "https://dokku.com/docs/getting-started/installation/" },
+    { "label": "coollabsio/coolify on GitHub (self-hostable PaaS, Apache 2.0)", "url": "https://github.com/coollabsio/coolify" },
+    { "label": "caprover/caprover on GitHub (Docker and nginx PaaS)", "url": "https://github.com/caprover/caprover" }
+  ]
+}

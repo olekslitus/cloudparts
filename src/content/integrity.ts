@@ -57,9 +57,10 @@ export function findProblems({ parts, categories, concepts, technologies, archit
     if (!catIds.has(data.category)) {
       problems.push(`${where}: unknown category "${data.category}" (known: ${[...catIds].join(', ')})`);
     }
-    const key = `${data.category}:${data.order}`;
+    // Order is a position among siblings: top-level concepts of the category, or children of one parent
+    const key = `${data.category}:${data.parent ?? ''}:${data.order}`;
     if (seenOrder.has(key)) {
-      problems.push(`${where}: order ${data.order} is already used by "${seenOrder.get(key)}" in ${data.category}`);
+      problems.push(`${where}: order ${data.order} is already used by "${seenOrder.get(key)}" in ${data.parent ? `"${data.parent}"` : data.category}`);
     }
     seenOrder.set(key, id);
     for (const r of data.related) {

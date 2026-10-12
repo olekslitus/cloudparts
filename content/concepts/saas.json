@@ -1,0 +1,183 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Software as a service (SaaS)",
+  "icon": "app-window",
+  "category": "compute",
+  "parent": "cloud-service-models",
+  "order": 30,
+  "summary": "Software you use over the network while the provider runs all of it; for the people building it, one system that serves many customers (tenants) without letting them see or slow each other.",
+  "howItWorks": "NIST defines SaaS as using “the provider’s applications running on a cloud infrastructure”, through a browser or an API, without managing the network, servers, operating systems, storage “or even individual application capabilities”, apart from limited user settings. For the provider, the core of it is multi-tenancy. Every customer is a tenant, and all tenants use one system with one onboarding, operations and release process, so an update usually reaches every tenant at once. When a user signs in, the identity provider issues a token that carries both the user and the tenant; AWS calls this binding the SaaS identity. That tenant context travels with every request into every service, which uses it to pick the right data, enforce isolation, write tenant-aware logs and metrics, and record metering events for billing. Around the application sits a control plane (onboarding, tenant management, billing, metrics) that serves all tenants and is not itself multi-tenant. How much tenants share is a design choice: in the silo model a tenant gets dedicated resources, such as its own database or whole stack; in the pool model tenants share resources and are kept apart by the tenant id; the bridge model mixes the two per tier or per service. Sharing is cheaper and simpler to operate, but one heavy tenant can slow the others (the noisy neighbor problem), and a gap in isolation can show one customer’s data to another.",
+  "analogy": "An apartment building. Tenants share the foundation, roof, plumbing and elevators, which is why rent costs less than a house, but each unit has its own locked door. The landlord fixes the boiler once for everyone. A tenant who rehearses with a drum kit at midnight is a noisy neighbor, so the building sets quiet hours. A tenant who needs more privacy can pay for the whole top floor with its own entrance, and still deals with the same landlord, lease and maintenance desk.",
+  "useWhen": [
+    "Buying: the software isn’t what sets you apart (email, CRM, help desk) and you have no reason to run it; Google suggests SaaS when you lack the expertise or the business need to build the application yourself",
+    "Building: you sell one product to many customers and want all of them on the same version, so a fix or feature ships once instead of per customer",
+    "Building: most tenants are small or busy at different times, so a pooled system that scales with their combined load costs far less than a stack per customer",
+    "Building: a few customers need dedicated resources for compliance or performance; a silo for them inside the same onboarding, operations and billing lets you charge more without forking the product"
+  ],
+  "avoidWhen": [
+    "Buying: you need to change how the software behaves, not just its settings; under NIST’s definition SaaS leaves you only limited configuration",
+    "Buying: you assume the vendor now owns security. In every model you stay responsible for your data, your users and their access policies",
+    "Building: each customer wants its own version, customizations and upgrade schedule. AWS calls that a managed service provider model: automating installs per customer doesn’t make it SaaS",
+    "Building: tenant separation rests only on every query remembering `WHERE tenant_id = ?`. AWS notes that in a pool, network and IAM boundaries can’t separate tenants, so add an enforced layer such as database row-level security"
+  ],
+  "example": "A company sells invoicing software to 2,000 small businesses and one bank. Users sign in through its identity provider, which puts `tenant_id` in the token. The API gateway passes it on, and the shared invoice service sets it on each database transaction, where a PostgreSQL row-level security policy hides other tenants’ rows even if a query forgets the filter. Every invoice created emits a metering event with the tenant id, which the billing system turns into a monthly usage charge. Logs and metrics carry the same id, so when everything slows at 9 a.m. the team can see that one tenant’s 40,000-row export did it; they move exports to a background job and cap rows per request. The bank’s contract requires dedicated infrastructure, so onboarding gives it a silo: its own service and database, deployed by the same pipeline, managed from the same admin console and billed by the same system.",
+  "providers": {
+    "aws": "AWS SaaS Factory (guidance, reference architectures and engagement for SaaS builders) and the Well-Architected SaaS Lens; SaaS listings in AWS Marketplace, which integrate with the AWS Marketplace Metering and Entitlement Service APIs",
+    "gcp": "SaaS products in Google Cloud Marketplace, billed by Google, with sign-in through users’ Google accounts; App Lifecycle Manager to deploy a SaaS product with streamlined tenant onboarding",
+    "azure": "SaaS offers in Microsoft Marketplace, integrated through the SaaS Fulfillment APIs, a landing page and a webhook; Azure SaaS Development Kit (MIT), a reference control plane; Azure Architecture Center guidance on multitenant solutions",
+    "oss": "PostgreSQL row-level security to filter pooled tables by tenant; Citus row-based sharding (shared tables with a tenant ID column) or schema-based sharding (a schema per tenant); django-tenants for a schema per tenant in Django"
+  },
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "-- Pooled table: every row carries its tenant",
+      "ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;",
+      "ALTER TABLE invoices FORCE ROW LEVEL SECURITY;  -- the table owner too",
+      "",
+      "CREATE POLICY tenant_isolation ON invoices",
+      "  USING (tenant_id = current_setting('app.tenant_id')::uuid)",
+      "  WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);",
+      "",
+      "-- Per request, from the tenant claim in the user's token",
+      "BEGIN;",
+      "SELECT set_config('app.tenant_id', '6f1c2a9e-1d0b-4c55-9a43-2f3e8b7d1c10', true);",
+      "SELECT id, total FROM invoices;  -- only this tenant's rows",
+      "COMMIT;"
+    ]
+  },
+  "related": ["cloud-service-models", "paas", "iam", "authentication"],
+  "diagram": {
+    "caption": "Each request’s color is its tenant, and the tenant id rides in the user’s token. The router sends the blue and green tenants to the pooled service, which shares one database keyed by tenant id; the orange premium tenant goes to its own silo with a dedicated database.",
+    "h": 260,
+    "zones": [
+      { "x": 385, "y": 22, "w": 360, "h": 104, "label": "Pool · shared by many tenants" },
+      { "x": 385, "y": 146, "w": 360, "h": 104, "label": "Silo · one tenant" }
+    ],
+    "nodes": [
+      {
+        "id": "users", "x": 95, "y": 136, "label": "Users", "sub": "three tenants",
+        "concept": "authentication",
+        "emit": { "every": 380, "jitter": 0.4, "req": true, "colorByKey": 3 },
+        "out": ["router"]
+      },
+      {
+        "id": "router", "x": 255, "y": 136, "label": "Tenant router", "sub": "tenant_id from token",
+        "concept": "apigw", "route": "hash",
+        "out": ["pool", "silo"]
+      },
+      { "id": "pool", "x": 480, "y": 80, "label": "Pooled service", "sub": "blue + green tenants", "out": ["pooldb"] },
+      { "id": "pooldb", "x": 660, "y": 80, "label": "Shared database", "sub": "rows keyed by tenant_id", "concept": "relational", "mode": "reply", "delay": 160 },
+      { "id": "silo", "x": 480, "y": 204, "label": "Silo service", "sub": "orange tenant only", "out": ["silodb"] },
+      { "id": "silodb", "x": 660, "y": 204, "label": "Dedicated database", "sub": "premium tier", "concept": "relational", "mode": "reply", "delay": 160 }
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Silo, pool and bridge",
+      "intro": "AWS’s SaaS guidance names three ways to lay tenants out; Microsoft’s Azure Architecture Center describes the same spectrum, from shared nothing to shared everything. Most real systems pick per layer or per service.",
+      "columns": ["Silo", "Pool", "Bridge"],
+      "rows": [
+        { "label": "What tenants share", "values": ["Identity, onboarding and operations only; each tenant gets dedicated resources, from its own database to a full stack", "Everything: compute, storage, messaging", "Some layers or services pooled, others siloed, such as a shared web tier over per-tenant app tiers and databases"] },
+        { "label": "Azure’s name for it", "values": ["Automated single-tenant deployments", "Fully multitenant deployments", "Vertically or horizontally partitioned deployments"] },
+        { "label": "How isolation is enforced", "values": ["A boundary around each tenant’s stack; simpler to enforce", "Application code and policies keyed by tenant id; network and IAM constructs alone can’t separate tenants", "Both, depending on the layer"] },
+        { "label": "Noisy neighbors", "values": ["None from other tenants", "Likely; needs per-tenant monitoring, quotas and throttling", "Limited to the pooled parts"] },
+        { "label": "Infrastructure cost", "values": ["Highest: 100 tenants cost about 100 times one, idle capacity included", "Lowest: scales with the tenants’ actual load", "In between"] },
+        { "label": "Cost per tenant", "values": ["Easy to attribute: resources map to one tenant", "Hard: needs per-tenant instrumentation or an estimate", "Easy for siloed parts, hard for pooled ones"] },
+        { "label": "When something fails", "values": ["Usually one tenant is affected", "Likely every tenant is affected", "Depends on which part fails"] },
+        { "label": "Onboarding and updates", "values": ["Heavy: new infrastructure per tenant, many stacks to update, but changes can roll out tenant by tenant", "Light: one deployment to update, but a bad change reaches everyone", "Provision and update only the siloed parts per tenant"] }
+      ],
+      "notes": [
+        "From the AWS Well-Architected SaaS Lens (silo, pool and bridge pros and cons) and Microsoft’s “Tenancy models for a multitenant solution”. A silo surrounded by shared identity, onboarding, metering and operations still counts as SaaS; separate versions managed separately do not."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "What a SaaS provider has to build besides the product",
+      "intro": "These pieces are the same whether tenants are siloed or pooled. Most of them live in the control plane.",
+      "items": [
+        { "name": "Onboarding", "tag": "self-service or provider-run", "text": "Creates a tenant: its admin user, identity settings, tier and any per-tenant resources. AWS wants it automated end to end. In a silo it means provisioning infrastructure, and sometimes new account limits, so it is heavier than adding a tenant to a pool." },
+        { "name": "Tenant context", "tag": "on every request", "text": "Each request must say which tenant it is for. A claim in the sign-in token is the usual way; Azure also lists subdomains, URL paths, headers and API keys recorded against a tenant. AWS warns against a separate service that maps users to tenants on the side: it weakens security and becomes a bottleneck." },
+        { "name": "Isolation", "tag": "never optional", "text": "Stops any tenant from reaching another tenant’s resources. AWS calls crossing that boundary “a significant and potentially unrecoverable event” for a SaaS business, and a shared model is no reason to relax it. Azure advises testing that data doesn’t leak between tenants." },
+        { "name": "Metering and billing", "tag": "per tenant", "text": "Metering records billable usage per tenant, such as requests, active users or documents created, and feeds a billing system; metrics are the wider tenant-aware data for operations and product teams. Azure warns not to bill from sampled telemetry such as Application Insights." },
+        { "name": "Noisy-neighbor controls", "tag": "in pooled parts", "text": "Monitor usage per tenant and alert on spikes, enforce quotas through throttling or rate limiting, cap expensive queries or make them asynchronous at off-peak times, and let tenants buy reserved capacity." },
+        { "name": "Tiers", "tag": "price meets architecture", "text": "Separate prices for separate customer profiles, and often separate architecture: a basic tier fully pooled, a premium tier with dedicated resources. Azure notes that you can charge more for a single-tenant deployment to recover its cost." }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Keeping pooled data apart",
+      "body": [
+        "In a pooled database every table carries a tenant id. PostgreSQL’s row-level security can enforce the filter inside the database: once `ALTER TABLE … ENABLE ROW LEVEL SECURITY` is on, every normal read or write must pass a policy, and with no policy nothing is visible. Two exceptions matter: superusers and roles with `BYPASSRLS` always skip the policies, and so does the table’s owner unless you add `FORCE ROW LEVEL SECURITY`. So the application should connect as a role that is neither the table owner nor a superuser. The tenant can come from a custom setting such as `app.tenant_id` (PostgreSQL accepts any two-part setting name), set with `set_config(…, true)` so it lasts only for the current transaction.",
+        "When one database is no longer enough, Citus offers two ways to spread tenants over nodes. Row-based sharding keeps shared tables with a tenant ID column; every table needs that column and every query must filter on it, and it packs tenants most densely, from 1 to over a million. Schema-based sharding, added in Citus 12.0 in 2023, puts each tenant in its own schema and places whole schemas on nodes; the application mostly just sets `search_path`, tenants can have different schemas, and it suits roughly 1 to 10,000 tenants."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Business software used to be licensed and installed on the customer’s own servers. In the late 1990s application service providers (ASPs) started hosting it instead: the ASP owned and ran the servers and delivered the application over the internet, typically hosting a separate application for each customer and billing per use or by monthly fee.",
+      "Salesforce took the next step. Marc Benioff, Parker Harris, Frank Dominguez and Dave Moellenhoff incorporated it on March 8, 1999 and built the first version of its CRM in a rented one-bedroom apartment in San Francisco. It launched on February 7, 2000, at an event themed “The End of Software”, and a month later hired actors to stage a mock protest outside a Siebel Systems conference. Instead of a copy per customer, its platform keeps every customer (an “org”) in one shared database with a single schema, tagging each record with an OrgID, and lets each org customize through metadata. By its fiscal year ending January 2009 Salesforce had passed $1 billion in revenue, which it calls a first for a cloud computing company.",
+      "Gmail brought SaaS email to consumers in 2004, and in 2011 NIST defined SaaS as one of three cloud service models. As more software companies moved to the model, the clouds published guidance on how to build it: AWS launched its SaaS Factory program in June 2018, and its SaaS Lens and Microsoft’s multitenant architecture guide gave builders shared vocabulary such as silo, pool and bridge, noisy neighbors and tenant context."
+    ],
+    "choices": [
+      { "choice": "One shared system for every customer instead of a copy each", "why": "A single multitenant database with one schema, separated by OrgID, lets Salesforce run every org on one platform and rerun every org’s unit tests with each release; AWS later drew the same line between SaaS and managed hosting, where each customer may run its own version." },
+      { "choice": "Customize with metadata instead of forking code", "why": "Storing each org’s customizations as private metadata lets each tenant change its apps and user experience quickly, without locking or downtime." },
+      { "choice": "Limit what any one tenant can use", "why": "Salesforce’s governor limits exist “to prevent malicious or unintentional monopolization” of shared resources, the noisy neighbor problem that every pooled design faces." },
+      { "choice": "A subscription over the internet instead of a license to install", "why": "Delivering standardized applications over the internet on a subscription basis removed the need for each organization to install and customize the software on its own infrastructure." }
+    ],
+    "timeline": [
+      { "year": "1999", "text": "Salesforce is incorporated to build a CRM delivered over the web" },
+      { "year": "2000", "text": "salesforce.com launches with “The End of Software”" },
+      { "year": "2004", "text": "Gmail brings SaaS email to consumers" },
+      { "year": "2005", "text": "Salesforce AppExchange opens to third-party apps" },
+      { "year": "2011", "text": "NIST SP 800-145 defines software as a service" },
+      { "year": "2018", "text": "AWS launches the SaaS Factory program for SaaS builders" },
+      { "year": "2023", "text": "Citus 12 adds schema-based sharding for schema-per-tenant apps" }
+    ],
+    "sources": [
+      { "label": "Wikipedia: Application service provider (the ASP model)", "url": "https://en.wikipedia.org/wiki/Application_service_provider" },
+      { "label": "Wikipedia: Software as a service (history, from ASPs to SaaS; Gmail in 2004)", "url": "https://en.wikipedia.org/wiki/Software_as_a_service" },
+      { "label": "Salesforce: The History of Salesforce (1999 founding, Feb 7, 2000 launch, AppExchange, $1 billion revenue)", "url": "https://www.salesforce.com/news/stories/the-history-of-salesforce/" },
+      { "label": "Salesforce Architects: Platform Multitenant Architecture (OrgID, metadata, governor limits)", "url": "https://architect.salesforce.com/fundamentals/platform-multitenant-architecture" },
+      { "label": "NIST SP 800-145: The NIST Definition of Cloud Computing (Sept 2011)", "url": "https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-145.pdf" },
+      { "label": "AWS Partner Network Blog: Introducing AWS SaaS Factory to Help ISVs Accelerate SaaS Adoption (Jun 20, 2018)", "url": "https://aws.amazon.com/blogs/apn/introducing-aws-saas-factory-to-help-isvs-accelerate-saas-adoption/" },
+      { "label": "AWS whitepaper: SaaS Architecture Fundamentals, SaaS vs. Managed Service Provider (2022)", "url": "https://docs.aws.amazon.com/whitepapers/latest/saas-architecture-fundamentals/saas-vs.-managed-service-provider-msp.html" },
+      { "label": "Citus blog: Citus 12: Schema-based sharding for PostgreSQL (Jul 2023)", "url": "https://www.citusdata.com/blog/2023/07/18/citus-12-schema-based-sharding-for-postgres/" }
+    ]
+  },
+  "sources": [
+    { "label": "NIST SP 800-145: The NIST Definition of Cloud Computing (SaaS definition)", "url": "https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-145.pdf" },
+    { "label": "AWS Well-Architected SaaS Lens: Tenant", "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/tenant.html" },
+    { "label": "AWS Well-Architected SaaS Lens: Silo, Pool, and Bridge Models", "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/silo-pool-and-bridge-models.html" },
+    { "label": "AWS Well-Architected SaaS Lens: Silo isolation (pros and cons)", "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/silo-isolation.html" },
+    { "label": "AWS Well-Architected SaaS Lens: Pool isolation (pros and cons)", "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/pool-isolation.html" },
+    { "label": "AWS Well-Architected SaaS Lens: The bridge model", "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/bridge-model.html" },
+    { "label": "AWS Well-Architected SaaS Lens: SaaS Identity", "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/saas-identity.html" },
+    { "label": "AWS Well-Architected SaaS Lens: Tenant Isolation", "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/tenant-isolation.html" },
+    { "label": "AWS Well-Architected SaaS Lens: Noisy Neighbor", "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/noisy-neighbor.html" },
+    { "label": "AWS Well-Architected SaaS Lens: Tenant Onboarding", "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/tenant-onboarding.html" },
+    { "label": "AWS Well-Architected SaaS Lens: Tenant Tiers", "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/tenant-tiers.html" },
+    { "label": "AWS Well-Architected SaaS Lens: Tenant Activity and Consumption (metering and billing)", "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/tenant-activity-and-consumption.html" },
+    { "label": "AWS Well-Architected SaaS Lens: Software and architecture patterns (automated onboarding)", "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/software-and-architecture-patterns.html" },
+    { "label": "AWS whitepaper: SaaS Architecture Fundamentals, Control plane vs. application plane", "url": "https://docs.aws.amazon.com/whitepapers/latest/saas-architecture-fundamentals/control-plane-vs.-application-plane.html" },
+    { "label": "AWS whitepaper: SaaS Architecture Fundamentals, SaaS identity", "url": "https://docs.aws.amazon.com/whitepapers/latest/saas-architecture-fundamentals/saas-identity.html" },
+    { "label": "AWS whitepaper: SaaS Architecture Fundamentals, Metering, metrics, and billing", "url": "https://docs.aws.amazon.com/whitepapers/latest/saas-architecture-fundamentals/metering-metrics-and-billing.html" },
+    { "label": "AWS whitepaper: SaaS Architecture Fundamentals, SaaS vs. Managed Service Provider (MSP)", "url": "https://docs.aws.amazon.com/whitepapers/latest/saas-architecture-fundamentals/saas-vs.-managed-service-provider-msp.html" },
+    { "label": "Azure Architecture Center: Tenancy models for a multitenant solution", "url": "https://learn.microsoft.com/en-us/azure/architecture/guide/multitenant/considerations/tenancy-models" },
+    { "label": "Azure Architecture Center: Map requests to tenants in a multitenant solution", "url": "https://learn.microsoft.com/en-us/azure/architecture/guide/multitenant/considerations/map-requests" },
+    { "label": "Azure Architecture Center: Measure the consumption of each tenant", "url": "https://learn.microsoft.com/en-us/azure/architecture/guide/multitenant/considerations/measure-consumption" },
+    { "label": "Azure Architecture Center: Noisy Neighbor antipattern", "url": "https://learn.microsoft.com/en-us/azure/architecture/antipatterns/noisy-neighbor/noisy-neighbor" },
+    { "label": "Microsoft Learn: Shared responsibility in the cloud", "url": "https://learn.microsoft.com/en-us/azure/security/fundamentals/shared-responsibility" },
+    { "label": "Google Cloud Architecture Center: Shared responsibilities and shared fate (SaaS)", "url": "https://cloud.google.com/architecture/framework/security/shared-responsibility-shared-fate" },
+    { "label": "PostgreSQL docs: Row Security Policies", "url": "https://www.postgresql.org/docs/current/ddl-rowsecurity.html" },
+    { "label": "PostgreSQL docs: Customized Options (two-part setting names)", "url": "https://www.postgresql.org/docs/current/runtime-config-custom.html" },
+    { "label": "PostgreSQL docs: System Administration Functions (current_setting, set_config)", "url": "https://www.postgresql.org/docs/current/functions-admin.html" },
+    { "label": "Citus docs: Concepts (row-based vs. schema-based sharding, tenant counts)", "url": "https://docs.citusdata.com/en/latest/aboutcitus/concepts.html" },
+    { "label": "Citus blog: Citus 12: Schema-based sharding for PostgreSQL (django-tenants)", "url": "https://www.citusdata.com/blog/2023/07/18/citus-12-schema-based-sharding-for-postgres/" },
+    { "label": "AWS Marketplace Seller Guide: SaaS-based products in AWS Marketplace", "url": "https://docs.aws.amazon.com/marketplace/latest/userguide/saas-products.html" },
+    { "label": "Google Cloud Marketplace Partners: Offering software as a service (SaaS) products", "url": "https://docs.cloud.google.com/marketplace/docs/partners/integrated-saas" },
+    { "label": "Microsoft Learn: Plan a SaaS offer for Microsoft Marketplace", "url": "https://learn.microsoft.com/en-us/partner-center/marketplace-offers/plan-saas-offer" },
+    { "label": "Azure/azure-saas: Azure SaaS Development Kit (ASDK) README", "url": "https://github.com/Azure/azure-saas" },
+    { "label": "AWS Partner Network Blog: Introducing AWS SaaS Factory (Jun 2018)", "url": "https://aws.amazon.com/blogs/apn/introducing-aws-saas-factory-to-help-isvs-accelerate-saas-adoption/" }
+  ]
+}
