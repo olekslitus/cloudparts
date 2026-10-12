@@ -1,0 +1,153 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Pinecone",
+  "concepts": ["vector"],
+  "uses": ["search"],
+  "provider": "vendor",
+  "vendor": "Pinecone Systems, Inc.",
+  "license": "Proprietary; managed service",
+  "website": "https://www.pinecone.io/",
+  "summary": "A managed, serverless vector database that keeps its indexes in object storage and serves dense-vector, sparse-vector and BM25 full-text search from the same index.",
+  "intro": [
+    "Pinecone stores data in indexes, and each index is split into namespaces: every write and query targets one namespace, so a namespace per customer keeps tenants apart and keeps each search small. A vector index holds records, each an id, a dense or sparse vector and flat metadata. A document index, the default for new indexes since the Documents API, holds JSON documents whose schema declares at most one `dense_vector` field, at most one `sparse_vector` field and up to 100 `string` fields with full-text search; any other field is stored and indexed for filtering. A query ranks by cosine, dot product or Euclidean similarity, by sparse-vector dot product, or by BM25 over text fields, and can filter with operators such as `$eq`, `$in` and `$gte`. With integrated embedding, a hosted model such as `llama-text-embed-v2` turns text into vectors at upsert and query time, and hosted rerankers can reorder the results.",
+    "Pinecone runs only as a managed service, on AWS, GCP and Azure. In its serverless architecture, a write is logged with a sequence number and acknowledged as durable, then held in an in-memory memtable and later flushed to object storage as immutable files called slabs. Small slabs use cheap indexes; as a namespace grows they are merged into larger slabs with more sophisticated ones. A query router sends each query to executors that search the relevant slabs, cached in memory or on local SSD and fetched from object storage on a miss, and merges their results with the memtable’s recent writes. Reads and writes take separate paths that scale independently. Dedicated read nodes give one index its own read hardware, Bring Your Own Cloud (BYOC) runs the data plane in your own cloud account, and the older pod-based indexes, fixed units of hardware, are legacy."
+  ],
+  "strengths": [
+    "Nothing to size: namespaces are created on first upsert, storage and reads scale on their own, and the same index can hold millions of namespaces (1,000,000 per index on the Enterprise plan)",
+    "Dense vectors, sparse vectors and BM25 full-text search with Lucene query syntax in one index, generally available since September 2026, plus metadata and phrase filters",
+    "Hosted embedding models (`llama-text-embed-v2`, `multilingual-e5-large`, `pinecone-sparse-english-v0`) and rerankers (`bge-reranker-v2-m3`, `cohere-rerank-4-fast`, `pinecone-rerank-v0`), so you can upsert and search with plain text instead of vectors",
+    "Usage-based pricing: a free Starter plan with 2 GB of storage, 1 million read units and 2 million write units a month; a flat $20 Builder plan; and Standard from a $50 monthly minimum at $0.33 per GB-month stored, $16 to $18 per million read units and $4 to $4.50 per million write units (checked October 12, 2026)",
+    "Runs on AWS, GCP and Azure, with dedicated read nodes for sustained high query rates and BYOC on the Enterprise plan for data that must stay in your own account"
+  ],
+  "limits": [
+    "Closed source and offered only as a managed service, BYOC included; Pinecone Local, the Docker emulator for tests, reached end of life on October 7, 2026, so local development needs a separate Pinecone project",
+    "A query costs 1 read unit per GB of the namespace it searches (minimum 0.25), and filters don’t lower that because queries scan the whole namespace; one big namespace filtered by tenant costs far more than a namespace per tenant",
+    "Fixed caps: 20,000 dense dimensions, 40 KB of filterable metadata per record with no nested objects or nulls, `top_k` up to 10,000, 4 MB per result, 1,000 records or 2 MB per upsert, and 100 queries per second per namespace by default (checked October 12, 2026)",
+    "On-demand reads cache slabs on a best-effort basis, so cold namespaces are fetched from object storage and answer slower; Pinecone also documents upserts as eventually consistent",
+    "Choices are fixed at creation: an index’s cloud and region can’t change, and a document schema can’t gain, lose or change fields, so a schema change means a new index"
+  ],
+  "worksWith": [
+    { "id": "python", "how": "has an official client SDK for" },
+    { "id": "s3", "how": "bulk-imports Parquet or JSONL files from" },
+    { "id": "kubernetes", "how": "runs its BYOC data plane on" },
+    { "id": "prometheus", "how": "exposes index metrics to" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "One index with a vector field and a BM25 text field, searched with a metadata filter",
+    "source": [
+      "import os, time",
+      "from pinecone import Pinecone, SchemaBuilder  # pip install --upgrade pinecone",
+      "",
+      "pc = Pinecone(api_key=os.environ[\"PINECONE_API_KEY\"])",
+      "schema = (",
+      "    SchemaBuilder()",
+      "      .add_dense_vector_field(name=\"embedding\", dimension=3, metric=\"cosine\")",
+      "      .add_string_field(name=\"body\", full_text_search={\"language\": \"en\"})",
+      "      .build()",
+      ")",
+      "pc.indexes.create(name=\"docs\", schema=schema)",
+      "while not pc.indexes.describe(name=\"docs\").status.ready:",
+      "    time.sleep(2)",
+      "",
+      "index = pc.Index(name=\"docs\")",
+      "# Your embedding model makes these; 3 dimensions keep the example short.",
+      "index.documents.upsert(",
+      "    namespace=\"acme\",  # one namespace per tenant",
+      "    documents=[",
+      "        {\"_id\": \"refund\", \"embedding\": [0.9, 0.1, 0.0], \"body\": \"Refunds take 5 days\", \"lang\": \"en\"},",
+      "        {\"_id\": \"shipping\", \"embedding\": [0.1, 0.9, 0.1], \"body\": \"We ship in 2 days\", \"lang\": \"en\"},",
+      "        {\"_id\": \"returns\", \"embedding\": [0.8, 0.2, 0.1], \"body\": \"Return within 30 days\", \"lang\": \"de\"},",
+      "    ],",
+      ")",
+      "time.sleep(5)  # documents are indexed asynchronously",
+      "",
+      "hits = index.documents.search(",
+      "    namespace=\"acme\",",
+      "    top_k=2,",
+      "    score_by=[{\"type\": \"dense_vector\", \"fields\": [\"embedding\"], \"values\": [0.85, 0.15, 0.05]}],",
+      "    filter={\"lang\": {\"$eq\": \"en\"}},  # `lang` isn't in the schema: it's metadata",
+      ")",
+      "print([(m._id, round(m._score, 3)) for m in hits.matches])  # [('refund', 0.996), ('shipping', 0.286)]",
+      "",
+      "# Same index, ranked by BM25 on the text field instead",
+      "hits = index.documents.search(",
+      "    namespace=\"acme\", top_k=2,",
+      "    score_by=[{\"type\": \"text\", \"fields\": [\"body\"], \"query\": \"refunds\"}],",
+      ")",
+      "print([m._id for m in hits.matches])  # ['refund']"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Three ways Pinecone serves reads",
+      "intro": "On-demand and dedicated read nodes share the serverless write path and object storage; pod-based indexes are the original architecture, now legacy.",
+      "columns": ["On-demand (default)", "Dedicated read nodes", "Pod-based (legacy)"],
+      "rows": [
+        { "label": "Reads run on", "values": ["Multi-tenant query executors shared across customers", "Query executors provisioned for one index", "The index’s own pods (s1, p1 or p2)"] },
+        { "label": "Data kept", "values": ["Slabs in object storage, cached on a best-effort basis", "Slabs in object storage, all kept warm in memory and on local SSD", "The whole index on the pods; a query scatters to every shard"] },
+        { "label": "Reads billed by", "values": ["Read units: 1 per GB of namespace per query, minimum 0.25", "A fixed hourly rate by node type, shards and replicas", "Per pod-minute, whether or not the index is queried"] },
+        { "label": "Scaling", "values": ["Automatic", "Manual: shards for storage, replicas for throughput", "Manual: pod size x1 to x8, pod count and replicas"] },
+        { "label": "Available on", "values": ["All plans", "Standard and Enterprise; one namespace per index", "Not for Standard or Enterprise sign-ups since August 18, 2025"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Pinecone was founded by Edo Liberty, who had built teams at Yahoo and Amazon; TechCrunch described the company as coming from “the folks who helped launch Amazon SageMaker”. It came out of stealth in January 2021 with a $10 million seed round led by Wing Venture Capital, after a couple of years of building. Liberty’s argument was that “the data that a machine learning model expects isn’t a JSON record, it’s a high dimensional vector”, and that only companies such as Google or Pinterest could exploit that, so Pinecone would sell vector search as a hosted database, with recommendations as an early example.",
+      "Retrieval for language models turned that into a boom. In April 2023 Pinecone raised a $100 million Series B led by Andreessen Horowitz at a $750 million valuation, after a $28 million Series A in 2022, and TechCrunch reported customers growing from a handful to 1,500 in a year. In January 2024, after more than a year of development, Pinecone launched serverless indexes: a rebuilt database that keeps indexes in blob storage and bills per use instead of per pod. Pinecone said Gong’s costs fell tenfold on it.",
+      "In September 2025 Ash Ashutosh, a founder of Actifio and AppIQ, became CEO and Liberty became Chief Scientist; in August 2026 Ashutosh wrote that Liberty was stepping back from day-to-day work while staying a shareholder and board member. In 2026 Pinecone made dedicated read nodes, Bring Your Own Cloud and BM25 full-text search generally available; full-text search lets one index rank by keywords as well as by vectors."
+    ],
+    "choices": [
+      { "choice": "A hosted database, not a library", "why": "Liberty told TechCrunch that with “a production grade database, 90% of the difficulty and heavy lifting” of building something like a recommendation engine goes away, so the product was a cloud service with its own vector engine and management layer from the start." },
+      { "choice": "Blob storage instead of scatter-gather shards", "why": "Pod-based Pinecone, like other vector databases, kept each shard’s whole index local and sent every query to all shards, so cost tracked total data even for rare queries. Serverless makes blob storage the source of truth and loads only the relevant index segments, caching them on query executors." },
+      { "choice": "Namespaces as hard partitions", "why": "Customers such as Notion ran thousands of tenants with very different usage in one index. Serverless builds index partitions only within a namespace and restricts queries to that namespace’s segments, so rarely queried tenants don’t drive up cost." },
+      { "choice": "Clusters rebuilt as data changes, plus a freshness layer", "why": "Pinecone found few workloads were static, and says HNSW and Faiss struggle with incremental updates. Its index builder keeps a hierarchy of partitions from coarse to fine and rebuilds them as data arrives, while a separate layer serves writes not yet indexed within seconds." }
+    ],
+    "timeline": [
+      { "year": "2021", "text": "Comes out of stealth in January with a $10M seed led by Wing Venture Capital" },
+      { "year": "2022", "text": "$28M Series A; hybrid search enters early access in October" },
+      { "year": "2023", "text": "$100M Series B in April, led by Andreessen Horowitz, at a $750M valuation" },
+      { "year": "2024", "text": "Serverless indexes launch in public preview in January" },
+      { "year": "2025", "text": "Pod-based indexes closed to new Standard and Enterprise customers in August; Ash Ashutosh becomes CEO in September" },
+      { "year": "2026", "text": "BYOC generally available in August and full-text search in September" }
+    ],
+    "sources": [
+      { "label": "TechCrunch: Pinecone lands $10M seed for purpose-built machine learning database (Jan 2021)", "url": "https://techcrunch.com/2021/01/27/pinecone-lands-10m-seed-for-purpose-built-machine-learning-database/" },
+      { "label": "TechCrunch: Pinecone drops $100M investment on $750M valuation, as vector database demand grows (Apr 2023)", "url": "https://techcrunch.com/2023/04/27/pinecone-drops-100m-investment-on-750m-valuation-as-vector-database-demand-grows/" },
+      { "label": "Pinecone blog: Announcing our $100M Series B funding (Apr 2023)", "url": "https://www.pinecone.io/blog/series-b/" },
+      { "label": "Pinecone 2022 changelog (hybrid search early access, October 2022)", "url": "https://docs.pinecone.io/release-notes/2022" },
+      { "label": "Pinecone blog: Introducing Pinecone Serverless (Jan 2024)", "url": "https://www.pinecone.io/blog/serverless/" },
+      { "label": "Pinecone blog: Reimagining the vector database to enable knowledgeable AI (Jan 2024; serverless design)", "url": "https://www.pinecone.io/blog/serverless-architecture/" },
+      { "label": "Pinecone docs: Understanding pod-based indexes (legacy since August 18, 2025)", "url": "https://docs.pinecone.io/guides/indexes/pods/understanding-pod-based-indexes" },
+      { "label": "Pinecone blog: Moving Pinecone forward with Ash Ashutosh as CEO (Sep 2025)", "url": "https://www.pinecone.io/blog/growing-ai-ambitions/" },
+      { "label": "Pinecone blog: One Year In, and Just Getting Started (Aug 2026)", "url": "https://www.pinecone.io/blog/one-year-in-just-getting-started/" },
+      { "label": "Pinecone 2026 changelog (dedicated read nodes, BYOC and full-text search GA)", "url": "https://docs.pinecone.io/release-notes/2026" }
+    ]
+  },
+  "sources": [
+    { "label": "Pinecone docs: Pinecone Database overview", "url": "https://docs.pinecone.io/guides/get-started/overview" },
+    { "label": "Pinecone docs: Architecture (control and data planes, request log, memtable, slabs, query executors)", "url": "https://docs.pinecone.io/guides/core-concepts/architecture" },
+    { "label": "Pinecone docs: Key terms (indexes, namespaces, records, documents, schemas)", "url": "https://docs.pinecone.io/guides/core-concepts/key-terms" },
+    { "label": "Pinecone docs: Index data overview (document and vector indexes, integrated embedding, metadata format)", "url": "https://docs.pinecone.io/guides/index-data/indexing-overview" },
+    { "label": "Pinecone docs: Create an index (cloud regions, similarity metrics, hosted embedding models, fixed schemas)", "url": "https://docs.pinecone.io/guides/index-data/create-an-index" },
+    { "label": "Pinecone docs: Full-text search (BM25, Lucene syntax, Python example)", "url": "https://docs.pinecone.io/guides/search/full-text-search" },
+    { "label": "Pinecone docs: Quickstart, bring your own vectors (Python SDK)", "url": "https://docs.pinecone.io/guides/get-started/quickstart/bring-your-own-vectors" },
+    { "label": "Pinecone docs: Object limits (indexes, namespaces, storage by plan)", "url": "https://docs.pinecone.io/reference/api/database-limits/object-limits" },
+    { "label": "Pinecone docs: Operation limits (dimensions, metadata size, batch and query limits)", "url": "https://docs.pinecone.io/reference/api/database-limits/operation-limits" },
+    { "label": "Pinecone docs: Rate limits (monthly read and write units, per-namespace request limits, rerank models)", "url": "https://docs.pinecone.io/reference/api/database-limits/rate-limits" },
+    { "label": "Pinecone docs: Known limitations (eventual consistency, metadata rules)", "url": "https://docs.pinecone.io/reference/api/known-limitations" },
+    { "label": "Pinecone docs: Understand Pinecone cost (read units per GB of namespace, minimums)", "url": "https://docs.pinecone.io/guides/manage-cost/understanding-cost" },
+    { "label": "Pinecone pricing (plans and rates)", "url": "https://www.pinecone.io/pricing/" },
+    { "label": "Pinecone docs: Dedicated read nodes overview", "url": "https://docs.pinecone.io/guides/index-data/dedicated-read-nodes/overview" },
+    { "label": "Pinecone docs: Bring Your Own Cloud (data plane in your account, Kubernetes, object storage)", "url": "https://docs.pinecone.io/guides/production/bring-your-own-cloud" },
+    { "label": "Pinecone docs: Understanding pod-based indexes (pod types, sizes, costs)", "url": "https://docs.pinecone.io/guides/indexes/pods/understanding-pod-based-indexes" },
+    { "label": "Pinecone docs: Import records (Amazon S3, Google Cloud Storage, Azure Blob Storage)", "url": "https://docs.pinecone.io/guides/index-data/import-data" },
+    { "label": "Pinecone docs: Monitor performance (Prometheus and Datadog)", "url": "https://docs.pinecone.io/guides/production/monitoring" },
+    { "label": "Pinecone 2026 changelog (Pinecone Local end of life, full-text search GA, namespace limits)", "url": "https://docs.pinecone.io/release-notes/2026" },
+    { "label": "Pinecone blog: Full-Text Search is Now Generally Available in Pinecone Database (Sep 2026)", "url": "https://www.pinecone.io/blog/full-text-search-generally-available/" },
+    { "label": "Pinecone blog: Reimagining the vector database to enable knowledgeable AI (scatter-gather in pod-based indexes)", "url": "https://www.pinecone.io/blog/serverless-architecture/" }
+  ],
+  "checked": "2026-10-12"
+}
