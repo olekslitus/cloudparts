@@ -1,0 +1,265 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Agent frameworks",
+  "icon": "blocks",
+  "category": "ai",
+  "order": 10,
+  "parent": "ai-agents",
+  "summary": "Libraries that run the agent loop for you: they call the model, execute tools, keep state between steps, and add checkpoints, streaming, human approval and tracing around it.",
+  "howItWorks": "The agent loop itself is a few lines: call the model, run the tools it asks for, send back the results, repeat. A framework wraps that loop and the work around it, and frameworks differ mostly in who decides the next step. In a model-driven loop you hand over a model, a prompt and a list of tools, and the model plans its own steps; Strands Agents, LangChain’s `create_agent` and the OpenAI Agents SDK work this way. In a graph, or state machine, you declare nodes (functions or model calls) and edges between them, including conditional edges and cycles, over a shared state object; the model only decides where you let it. LangGraph and the workflows in Microsoft Agent Framework are graphs. Older chains are graphs without cycles: each call feeds the next in a fixed order. Genkit’s flows are plain functions wrapped with typed input and output schemas, streaming and traces. Around the loop, frameworks provide the same services. Tools are generated from ordinary functions, with the JSON Schema taken from type hints and docstrings. A model interface hides the differences between providers. Checkpointers save the state after every step under a thread id, so a run can resume after a crash or pause for days waiting for a person; LangChain’s human-in-the-loop middleware raises an interrupt before a listed tool runs and continues when you send back “approve” or “reject”. Stores keep long-term memory across threads. Streaming sends tokens and intermediate steps to the user as they happen, and tracing records every model and tool call so you can debug and evaluate a run afterwards.",
+  "analogy": "The kitchen system around a gifted but forgetful chef. The ticket rail holds the state of every order, so when the chef steps out, whoever comes next carries on from the last ticket (checkpoints). Some kitchens let the chef decide the whole menu as the night goes (a model-driven loop); others fix the stations and the order of the courses and let the chef improvise only at one of them (a graph). The expediter checks a plate before it leaves the kitchen (human approval), and the order log shows afterwards what happened to every dish (tracing).",
+  "useWhen": [
+    "Runs that last minutes to days and must survive a crash or wait for a person’s approval: that needs persisted state, not a variable in one process",
+    "Processes that mix fixed steps with model decisions, best written as a graph with branches and loops",
+    "You want to switch model providers without rewriting message formats, tool calling and streaming",
+    "You need a trace of every model and tool call to debug the agent and evaluate changes"
+  ],
+  "avoidWhen": [
+    "One model call or a short loop does the job: Anthropic suggests starting with the model API directly, since many patterns take a few lines of code",
+    "Nobody on the team knows what the framework actually sends to the model: extra layers hide prompts and responses, and wrong assumptions about them are a common source of errors",
+    "Your agent doesn’t fit the framework’s built-in loop: LangChain’s own users reported its abstractions were sometimes too heavy and hard to customize, which shaped the slimmer 1.0"
+  ],
+  "example": "Clare Liguori’s team at AWS began building agents for Amazon Q Developer in early 2023, when models weren’t trained to act as agents. Each agent needed long prompt instructions on using tools, parsers for the model’s replies and orchestration code, and the team relied on several complex agent frameworks. As models gained native tool use and reasoning, those frameworks started to get in the way. So the team wrote Strands Agents, where an agent is a prompt plus a list of tools and the model plans its own steps; even multi-agent patterns such as a graph or a swarm of sub-agents are tools the model can choose. Teams that had needed months to take a new agent from prototype to production now shipped in days and weeks, and Amazon Q Developer, AWS Glue and VPC Reachability Analyzer ran Strands agents in production when AWS open-sourced it under Apache 2.0 in May 2025. The loop and the tools can also be split: the agent runs in a Fargate container and calls tools that run as Lambda functions.",
+  "providers": {
+    "aws": "Strands Agents (open source, from AWS); Amazon Bedrock AgentCore Runtime hosts agents built with any framework, including LangGraph, CrewAI, LlamaIndex, Google ADK and the OpenAI Agents SDK",
+    "gcp": "Agent Development Kit (ADK), in Python, TypeScript, Go, Java and Kotlin; Genkit, with flows for JavaScript, Go, Dart and Python (preview)",
+    "azure": "Microsoft Agent Framework, the successor to Semantic Kernel and AutoGen, with graph-based workflows",
+    "oss": "LangChain and LangGraph (MIT), OpenAI Agents SDK, LlamaIndex, Haystack, CrewAI"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "from langchain.agents import create_agent",
+      "from langchain.agents.middleware import HumanInTheLoopMiddleware",
+      "from langchain.tools import tool",
+      "from langgraph.checkpoint.memory import InMemorySaver",
+      "from langgraph.types import Command",
+      "",
+      "",
+      "@tool",
+      "def execute_sql(query: str) -> str:",
+      "    \"\"\"Run a SQL statement against the orders database.\"\"\"",
+      "    return \"3 rows deleted\"",
+      "",
+      "",
+      "agent = create_agent(",
+      "    model=\"gpt-5.5\",",
+      "    tools=[execute_sql],  # schema comes from the type hints and docstring",
+      "    middleware=[",
+      "        HumanInTheLoopMiddleware(interrupt_on={\"execute_sql\": {\"allowed_decisions\": [\"approve\", \"reject\"]}}),",
+      "    ],",
+      "    checkpointer=InMemorySaver(),  # state after every step; use a Postgres checkpointer in production",
+      ")",
+      "",
+      "config = {\"configurable\": {\"thread_id\": \"ticket-4521\"}}  # one thread = one resumable run",
+      "result = agent.invoke(",
+      "    {\"messages\": [{\"role\": \"user\", \"content\": \"Delete test orders older than 30 days\"}]},",
+      "    config=config,",
+      "    version=\"v2\",",
+      ")",
+      "print(result.interrupts)  # paused before execute_sql, with the proposed query",
+      "",
+      "# Later, once someone has reviewed the query: same thread id, so the run continues",
+      "agent.invoke(Command(resume={\"decisions\": [{\"type\": \"approve\"}]}), config=config, version=\"v2\")"
+    ]
+  },
+  "related": [
+    "ai-agents",
+    "agent-tools",
+    "workflow",
+    "api-frameworks"
+  ],
+  "sections": [
+    {
+      "type": "table",
+      "title": "Who decides the next step",
+      "intro": "The main difference between frameworks is how much of the path you write down and how much the model chooses.",
+      "corner": "Style",
+      "columns": [
+        "You write",
+        "The model decides",
+        "Examples"
+      ],
+      "rows": [
+        {
+          "label": "Model-driven loop",
+          "values": [
+            "A prompt and a list of tools",
+            "Every step, until it answers in text",
+            "Strands Agents, LangChain `create_agent`, OpenAI Agents SDK"
+          ]
+        },
+        {
+          "label": "Graph or state machine",
+          "values": [
+            "Nodes, edges and a shared state, with cycles allowed",
+            "Only at the nodes and branches you give it",
+            "LangGraph, Microsoft Agent Framework workflows"
+          ]
+        },
+        {
+          "label": "Chain",
+          "values": [
+            "A fixed sequence of calls, each feeding the next",
+            "Nothing about the order",
+            "Classic LangChain chains"
+          ]
+        },
+        {
+          "label": "Flow",
+          "values": [
+            "A function with typed input and output schemas",
+            "Whatever the code inside asks it",
+            "Genkit flows"
+          ]
+        }
+      ],
+      "notes": [
+        "The styles combine: LangChain’s `create_agent` runs its model-driven loop on the LangGraph runtime, and Strands exposes graphs and swarms of sub-agents as tools the model can pick."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "LangChain started as Harrison Chase’s open-source side project: the first version of the Python package came out on October 24, 2022, as “a python package aimed at helping build LLM applications through composability”: a collection of pieces, combined through one interface into a single “chain”. Chains run in a fixed order, as a directed acyclic graph, which suits pipelines but not agents that loop until they are done.",
+      "In January 2024 LangChain released LangGraph to add those cycles: an agent became a state machine written as a graph, with a special END node because every cycle has to stop. Other vendors built their own. Microsoft had Semantic Kernel and AutoGen for multi-agent orchestration, Google introduced Firebase Genkit in May 2024 as an open-source JavaScript and TypeScript framework built around flows, and OpenAI turned its experimental Swarm into the Agents SDK.",
+      "As models learned to call tools natively, frameworks got thinner. AWS released Strands Agents in May 2025 because heavy orchestration had started to get in the way of better models. In October 2025 LangChain 1.0 cut the package back to the core agent loop plus middleware hooks, running on LangGraph, and promised no breaking changes until 2.0; Microsoft merged Semantic Kernel and AutoGen into Agent Framework. What frameworks still add is mostly operational: durable state, human approval, streaming and tracing."
+    ],
+    "choices": [
+      {
+        "choice": "Graphs with cycles instead of chains",
+        "why": "LangChain’s chains were directed acyclic graphs, like most data orchestration tools, but agents run a model in a loop that decides what to do next. LangGraph let developers write that loop as a state machine they could still constrain."
+      },
+      {
+        "choice": "Save state as checkpoints per thread",
+        "why": "A checkpoint after every step gives conversation continuity, recovery from failures and the ability to pause for a person. LangChain’s human-in-the-loop middleware requires a checkpointer for exactly that reason."
+      },
+      {
+        "choice": "Let the model drive instead of hand-coded orchestration",
+        "why": "Strands’ authors found that once models could plan and call tools natively, encoding the plan in the framework slowed teams down; a prompt and a list of tools was enough."
+      },
+      {
+        "choice": "Middleware hooks instead of more prebuilt agent types",
+        "why": "LangChain users wanted control over the agent loop without dropping to raw model calls. Version 1.0 added hooks around each step for things like summarizing old messages, redacting personal data and asking for approval."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "2022",
+        "text": "First release of the LangChain Python package (October 24)"
+      },
+      {
+        "year": "2024",
+        "text": "LangGraph adds cycles: agents as state machines (January)"
+      },
+      {
+        "year": "2024",
+        "text": "Google releases Firebase Genkit in beta, built around flows (May)"
+      },
+      {
+        "year": "2025",
+        "text": "AWS open-sources Strands Agents, a model-driven loop (May)"
+      },
+      {
+        "year": "2025",
+        "text": "LangChain 1.0 and LangGraph 1.0 (October 22)"
+      }
+    ],
+    "sources": [
+      {
+        "label": "LangChain blog: Announcing our $10M seed round (first release Oct 24, 2022; Apr 2023)",
+        "url": "https://blog.langchain.com/announcing-our-10m-seed-round-led-by-benchmark/"
+      },
+      {
+        "label": "LangChain blog: LangGraph (cycles, state machines as graphs; Jan 2024)",
+        "url": "https://blog.langchain.com/langgraph/"
+      },
+      {
+        "label": "Firebase blog: Introducing Firebase Genkit (May 2024)",
+        "url": "https://firebase.blog/posts/2024/05/introducing-genkit/"
+      },
+      {
+        "label": "Microsoft Learn: Microsoft Agent Framework overview (successor to Semantic Kernel and AutoGen)",
+        "url": "https://learn.microsoft.com/en-us/agent-framework/overview/agent-framework-overview"
+      },
+      {
+        "label": "OpenAI Agents SDK docs: introduction (production-ready upgrade of Swarm)",
+        "url": "https://openai.github.io/openai-agents-python/"
+      },
+      {
+        "label": "AWS Open Source blog: Introducing Strands Agents, an open source AI agents SDK (May 2025)",
+        "url": "https://aws.amazon.com/blogs/opensource/introducing-strands-agents-an-open-source-ai-agents-sdk/"
+      },
+      {
+        "label": "LangChain blog: LangChain and LangGraph agent frameworks reach v1.0 (Oct 2025)",
+        "url": "https://blog.langchain.com/langchain-langgraph-1dot0/"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "Anthropic: Building effective agents (when and how to use frameworks; Dec 2024)",
+      "url": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "label": "AWS Open Source blog: Introducing Strands Agents, an open source AI agents SDK (May 2025)",
+      "url": "https://aws.amazon.com/blogs/opensource/introducing-strands-agents-an-open-source-ai-agents-sdk/"
+    },
+    {
+      "label": "LangChain docs: LangGraph overview (durable execution, streaming, human-in-the-loop, memory)",
+      "url": "https://docs.langchain.com/oss/python/langgraph/overview"
+    },
+    {
+      "label": "LangChain docs: LangGraph persistence (checkpointers per thread, stores across threads)",
+      "url": "https://docs.langchain.com/oss/python/langgraph/persistence"
+    },
+    {
+      "label": "LangChain docs: Agents (create_agent, tools from Python functions)",
+      "url": "https://docs.langchain.com/oss/python/langchain/agents"
+    },
+    {
+      "label": "LangChain docs: Human-in-the-loop middleware (interrupts, approve and reject decisions)",
+      "url": "https://docs.langchain.com/oss/python/langchain/human-in-the-loop"
+    },
+    {
+      "label": "LangChain blog: LangChain and LangGraph agent frameworks reach v1.0 (Oct 2025)",
+      "url": "https://blog.langchain.com/langchain-langgraph-1dot0/"
+    },
+    {
+      "label": "LangChain blog: LangGraph (cycles, state machines as graphs; Jan 2024)",
+      "url": "https://blog.langchain.com/langgraph/"
+    },
+    {
+      "label": "OpenAI Agents SDK docs: introduction (agents, handoffs, guardrails, sessions, tracing)",
+      "url": "https://openai.github.io/openai-agents-python/"
+    },
+    {
+      "label": "Genkit docs: Defining AI workflows (flows with schemas, streaming, traces)",
+      "url": "https://genkit.dev/docs/js/flows/"
+    },
+    {
+      "label": "Genkit docs: overview (JavaScript, Go, Dart, Python preview)",
+      "url": "https://genkit.dev/docs/js/overview/"
+    },
+    {
+      "label": "Microsoft Learn: Microsoft Agent Framework overview (successor to Semantic Kernel and AutoGen)",
+      "url": "https://learn.microsoft.com/en-us/agent-framework/overview/agent-framework-overview"
+    },
+    {
+      "label": "Google ADK docs (Python, TypeScript, Go, Java, Kotlin)",
+      "url": "https://google.github.io/adk-docs/"
+    },
+    {
+      "label": "AWS docs: What is Amazon Bedrock AgentCore? (Runtime works with any framework)",
+      "url": "https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/what-is-bedrock-agentcore.html"
+    },
+    {
+      "label": "LlamaIndex docs: Introduction to RAG (query engines, chat engines and agents)",
+      "url": "https://developers.llamaindex.ai/python/framework/understanding/rag/"
+    },
+    {
+      "label": "Haystack docs: Introduction (open-source framework for agents and RAG)",
+      "url": "https://docs.haystack.deepset.ai/docs/intro"
+    }
+  ]
+}

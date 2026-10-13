@@ -1,0 +1,409 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Retrieval-augmented generation (RAG)",
+  "icon": "file-search",
+  "category": "ai",
+  "order": 30,
+  "summary": "Retrieve, then generate: search your own documents for the passages most likely to answer a question, put them in the prompt, and have the model answer from them, citing which passage said what.",
+  "howItWorks": "RAG has two phases. Indexing happens ahead of time: load the documents, split them into chunks of usually no more than a few hundred tokens (Amazon Bedrock’s default is about 300 tokens, kept to whole sentences), turn each chunk into a vector with an embedding model, and store the vector with the chunk’s text and metadata, such as source and date, in a vector index. Most systems also build a keyword index over the same chunks, scored with BM25. Answering happens per question: embed the question with the same model, fetch the nearest chunks from the vector index and the best keyword matches, and merge the two ranked lists, often with Reciprocal Rank Fusion, which scores each chunk by summing 1 / (k + rank) over the lists it appears in. The two searches cover each other’s gaps: embeddings match meaning (“money back” finds “refund policy”), while BM25 catches exact strings such as an error code `TS-999` that embeddings can miss. An optional reranking model then scores each candidate against the question, for example the top 150, and keeps the best 20. Those chunks go into the prompt with an instruction to answer only from them, and the answer cites the chunks it used; some APIs return the exact cited spans. Because there are two steps, there are two ways to fail and two things to measure: retrieval (did the right chunks come back?) and generation (does every claim in the answer follow from the retrieved text?). In agentic retrieval the model itself issues searches as tool calls, reads the results and searches again, instead of getting one fixed batch of chunks up front.",
+  "analogy": "An open-book exam with a fast librarian. The model is a student who knows a lot, but not your company’s handbook. Before each answer, the librarian pulls the few pages most likely to help, looking up both the topic and the exact words in the question, and lays them on the desk; the student answers from those pages and writes down the page numbers. If the librarian brings the wrong pages, even the best student answers wrong, which is why most of the work goes into the librarian.",
+  "useWhen": [
+    "Answers must come from documents the model never saw: internal docs, policies, tickets, contracts, product manuals",
+    "The documents change often: re-index a page and the next answer uses it, with no retraining",
+    "People need sources they can check next to each answer",
+    "The corpus is far larger than a context window, or sending all of it with every question costs too much"
+  ],
+  "avoidWhen": [
+    "The whole knowledge base fits in the prompt: below about 200,000 tokens (around 500 pages), Anthropic suggests sending all of it and caching the prompt",
+    "Questions need every record, such as counts or totals: retrieval returns only the top few chunks, so a database query answers better",
+    "You have no test questions with known answers: without them, changes to chunking, embeddings or ranking are guesswork",
+    "The index would show users passages their own permissions don’t allow: retrieval has to apply the same access rules as the source"
+  ],
+  "example": "In September 2024 Anthropic measured a common weakness: chunks lose their context. A chunk saying “The company’s revenue grew by 3% over the previous quarter” doesn’t say which company or which quarter, so neither search finds it. Their fix, Contextual Retrieval, had a small model (Claude 3 Haiku) read each whole document and write 50 to 100 tokens of context for every chunk, such as “This chunk is from an SEC filing on ACME corp’s performance in Q2 2023”, prepended before embedding and before building the BM25 index. With prompt caching, so the document is sent once rather than once per chunk, that cost $1.02 per million document tokens. Across several knowledge domains, measured as the share of relevant chunks missing from the top 20, contextual embeddings cut failures from 5.7% to 3.7%, adding contextual BM25 brought them to 2.9% (49% fewer), and reranking the top 150 candidates down to 20 brought them to 1.9% (67% fewer). Reranking adds a step at query time, so it costs some latency.",
+  "providers": {
+    "aws": "Amazon Bedrock Knowledge Bases (fixed-size, hierarchical or semantic chunking into a vector index; AWS recommends Amazon Bedrock Managed Knowledge Base for a managed experience)",
+    "gcp": "RAG Engine, now part of Gemini Enterprise Agent Platform (the evolution of Vertex AI); Agent Platform Search; Agent Retrieval, formerly Vector Search 2.0",
+    "azure": "Azure AI Search: classic RAG with hybrid search (BM25 and vectors merged with RRF) plus semantic ranker, or agentic retrieval (preview), where a model plans subqueries; it also underpins Foundry IQ knowledge bases",
+    "oss": "LlamaIndex, LangChain and Haystack for pipelines; PostgreSQL with pgvector and full-text search; vector databases plus a reranker; Ragas for evaluation"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "# The retrieval step: hybrid search in PostgreSQL (pgvector + full-text), merged with RRF",
+      "import psycopg",
+      "from pgvector.psycopg import register_vector",
+      "from sentence_transformers import SentenceTransformer",
+      "",
+      "conn = psycopg.connect(dbname=\"support\", autocommit=True)",
+      "register_vector(conn)",
+      "model = SentenceTransformer(\"multi-qa-MiniLM-L6-cos-v1\")  # same model that embedded the chunks",
+      "",
+      "HYBRID = \"\"\"",
+      "WITH semantic AS (",
+      "  SELECT id, RANK() OVER (ORDER BY embedding <=> %(embedding)s) AS rank",
+      "  FROM chunks ORDER BY embedding <=> %(embedding)s LIMIT 20",
+      "), keyword AS (",
+      "  SELECT id, RANK() OVER (ORDER BY ts_rank_cd(to_tsvector('english', content), q) DESC) AS rank",
+      "  FROM chunks, plainto_tsquery('english', %(query)s) q",
+      "  WHERE to_tsvector('english', content) @@ q",
+      "  ORDER BY ts_rank_cd(to_tsvector('english', content), q) DESC LIMIT 20",
+      ")",
+      "SELECT c.id, c.source, c.content,",
+      "       COALESCE(1.0 / (60 + s.rank), 0) + COALESCE(1.0 / (60 + k.rank), 0) AS score",
+      "FROM semantic s FULL OUTER JOIN keyword k ON s.id = k.id",
+      "JOIN chunks c ON c.id = COALESCE(s.id, k.id)",
+      "ORDER BY score DESC LIMIT 5",
+      "\"\"\"",
+      "",
+      "question = \"What does error TS-999 mean?\"",
+      "rows = conn.execute(HYBRID, {\"query\": question, \"embedding\": model.encode(question)}).fetchall()",
+      "",
+      "# The generation step gets only these chunks, numbered so the answer can cite them",
+      "context = \"\\n\\n\".join(f\"[{i}] ({source})\\n{content}\" for i, (_, source, content, _) in enumerate(rows, 1))",
+      "prompt = (",
+      "    \"Answer using only the sources below and cite them like [2]. \"",
+      "    \"If they don't contain the answer, say so.\\n\\n\" + context + \"\\n\\nQuestion: \" + question",
+      ")"
+    ]
+  },
+  "related": [
+    "vector",
+    "search",
+    "llms",
+    "ai-agents",
+    "agent-tools"
+  ],
+  "diagram": {
+    "caption": "Documents are chunked and embedded ahead of time and land in the index. Each question is embedded and searched by meaning and by keywords; the index passes the merged candidates to a reranker, the best few go into the model’s prompt, and the answer travels back to the user.",
+    "w": 780,
+    "h": 280,
+    "zones": [
+      {
+        "x": 30,
+        "y": 25,
+        "w": 340,
+        "h": 95,
+        "label": "Ahead of time"
+      },
+      {
+        "x": 30,
+        "y": 160,
+        "w": 340,
+        "h": 95,
+        "label": "Per question"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "docs",
+        "x": 105,
+        "y": 72,
+        "label": "Documents",
+        "sub": "pages, PDFs, tickets",
+        "emit": {
+          "every": 1600,
+          "jitter": 0.4,
+          "color": 2,
+          "type": "doc"
+        },
+        "out": [
+          "chunk"
+        ]
+      },
+      {
+        "id": "chunk",
+        "x": 285,
+        "y": 72,
+        "kind": "pool",
+        "label": "Chunk + embed",
+        "sub": "~300 tokens each",
+        "min": 1,
+        "max": 3,
+        "work": 500,
+        "out": [
+          "index"
+        ]
+      },
+      {
+        "id": "user",
+        "x": 105,
+        "y": 207,
+        "label": "Question",
+        "sub": "“error TS-999?”",
+        "emit": {
+          "every": 900,
+          "jitter": 0.4,
+          "req": true,
+          "color": 0,
+          "type": "question"
+        },
+        "out": [
+          "retrieve"
+        ]
+      },
+      {
+        "id": "retrieve",
+        "x": 285,
+        "y": 207,
+        "label": "Retriever",
+        "sub": "embed query",
+        "out": [
+          "index"
+        ]
+      },
+      {
+        "id": "index",
+        "x": 470,
+        "y": 140,
+        "label": "Index",
+        "sub": "vectors + BM25 · RRF",
+        "concept": "vector",
+        "mode": "gate",
+        "allowTypes": [
+          "question"
+        ],
+        "quiet": true,
+        "out": [
+          "rerank"
+        ]
+      },
+      {
+        "id": "rerank",
+        "x": 610,
+        "y": 140,
+        "label": "Reranker",
+        "sub": "top 150 → 20",
+        "out": [
+          "llm"
+        ]
+      },
+      {
+        "id": "llm",
+        "x": 715,
+        "y": 140,
+        "label": "LLM",
+        "sub": "answers, cites",
+        "concept": "llms",
+        "mode": "reply",
+        "delay": 400
+      }
+    ]
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "Measure the two halves separately",
+      "intro": "A wrong answer can come from retrieval or from generation, so evaluate each one. These are the usual metrics, with the names Ragas uses.",
+      "items": [
+        {
+          "name": "Recall@k",
+          "tag": "retrieval",
+          "text": "The share of relevant chunks that appear in the top k results. Anthropic’s Contextual Retrieval tests report 1 minus recall@20: how often a relevant chunk is missing from the top 20."
+        },
+        {
+          "name": "Context precision",
+          "tag": "retrieval",
+          "text": "Whether the relevant chunks are ranked above the irrelevant ones: the mean of precision@k over the retrieved chunks. Rerankers mainly improve this."
+        },
+        {
+          "name": "Faithfulness",
+          "tag": "generation",
+          "text": "The share of claims in the answer that the retrieved context supports, from 0 to 1. A low score means the model is adding facts from memory or inventing them."
+        },
+        {
+          "name": "Answer relevancy",
+          "tag": "generation",
+          "text": "How directly the answer addresses the question that was asked, from 0 to 1, penalizing incomplete answers and padding. It doesn’t check whether the answer is true."
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Long context or retrieval?",
+      "body": [
+        "Context windows grew fast: Google’s Gemini 1.5 Pro ran up to 1 million tokens in February 2024, and found a planted fact 99% of the time in a needle-in-a-haystack test of that length. For a small corpus, sending everything is now often simpler than RAG; Anthropic’s rule of thumb is about 200,000 tokens, with prompt caching to cut the cost of resending it.",
+        "Long context doesn’t remove the reasons for retrieval. A 2023 study found that models used information at the start and end of a long context much better than information in the middle, even models built for long contexts, and Anthropic describes “context rot”: recall drops as the context fills. Every token also costs money and latency on every request. Agents increasingly mix the two, keeping lightweight references such as file paths or saved queries and loading the content with tools just in time, rather than either retrieving once or loading everything."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Pre-trained language models store what they know in their weights. That knowledge is hard to update, it can’t say where a fact came from, and it falls behind on knowledge-heavy tasks. In 2020 researchers gave models a second, searchable memory. REALM retrieved documents during pre-training. Dense Passage Retrieval showed that learned embeddings could beat BM25 at finding the right passage, by 9 to 19 points in top-20 accuracy. In May 2020 Patrick Lewis and colleagues at Facebook AI named the approach: retrieval-augmented generation, a sequence-to-sequence model paired with a dense vector index of Wikipedia. When Meta released RAG in Hugging Face Transformers that September, it showed that swapping the index for an older Wikipedia changed what the model answered, with no retraining.",
+      "RETRO (December 2021) scaled the idea to a 2 trillion token database and matched GPT-3 with 25 times fewer parameters. After chat models arrived, RAG moved from model architecture into application code: developers wanted to connect models to their own documents, APIs and data, and frameworks such as LangChain and LlamaIndex packaged the index-then-retrieve pattern for them.",
+      "Then context windows grew to a million tokens, raising the question of whether retrieval was still needed. Research such as “Lost in the Middle” (2023) showed that more context isn’t the same as used context, and practitioners refined retrieval instead: hybrid keyword and vector search, reranking, chunks enriched with document context, and agents that search with tools as they go."
+    ],
+    "choices": [
+      {
+        "choice": "Keep knowledge in an index, not in the weights",
+        "why": "The RAG paper’s authors wanted knowledge that could be updated and traced. Changing a model’s weights means retraining; changing an index means re-embedding a few documents, and each answer can point to its sources."
+      },
+      {
+        "choice": "Search by meaning and by keywords",
+        "why": "Dense retrieval beat BM25 on question answering, but embeddings can miss exact identifiers and rare terms. Running both and merging with rank fusion keeps the strengths of each."
+      },
+      {
+        "choice": "Small chunks, a wide first pass, then a reranker",
+        "why": "Chunks of a few hundred tokens let retrieval return just the relevant part of a long document. A cheap search fetches many candidates, and a slower reranking model orders a short list, so fewer tokens reach the model."
+      },
+      {
+        "choice": "Answer only from the sources, with citations",
+        "why": "Provenance was one of the problems RAG set out to solve. Citing the chunk behind each claim lets a person check it, and evaluation can count claims the sources don’t support."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "2020",
+        "text": "REALM (February) and Dense Passage Retrieval (April) add learned retrieval"
+      },
+      {
+        "year": "2020",
+        "text": "Lewis et al. name retrieval-augmented generation (May); Meta releases it in Hugging Face Transformers (September)"
+      },
+      {
+        "year": "2021",
+        "text": "RETRO retrieves from a 2 trillion token database"
+      },
+      {
+        "year": "2023",
+        "text": "“Lost in the Middle” shows models underuse the middle of long contexts"
+      },
+      {
+        "year": "2024",
+        "text": "Gemini 1.5 runs 1 million tokens (February); Anthropic’s Contextual Retrieval cuts retrieval failures by 67% (September)"
+      },
+      {
+        "year": "2025",
+        "text": "Agents shift toward just-in-time retrieval with tools"
+      }
+    ],
+    "sources": [
+      {
+        "label": "Guu et al.: REALM, Retrieval-Augmented Language Model Pre-Training (arXiv, Feb 2020)",
+        "url": "https://arxiv.org/abs/2002.08909"
+      },
+      {
+        "label": "Karpukhin et al.: Dense Passage Retrieval for Open-Domain Question Answering (arXiv, Apr 2020)",
+        "url": "https://arxiv.org/abs/2004.04906"
+      },
+      {
+        "label": "Lewis et al.: Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks (arXiv, May 2020)",
+        "url": "https://arxiv.org/abs/2005.11401"
+      },
+      {
+        "label": "Meta AI blog: Retrieval Augmented Generation, streamlining the creation of intelligent NLP models (Sep 2020)",
+        "url": "https://ai.meta.com/blog/retrieval-augmented-generation-streamlining-the-creation-of-intelligent-natural-language-processing-models/",
+        "archive": "https://web.archive.org/web/20260925134053/https://ai.meta.com/blog/retrieval-augmented-generation-streamlining-the-creation-of-intelligent-natural-language-processing-models/"
+      },
+      {
+        "label": "Borgeaud et al.: Improving language models by retrieving from trillions of tokens (RETRO; arXiv, Dec 2021)",
+        "url": "https://arxiv.org/abs/2112.04426"
+      },
+      {
+        "label": "LangChain blog: Announcing our $10M seed round (connecting models to proprietary documents; Apr 2023)",
+        "url": "https://blog.langchain.com/announcing-our-10m-seed-round-led-by-benchmark/"
+      },
+      {
+        "label": "Liu et al.: Lost in the Middle, How Language Models Use Long Contexts (arXiv, Jul 2023)",
+        "url": "https://arxiv.org/abs/2307.03172"
+      },
+      {
+        "label": "Google: Our next-generation model, Gemini 1.5 (1 million tokens; Feb 2024)",
+        "url": "https://blog.google/technology/ai/google-gemini-next-generation-model-february-2024/"
+      },
+      {
+        "label": "Anthropic: Introducing Contextual Retrieval (hybrid search, reranking, the 200,000-token rule; Sep 2024)",
+        "url": "https://www.anthropic.com/news/contextual-retrieval"
+      },
+      {
+        "label": "Anthropic: Effective context engineering for AI agents (just-in-time retrieval; Sep 2025)",
+        "url": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "Anthropic: Introducing Contextual Retrieval (hybrid search, reranking, the 200,000-token rule; Sep 2024)",
+      "url": "https://www.anthropic.com/news/contextual-retrieval"
+    },
+    {
+      "label": "Lewis et al.: Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks (arXiv, May 2020)",
+      "url": "https://arxiv.org/abs/2005.11401"
+    },
+    {
+      "label": "AWS docs: How content chunking works for knowledge bases (default about 300 tokens, fixed-size, hierarchical, semantic)",
+      "url": "https://docs.aws.amazon.com/bedrock/latest/userguide/kb-chunking.html"
+    },
+    {
+      "label": "AWS docs: Retrieve data and generate AI responses with Amazon Bedrock Knowledge Bases",
+      "url": "https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base.html"
+    },
+    {
+      "label": "Google Cloud docs: RAG Engine on Gemini Enterprise Agent Platform overview",
+      "url": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/build/rag-engine/rag-overview"
+    },
+    {
+      "label": "Google Cloud docs: Vertex AI release notes (Vertex AI services are now part of Gemini Enterprise Agent Platform)",
+      "url": "https://docs.cloud.google.com/vertex-ai/docs/release-notes"
+    },
+    {
+      "label": "Microsoft Learn: RAG in Azure AI Search (classic RAG and agentic retrieval)",
+      "url": "https://learn.microsoft.com/en-us/azure/search/retrieval-augmented-generation-overview"
+    },
+    {
+      "label": "Microsoft Learn: Hybrid search in Azure AI Search (BM25 and vectors in parallel, merged with RRF)",
+      "url": "https://learn.microsoft.com/en-us/azure/search/hybrid-search-overview"
+    },
+    {
+      "label": "pgvector README (cosine distance, hybrid search with full-text search)",
+      "url": "https://github.com/pgvector/pgvector"
+    },
+    {
+      "label": "pgvector-python: hybrid search with Reciprocal Rank Fusion example",
+      "url": "https://github.com/pgvector/pgvector-python/blob/master/examples/hybrid_search/rrf.py"
+    },
+    {
+      "label": "LlamaIndex docs: Introduction to RAG (loading, indexing, storing, querying, evaluation)",
+      "url": "https://developers.llamaindex.ai/python/framework/understanding/rag/"
+    },
+    {
+      "label": "Haystack docs: Introduction (open-source framework for RAG and agents)",
+      "url": "https://docs.haystack.deepset.ai/docs/intro"
+    },
+    {
+      "label": "Ragas docs: Faithfulness",
+      "url": "https://docs.ragas.io/en/stable/concepts/metrics/available_metrics/faithfulness/"
+    },
+    {
+      "label": "Ragas docs: Context precision",
+      "url": "https://docs.ragas.io/en/stable/concepts/metrics/available_metrics/context_precision/"
+    },
+    {
+      "label": "Ragas docs: Answer relevancy",
+      "url": "https://docs.ragas.io/en/stable/concepts/metrics/available_metrics/answer_relevance/"
+    },
+    {
+      "label": "Ragas docs: Available metrics",
+      "url": "https://docs.ragas.io/en/stable/concepts/metrics/available_metrics/"
+    },
+    {
+      "label": "Claude docs: Citations (cited spans, sentence chunking)",
+      "url": "https://platform.claude.com/docs/en/build-with-claude/citations"
+    },
+    {
+      "label": "Liu et al.: Lost in the Middle, How Language Models Use Long Contexts (arXiv, Jul 2023)",
+      "url": "https://arxiv.org/abs/2307.03172"
+    },
+    {
+      "label": "Google: Our next-generation model, Gemini 1.5 (1 million tokens; Feb 2024)",
+      "url": "https://blog.google/technology/ai/google-gemini-next-generation-model-february-2024/"
+    },
+    {
+      "label": "Anthropic: Effective context engineering for AI agents (just-in-time retrieval; Sep 2025)",
+      "url": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents"
+    },
+    {
+      "label": "Karpukhin et al.: Dense Passage Retrieval for Open-Domain Question Answering (arXiv, Apr 2020)",
+      "url": "https://arxiv.org/abs/2004.04906"
+    }
+  ]
+}

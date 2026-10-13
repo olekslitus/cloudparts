@@ -1,0 +1,192 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Model routers and gateways",
+  "icon": "split",
+  "category": "ai",
+  "order": 30,
+  "parent": "llms",
+  "summary": "A proxy between your app and many model providers: one API and one key in front of OpenAI, Anthropic, Google and others, which routes each request, falls back when a provider fails, and caches, rate-limits, logs and bills the traffic.",
+  "howItWorks": "Your app sends its model requests to the gateway instead of to each provider, usually in OpenAI’s chat completions format: OpenRouter at `https://openrouter.ai/api/v1/chat/completions`, Cloudflare AI Gateway by swapping the provider’s base URL for `https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/openai`, or a self-hosted LiteLLM proxy on your own network. The gateway checks the caller’s key, picks an upstream, translates the request if that provider speaks another format, forwards it and streams the answer back. Routing decides the upstream. OpenRouter, by default, prefers providers of the requested model that had no significant outages in the last 30 seconds, then picks among the cheapest of those, weighted by the inverse square of their price; `provider.order` or `sort` override that. Fallbacks handle failure: OpenRouter’s `models` list is tried in order when a model returns an error, including rate limits, downtime, moderation refusals and context-length errors, and the request is billed at the model that answered. Cloudflare’s dynamic routes add conditions, percentage splits and per-key rate or budget limits that switch to a fallback model. Caching skips the provider entirely: Cloudflare hashes the provider, endpoint, model, auth header and full request body with SHA-256 and serves an identical request from cache (`cf-aig-cache-status: HIT`). Rate limits return `429` after, for example, 100 requests per 60 seconds; Azure API Management counts tokens per minute instead. Every request can be logged with its prompt, response, provider, token usage, cost and duration. Billing goes one of two ways: you bring your own provider keys, or you buy credits from the gateway, which passes provider prices through and charges a fee on the credits (5% at Cloudflare, 5.5% on OpenRouter’s Standard plan).",
+  "analogy": "A travel agent instead of booking each airline yourself. You give one agent your plans and one card. They know every airline’s booking system, rebook you on another carrier when a flight is canceled, hand you the same ticket again if you ask for exactly the same trip, keep a record of every booking, and send one invoice with their fee on top.",
+  "useWhen": [
+    "One product uses models from several providers, and you want one API, one key and one bill",
+    "Uptime matters more than which provider answers: fallbacks move a request to another provider or model when one returns errors or rate limits",
+    "You need per-team or per-user limits and budgets, and one log of prompts, tokens and cost across providers",
+    "Many requests are identical, such as a support bot with fixed menu prompts, so an exact-match cache answers them without a provider call"
+  ],
+  "avoidWhen": [
+    "Prompts must not pass through another company: a hosted gateway sees and, by default, may log every prompt and response, so turn logging off, restrict routing to zero-data-retention providers, or self-host LiteLLM",
+    "You depend on one provider’s newest or most specific options: a common format can lag or reject them, for example OpenRouter’s Anthropic-style `fallbacks` entries accept only a model name and return a 400 for per-attempt `max_tokens` or `thinking`",
+    "You spend heavily with one provider: a 5% to 5.5% fee on credits is real money at scale, where a direct contract or your own keys cost less",
+    "Every prompt is different: exact-match caching only helps identical requests, and any change to the messages, tools or parameters is a miss"
+  ],
+  "example": "OpenRouter’s docs walk through a request for one open-weight model that three providers host at $1, $2 and $3 per million tokens, where provider B has had a few recent outages. The router puts B last and weights the other two by the inverse square of their price: A gets 1/1² = 1 and C gets 1/3² = 1/9, so A is tried first 9 times as often as C. If A fails, C is tried next, and B only after that. A team using that model adds a `models` list with a second model behind it. When every provider of the first model fails or rate-limits, OpenRouter sends the same messages to the second, and the response’s `model` field shows which one answered and was billed. To keep prompts away from providers that store data, the team also sets `provider.zdr` so only zero-data-retention endpoints are used, and pays with credits, which carry a 5.5% platform fee on the Standard plan while token prices pass through unchanged.",
+  "providers": {
+    "aws": "No multi-provider gateway service: Amazon Bedrock intelligent prompt routing picks between models of one family per request, and cross-Region inference profiles spread requests across AWS Regions",
+    "gcp": "Apigee API Management with LLM token policies (PromptTokenLimit, LLMTokenQuota) in front of model APIs",
+    "azure": "AI gateway in Azure API Management: token-per-minute limits per consumer, semantic caching, load balancing with circuit breakers, and a unified OpenAI-compatible model API (preview) for Foundry and other providers such as Amazon Bedrock",
+    "oss": "LiteLLM AI Gateway (self-hosted, one OpenAI-compatible endpoint for 100+ providers, virtual keys and budgets); hosted: OpenRouter, Cloudflare AI Gateway"
+  },
+  "snippet": {
+    "lang": "bash",
+    "source": [
+      "# One endpoint and one key for every provider OpenRouter routes to",
+      "curl https://openrouter.ai/api/v1/chat/completions \\",
+      "  -H \"Authorization: Bearer $OPENROUTER_API_KEY\" \\",
+      "  -H \"Content-Type: application/json\" \\",
+      "  -d '{",
+      "    \"models\": [\"~anthropic/claude-sonnet-latest\", \"gryphe/mythomax-l2-13b\"],",
+      "    \"provider\": { \"sort\": \"price\", \"zdr\": true },",
+      "    \"messages\": [{\"role\": \"user\", \"content\": \"Summarize this ticket in one line: ...\"}]",
+      "  }'",
+      "",
+      "# models: tried in order if the first one errors, is rate-limited or refuses",
+      "# provider.sort: cheapest provider first, instead of price-weighted load balancing",
+      "# provider.zdr: only providers with zero data retention",
+      "# The response's \"model\" field says which model answered (and was billed)."
+    ]
+  },
+  "related": ["llms", "apigw", "lb", "cache", "observability"],
+  "diagram": {
+    "caption": "Requests from the app reach the gateway, which answers identical repeats from its cache (HIT) and forwards the rest to a router that spreads them over two providers. When provider A goes down, the router sends everything to provider B until A recovers.",
+    "h": 260,
+    "nodes": [
+      {
+        "id": "app",
+        "x": 95,
+        "y": 130,
+        "label": "App",
+        "sub": "one API key",
+        "emit": { "every": 450, "jitter": 0.35, "req": true, "color": 0 },
+        "out": ["cache"]
+      },
+      {
+        "id": "cache",
+        "x": 275,
+        "y": 130,
+        "label": "Gateway cache",
+        "sub": "exact match · SHA-256",
+        "mode": "cache",
+        "p": 0.25,
+        "concept": "cache",
+        "out": ["router"]
+      },
+      {
+        "id": "router",
+        "x": 455,
+        "y": 130,
+        "label": "Router",
+        "sub": "health · price · fallback",
+        "route": "rr",
+        "out": ["a", "b"]
+      },
+      {
+        "id": "a",
+        "x": 645,
+        "y": 70,
+        "label": "Provider A",
+        "sub": "$1 / M tokens",
+        "mode": "reply",
+        "delay": 500
+      },
+      {
+        "id": "b",
+        "x": 645,
+        "y": 190,
+        "label": "Provider B",
+        "sub": "$3 / M tokens",
+        "mode": "reply",
+        "delay": 650
+      }
+    ],
+    "events": [
+      { "node": "a", "at": 4000, "every": 12000, "dur": 4500, "text": "503 errors", "back": "healthy" }
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "What a gateway does to each request",
+      "intro": "The same features show up in hosted and self-hosted gateways, under different names.",
+      "corner": "Feature",
+      "columns": ["What it does", "OpenRouter", "Cloudflare AI Gateway", "LiteLLM (self-hosted)"],
+      "rows": [
+        { "label": "One API", "values": ["Accepts one format and translates to each provider", "OpenAI-style chat completions, plus an Anthropic Messages endpoint", "Provider URLs behind one gateway, plus OpenAI-compatible endpoints", "One OpenAI-compatible endpoint for 100+ providers"] },
+        { "label": "Routing and fallback", "values": ["Chooses an upstream and retries elsewhere on failure", "Price-weighted load balancing; `models` fallback list", "Dynamic routes with conditions, percentage splits and fallbacks", "Load balancing, fallbacks, retries and cooldowns"] },
+        { "label": "Caching", "values": ["Answers repeats without calling the provider", "Uses providers’ prompt caching, with sticky routing to the same provider to keep cache hits", "Exact-match cache, off by default, per-request TTL headers", "Caching"] },
+        { "label": "Limits", "values": ["Caps requests, tokens or spend per caller", "`max_price` per request", "Requests per window (fixed or sliding); rate and budget nodes in routes", "Budgets and rate limits per virtual key"] },
+        { "label": "Logs and billing", "values": ["Records cost and usage; one invoice", "5.5% fee on credits (Standard); no markup on tokens", "Logs with prompt, response, tokens and cost; 5% fee on Unified Billing credits", "Spend per key, team and user; you pay providers directly"] }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Exact-match or semantic caching",
+      "body": [
+        "A model call is expensive and slow compared with a cache lookup, but a cache only helps if requests repeat. Cloudflare AI Gateway uses an exact-match key: a SHA-256 hash of the provider, endpoint, model, the provider auth header and the full request body. Any difference in the messages, tools or parameters makes a new entry, so Cloudflare suggests it for apps with limited prompt options, such as a support bot that offers a fixed menu of questions. Caching is off by default and set per gateway, with per-request headers to change the TTL or the key.",
+        "Azure API Management offers semantic caching instead: it stores completions with an embedding of the prompt in a Redis-compatible vector store and reuses a cached completion when a new prompt is close enough. That raises hit rates on prompts that are worded differently but mean the same, at the risk of returning an answer to a question that only looked similar."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "The first generation of LLM apps called one provider’s API directly, with that provider’s SDK and key. As apps started to mix providers, every team rebuilt the same plumbing: retries, fallbacks, cost tracking and caching. When Cloudflare announced the beta of AI Gateway on September 27, 2023, it noted that basic usage analytics were “surprisingly difficult” to get from the typical model providers. Its gateway sat between the app and APIs such as OpenAI, Hugging Face and Replicate, needed only a changed base URL, and could cache, rate-limit, retry and fall back, for example from GPT-3 on OpenAI to GPT-2 on Hugging Face.",
+      "OpenRouter, founded in 2023 by Alex Atallah and Louis Vichy in New York, took the marketplace route: one API and one bill for models from many developers and inference providers, with routing by price and performance. It grew to more than 500 models from over 80 providers and raised a $113 million Series B in May 2026 at a valuation of about $1.3 billion; in August 2026, Bloomberg and The Wall Street Journal reported that Stripe had agreed to acquire it for more than $7 billion.",
+      "The same features moved into self-hosted and enterprise tools. LiteLLM offers an open-source gateway with virtual keys, budgets and spend tracking, and Azure API Management added an AI gateway that counts tokens per consumer and caches by meaning. By 2026 Cloudflare’s gateway also sold models from several providers on one bill, with a 5% fee on credits and provider prices passed through."
+    ],
+    "choices": [
+      {
+        "choice": "Copy the provider’s API instead of inventing one",
+        "why": "If the gateway accepts the same requests as OpenAI’s API, an existing app switches by changing its base URL. Cloudflare’s 2023 launch post said it took one line of code and left the payload untouched."
+      },
+      {
+        "choice": "Pass token prices through and charge on credits",
+        "why": "Both OpenRouter and Cloudflare charge the provider’s own per-token price with no markup and take a fee when you buy credits, so comparing models stays simple and the gateway’s cost is one visible percentage."
+      },
+      {
+        "choice": "Route by health and price, not a fixed provider",
+        "why": "The same open model is often served by several providers at different prices and with different uptime. OpenRouter puts providers with recent outages last and weights the rest by the inverse square of their price, which favors cheap providers while keeping others warm as backups."
+      },
+      {
+        "choice": "Exact-match cache keys",
+        "why": "Hashing the whole request, including the auth header, means a cached answer is only reused for exactly the same request with the same credentials, never for a near match or another key. Cloudflare planned semantic caching to raise hit rates; Azure API Management ships it, trading exactness for more hits."
+      }
+    ],
+    "timeline": [
+      { "year": "2023", "text": "OpenRouter is founded in New York; Cloudflare announces the AI Gateway beta (September 27)" },
+      { "year": "2025", "text": "OpenRouter raises a seed round led by Andreessen Horowitz and a Series A led by Menlo Ventures" },
+      { "year": "2026", "text": "OpenRouter raises a $113 million Series B (May); Stripe is reported to be acquiring OpenRouter (August)" }
+    ],
+    "sources": [
+      { "label": "Cloudflare blog: Announcing AI Gateway (Sept 27, 2023)", "url": "https://blog.cloudflare.com/announcing-ai-gateway/" },
+      { "label": "Wikipedia: OpenRouter (founders, funding, reported Stripe deal)", "url": "https://en.wikipedia.org/wiki/OpenRouter" },
+      { "label": "OpenRouter: Pricing (500+ models, 80+ providers, platform fees)", "url": "https://openrouter.ai/pricing" },
+      { "label": "OpenRouter docs: FAQ (no markup on inference, fee on credits)", "url": "https://openrouter.ai/docs/faq" },
+      { "label": "OpenRouter docs: Provider selection (outage window, inverse-square price weighting)", "url": "https://openrouter.ai/docs/guides/routing/provider-selection" },
+      { "label": "LiteLLM docs: AI Gateway (self-hosted, virtual keys, spend tracking)", "url": "https://docs.litellm.ai/docs/simple_proxy" },
+      { "label": "Microsoft Learn: AI gateway in Azure API Management", "url": "https://learn.microsoft.com/en-us/azure/api-management/genai-gateway-capabilities" },
+      { "label": "Cloudflare docs: AI Gateway Unified Billing (5% fee, no markup)", "url": "https://developers.cloudflare.com/ai-gateway/features/unified-billing/" },
+      { "label": "Cloudflare docs: AI Gateway caching (exact match, semantic caching planned)", "url": "https://developers.cloudflare.com/ai-gateway/features/caching/" }
+    ]
+  },
+  "sources": [
+    { "label": "OpenRouter docs: Quickstart (one endpoint, chat completions, OpenAI SDK as drop-in)", "url": "https://openrouter.ai/docs/quickstart" },
+    { "label": "OpenRouter docs: Provider selection (load balancing, provider object, zdr, sort)", "url": "https://openrouter.ai/docs/guides/routing/provider-selection" },
+    { "label": "OpenRouter docs: Model fallbacks (models list, errors that trigger it, billing, fallbacks limits)", "url": "https://openrouter.ai/docs/guides/routing/model-fallbacks" },
+    { "label": "OpenRouter docs: Prompt caching", "url": "https://openrouter.ai/docs/features/prompt-caching" },
+    { "label": "OpenRouter docs: FAQ (fees, BYOK)", "url": "https://openrouter.ai/docs/faq" },
+    { "label": "OpenRouter: Pricing (5.5% Standard platform fee, BYOK allowance)", "url": "https://openrouter.ai/pricing" },
+    { "label": "Cloudflare docs: AI Gateway overview", "url": "https://developers.cloudflare.com/ai-gateway/" },
+    { "label": "Cloudflare docs: AI Gateway get started (provider base URLs, OpenAI-compatible endpoints)", "url": "https://developers.cloudflare.com/ai-gateway/get-started/" },
+    { "label": "Cloudflare docs: AI Gateway caching (cache key, cf-aig-cache-status)", "url": "https://developers.cloudflare.com/ai-gateway/features/caching/" },
+    { "label": "Cloudflare docs: AI Gateway rate limiting (fixed and sliding windows, 429)", "url": "https://developers.cloudflare.com/ai-gateway/features/rate-limiting/" },
+    { "label": "Cloudflare docs: AI Gateway dynamic routing (conditions, percentages, rate and budget limits)", "url": "https://developers.cloudflare.com/ai-gateway/features/dynamic-routing/" },
+    { "label": "Cloudflare docs: AI Gateway logging (prompt, response, tokens, cost)", "url": "https://developers.cloudflare.com/ai-gateway/observability/logging/" },
+    { "label": "Cloudflare docs: AI Gateway Unified Billing (5% fee, credential precedence)", "url": "https://developers.cloudflare.com/ai-gateway/features/unified-billing/" },
+    { "label": "LiteLLM docs: AI Gateway (self-hosted, OpenAI-compatible, 100+ providers)", "url": "https://docs.litellm.ai/docs/simple_proxy" },
+    { "label": "LiteLLM docs: Router load balancing (fallbacks, retries, cooldowns)", "url": "https://docs.litellm.ai/docs/routing" },
+    { "label": "Microsoft Learn: AI gateway in Azure API Management (token limits, semantic caching, load balancing, unified model API)", "url": "https://learn.microsoft.com/en-us/azure/api-management/genai-gateway-capabilities" },
+    { "label": "AWS docs: Amazon Bedrock intelligent prompt routing", "url": "https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-routing.html" },
+    { "label": "AWS docs: Amazon Bedrock cross-Region inference", "url": "https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html" },
+    { "label": "Google Cloud docs: Apigee LLM token policies", "url": "https://docs.cloud.google.com/apigee/docs/api-platform/tutorials/using-ai-token-policies" }
+  ]
+}

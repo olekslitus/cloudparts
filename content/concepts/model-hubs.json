@@ -1,0 +1,150 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Model hubs",
+  "icon": "library",
+  "category": "ai",
+  "order": 10,
+  "parent": "llms",
+  "summary": "Registries for trained models and datasets: each model is a versioned repository of weight files, config and a model card that says what it is, what it was derived from and under which license you may use it.",
+  "howItWorks": "On the Hugging Face Hub, the largest, every model, dataset and Space is a Git repository. A model repository holds the weights, the config and tokenizer files, and a `README.md` that the Hub renders as the model card: Markdown with a YAML header that names the `license`, the `base_model`, the `datasets` it was trained on and the task (`pipeline_tag`). Weights are too big for plain Git (Qwen3-8B is five shards, 16.4 GB in all, and some repos hold terabyte-scale files), so the repository keeps small pointer files, tracked in `.gitattributes`, while the bytes sit in remote storage such as Amazon S3. The Hub now stores them with Xet, which deduplicates in chunks; Git LFS still works. You fetch by repository ID and revision (`hf download Qwen/Qwen3-8B`), from a CDN, into a local cache keyed by commit hash, so two machines that pin the same commit get the same bytes. The metadata turns the hub into a family tree: a fine-tune, adapter, merge or quantized copy names its `base_model`, and the Hub links the two. The file format decides what loading a model can do to your machine. PyTorch’s default format is Python pickle, which can run arbitrary code while it loads. Safetensors is an 8-byte header length, a JSON header listing each tensor’s dtype, shape and byte offsets, then raw bytes, so loading is only reading. GGUF, made for llama.cpp, packs the tensors plus metadata such as the architecture and tokenizer into one file, often quantized. Authors can gate a repository: users must share their contact details and accept terms, with approval automatic or manual.",
+  "analogy": "A package registry such as npm, but for trained models. Each package is a repository with a README saying what it does and under which license, versions you can pin, and a link to the package it was forked from. As with packages, downloading one means running someone else’s work, so who published it and in which format matters.",
+  "useWhen": [
+    "Finding an open-weight model for a task and comparing its variants (base, instruction-tuned, quantized) in one place",
+    "Pinning the exact weights a service runs, by repository ID and commit, so every deploy loads the same files",
+    "Sharing fine-tunes, adapters or datasets with a team in private repositories, or publicly behind a gate with terms",
+    "Checking a model’s license, base model and training data before you build a product on it"
+  ],
+  "avoidWhen": [
+    "You only need answers from a model: a hosted API or a gateway spares you downloading and serving 16 GB of weights",
+    "The weights come as pickle files (`.bin`, `.pt`, `.pth`) from a publisher you don’t trust: unpickling can execute code, so prefer safetensors or GGUF",
+    "You assume “open” means free for any use: licenses range from Apache 2.0 to custom terms such as the Llama 3.1 Community License, and some are noncommercial (`cc-by-nc-4.0`)",
+    "Servers behind a strict firewall pull models at startup: files come from separate storage and CDN hostnames, not just huggingface.co, so mirror them into your own storage instead"
+  ],
+  "example": "A team picks an 8-billion-parameter model for an internal assistant and compares two repositories. `meta-llama/Llama-3.1-8B-Instruct` is gated with manual approval: each engineer must share contact information and accept the Llama 3.1 Community License, which requires a “Built with Llama” notice, “Llama” at the start of the name of any model trained from it, and a separate license from Meta above 700 million monthly active users. Its card names `meta-llama/Llama-3.1-8B` as the base model. It holds 8.03 billion BF16 parameters in four safetensors shards (16.06 GB), plus a 16.06 GB `original/consolidated.00.pth`, the same weights in PyTorch’s pickle-based format that the team doesn’t need. `Qwen/Qwen3-8B` is not gated and is Apache 2.0, with 8.2 billion parameters in 16.4 GB. The team chooses Qwen3-8B for its simpler license, downloads only the `.safetensors` files pinned to one commit hash, copies them into its own object storage, and records the repository, commit and license in the service’s README.",
+  "providers": {
+    "aws": "Amazon SageMaker JumpStart (pretrained open-source models from popular model hubs to deploy, fine-tune and evaluate)",
+    "gcp": "Model Garden in Gemini Enterprise Agent Platform, formerly Vertex AI Model Garden (first-party, partner and open models to discover, test and deploy)",
+    "azure": "Microsoft Foundry Models catalog (models from Microsoft, Azure OpenAI, Anthropic, DeepSeek, Meta, Mistral, Cohere, Hugging Face and more)",
+    "oss": "Hugging Face Hub (Git and Xet repositories, model cards, gated models, `hf` CLI); ModelScope (a “Model-as-a-Service” library and hub)"
+  },
+  "snippet": {
+    "lang": "bash",
+    "source": [
+      "# Find candidates: 6B to 128B parameters, not gated, runnable by llama.cpp",
+      "hf models ls --num-parameters min:6B,max:128B --no-gated --apps llama.cpp",
+      "",
+      "# Read the license and lineage before downloading anything",
+      "hf models card meta-llama/Llama-3.1-8B-Instruct --metadata",
+      "",
+      "# What is in the repository, with sizes",
+      "hf models ls meta-llama/Llama-3.1-8B-Instruct --tree -h",
+      "",
+      "# Gated repositories need a token from an account whose request was approved",
+      "hf auth login",
+      "",
+      "# Only the safetensors weights, pinned to one commit",
+      "hf download meta-llama/Llama-3.1-8B-Instruct --include \"*.safetensors\" \\",
+      "  --revision 0e9e39f249a16976918f6564b8830bc894c89659",
+      "# -> ~/.cache/huggingface/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f2.../"
+    ]
+  },
+  "related": ["llms", "local-inference", "package-managers", "file-formats", "object"],
+  "sections": [
+    {
+      "type": "cards",
+      "title": "Weight file formats",
+      "intro": "The same weights can ship in several formats, often side by side in one repository. The format decides what loading it can do and which runtimes can use it.",
+      "items": [
+        {
+          "name": "Pickle (PyTorch .bin, .pt, .pth)",
+          "tag": "unsafe to load",
+          "text": "PyTorch’s default. A pickle is a list of instructions that the loader executes; the `GLOBAL` and `REDUCE` opcodes can import and call any function, so a crafted file runs code on your machine. The Hub scans pickles and shows the imports they make, and suggests only loading them from publishers you trust."
+        },
+        {
+          "name": "Safetensors",
+          "tag": "tensors only",
+          "text": "An 8-byte little-endian header length, a JSON header mapping each tensor name to its dtype, shape and byte offsets, then one buffer of raw bytes. Nothing is executed on load, loading is zero-copy and can read only part of a tensor, and Hugging Face measured loads around 100 times faster on CPU than pickle. An external audit in 2023 found no flaw leading to code execution."
+        },
+        {
+          "name": "GGUF",
+          "tag": "single file for inference",
+          "text": "The llama.cpp format: tensors plus a typed key-value metadata section (architecture, tokenizer, chat template) in one file built for `mmap`. It usually holds quantized weights: `Q4_K` uses 4.5 bits per weight and `Q6_K` 6.5625, so Qwen3-8B is 5.03 GB at `Q4_K_M` against 16.4 GB in BF16."
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Licenses on weights",
+      "body": [
+        "A model card’s `license` field is what the Hub filters on, and it covers a wide range. Some weights use ordinary open-source licenses, such as Apache 2.0 for Qwen3-8B. Others ship under the model maker’s own terms: the Llama 3.1 Community License grants use, modification and redistribution, but adds conditions on attribution, naming and very large deployments, and an acceptable use policy. The Hub’s license list also includes OpenRAIL variants and noncommercial licenses such as `cc-by-nc-4.0`.",
+        "Two details catch teams out. Derivatives inherit terms: the Llama license’s redistribution conditions cover “any derivative works thereof”, so a quantized or fine-tuned copy in someone else’s repository carries Meta’s conditions too. And a gate is not a license: accepting the gate shares your contact details with the author, while the license text decides what you may do with the files."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Hugging Face was founded in New York in 2016 by Clément Delangue, Julien Chaumond and Thomas Wolf, first as a chatbot app for teenagers. It became better known for its Transformers library and for a hub where anyone could publish trained models and datasets. In April 2021 it launched the BigScience workshop with other research groups to train an open large language model, which ended in 2022 with BLOOM, a multilingual model of 176 billion parameters. When Meta released Llama 2 in July 2023 for commercial use, it was available through AWS, Hugging Face and other providers at launch.",
+      "Sharing weights at that scale exposed the file format. PyTorch saved models as Python pickles, and loading one from a stranger could run their code. Hugging Face built safetensors as a format that only holds tensors, and in May 2023, together with EleutherAI and Stability AI, had it audited externally and announced the plan to make it the default. Meanwhile llama.cpp, which ran models on laptops, had outgrown its own GGML formats, and in August 2023 replaced them with GGUF, a single file that carries its metadata. Hub repositories, built on Git, moved their large files from Git LFS to Xet, a storage system built for model and dataset files.",
+      "The hub became infrastructure for the open-model ecosystem. By 2026 it hosted over 2 million models and 1.5 million datasets. On February 20, 2026, Georgi Gerganov and the ggml team behind llama.cpp joined Hugging Face, keeping the projects open source. On September 3, 2026, Nvidia announced an agreement to acquire Hugging Face for about $12.9 billion, expected to close in the first half of 2027 subject to regulatory approval; Nvidia said the Hub would remain an open platform."
+    ],
+    "choices": [
+      {
+        "choice": "Every model is a Git repository",
+        "why": "Version control and collaboration come for free: commits you can pin, branches, pull requests and discussions. The cost is that Git can’t hold multi-gigabyte binaries, so large files live in separate storage behind pointer files (Git LFS, then Xet with chunk-level deduplication)."
+      },
+      {
+        "choice": "The model card is the README, with YAML metadata on top",
+        "why": "Authors already write a README, so the Hub made it the card and read structured fields from its header: license, base model, datasets and task. That metadata powers search filters and the links between a base model and its fine-tunes and quantized copies."
+      },
+      {
+        "choice": "Safetensors instead of pickle",
+        "why": "Pickle was the default because PyTorch used it, but it executes code on load, a risk Hugging Face noted was not common knowledge in the broader ML community. A format that is only a header and bytes is safe to load and also faster, since loading is zero-copy and can be lazy."
+      },
+      {
+        "choice": "GGUF: one file with typed metadata",
+        "why": "The earlier GGML formats didn’t record which architecture a file was for, and adding a hyperparameter broke every existing file. GGUF’s key-value metadata lets new fields be added without breaking old models, and keeps everything needed to load the model in one file."
+      }
+    ],
+    "timeline": [
+      { "year": "2016", "text": "Hugging Face is founded in New York" },
+      { "year": "2021", "text": "Hugging Face launches the BigScience workshop to train an open model (April 28)" },
+      { "year": "2022", "text": "BigScience releases BLOOM, 176 billion parameters" },
+      { "year": "2023", "text": "Safetensors passes an external security audit (May 23); llama.cpp introduces GGUF (August)" },
+      { "year": "2026", "text": "The ggml and llama.cpp team joins Hugging Face (February 20); Nvidia agrees to acquire Hugging Face (September 3)" }
+    ],
+    "sources": [
+      { "label": "Wikipedia: Hugging Face (founding, BigScience, BLOOM, Nvidia agreement)", "url": "https://en.wikipedia.org/wiki/Hugging_Face" },
+      { "label": "Meta AI: Llama 2 announcement (available through AWS and Hugging Face, July 18, 2023)", "url": "https://ai.meta.com/blog/llama-2/", "archive": "https://web.archive.org/web/20260113074313/https://ai.meta.com/blog/llama-2/" },
+      { "label": "Hugging Face blog: Audit shows that safetensors is safe and ready to become the default (May 23, 2023)", "url": "https://huggingface.co/blog/safetensors-security-audit" },
+      { "label": "ggml docs: GGUF specification (historical state of affairs, why a new format)", "url": "https://github.com/ggml-org/ggml/blob/master/docs/gguf.md" },
+      { "label": "Wikipedia: GGUF (introduced August 2023)", "url": "https://en.wikipedia.org/wiki/GGUF" },
+      { "label": "Hugging Face Hub docs: Xet storage backend (pointer files, Git LFS history)", "url": "https://huggingface.co/docs/hub/xet/index" },
+      { "label": "Hugging Face blog: GGML and llama.cpp join HF to ensure the long-term progress of Local AI (Feb 20, 2026)", "url": "https://huggingface.co/blog/ggml-joins-hf" },
+      { "label": "Hugging Face Hub docs: Hub overview (2M models, 1.5M datasets)", "url": "https://huggingface.co/docs/hub/index" }
+    ]
+  },
+  "sources": [
+    { "label": "Hugging Face Hub docs: Hub overview (2M models, 1.5M datasets, 1.5M Spaces)", "url": "https://huggingface.co/docs/hub/index" },
+    { "label": "Hugging Face Hub docs: Repositories (Git repositories, Xet)", "url": "https://huggingface.co/docs/hub/repositories" },
+    { "label": "Hugging Face Hub docs: Xet storage backend (pointer files, remote storage, chunk-level deduplication)", "url": "https://huggingface.co/docs/hub/xet/index" },
+    { "label": "Hugging Face Hub docs: Model cards (YAML metadata, base_model, license)", "url": "https://huggingface.co/docs/hub/model-cards" },
+    { "label": "Hugging Face Hub docs: Licenses", "url": "https://huggingface.co/docs/hub/repositories-licenses" },
+    { "label": "Hugging Face Hub docs: Gated models (contact sharing, automatic or manual approval)", "url": "https://huggingface.co/docs/hub/models-gated" },
+    { "label": "Hugging Face Hub docs: Downloading models (hf download, CDN hostnames to allowlist)", "url": "https://huggingface.co/docs/hub/models-downloading" },
+    { "label": "huggingface_hub docs: Command Line Interface (hf models ls, hf models card, hf download, cache paths)", "url": "https://huggingface.co/docs/huggingface_hub/guides/cli" },
+    { "label": "Hugging Face Hub docs: Pickle scanning (arbitrary code execution, GLOBAL and REDUCE)", "url": "https://huggingface.co/docs/hub/security-pickle" },
+    { "label": "huggingface/safetensors README (file format)", "url": "https://github.com/huggingface/safetensors" },
+    { "label": "Hugging Face blog: safetensors security audit (lazy loading, about 100x faster on CPU)", "url": "https://huggingface.co/blog/safetensors-security-audit" },
+    { "label": "Hugging Face Hub docs: GGUF (quantization types and bits per weight)", "url": "https://huggingface.co/docs/hub/gguf" },
+    { "label": "ggml docs: GGUF specification", "url": "https://github.com/ggml-org/ggml/blob/master/docs/gguf.md" },
+    { "label": "Hugging Face: meta-llama/Llama-3.1-8B-Instruct files (gated, four safetensors shards, original .pth)", "url": "https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct/tree/main" },
+    { "label": "Hugging Face: meta-llama/Llama-3.1-8B-Instruct model card (Llama 3.1 Community License)", "url": "https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct" },
+    { "label": "Hugging Face: Qwen/Qwen3-8B files (16.4 GB of safetensors)", "url": "https://huggingface.co/Qwen/Qwen3-8B/tree/main" },
+    { "label": "Hugging Face: Qwen/Qwen3-8B-GGUF files (Q4_K_M 5.03 GB, Q8_0 8.71 GB)", "url": "https://huggingface.co/Qwen/Qwen3-8B-GGUF/tree/main" },
+    { "label": "AWS docs: SageMaker JumpStart pretrained models", "url": "https://docs.aws.amazon.com/sagemaker/latest/dg/studio-jumpstart.html" },
+    { "label": "Google Cloud docs: Overview of models on Agent Platform (Model Garden)", "url": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models" },
+    { "label": "Google Cloud: Agent Platform release notes (Vertex AI Model Garden renamed Model Garden)", "url": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/release-notes" },
+    { "label": "Microsoft Learn: Microsoft Foundry Models overview", "url": "https://learn.microsoft.com/en-us/azure/foundry-classic/concepts/foundry-models-overview" },
+    { "label": "modelscope/modelscope README (Model-as-a-Service)", "url": "https://github.com/modelscope/modelscope" }
+  ]
+}

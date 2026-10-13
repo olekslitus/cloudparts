@@ -1,0 +1,92 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "LangGraph",
+  "concepts": ["agent-frameworks"],
+  "uses": ["workflow"],
+  "provider": "oss",
+  "vendor": "LangChain Inc.",
+  "license": "MIT",
+  "website": "https://docs.langchain.com/oss/python/langgraph/overview",
+  "repo": "https://github.com/langchain-ai/langgraph",
+  "summary": "A low-level MIT-licensed runtime for agents written as graphs of nodes over shared state, which checkpoints that state after every step so a run can pause for a human, survive a crash and resume where it stopped.",
+  "intro": [
+    "You define a state schema (for example a list of messages), add nodes, which are ordinary functions that read the state and return updates, and connect them with edges, including conditional edges that pick the next node from the state. Edges can form cycles, which is what an agent loop needs: call the model, run its tools, call the model again. Deterministic steps and LLM-driven steps sit in the same graph. Compiling the graph produces a `Pregel` runtime, named after Google’s graph-processing paper: execution runs in super-steps, where every node scheduled for that step runs in parallel, their writes are applied to channels at the end of the step, and the next step runs the nodes subscribed to the channels that changed.",
+    "Compile with a checkpointer and LangGraph saves a snapshot of the state at every super-step boundary, keyed by a `thread_id` you pass in. That snapshot is the agent’s short-term memory, and it is what makes `interrupt()` work: a node pauses, the checkpoint is saved, and the run resumes later from the same thread with `Command(resume=...)`, even in another process. If one node fails, the writes of nodes that finished in the same super-step are kept as pending writes and aren’t re-run. Checkpointers ship for memory, SQLite, Postgres and MongoDB; stores keep long-term, cross-thread data such as user preferences. LangChain’s `create_agent` compiles to a LangGraph graph, but LangGraph doesn’t require LangChain. It is MIT-licensed and free; LangChain Inc. sells hosting for it as LangSmith Deployment."
+  ],
+  "strengths": [
+    "Fine-grained control: you decide every step and branch, and mix hand-written logic with model calls in one graph",
+    "Durable execution built in: a run can pause for human approval, wait, recover from a failed node and resume from its last checkpoint",
+    "Time travel: every super-step is a checkpoint you can inspect, replay or fork from",
+    "Runs anywhere Python or JavaScript runs, with a Postgres checkpointer for production (the one LangSmith uses)"
+  ],
+  "limits": [
+    "Deliberately low-level: it doesn’t abstract prompts or agent architecture, so simple agents are quicker to build with LangChain’s `create_agent`",
+    "By default each checkpoint writes the full value of every state channel, so long threads grow storage; `DeltaChannel`, which stores only the changes, is still in beta",
+    "Some features are Python-only: per-node timeouts and node-level error handlers (1.2) aren’t in the TypeScript version, where only retry policies work",
+    "Managed hosting is a paid product: beyond one free small serverless deployment on the Plus plan, LangSmith Deployment bills 0.0675 LSU ($1 each) per vCPU-hour plus memory and database time"
+  ],
+  "worksWith": [
+    { "id": "langchain", "how": "is the runtime under agents built with" },
+    { "id": "postgresql", "how": "checkpoints thread state in production in" },
+    { "id": "sqlite", "how": "can checkpoint local runs in" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "A graph compiled with a checkpointer; the thread_id selects the saved state",
+    "source": [
+      "from langgraph.checkpoint.memory import InMemorySaver",
+      "from langgraph.graph import StateGraph, MessagesState, START, END",
+      "",
+      "def mock_llm(state: MessagesState):",
+      "    return {\"messages\": [{\"role\": \"ai\", \"content\": \"hello world\"}]}",
+      "",
+      "builder = StateGraph(MessagesState)",
+      "builder.add_node(mock_llm)",
+      "builder.add_edge(START, \"mock_llm\")",
+      "builder.add_edge(\"mock_llm\", END)",
+      "graph = builder.compile(checkpointer=InMemorySaver())",
+      "",
+      "graph.invoke(",
+      "    {\"messages\": [{\"role\": \"user\", \"content\": \"hi!\"}]},",
+      "    {\"configurable\": {\"thread_id\": \"thread-1\"}},",
+      ")"
+    ]
+  },
+  "history": {
+    "story": [
+      "LangChain’s chains were directed acyclic graphs, like most data orchestration tools. But agents need cycles: the model decides what to do, a tool runs, and the result goes back to the model, round and round. LangChain’s own `AgentExecutor` ran that loop with nearly all decisions left to the model, and teams putting agents into production kept asking for more control, such as forcing a particular tool first or using different prompts in different states. The LangChain team called these controlled loops state machines.",
+      "LangGraph, announced on 17 January 2024, let developers write those state machines as graphs on top of LangChain, with a `StateGraph`, nodes and conditional edges. It took its execution model from Google’s Pregel and Apache Beam and its interface from NetworkX. Lessons from LangChain went in early: streaming, durable execution, short-term memory and human-in-the-loop. By late 2024 it had become LangChain’s recommended way to build anything beyond a single LLM call, and LangGraph 1.0 on 20 October 2025 kept the graph primitives and runtime unchanged while committing to no breaking changes until 2.0."
+    ],
+    "choices": [
+      { "choice": "Graphs with cycles instead of chains", "why": "An agent is an LLM running in a loop. Chains could only describe fixed, acyclic sequences, so the team needed a way to add loops while still letting developers decide how each loop is built." },
+      { "choice": "A Pregel-style runtime with super-steps", "why": "Running nodes in synchronized steps and applying their writes at step boundaries gives natural points to save state, run nodes in parallel and resume after a failure or a human pause." },
+      { "choice": "Low-level, with no prompt or architecture abstractions", "why": "LangChain’s high-level interfaces had proved too rigid for production teams. LangGraph leaves prompts and agent design to the developer and focuses on orchestration: persistence, streaming and human-in-the-loop." }
+    ],
+    "timeline": [
+      { "year": "2024", "text": "LangGraph announced as a library on top of LangChain for cyclical graphs" },
+      { "year": "2024", "text": "Becomes LangChain’s recommended way to build agents; most old chains deprecated" },
+      { "year": "2025", "text": "LangGraph 1.0 keeps the graph APIs and runtime unchanged; `create_react_agent` deprecated for LangChain’s `create_agent`" },
+      { "year": "2026", "text": "1.1 adds type-safe streaming and invoke results" },
+      { "year": "2026", "text": "1.2 adds per-node timeouts, error handlers, graceful shutdown and the beta `DeltaChannel`" }
+    ],
+    "sources": [
+      { "label": "LangChain Blog: LangGraph (Jan 2024)", "url": "https://blog.langchain.com/langgraph/" },
+      { "label": "LangChain docs: Philosophy (history timeline)", "url": "https://docs.langchain.com/oss/python/langchain/philosophy" },
+      { "label": "LangChain docs: What’s new in LangGraph v1", "url": "https://docs.langchain.com/oss/python/releases/langgraph-v1" },
+      { "label": "LangChain Blog: LangChain and LangGraph 1.0 (Oct 2025)", "url": "https://blog.langchain.com/langchain-langgraph-1dot0/" },
+      { "label": "LangChain docs: Python changelog (LangGraph 1.1 and 1.2)", "url": "https://docs.langchain.com/oss/python/releases/changelog" }
+    ]
+  },
+  "sources": [
+    { "label": "LangChain docs: LangGraph overview", "url": "https://docs.langchain.com/oss/python/langgraph/overview" },
+    { "label": "LangChain docs: LangGraph runtime (Pregel, super-steps, channels)", "url": "https://docs.langchain.com/oss/python/langgraph/pregel" },
+    { "label": "LangChain docs: Persistence (checkpointers and stores)", "url": "https://docs.langchain.com/oss/python/langgraph/persistence" },
+    { "label": "LangChain docs: Checkpointers (super-steps, pending writes, storage growth, libraries)", "url": "https://docs.langchain.com/oss/python/langgraph/checkpointers" },
+    { "label": "LangChain docs: Interrupts", "url": "https://docs.langchain.com/oss/python/langgraph/interrupts" },
+    { "label": "LangChain docs: Python changelog (LangGraph 1.2: timeouts, DeltaChannel)", "url": "https://docs.langchain.com/oss/python/releases/changelog" },
+    { "label": "LangChain docs: Middleware overview (create_agent returns a compiled graph)", "url": "https://docs.langchain.com/oss/python/langchain/middleware/overview" },
+    { "label": "LangChain: LangGraph product page (MIT license)", "url": "https://www.langchain.com/langgraph" },
+    { "label": "LangChain: LangSmith pricing (Deployment metering)", "url": "https://www.langchain.com/pricing" }
+  ],
+  "checked": "2026-10-13"
+}

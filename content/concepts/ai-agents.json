@@ -1,0 +1,257 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "AI agents",
+  "icon": "brain-circuit",
+  "category": "ai",
+  "order": 20,
+  "summary": "A language model in a loop with tools: it picks a function to call, your code runs it, the result goes back to the model, and the loop repeats until the task is done or a limit stops it.",
+  "howItWorks": "An agent is three things: a model, a set of tools and a prompt. Your application sends the model the conversation plus a list of tools, each with a name, a plain-language description and a JSON Schema for its arguments. The model can’t run anything itself. When it decides a tool would help, it replies with a structured tool call instead of text, such as `get_order` with `{\"order_id\": \"A-1001\"}`; Claude’s API marks such a reply with `stop_reason: \"tool_use\"`. Your code, often called the harness, runs the function, appends the result to the conversation and calls the model again. The loop ends when the model answers in plain text, or when a stopping condition such as a maximum number of steps cuts it off. Planning happens inside the loop: the model may write a plan before acting, or a lead agent may split the work among subagents, each with its own context window, and merge what they find. The model is stateless, so everything it knows about the task has to be in its context window, which is limited and degrades as it fills. Long-running agents therefore keep state outside it: a checkpoint of the conversation so a crash resumes instead of restarting, notes or a memory store the agent reads back later, and compaction, which summarizes old turns into a fresh context. Because tool calls have real effects, the harness decides which calls run on their own and which wait for a person to approve them; the Model Context Protocol spec says there should always be a human able to deny a tool call. Coding agents are one application of this loop, with files, a shell and tests as the tools.",
+  "analogy": "A dispatcher at a desk with a phone and a binder of forms. They never leave the desk: every action is a form they fill in (the tool call), which a clerk carries out and brings back with the result stamped on it. The dispatcher reads the result and fills in the next form until the job is done. The clerk refuses forms the house rules forbid and checks with the manager before anything that can’t be undone, like a refund. The desk only holds so much paper, so on long jobs the dispatcher keeps a notebook in the drawer and starts a clean stack now and then.",
+  "useWhen": [
+    "Open-ended tasks where you can’t predict the number of steps or hardcode the path, such as researching a question across many sources",
+    "Each step can be checked against something real: a tool result, a test run, a query that returns rows",
+    "The task is worth the tokens: Anthropic measured agents using about 4 times the tokens of a chat, and multi-agent systems about 15 times",
+    "The work splits into independent parts that subagents can explore in parallel"
+  ],
+  "avoidWhen": [
+    "A fixed sequence of steps does the job: a workflow with predefined code paths is cheaper, faster and easier to test, and often one model call with retrieval is enough",
+    "The agent would combine private data, untrusted content and a way to send data out (the “lethal trifecta”): a prompt injection can then leak the data, and no filter reliably stops it",
+    "Actions are irreversible and no person can approve them: small mistakes compound over many steps",
+    "You need the same output for the same input every time; models are non-deterministic"
+  ],
+  "example": "In June 2025 Anthropic described the multi-agent system behind Claude’s Research feature. A lead agent reads the question, plans, and saves the plan to memory, because past 200,000 tokens its context is truncated. It then starts 3 to 5 subagents in parallel, each with a clear task, its own context window and search tools; they search, judge what they find and report back, and the lead decides whether more research is needed. A separate citation agent ties each claim to a source. With Claude Opus 4 as lead and Claude Sonnet 4 subagents, the system beat a single Opus 4 agent by 90.2% on Anthropic’s internal research eval, for example finding the board members of every information technology company in the S&P 500 where the single agent’s slow, sequential searches failed. Running subagents and tool calls in parallel cut research time by up to 90% for complex queries. The cost was tokens, about 15 times a chat. Early versions also spawned 50 subagents for simple questions, so the prompts now carry scaling rules: 1 agent with 3 to 10 tool calls for a fact, more than 10 subagents only for complex research. Because errors compound, the team built agents that resume from where they failed and deploys new versions gradually so running agents aren’t broken.",
+  "providers": {
+    "aws": "Amazon Bedrock AgentCore: Runtime hosts agents built with any framework in isolated sessions, Harness is a managed agent loop, plus Memory, Gateway, Identity, Policy and Observability",
+    "gcp": "Gemini Enterprise Agent Platform, the evolution of Vertex AI: Agent Runtime to deploy and scale agents, Sessions and Memory Bank for state, Agent Development Kit (ADK) to build them",
+    "azure": "Microsoft Foundry Agent Service: prompt agents that Foundry runs for you, or hosted agents, your own code and framework in a container with a managed endpoint",
+    "oss": "Frameworks: LangGraph and LangChain, Strands Agents, OpenAI Agents SDK, Google ADK, Microsoft Agent Framework, Claude Agent SDK; tools through the Model Context Protocol"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "import json",
+      "",
+      "import anthropic",
+      "",
+      "client = anthropic.Anthropic()",
+      "order_arg = {\"type\": \"object\", \"properties\": {\"order_id\": {\"type\": \"string\"}}, \"required\": [\"order_id\"]}",
+      "tools = [",
+      "    {\"name\": \"get_order\", \"description\": \"Look up an order: status, items, total.\", \"input_schema\": order_arg},",
+      "    {\"name\": \"refund_order\", \"description\": \"Refund an order in full. Cannot be undone.\", \"input_schema\": order_arg},",
+      "]",
+      "",
+      "",
+      "def get_order(order_id):",
+      "    return {\"id\": order_id, \"status\": \"delivered\", \"total\": 42.0}",
+      "",
+      "",
+      "def refund_order(order_id):",
+      "    return {\"id\": order_id, \"refunded\": True}",
+      "",
+      "",
+      "HANDLERS = {\"get_order\": get_order, \"refund_order\": refund_order}",
+      "NEEDS_APPROVAL = {\"refund_order\"}  # a person signs off on anything irreversible",
+      "",
+      "messages = [{\"role\": \"user\", \"content\": \"Order A-1001 arrived broken. Please refund it.\"}]",
+      "for step in range(10):  # stopping condition: never loop forever",
+      "    response = client.messages.create(",
+      "        model=\"claude-opus-5-5\", max_tokens=1024, tools=tools, messages=messages",
+      "    )",
+      "    messages.append({\"role\": \"assistant\", \"content\": response.content})",
+      "    if response.stop_reason != \"tool_use\":  # plain text: the agent is done",
+      "        print(\"\".join(b.text for b in response.content if b.type == \"text\"))",
+      "        break",
+      "    results = []",
+      "    for call in (b for b in response.content if b.type == \"tool_use\"):",
+      "        if call.name in NEEDS_APPROVAL and input(f\"Allow {call.name}({call.input})? [y/N] \") != \"y\":",
+      "            output, failed = \"A person denied this action.\", True",
+      "        else:",
+      "            output, failed = json.dumps(HANDLERS[call.name](**call.input)), False",
+      "        results.append({\"type\": \"tool_result\", \"tool_use_id\": call.id, \"content\": output, \"is_error\": failed})",
+      "    messages.append({\"role\": \"user\", \"content\": results})  # the model sees every result",
+      "else:",
+      "    print(\"Stopped after 10 steps without an answer\")"
+    ]
+  },
+  "related": [
+    "coding-agents",
+    "agent-frameworks",
+    "agent-tools",
+    "rag",
+    "workflow",
+    "llms"
+  ],
+  "sections": [
+    {
+      "type": "text",
+      "title": "Workflows or agents",
+      "body": [
+        "Anthropic draws the line this way: in a workflow, models and tools are orchestrated through predefined code paths, such as “summarize, then translate, then check the length”. In an agent, the model directs its own process and decides which tool to use next. Both are useful. Workflows are predictable and cheap to test; agents handle problems where you can’t know the steps in advance, at the price of latency, tokens and less predictable behavior. Microsoft’s Agent Framework docs put it bluntly: if you can write a function to handle the task, do that instead of using an agent.",
+        "Most production systems mix the two. A support bot may follow a fixed workflow to identify the customer and only hand the open-ended part to an agent; graph-based frameworks such as LangGraph exist to combine deterministic steps with model-driven ones in one program."
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Where agents fail",
+      "body": [
+        "Prompt injection is the hardest problem. A model follows instructions it finds anywhere in its context, including in a web page, an email or a tool result, because everything ends up as one sequence of tokens. Simon Willison named the attack in September 2022, after Riley Goodside showed GPT-3 obeying instructions hidden in the text it was asked to translate. In mid-2025 researchers at Invariant Labs showed it against GitHub’s official MCP server: a malicious issue in a public repository steered an agent into copying data from the user’s private repositories into a public pull request. Willison’s rule of thumb is to never combine private data, untrusted content and a way to communicate externally in one agent, because guardrail products that catch “95% of attacks” are a failing grade in security.",
+        "Agents also fail in plainer ways. A loop has no natural end, so set a step limit and a token or cost budget. Errors compound: one wrong tool result early on can send every later step in the wrong direction, so agents need checkpoints to resume from and evaluations that check the end state rather than every step. And quality drops as the context fills, which Anthropic calls context rot: as the number of tokens grows, the model’s ability to recall what is in its context declines. Compaction, notes outside the context and subagents with clean contexts are the usual answers."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Language models first learned to act through prompting. The ReAct paper (October 2022) had a model interleave reasoning traces with actions, such as queries to a simple Wikipedia API, and read back the results, which reduced the made-up facts that pure chain-of-thought produced. Toolformer (February 2023) trained a model to decide by itself which APIs to call, including a calculator, search engines and a calendar. In practice, early agents needed long instructions on how to use tools, parsers for the model’s output and orchestration code; Clare Liguori of AWS recalls that simply getting models to produce valid JSON was a challenge in early 2023. Meanwhile, Simon Willison named the risk that came with reading untrusted text: prompt injection, in September 2022.",
+      "Model providers then trained models to emit tool calls natively, as structured JSON against a schema, and the loop became simple to write. In November 2024 Anthropic open-sourced the Model Context Protocol so tools could be shared across applications, and in December it published “Building effective agents”, which separated workflows from agents and described agents as “typically just LLMs using tools based on environmental feedback in a loop”. AWS released Strands Agents in May 2025 on the same model-driven idea: give the model a prompt and tools and let it plan, instead of encoding the plan in a framework.",
+      "The open problems moved from making agents act to keeping them on track and safe: context engineering and memory for long tasks, multi-agent systems that spend more tokens in parallel, and the “lethal trifecta” of private data, untrusted content and external communication. In December 2025 MCP moved to the Linux Foundation’s new Agentic AI Foundation, and by 2026 AWS, Google and Microsoft each sold a managed platform for running agents, with sessions, memory, identity and tracing built in."
+    ],
+    "choices": [
+      {
+        "choice": "The model proposes, the application executes",
+        "why": "A tool call is only structured output; your code runs it. That keeps credentials, permissions and side effects in code you control, so the harness can refuse a call, ask a person or run it in a sandbox, which matters because anything the model reads can try to steer it."
+      },
+      {
+        "choice": "Describe tools with a JSON Schema",
+        "why": "Before native tool use, teams wrote prompts and parsers to coax actions out of free text. A schema per tool lets the provider train for it and validate arguments; OpenAI’s strict mode makes calls follow the schema instead of best effort."
+      },
+      {
+        "choice": "Let the model choose the path, inside limits",
+        "why": "Agents exist for problems where you can’t hardcode the steps. Anthropic recommends stopping conditions such as a maximum number of iterations, and pauses for human feedback at checkpoints, to keep that freedom under control."
+      },
+      {
+        "choice": "Keep long-term state outside the context window",
+        "why": "The context is limited and recall degrades as it fills. Anthropic’s Research agent saves its plan to memory because its context is truncated past 200,000 tokens, and agents use compaction and note files to carry work across resets."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "2022",
+        "text": "The ReAct paper interleaves reasoning with actions; Simon Willison names prompt injection (September)"
+      },
+      {
+        "year": "2023",
+        "text": "Toolformer trains a model to decide which APIs to call"
+      },
+      {
+        "year": "2024",
+        "text": "Anthropic open-sources MCP (November) and publishes “Building effective agents” (December)"
+      },
+      {
+        "year": "2025",
+        "text": "AWS releases Strands Agents (May); Anthropic describes its multi-agent Research system (June)"
+      },
+      {
+        "year": "2025",
+        "text": "MCP moves to the Linux Foundation’s Agentic AI Foundation (December)"
+      }
+    ],
+    "sources": [
+      {
+        "label": "Yao et al.: ReAct, Synergizing Reasoning and Acting in Language Models (arXiv, Oct 2022)",
+        "url": "https://arxiv.org/abs/2210.03629"
+      },
+      {
+        "label": "Schick et al.: Toolformer, Language Models Can Teach Themselves to Use Tools (arXiv, Feb 2023)",
+        "url": "https://arxiv.org/abs/2302.04761"
+      },
+      {
+        "label": "Simon Willison: Prompt injection attacks against GPT-3 (Sep 2022)",
+        "url": "https://simonwillison.net/2022/Sep/12/prompt-injection/"
+      },
+      {
+        "label": "Anthropic: Introducing the Model Context Protocol (Nov 2024)",
+        "url": "https://www.anthropic.com/news/model-context-protocol"
+      },
+      {
+        "label": "Anthropic: Building effective agents (workflows vs agents, stopping conditions, frameworks; Dec 2024)",
+        "url": "https://www.anthropic.com/engineering/building-effective-agents"
+      },
+      {
+        "label": "AWS Open Source blog: Introducing Strands Agents, an open source AI agents SDK (May 2025)",
+        "url": "https://aws.amazon.com/blogs/opensource/introducing-strands-agents-an-open-source-ai-agents-sdk/"
+      },
+      {
+        "label": "Anthropic: How we built our multi-agent research system (Jun 2025)",
+        "url": "https://www.anthropic.com/engineering/multi-agent-research-system"
+      },
+      {
+        "label": "Simon Willison: The lethal trifecta for AI agents (Jun 2025)",
+        "url": "https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/"
+      },
+      {
+        "label": "Linux Foundation: Formation of the Agentic AI Foundation with MCP, goose and AGENTS.md (Dec 2025)",
+        "url": "https://www.linuxfoundation.org/press/linux-foundation-announces-the-formation-of-the-agentic-ai-foundation"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "Anthropic: Building effective agents (workflows vs agents, stopping conditions, frameworks; Dec 2024)",
+      "url": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "label": "AWS Open Source blog: Introducing Strands Agents, an open source AI agents SDK (May 2025)",
+      "url": "https://aws.amazon.com/blogs/opensource/introducing-strands-agents-an-open-source-ai-agents-sdk/"
+    },
+    {
+      "label": "Claude docs: Tool use overview (client and server tools, tool_use and tool_result)",
+      "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview"
+    },
+    {
+      "label": "Claude docs: Handle tool calls (stop_reason, is_error)",
+      "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls"
+    },
+    {
+      "label": "OpenAI docs: Function calling (five-step flow, strict mode, tool definitions billed as input tokens)",
+      "url": "https://developers.openai.com/api/docs/guides/function-calling"
+    },
+    {
+      "label": "Anthropic: How we built our multi-agent research system (Jun 2025)",
+      "url": "https://www.anthropic.com/engineering/multi-agent-research-system"
+    },
+    {
+      "label": "Anthropic: Effective context engineering for AI agents (context rot, compaction, note-taking; Sep 2025)",
+      "url": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents"
+    },
+    {
+      "label": "Model Context Protocol spec 2026-07-28: Tools (a human in the loop able to deny tool invocations)",
+      "url": "https://modelcontextprotocol.io/specification/2026-07-28/server/tools"
+    },
+    {
+      "label": "Microsoft Learn: Microsoft Agent Framework overview (agents vs workflows)",
+      "url": "https://learn.microsoft.com/en-us/agent-framework/overview/agent-framework-overview"
+    },
+    {
+      "label": "LangChain docs: LangGraph overview (mix deterministic and agentic steps)",
+      "url": "https://docs.langchain.com/oss/python/langgraph/overview"
+    },
+    {
+      "label": "Simon Willison: The lethal trifecta for AI agents (Jun 2025)",
+      "url": "https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/"
+    },
+    {
+      "label": "Simon Willison: Prompt injection attacks against GPT-3 (Sep 2022)",
+      "url": "https://simonwillison.net/2022/Sep/12/prompt-injection/"
+    },
+    {
+      "label": "Invariant Labs: GitHub MCP exploited, accessing private repositories via MCP",
+      "url": "https://invariantlabs.ai/blog/mcp-github-vulnerability"
+    },
+    {
+      "label": "AWS docs: What is Amazon Bedrock AgentCore? (Harness, Runtime, Memory, Gateway, Identity, Policy)",
+      "url": "https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/what-is-bedrock-agentcore.html"
+    },
+    {
+      "label": "Google Cloud docs: Agent Platform overview (an evolution of Vertex AI)",
+      "url": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/overview"
+    },
+    {
+      "label": "Google Cloud docs: Scale your agents (Agent Runtime, Sessions, Memory Bank)",
+      "url": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale"
+    },
+    {
+      "label": "Microsoft Learn: What is Microsoft Foundry Agent Service? (prompt agents, hosted agents)",
+      "url": "https://learn.microsoft.com/en-us/azure/foundry/agents/overview"
+    }
+  ]
+}

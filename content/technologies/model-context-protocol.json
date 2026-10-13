@@ -1,0 +1,88 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Model Context Protocol (MCP)",
+  "concepts": ["agent-tools"],
+  "provider": "oss",
+  "vendor": "Agentic AI Foundation (Linux Foundation), created at Anthropic",
+  "license": "Open standard; specification and code under Apache 2.0 (older contributions not yet relicensed stay MIT), documentation under CC BY 4.0",
+  "website": "https://modelcontextprotocol.io/specification/2026-07-28",
+  "repo": "https://github.com/modelcontextprotocol/modelcontextprotocol",
+  "summary": "An open protocol, built on JSON-RPC, that lets an AI application discover and call tools, read resources and use prompt templates from any server that speaks it, so one integration works across Claude, ChatGPT, Cursor, VS Code and other clients.",
+  "intro": [
+    "MCP has three roles. A host is the AI application, such as a chat app or an editor; inside it, a client holds a connection to one server; a server exposes features. Servers offer tools (functions the model may call, each with a name, a description and a JSON Schema for its input), resources (data for the user or the model) and prompts (templated messages). Messages are JSON-RPC 2.0. There are two standard transports: stdio, where the client launches the server as a subprocess and they exchange newline-delimited JSON on its standard streams, and Streamable HTTP, where every message is a POST to one MCP endpoint and the reply comes back as JSON or as a server-sent event stream for that request. Authorization is optional; an HTTP server that requires it acts as an OAuth 2.1 resource server and publishes RFC 9728 metadata pointing to its authorization server, while stdio servers take credentials from the environment instead.",
+    "The model only ever sees what the host puts in its context: typically the tool names, descriptions and schemas from `tools/list`, then the results of the `tools/call` requests it asks for. The spec makes the host responsible for safety: it must get the user’s consent before calling a tool or sharing user data with a server, and it should treat tool descriptions from an untrusted server as untrusted. The current revision, `2026-07-28`, made the protocol stateless. The `initialize` handshake and the `Mcp-Session-Id` header are gone: every request carries its protocol version, client identity and capabilities in `_meta`, HTTP requests also carry `Mcp-Method` and `Mcp-Name` headers that gateways can route on, and list results carry `ttlMs` and `cacheScope` cache hints. A server that needs to ask the user something mid-call now returns `resultType: \"input_required\"` and the client retries the call with the answers, instead of the server sending its own request over a held-open stream. Versions are dates, and servers answer a version they don’t support with an error listing the ones they do.",
+    "The project lives at the Agentic AI Foundation, a directed fund under the Linux Foundation, as “Model Context Protocol a Series of LF Projects, LLC”. Anthropic donated it in December 2025. Changes go through Specification Enhancement Proposals (SEPs); lead maintainers David Soria Parra and Den Delimarsky hold final say, and seats belong to individuals rather than companies. The four Tier 1 SDKs (TypeScript, Python, Go and C#) all supported `2026-07-28` on release day, and the Rust SDK supports it in beta."
+  ],
+  "strengths": [
+    "Write a server once and every compliant host can use it: the Anthropic donation post listed ChatGPT, Cursor, Gemini, Microsoft Copilot and VS Code as adopters, and counted more than 10,000 active public servers",
+    "Since `2026-07-28` any request can land on any server instance behind a plain round-robin load balancer, with no sticky sessions or shared session store",
+    "Authorization reuses OAuth 2.1 and its RFCs (protected resource metadata, resource indicators, issuer checks) rather than a custom scheme",
+    "Deprecated features stay in the spec for at least twelve months under a formal deprecation policy, and the TypeScript and Python SDKs each passed 1 billion total downloads by July 2026"
+  ],
+  "limits": [
+    "Tools are arbitrary code run on a model’s say-so, and the protocol can’t enforce consent: hosts must build approval UIs, and a malicious server can describe its tools misleadingly",
+    "`2026-07-28` is a breaking revision: servers that relied on session IDs, server-initiated sampling or roots must migrate, and dual-era implementations need fallback logic for `2025-11-25` and older peers",
+    "Tool names, descriptions and schemas are what the model reads to pick a tool, so many connected servers mean a long prompt; the spec now asks servers for a deterministic tool order so prompt caches stay valid",
+    "Sampling, Roots and Logging are deprecated, and Dynamic Client Registration is deprecated in favor of Client ID Metadata Documents, so older guides and servers go out of date"
+  ],
+  "worksWith": [
+    { "id": "json", "how": "encodes its JSON-RPC 2.0 messages as" },
+    { "id": "http", "how": "sends each remote message as a POST over" }
+  ],
+  "snippet": {
+    "lang": "http",
+    "title": "A stateless tools/call over Streamable HTTP (2026-07-28)",
+    "source": [
+      "POST /mcp HTTP/1.1",
+      "MCP-Protocol-Version: 2026-07-28",
+      "Mcp-Method: tools/call",
+      "Mcp-Name: search",
+      "",
+      "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",",
+      " \"params\":{\"name\":\"search\",\"arguments\":{\"q\":\"otters\"},",
+      " \"_meta\":{\"io.modelcontextprotocol/clientInfo\":{\"name\":\"my-app\",\"version\":\"1.0\"}}}}"
+    ]
+  },
+  "history": {
+    "story": [
+      "In late 2024 every AI assistant needed its own connector for each data source, and Anthropic described models as “trapped behind information silos and legacy systems”. On 25 November 2024 it open-sourced MCP, created at Anthropic by David Soria Parra and Justin Spahr-Summers, with a specification, SDKs, local server support in the Claude Desktop apps and reference servers for Google Drive, Slack, GitHub, Git, Postgres and Puppeteer. The design borrowed from the Language Server Protocol, which standardized how editors talk to language tooling.",
+      "The first revision only worked well locally. The `2025-03-26` revision added an OAuth 2.1 authorization framework and replaced the original HTTP+SSE transport with Streamable HTTP, which made hosted remote servers practical. On 9 December 2025 Anthropic donated MCP to the new Agentic AI Foundation under the Linux Foundation, co-founded with Block and OpenAI, saying the governance model would stay unchanged. The `2026-07-28` revision then rebuilt the core as stateless request and response, which David Soria Parra called MCP’s most important release since remote MCP first launched."
+    ],
+    "choices": [
+      { "choice": "JSON-RPC and a design modeled on the Language Server Protocol", "why": "LSP had already shown that one protocol between many editors and many language servers beats a custom integration for every pair. MCP applies the same idea to AI applications and the tools and context they need." },
+      { "choice": "Hosts, not servers, own consent", "why": "The protocol can’t stop a server from doing harm, so the specification puts the duty on the host: get the user’s explicit consent before calling tools or sharing data, and treat tool descriptions from untrusted servers as untrusted." },
+      { "choice": "Drop protocol sessions in 2026", "why": "Sessions forced remote servers into sticky routing or shared session stores. The maintainers found that state is better carried in explicit handles a tool returns and the model passes back, because the model can see them and thread them between tools." }
+    ],
+    "timeline": [
+      { "year": "2024", "text": "Anthropic open-sources MCP with the `2024-11-05` specification and reference servers" },
+      { "year": "2025", "text": "`2025-03-26` adds OAuth 2.1 authorization and the Streamable HTTP transport" },
+      { "year": "2025", "text": "`2025-11-25` adds experimental tasks, URL elicitation and Client ID Metadata Documents" },
+      { "year": "2025", "text": "Donated to the Linux Foundation’s new Agentic AI Foundation in December" },
+      { "year": "2026", "text": "`2026-07-28` removes the handshake and sessions, making the protocol stateless" }
+    ],
+    "sources": [
+      { "label": "Anthropic: Introducing the Model Context Protocol (Nov 2024)", "url": "https://www.anthropic.com/news/model-context-protocol" },
+      { "label": "Anthropic: Donating the Model Context Protocol and establishing the Agentic AI Foundation (Dec 2025)", "url": "https://www.anthropic.com/news/donating-the-model-context-protocol-and-establishing-of-the-agentic-ai-foundation" },
+      { "label": "MCP specification 2025-03-26: key changes", "url": "https://modelcontextprotocol.io/specification/2025-03-26/changelog" },
+      { "label": "MCP specification 2025-11-25: key changes", "url": "https://modelcontextprotocol.io/specification/2025-11-25/changelog" },
+      { "label": "MCP Blog: The 2026-07-28 Specification (Jul 2026)", "url": "https://blog.modelcontextprotocol.io/posts/2026-07-28/" },
+      { "label": "MCP specification 2026-07-28: overview (LSP inspiration, security principles)", "url": "https://modelcontextprotocol.io/specification/2026-07-28" }
+    ]
+  },
+  "sources": [
+    { "label": "MCP specification 2026-07-28: overview, roles and security principles", "url": "https://modelcontextprotocol.io/specification/2026-07-28" },
+    { "label": "MCP specification 2026-07-28: key changes", "url": "https://modelcontextprotocol.io/specification/2026-07-28/changelog" },
+    { "label": "MCP specification 2026-07-28: versioning and compatibility", "url": "https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning" },
+    { "label": "MCP specification 2026-07-28: transports", "url": "https://modelcontextprotocol.io/specification/2026-07-28/basic/transports" },
+    { "label": "MCP specification 2026-07-28: stdio transport", "url": "https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/stdio" },
+    { "label": "MCP specification 2026-07-28: Streamable HTTP transport", "url": "https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http" },
+    { "label": "MCP specification 2026-07-28: tools", "url": "https://modelcontextprotocol.io/specification/2026-07-28/server/tools" },
+    { "label": "MCP specification 2026-07-28: authorization", "url": "https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization" },
+    { "label": "MCP docs: versioning (current revision 2026-07-28, deprecation windows)", "url": "https://modelcontextprotocol.io/docs/2026-07-28/learn/versioning" },
+    { "label": "MCP docs: governance and stewardship (LF Projects, licenses, maintainers)", "url": "https://modelcontextprotocol.io/community/governance" },
+    { "label": "MCP repository LICENSE: transition from MIT to Apache 2.0", "url": "https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/LICENSE" },
+    { "label": "MCP Blog: The 2026-07-28 Specification (SDKs, download numbers)", "url": "https://blog.modelcontextprotocol.io/posts/2026-07-28/" },
+    { "label": "Anthropic: Donating MCP to the Agentic AI Foundation (adopters, server count)", "url": "https://www.anthropic.com/news/donating-the-model-context-protocol-and-establishing-of-the-agentic-ai-foundation" }
+  ],
+  "checked": "2026-10-13"
+}

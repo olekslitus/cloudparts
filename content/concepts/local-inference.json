@@ -1,0 +1,270 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Running models locally",
+  "icon": "laptop",
+  "category": "ai",
+  "order": 20,
+  "parent": "llms",
+  "summary": "Running an open-weight model on your own laptop or server: a runtime loads the weights, usually quantized to 4 to 8 bits, into memory and serves an OpenAI-compatible API on localhost, so prompts never leave the machine.",
+  "howItWorks": "You download the weights, most often as a GGUF file from Hugging Face, and a runtime loads them. llama.cpp, a plain C/C++ runtime, does both in one step: `llama-server -hf Qwen/Qwen3-8B-GGUF:Q4_K_M` fetches the file and starts serving. The weights have to fit in memory, and their size is roughly the parameter count times the bits per weight, divided by 8. Qwen3-8B’s 8.2 billion parameters take 16.4 GB in BF16 (16 bits each), so most people run a quantized copy: the weights are stored in fewer bits, in small blocks that share a scale factor. In llama.cpp’s `Q4_K` type, blocks of 32 weights are rebuilt as `w = q * block_scale + block_min`, which works out to 4.5 bits per weight; Qwen3-8B at `Q4_K_M` is a 5.03 GB file and at `Q8_0` 8.71 GB. Fewer bits cost some accuracy, and they also speed up generation: in llama.cpp’s benchmark of Llama 3.1 8B, `Q4_K_M` generated 71.9 tokens per second against 50.9 for `Q8_0` on the same machine. The context needs memory on top of the weights: Ollama warns that a longer context “will increase the amount of memory required”, and so by default gives 4k tokens on GPUs under 24 GiB, 32k up to 48 GiB and 256k above. On a GPU, the runtime places as many layers in VRAM as fit (llama.cpp’s `-ngl`) and runs the rest on the CPU. Then it serves HTTP on localhost: llama.cpp’s `llama-server`, Ollama on `127.0.0.1:11434` and LM Studio on port 1234 all expose `/v1/chat/completions` in OpenAI’s format, so an existing OpenAI client only needs a new base URL. Ollama keeps a model loaded for 5 minutes after the last request, then frees the memory.",
+  "analogy": "Cooking at home instead of ordering delivery. You buy the ingredients once (download the weights), you need a kitchen big enough for the dish (memory), and nobody outside sees what you cook. Quantization is cooking with concentrate: it fits in a much smaller fridge and tastes a little different.",
+  "useWhen": [
+    "Prompts or documents must not leave the machine: Ollama’s FAQ says “We don’t see your prompts or data when you run locally”",
+    "Offline or air-gapped work: LM Studio runs entirely offline once the model files are on disk",
+    "Development and tests against an OpenAI-compatible endpoint without a per-token bill or rate limits",
+    "Models small enough for your memory: an 8B model at 4-bit quantization is about 5 GB of weights"
+  ],
+  "avoidWhen": [
+    "You need the largest models: DeepSeek-R1’s 671 billion parameters at 4.5 bits per weight would be about 377 GB of weights alone",
+    "Long contexts on a small GPU: Ollama defaults to 4k tokens below 24 GiB of VRAM, while it recommends at least 64,000 for agents and coding tools",
+    "Many users at once with latency targets: one server’s memory is split into a fixed number of parallel slots, each with its share of the context, and adding capacity means adding machines",
+    "The machine is small: LM Studio recommends at least 16 GB of RAM and 4 GB of dedicated VRAM, and says 8 GB Macs should stick to smaller models and modest context sizes"
+  ],
+  "example": "A developer wants a coding helper on a 16 GB laptop that also works offline. Qwen3-8B (Apache 2.0) is 16.4 GB in BF16, which can’t fit next to the operating system and an editor, so they compare the quantized files in `Qwen/Qwen3-8B-GGUF`: `Q8_0` is 8.71 GB, `Q6_K` 6.73 GB and `Q4_K_M` 5.03 GB. They pick `Q4_K_M`, which leaves room for the context, and start `llama-server -hf Qwen/Qwen3-8B-GGUF:Q4_K_M -c 32768 --port 8080`: the full native window of 32,768 tokens. In the editor, the OpenAI-compatible provider’s base URL becomes `http://localhost:8080/v1`, and requests use the model card’s settings for thinking mode (temperature 0.6, top-p 0.95, top-k 20), since the card warns that greedy decoding causes “endless repetitions”. Nothing they type leaves the laptop. The limit shows in long sessions: Ollama’s docs suggest 64,000 tokens or more for coding tools, about twice what this model handles natively, so for large refactors they switch back to a hosted model.",
+  "snippet": {
+    "lang": "bash",
+    "source": [
+      "# Download a 4-bit GGUF from Hugging Face (5.03 GB) and serve it on localhost.",
+      "# -c: context window in tokens (more context needs more memory)",
+      "# -ngl all: put every layer on the GPU if it fits",
+      "llama-server -hf Qwen/Qwen3-8B-GGUF:Q4_K_M -c 32768 -ngl all --port 8080",
+      "",
+      "# Any OpenAI-style client can now call it",
+      "curl http://localhost:8080/v1/chat/completions \\",
+      "  -H \"Content-Type: application/json\" \\",
+      "  -d '{",
+      "    \"messages\": [{\"role\": \"user\", \"content\": \"Explain quantization in one sentence.\"}],",
+      "    \"temperature\": 0.6, \"top_p\": 0.95",
+      "  }'",
+      "",
+      "# The same API elsewhere: Ollama at http://localhost:11434/v1, LM Studio at http://localhost:1234/v1"
+    ]
+  },
+  "related": [
+    "llms",
+    "model-hubs",
+    "model-gateways",
+    "dev-environments"
+  ],
+  "sections": [
+    {
+      "type": "table",
+      "title": "How big the weights are",
+      "intro": "Qwen3-8B, with 8.2 billion parameters, as files on Hugging Face, next to llama.cpp’s measured bits per weight for each type on Llama 3.1 8B. The context and the runtime need memory on top of these sizes.",
+      "corner": "Format",
+      "columns": [
+        "Bits per weight (llama.cpp, Llama 3.1 8B)",
+        "Qwen3-8B file size",
+        "Text generation, Llama 3.1 8B"
+      ],
+      "rows": [
+        {
+          "label": "BF16 or F16 (original)",
+          "values": [
+            "16.0",
+            "16.4 GB (five safetensors shards)",
+            "not listed"
+          ]
+        },
+        {
+          "label": "Q8_0",
+          "values": [
+            "8.50",
+            "8.71 GB",
+            "50.9 tokens/s"
+          ]
+        },
+        {
+          "label": "Q6_K",
+          "values": [
+            "6.56",
+            "6.73 GB",
+            "58.7 tokens/s"
+          ]
+        },
+        {
+          "label": "Q5_K_M",
+          "values": [
+            "5.70",
+            "5.85 GB",
+            "67.2 tokens/s"
+          ]
+        },
+        {
+          "label": "Q4_K_M",
+          "values": [
+            "4.89",
+            "5.03 GB",
+            "71.9 tokens/s"
+          ]
+        }
+      ],
+      "notes": [
+        "Bits per weight are above the nominal 8, 6, 5 or 4 because each block also stores scales, and the `_M` types mix quantization types across tensors (`llama-quantize --pure` turns the mixing off). llama.cpp reports the speeds without naming the hardware, so compare them with each other, not with your machine. Its README also lists Llama 3.1 70B at 43.1 GB in `Q4_K_M` against 280.9 GB unquantized."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Local servers",
+      "intro": "Three common ways to run the same GGUF file. All of them speak OpenAI’s chat completions format on localhost.",
+      "items": [
+        {
+          "name": "llama.cpp",
+          "tag": "MIT · C/C++",
+          "text": "The runtime underneath much of local inference. `llama-cli` chats in the terminal; `llama-server` serves OpenAI-compatible chat completions, responses and embeddings routes, plus an Anthropic Messages-compatible route, with continuous batching and parallel slots. Backends include CUDA, Metal, Vulkan, HIP and plain CPU, and CPU+GPU hybrid inference runs models larger than VRAM."
+        },
+        {
+          "name": "Ollama",
+          "tag": "MIT · CLI and app",
+          "text": "Pulls and runs models with one command (`ollama run`), and serves its own API plus OpenAI-compatible `/v1` routes on `127.0.0.1:11434`. It unloads a model after 5 minutes idle (`keep_alive` changes that) and picks a default context from the VRAM it finds."
+        },
+        {
+          "name": "LM Studio",
+          "tag": "desktop app",
+          "text": "A desktop app for macOS on Apple Silicon, Windows and Linux to find, download and chat with models, with a local server on port 1234 that implements OpenAI’s Responses, Chat Completions and Embeddings endpoints and an Anthropic-compatible one. It runs fully offline once the files are downloaded."
+        }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Until 2023, models in GPT-3’s class were kept by the companies that built them and reached only through APIs, and even if you could get one, it needed several A100-class GPUs that retailed for $8,000 or more each. Georgi Gerganov, a developer in Sofia who had written the GGML tensor library in C and whisper.cpp, a C++ port of OpenAI’s Whisper speech model, took another route. Meta released LLaMA to researchers on February 24, 2023, and within days the weights were circulating on BitTorrent. On March 10, Gerganov published llama.cpp, an implementation of LLaMA inference in plain C/C++ whose stated goal was “to run the model using 4-bit quantization on a MacBook”.",
+      "Quantization made it fit: the 7B model shrank to about 4 GB on disk and the 13B to just under 8 GB. Simon Willison ran the 13B model on a laptop the next day and wrote that large language models were having their “Stable Diffusion moment”; the following day Artem Andreenko ran the 7B model on a Raspberry Pi 4 with 4 GB of RAM, at about 10 seconds per token. Tools grew on top: Ollama started in June 2023 to pull and run models with one command, and in August 2023 llama.cpp switched to the GGUF file format. LM Studio wraps the same steps in a desktop app.",
+      "Open weights then caught up in size and license. Llama 2 allowed commercial use from July 2023, and Apache 2.0 models such as Qwen3 followed. By 2026 llama.cpp had more than 131,000 stars on GitHub, and on February 20, 2026, Gerganov’s ggml team joined Hugging Face, which wrote that local inference was becoming “a meaningful and competitive alternative to cloud inference”."
+    ],
+    "choices": [
+      {
+        "choice": "4-bit quantization as the default",
+        "why": "A MacBook can’t hold a model in 16-bit floats, so llama.cpp set out to store weights in 4 bits. That cut LLaMA 7B to about 4 GB, small enough for an ordinary laptop. The cost is some accuracy, which llama.cpp measures as perplexity and KL divergence against the unquantized model."
+      },
+      {
+        "choice": "Plain C/C++ with no dependencies",
+        "why": "No Python, no CUDA requirement: the same program runs on a CPU, which is what made llama.cpp spread among people without special hardware. GPU backends (Metal on Apple silicon, CUDA, Vulkan and others) were added later without changing that."
+      },
+      {
+        "choice": "Copy OpenAI’s API on localhost",
+        "why": "Apps, editors and SDKs already spoke OpenAI’s chat completions format. Serving the same routes means existing clients switch to a local model by changing a base URL, as LM Studio’s docs put it, instead of adopting a new SDK."
+      },
+      {
+        "choice": "Keep a model loaded for a while, then unload it",
+        "why": "Loading gigabytes of weights takes time, but a laptop also needs its memory back. Ollama keeps a model in memory for 5 minutes after the last request for faster repeat calls, and lets you change that with `keep_alive`."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "2022",
+        "text": "Georgi Gerganov starts the GGML tensor library in C (September)"
+      },
+      {
+        "year": "2023",
+        "text": "llama.cpp runs LLaMA on a MacBook with 4-bit quantization (March 10); Ollama starts (June); GGUF replaces GGML files (August)"
+      },
+      {
+        "year": "2026",
+        "text": "The ggml and llama.cpp team joins Hugging Face (February 20)"
+      }
+    ],
+    "sources": [
+      {
+        "label": "Simon Willison: Large language models are having their Stable Diffusion moment (Mar 11, 2023)",
+        "url": "https://simonwillison.net/2023/Mar/11/llama/"
+      },
+      {
+        "label": "Wikipedia: llama.cpp (GGML from September 2022, whisper.cpp, release March 10, 2023, CPU-first)",
+        "url": "https://en.wikipedia.org/wiki/Llama.cpp"
+      },
+      {
+        "label": "Meta AI: Introducing LLaMA (Feb 24, 2023)",
+        "url": "https://ai.meta.com/blog/large-language-model-llama-meta-ai/",
+        "archive": "https://web.archive.org/web/20250530161422/https://ai.meta.com/blog/large-language-model-llama-meta-ai/"
+      },
+      {
+        "label": "GitHub: ggml-org/llama.cpp (created March 10, 2023; MIT)",
+        "url": "https://github.com/ggml-org/llama.cpp"
+      },
+      {
+        "label": "GitHub: ollama/ollama (created June 26, 2023; MIT)",
+        "url": "https://github.com/ollama/ollama"
+      },
+      {
+        "label": "Wikipedia: GGUF (introduced August 2023)",
+        "url": "https://en.wikipedia.org/wiki/GGUF"
+      },
+      {
+        "label": "Meta AI: Llama 2, free for research and commercial use (July 18, 2023)",
+        "url": "https://ai.meta.com/blog/llama-2/",
+        "archive": "https://web.archive.org/web/20260113074313/https://ai.meta.com/blog/llama-2/"
+      },
+      {
+        "label": "Hugging Face blog: GGML and llama.cpp join HF to ensure the long-term progress of Local AI (Feb 20, 2026)",
+        "url": "https://huggingface.co/blog/ggml-joins-hf"
+      },
+      {
+        "label": "LM Studio docs: OpenAI compatibility endpoints (switch the base URL)",
+        "url": "https://lmstudio.ai/docs/developer/openai-compat"
+      },
+      {
+        "label": "Ollama docs: FAQ (models stay loaded for 5 minutes)",
+        "url": "https://docs.ollama.com/faq"
+      },
+      {
+        "label": "llama.cpp docs: quantize (perplexity and KL divergence)",
+        "url": "https://github.com/ggml-org/llama.cpp/blob/master/tools/quantize/README.md"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "ggml-org/llama.cpp README (C/C++ without dependencies, 1.5 to 8-bit quantization, backends, hybrid CPU+GPU)",
+      "url": "https://github.com/ggml-org/llama.cpp"
+    },
+    {
+      "label": "llama.cpp docs: quantize (accuracy loss, k-quant mixtures, bits per weight, sizes and speeds for Llama 3.1 8B)",
+      "url": "https://github.com/ggml-org/llama.cpp/blob/master/tools/quantize/README.md"
+    },
+    {
+      "label": "llama.cpp docs: HTTP server (OpenAI and Anthropic compatible routes, -c, -ngl, --parallel, continuous batching)",
+      "url": "https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md"
+    },
+    {
+      "label": "Hugging Face Hub docs: GGUF (quantization types and bits per weight)",
+      "url": "https://huggingface.co/docs/hub/gguf"
+    },
+    {
+      "label": "Hugging Face: Qwen/Qwen3-8B-GGUF model card (llama-server -hf, 32,768-token context, sampling settings)",
+      "url": "https://huggingface.co/Qwen/Qwen3-8B-GGUF"
+    },
+    {
+      "label": "Hugging Face: Qwen/Qwen3-8B-GGUF files (Q4_K_M to Q8_0 sizes)",
+      "url": "https://huggingface.co/Qwen/Qwen3-8B-GGUF/tree/main"
+    },
+    {
+      "label": "Hugging Face: Qwen/Qwen3-8B files (16.4 GB in BF16)",
+      "url": "https://huggingface.co/Qwen/Qwen3-8B/tree/main"
+    },
+    {
+      "label": "Ollama docs: OpenAI compatibility (http://localhost:11434/v1)",
+      "url": "https://docs.ollama.com/api/openai-compatibility"
+    },
+    {
+      "label": "Ollama docs: Context length (defaults by VRAM, 64,000 for agents and coding tools)",
+      "url": "https://docs.ollama.com/context-length"
+    },
+    {
+      "label": "Ollama docs: FAQ (127.0.0.1:11434, keep_alive, prompts stay local)",
+      "url": "https://docs.ollama.com/faq"
+    },
+    {
+      "label": "LM Studio docs: OpenAI compatibility endpoints (port 1234)",
+      "url": "https://lmstudio.ai/docs/developer/openai-compat"
+    },
+    {
+      "label": "LM Studio docs: System requirements (16 GB RAM, 4 GB VRAM, offline operation)",
+      "url": "https://lmstudio.ai/docs/app/system-requirements"
+    },
+    {
+      "label": "Wikipedia: Large language model (DeepSeek-R1, 671 billion parameters)",
+      "url": "https://en.wikipedia.org/wiki/Large_language_model"
+    }
+  ]
+}

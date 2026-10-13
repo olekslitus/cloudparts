@@ -1,0 +1,297 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Agent tools and integrations",
+  "icon": "plug",
+  "category": "ai",
+  "order": 20,
+  "parent": "ai-agents",
+  "summary": "How an agent gets its tools: functions described by a schema, packaged as Model Context Protocol (MCP) servers that any agent can use, found through registries, and authorized per end user so the agent acts with that person’s access.",
+  "howItWorks": "At the bottom, every tool is a function definition: a name, a description and a JSON Schema for the arguments. The model emits a call, and the application runs it. Definitions are added to the prompt on every request and billed as input tokens, so each extra tool costs context. The Model Context Protocol standardizes how tools are packaged, so one integration works in many AI applications. The application (the host) creates one MCP client per MCP server it connects to, and they exchange JSON-RPC 2.0 messages. A server can offer tools, which the model calls; resources, which are data such as files or records for the user or the model to read; and prompts, which are templates for users. The client asks for `tools/list`, shows those tools to the model, and sends `tools/call` with the arguments the model chose. There are two standard transports. With stdio, the host starts the server as a subprocess on the same machine and exchanges newline-delimited messages over its standard input and output; such a local server usually serves one client and takes credentials from its environment. With Streamable HTTP, each message is an HTTP POST to one endpoint, so a remote server can serve many clients. Since the 2026-07-28 revision the protocol is stateless: there is no handshake or session, every request carries its protocol version and client capabilities, and servers answer `server/discover` with the versions they support. A protected remote server is an OAuth 2.1 resource server: the client finds its authorization server through Protected Resource Metadata (RFC 9728), the user signs in, and the server must reject tokens that weren’t issued for it. For third-party APIs such as Gmail or GitHub, managed-auth services keep one OAuth connection per end user, store and refresh the tokens, and inject the right one into each call, so the agent never sees the credentials. Registries list servers: the official MCP Registry holds metadata (a verified name and where to get the package or URL), and directories and marketplaces build on it. Generators can also turn an OpenAPI spec into one tool per endpoint.",
+  "analogy": "A standard power socket plus a hotel front desk. MCP is the socket: any appliance (a server) with the right plug works in any room (a host) without rewiring. The registry is the catalog that confirms who made each appliance, though not that it’s safe. Managed auth is the front desk that gives each guest their own key card: the agent can open the doors that guest may open, never the master key, and the desk can cancel a card without changing the locks.",
+  "useWhen": [
+    "The same integration should work in several AI applications, such as an editor, a chat app and your own agent: build it once as an MCP server",
+    "Your agent acts for many end users on third-party APIs, each with their own account: per-user OAuth with stored, refreshed tokens beats one shared API key",
+    "You have an OpenAPI spec and want to prototype tools over an existing API quickly",
+    "A team wants a vetted, private catalog of the servers its agents may use"
+  ],
+  "avoidWhen": [
+    "You plan to connect dozens of servers and load every definition up front: in one Anthropic example that cost 150,000 tokens, against 2,000 when the agent loaded only the tools it needed",
+    "The servers come from authors you can’t vet: tool descriptions are untrusted input, and the official registry leaves security scanning to package registries and downstream marketplaces",
+    "One tool would combine private data, untrusted content and a way to send data out, as the GitHub MCP server did when a malicious public issue made an agent leak private repository data",
+    "You want to mirror a large REST API endpoint by endpoint: FastMCP’s docs warn that models do significantly better with curated servers than with auto-converted OpenAPI ones"
+  ],
+  "example": "Anthropic’s engineers took a request like “Download my meeting transcript from Google Drive and attach it to the Salesforce lead.” With direct tool calls, the MCP client loads every tool definition from every connected server into the context, and the transcript flows through the model twice: once when it is read, and again when the model writes it into the Salesforce update. For a 2-hour sales meeting that is about 50,000 extra tokens. Their alternative presents each MCP server to the agent as a folder of TypeScript files. The agent lists `./servers/`, reads only `getDocument.ts` and `updateRecord.ts`, and writes a short program that moves the transcript from Drive to Salesforce without the text ever entering its context. Token use fell from 150,000 to 2,000, a 98.7% saving. Cloudflare reported similar results and calls the approach “Code Mode”. A lighter fix is a `search_tools` tool that returns only the definitions a task needs.",
+  "providers": {
+    "aws": "Amazon Bedrock AgentCore Gateway (turns APIs, OpenAPI specs and Lambda functions into MCP tools, handles OAuth flows, token refresh and credential injection), AgentCore Identity (access to third-party services on behalf of users), AgentCore Registry",
+    "gcp": "Gemini Enterprise Agent Platform: Agent Identity for granular permissions, Agent Gateway to secure agent traffic, and agent access through service accounts, API keys or OAuth clients",
+    "azure": "Microsoft Foundry Agent Service toolboxes: web search, file search, code interpreter, MCP servers and custom functions shared across agents through one managed MCP endpoint with central authentication",
+    "oss": "MCP SDKs (Python, TypeScript and others) and the official MCP Registry; FastMCP (servers from OpenAPI specs); hosted: Composio (per-user OAuth for third-party apps), Glama (server directory)"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "# server.py: an MCP server with one tool and one resource (Python SDK 2.x)",
+      "import json",
+      "",
+      "from mcp.server import MCPServer",
+      "",
+      "mcp = MCPServer(\"orders\")",
+      "",
+      "",
+      "@mcp.tool()",
+      "def order_status(order_id: str) -> str:",
+      "    \"\"\"Look up the shipping status of an order.\"\"\"  # becomes the tool description",
+      "    return f\"Order {order_id}: shipped, arriving Thursday\"  # call your real API here",
+      "",
+      "",
+      "@mcp.resource(\"orders://{order_id}\")",
+      "def order_record(order_id: str) -> str:",
+      "    \"\"\"The full order record, for the user or the model to read.\"\"\"",
+      "    return json.dumps({\"id\": order_id, \"items\": 2, \"total\": 42.0})",
+      "",
+      "",
+      "if __name__ == \"__main__\":",
+      "    mcp.run(transport=\"stdio\")  # local: the host starts this file as a subprocess",
+      "",
+      "# The input schema {\"order_id\": string} comes from the type hints: no JSON Schema to write.",
+      "# Remote instead of local:",
+      "#   uv run mcp run server.py --transport streamable-http   ->  http://localhost:8000/mcp"
+    ]
+  },
+  "related": [
+    "ai-agents",
+    "web-api",
+    "rpc",
+    "authentication",
+    "agent-frameworks"
+  ],
+  "sections": [
+    {
+      "type": "cards",
+      "title": "What an MCP server can offer",
+      "intro": "Servers declare which of these features they support. Who is in control differs: the model picks tools, while resources and prompts are mostly chosen by the application or the user.",
+      "items": [
+        {
+          "name": "Tools",
+          "tag": "model-controlled",
+          "text": "Functions with a JSON Schema input, listed with `tools/list` and run with `tools/call`. The result is a list of content items (text, images, links to resources) plus an `isError` flag. Hosts must get the user’s consent before invoking a tool and should let a person deny any call."
+        },
+        {
+          "name": "Resources",
+          "tag": "context",
+          "text": "Data addressed by URI, such as a file, a database record or an API response, read with `resources/read`. Lists come with a `ttlMs` freshness hint since 2026-07-28, so clients can cache them instead of polling."
+        },
+        {
+          "name": "Prompts",
+          "tag": "user-controlled",
+          "text": "Reusable message templates, such as a system prompt or a few worked examples, that a user picks from a menu in the host."
+        },
+        {
+          "name": "Elicitation",
+          "tag": "client feature",
+          "text": "The server asks the user for more input mid-request. Since 2026-07-28 it returns an `input_required` result and the client retries the original request with the answers, instead of the server sending its own request."
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Credentials: whose access does the agent use?",
+      "body": [
+        "A local stdio server runs with whatever credentials are in its environment, usually an API key or token of the person running it. That is simple and fine for one developer, but the agent then acts with that key’s full access, for every conversation. The MCP authorization spec says stdio servers should not use its OAuth flow and should take credentials from the environment instead.",
+        "Protected remote servers use OAuth 2.1. The server publishes Protected Resource Metadata that names its authorization server; the client registers (the 2026-07-28 revision prefers Client ID Metadata Documents over dynamic registration), sends the user through sign-in with a resource indicator naming the server, and receives a token whose audience is that server. The server must validate that audience, which stops a token issued for one service from being replayed against another.",
+        "Agents that work for many users across many SaaS apps add a broker. Composio, for example, groups connections under a user id you choose: an auth config per app holds the method and scopes, each user connects their own account through a hosted link, and every tool call then runs as that user against their own connected account, with tokens stored and refreshed by the broker. AgentCore Gateway and Identity do the same inside AWS, handling OAuth flows, token refresh and per-tool credential injection."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Function calling gave each model API its own way to describe tools, so every application wired every integration itself. Anthropic open-sourced the Model Context Protocol on November 25, 2024, to replace those fragmented integrations with one protocol. It was created by David Soria Parra and Justin Spahr-Summers and launched with SDKs, local server support in Claude Desktop and prebuilt servers for Google Drive, Slack, GitHub, Git, Postgres and Puppeteer. The design borrowed from the Language Server Protocol, which did the same for programming-language support across editors.",
+      "Adoption brought remote servers and their problems. The 2025-03-26 revision replaced the original HTTP+SSE transport with Streamable HTTP, and the spec added OAuth-based authorization. Security researchers at Invariant Labs showed tool poisoning, instructions in tool descriptions that users don’t see but models do, and an exploit of GitHub’s official server through a malicious issue. Discovery was the other gap: a community effort started in February 2025 became the official MCP Registry preview in September 2025, an open catalog of server metadata that others can build sub-registries on. As agents connected to hundreds of tools, Anthropic showed in November 2025, citing similar findings from Cloudflare, that letting agents write code against tools saves most of the context that definitions consume.",
+      "In December 2025 MCP moved to the Linux Foundation’s Agentic AI Foundation. The 2026-07-28 revision then made the protocol stateless, removing the initialize handshake and the session id so every request stands on its own, and moved long-running tasks into an optional extension."
+    ],
+    "choices": [
+      {
+        "choice": "One client per server, speaking JSON-RPC, modeled on the Language Server Protocol",
+        "why": "LSP let any editor support any language through one protocol. MCP applies the same idea so an integration is written once as a server and works in every host, instead of once per application."
+      },
+      {
+        "choice": "Two transports: stdio for local, Streamable HTTP for remote",
+        "why": "A subprocess on the same machine needs no network and can read credentials from its environment. A remote server can serve many clients and use standard HTTP authentication, with OAuth recommended for obtaining tokens."
+      },
+      {
+        "choice": "Tokens bound to one server",
+        "why": "Clients must name the target server when requesting a token, and servers must check that a token was issued for them. That blocks confused-deputy attacks where a token meant for one service is passed on to another."
+      },
+      {
+        "choice": "A registry of metadata, not of code",
+        "why": "Packages already live on npm, PyPI and Docker Hub, which scan them. The registry only verifies who owns a namespace (through GitHub or DNS) and points to the package, leaving curation and ratings to downstream marketplaces."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "2024",
+        "text": "Anthropic open-sources the Model Context Protocol (November 25)"
+      },
+      {
+        "year": "2025",
+        "text": "The 2025-03-26 revision replaces HTTP+SSE with Streamable HTTP"
+      },
+      {
+        "year": "2025",
+        "text": "The official MCP Registry launches in preview (September)"
+      },
+      {
+        "year": "2025",
+        "text": "Anthropic shows code execution with MCP cutting 150,000 tokens to 2,000 (November)"
+      },
+      {
+        "year": "2025",
+        "text": "MCP moves to the Linux Foundation’s Agentic AI Foundation (December)"
+      },
+      {
+        "year": "2026",
+        "text": "The 2026-07-28 revision makes MCP stateless: no handshake, no sessions"
+      }
+    ],
+    "sources": [
+      {
+        "label": "Anthropic: Introducing the Model Context Protocol (Nov 2024)",
+        "url": "https://www.anthropic.com/news/model-context-protocol"
+      },
+      {
+        "label": "Model Context Protocol spec 2026-07-28: Overview (hosts, clients, servers; tools, resources, prompts; inspired by LSP)",
+        "url": "https://modelcontextprotocol.io/specification/2026-07-28"
+      },
+      {
+        "label": "Model Context Protocol spec 2026-07-28: Key changes (stateless requests, no sessions, server/discover)",
+        "url": "https://modelcontextprotocol.io/specification/2026-07-28/changelog"
+      },
+      {
+        "label": "Invariant Labs: MCP security notification, tool poisoning attacks",
+        "url": "https://invariantlabs.ai/blog/mcp-security-notification-tool-poisoning-attacks"
+      },
+      {
+        "label": "Invariant Labs: GitHub MCP exploited, accessing private repositories via MCP",
+        "url": "https://invariantlabs.ai/blog/mcp-github-vulnerability"
+      },
+      {
+        "label": "MCP blog: Introducing the MCP Registry (Sep 2025)",
+        "url": "https://blog.modelcontextprotocol.io/posts/2025-09-08-mcp-registry-preview/"
+      },
+      {
+        "label": "Anthropic: Code execution with MCP (150,000 to 2,000 tokens; Nov 2025)",
+        "url": "https://www.anthropic.com/engineering/code-execution-with-mcp"
+      },
+      {
+        "label": "Linux Foundation: Formation of the Agentic AI Foundation with MCP, goose and AGENTS.md (Dec 2025)",
+        "url": "https://www.linuxfoundation.org/press/linux-foundation-announces-the-formation-of-the-agentic-ai-foundation"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "OpenAI docs: Function calling (JSON Schema tools, definitions billed as input tokens, tool search)",
+      "url": "https://developers.openai.com/api/docs/guides/function-calling"
+    },
+    {
+      "label": "Model Context Protocol spec 2026-07-28: Overview (hosts, clients, servers; tools, resources, prompts; inspired by LSP)",
+      "url": "https://modelcontextprotocol.io/specification/2026-07-28"
+    },
+    {
+      "label": "Model Context Protocol docs: Versioning (current version 2026-07-28)",
+      "url": "https://modelcontextprotocol.io/specification/versioning"
+    },
+    {
+      "label": "Model Context Protocol spec 2026-07-28: Key changes (stateless requests, no sessions, server/discover)",
+      "url": "https://modelcontextprotocol.io/specification/2026-07-28/changelog"
+    },
+    {
+      "label": "Model Context Protocol spec 2026-07-28: Transports (stdio and Streamable HTTP)",
+      "url": "https://modelcontextprotocol.io/specification/2026-07-28/basic/transports"
+    },
+    {
+      "label": "Model Context Protocol spec 2026-07-28: Tools (tools/list, tools/call, untrusted annotations)",
+      "url": "https://modelcontextprotocol.io/specification/2026-07-28/server/tools"
+    },
+    {
+      "label": "Model Context Protocol spec 2026-07-28: Authorization (OAuth 2.1, Protected Resource Metadata, token audience)",
+      "url": "https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization"
+    },
+    {
+      "label": "Model Context Protocol docs: Architecture (one client per server, local and remote servers)",
+      "url": "https://modelcontextprotocol.io/docs/learn/architecture"
+    },
+    {
+      "label": "Model Context Protocol docs: Build an MCP server (Python SDK, MCPServer, stdio)",
+      "url": "https://modelcontextprotocol.io/docs/develop/build-server"
+    },
+    {
+      "label": "modelcontextprotocol/python-sdk README (a server in 15 lines, Streamable HTTP at /mcp)",
+      "url": "https://github.com/modelcontextprotocol/python-sdk"
+    },
+    {
+      "label": "Model Context Protocol docs: The MCP Registry (metadata, namespaces, aggregators, security scanning)",
+      "url": "https://modelcontextprotocol.io/registry/about"
+    },
+    {
+      "label": "MCP blog: Introducing the MCP Registry (Sep 2025)",
+      "url": "https://blog.modelcontextprotocol.io/posts/2025-09-08-mcp-registry-preview/"
+    },
+    {
+      "label": "Glama: open-source MCP servers directory (97,619 servers listed on 2026-10-13)",
+      "url": "https://glama.ai/mcp/servers"
+    },
+    {
+      "label": "Anthropic: Code execution with MCP (150,000 to 2,000 tokens; Nov 2025)",
+      "url": "https://www.anthropic.com/engineering/code-execution-with-mcp"
+    },
+    {
+      "label": "Anthropic: Writing effective tools for agents, with agents (Sep 2025)",
+      "url": "https://www.anthropic.com/engineering/writing-tools-for-agents"
+    },
+    {
+      "label": "Composio docs: Authentication (per-user connected accounts, Connect Link, managed tokens)",
+      "url": "https://docs.composio.dev/docs/authentication"
+    },
+    {
+      "label": "Composio docs: Authenticating tools (auth configs, scopes, managed OAuth)",
+      "url": "https://docs.composio.dev/docs/authenticating-tools"
+    },
+    {
+      "label": "AWS docs: Amazon Bedrock AgentCore Gateway (APIs and Lambda to MCP tools, OAuth, credential injection)",
+      "url": "https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway.html"
+    },
+    {
+      "label": "AWS docs: Amazon Bedrock AgentCore Identity (third-party services on behalf of users)",
+      "url": "https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/identity.html"
+    },
+    {
+      "label": "AWS docs: What is Amazon Bedrock AgentCore? (Gateway wraps OpenAPI specs; Registry)",
+      "url": "https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/what-is-bedrock-agentcore.html"
+    },
+    {
+      "label": "Google Cloud docs: Agent Platform overview (Agent Identity, Agent Gateway)",
+      "url": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/overview"
+    },
+    {
+      "label": "Google Cloud docs: Scale your agents (manage agent access: service accounts, API keys, OAuth clients)",
+      "url": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale"
+    },
+    {
+      "label": "Microsoft Learn: What is Microsoft Foundry Agent Service? (toolboxes behind one managed MCP endpoint)",
+      "url": "https://learn.microsoft.com/en-us/azure/foundry/agents/overview"
+    },
+    {
+      "label": "FastMCP docs: OpenAPI integration (from_openapi; curated servers perform better)",
+      "url": "https://gofastmcp.com/integrations/openapi"
+    },
+    {
+      "label": "Invariant Labs: GitHub MCP exploited, accessing private repositories via MCP",
+      "url": "https://invariantlabs.ai/blog/mcp-github-vulnerability"
+    },
+    {
+      "label": "Simon Willison: The lethal trifecta for AI agents (Jun 2025)",
+      "url": "https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/"
+    }
+  ]
+}
