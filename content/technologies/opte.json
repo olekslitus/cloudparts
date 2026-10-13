@@ -1,0 +1,75 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "OPTE (Oxide Packet Transformation Engine)",
+  "concepts": ["vpc"],
+  "provider": "oss",
+  "vendor": "Oxide Computer Company",
+  "license": "MPL 2.0",
+  "website": "https://github.com/oxidecomputer/opte",
+  "repo": "https://github.com/oxidecomputer/opte",
+  "summary": "The virtual network inside each Oxide sled’s kernel: it sits between every VM and the physical NICs and implements VPC firewalling, routing, NAT and Geneve encapsulation as a stack of per-port packet transformations.",
+  "intro": [
+    "OPTE runs on every sled, in the illumos kernel, between each VM’s virtual NIC and the physical network. Every packet a VM sends goes into OPTE first. Each virtual NIC port has a series of layers that handle firewalling, routing, NAT and encapsulation. A layer either looks up state that already exists (a routing rule) or creates state (a firewall connection), and adds a transformation to a list. When every layer has had its say, OPTE applies the list: rewrite the addresses for NAT, say, and wrap the packet in a Geneve header addressed to the sled hosting the other VM. Packets coming in go through the same layers in reverse.",
+    "OPTE works off a connection-oriented flow table, as Microsoft’s VFP design recommends, because firewalls and NAT care about connections rather than single packets. Between sleds, encapsulated packets travel over the rack’s IPv6 underlay, routed by Oxide’s delay-driven multipath protocol, through the two rack switches, which decapsulate traffic leaving the rack. The project is split into a generic engine (`opte`), the Oxide VPC built on it (`oxide-vpc`), the `xde` kernel module that runs it on Helios, and `opteadm`, an operator tool for inspecting ports and rules; DTrace scripts trace it at run time.",
+    "Customers never touch OPTE directly. They see its effects through the Oxide API: VPCs with private RFC 1918 subnets, firewall rules, custom routers, internet gateways, outbound NAT, and ephemeral and floating external IPs."
+  ],
+  "strengths": [
+    "All the VPC logic runs on the host next to the VM, so each sled enforces its own VMs’ firewall rules and NAT without a central network appliance",
+    "Geneve encapsulation keeps the overlay compatible with NIC offloads and leaves room for custom header options",
+    "A pipeline of composable layers, modeled on Microsoft’s published VFP design, which the RFD says lets functions move between host, NIC and switch over time",
+    "Written in Rust, with parsers fuzzed and the engine testable and benchmarkable on Linux and macOS, not only in the kernel"
+  ],
+  "limits": [
+    "Its kernel module runs only on Helios, and its VPC model is Oxide’s own, so it is not a general-purpose virtual switch",
+    "Known issue in release v23: new instances cannot be created once the rack has more than 1,024 NAT entries (private-to-external IP mappings)",
+    "Known issue in release v23: an internet gateway cannot have both an IPv4 and an IPv6 address attached",
+    "Known issue in release v23: instances on a sled that loses contact with the switches can become unreachable until a reboot"
+  ],
+  "worksWith": [
+    { "id": "helios", "how": "runs as a kernel module in" },
+    { "id": "oxide-cloud-computer", "how": "implements the VPCs of" }
+  ],
+  "history": {
+    "story": [
+      "Oxide wanted each project in a rack to get its own virtual private cloud, like in a public cloud, on hardware with its own switches. RFD 63, Robert Mustacchi’s network architecture, proposed VPCs built on Geneve encapsulation over a routed IPv6 underlay, BGP towards the customer’s network, and a packet transformation engine on each host to provide routing, NAT, firewalling and more.",
+      "The design drew on Microsoft’s published papers on VL2, Ananta and especially VFP, which argues for a connection-oriented, programmable packet pipeline. Based on the problems the VFP paper reported, RFD 63 doubted that OpenFlow or Open vSwitch made sense for Oxide, and chose to build its own engine. The OPTE repository started in August 2021.",
+      "OPTE has shipped in every Oxide rack since the first in 2023, and later releases extended it, for example with IPv6 support and, for IPv6-only racks, periodic IPv6 router advertisements."
+    ],
+    "choices": [
+      {
+        "choice": "Geneve for the overlay",
+        "why": "It works with current NIC offloads and its header options give room to carry extra information as the network evolves."
+      },
+      {
+        "choice": "A custom engine instead of Open vSwitch or OpenFlow",
+        "why": "RFD 63 cited the negative experiences in Microsoft’s VFP paper as a reason to doubt OpenFlow and Open vSwitch, and took from the same paper the case for a connection-oriented pipeline, since firewall and NAT state is per connection."
+      },
+      {
+        "choice": "On the host, not the switch",
+        "why": "Putting routing, NAT and firewalling in software on every host gives a flexible base for load balancing and future services, and lets functions move to the NIC or switch later."
+      }
+    ],
+    "timeline": [
+      { "year": "2021", "text": "Repository started (August), following RFD 63’s network architecture" },
+      { "year": "2023", "text": "Ships in the first Oxide racks" },
+      { "year": "2026", "text": "IPv6 support (release v18, February); IPv6-only racks (release v23, September)" }
+    ],
+    "sources": [
+      { "label": "Oxide RFD 63: Network Architecture", "url": "https://rfd.shared.oxide.computer/rfd/0063" },
+      { "label": "OPTE README (RFDs and Microsoft’s VFP as inspiration)", "url": "https://github.com/oxidecomputer/opte/blob/master/README.adoc" },
+      { "label": "GitHub: oxidecomputer/opte (created August 2021)", "url": "https://github.com/oxidecomputer/opte" },
+      { "label": "Oxide docs: release notes v18 (IPv6, Feb 2026)", "url": "https://docs.oxide.computer/release-notes/system/18" },
+      { "label": "Oxide docs: release notes v23 (Sep 2026)", "url": "https://docs.oxide.computer/release-notes/system/23" }
+    ]
+  },
+  "sources": [
+    { "label": "Oxide docs: Networking architecture (OPTE, underlay, DDM)", "url": "https://docs.oxide.computer/guides/architecture/networking" },
+    { "label": "Oxide docs: Introduction (Geneve VPCs, unicast with emulated ARP/NDP)", "url": "https://docs.oxide.computer/guides/introduction" },
+    { "label": "Oxide docs: Key entities and concepts (VPCs, IP pools)", "url": "https://docs.oxide.computer/guides/key-entities-and-concepts" },
+    { "label": "Oxide: Networking (routers, NAT gateways, firewalls, floating IPs)", "url": "https://oxide.computer/product/networking" },
+    { "label": "OPTE README (crates, xde, tests, fuzzing)", "url": "https://github.com/oxidecomputer/opte/blob/master/README.adoc" },
+    { "label": "Oxide RFD 63: Network Architecture", "url": "https://rfd.shared.oxide.computer/rfd/0063" },
+    { "label": "Oxide docs: release notes v23 (known issues)", "url": "https://docs.oxide.computer/release-notes/system/23" }
+  ],
+  "checked": "2026-10-13"
+}

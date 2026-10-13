@@ -1,0 +1,132 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "WebRTC",
+  "concepts": ["network-protocols"],
+  "kinds": ["transport-protocols"],
+  "provider": "oss",
+  "vendor": "W3C and IETF",
+  "license": "Open standard (W3C Recommendation and IETF RFCs); Google’s reference implementation, libwebrtc, is BSD 3-Clause with a patent grant",
+  "website": "https://webrtc.org/",
+  "repo": "https://webrtc.googlesource.com/src",
+  "summary": "A browser API and protocol suite for live audio, video and data sent straight between two endpoints: ICE finds a path through NATs, DTLS sets up the keys, SRTP carries the media and SCTP carries data channels.",
+  "intro": [
+    "WebRTC is two standards that work together: the W3C’s JavaScript API (`RTCPeerConnection`, `RTCDataChannel`) and a suite of IETF protocols that every endpoint must implement, which RFC 8825 lists without defining a protocol of its own. Signaling is deliberately left out. Each application exchanges SDP offers and answers (the JSEP model of RFC 8829) and network candidates with the other side over a channel it chooses, typically HTTPS or WebSockets to its own server. Only the media path runs directly between the two endpoints, and it must follow the WebRTC protocols exactly so that any compliant browser, app or server can join.",
+    "Finding that path is the job of ICE (RFC 8445). Each side gathers candidates: host addresses from its own interfaces, server-reflexive addresses that a STUN server sees on the public side of a NAT, and relayed addresses allocated on a TURN server. ICE then tries the pairs in a sorted order until one works. Endpoints must support TURN, because two peers behind NATs with endpoint-dependent mapping can’t reach each other directly, and TURN over TCP or TLS to get through firewalls that block all UDP. On the chosen path the two sides run one DTLS handshake, checked against certificate fingerprints sent during signaling. Its exported keys protect the audio and video, sent as SRTP, and the data channels run SCTP inside the same DTLS association, all on one port pair.",
+    "Each data channel is an SCTP stream that is reliable by default, or limited by `maxRetransmits` or `maxPacketLifeTime`; zero retransmissions with unordered delivery gives a UDP-like service. Browsers must implement VP8 and H.264 Constrained Baseline video, and every endpoint Opus and G.711 audio. The IETF published the protocol cluster, more than 40 RFCs, in January 2021, and the W3C made the API a Recommendation on 26 January 2021, with an updated Recommendation on 13 March 2025."
+  ],
+  "strengths": [
+    "Built into all major browsers as a royalty-free JavaScript API, with a library offering the same features to native Android and iOS apps, so a call needs no plugin or download",
+    "Encryption is mandatory: media keys come from a DTLS handshake between the endpoints, so a signaling server that only relays messages can’t passively read the call",
+    "NAT traversal is built in: ICE tries direct, STUN-discovered and TURN-relayed paths, and can fall back to TURN over TCP or TLS where UDP is blocked",
+    "Data channels let each channel choose reliable and ordered delivery or a UDP-like mode, and are congestion-controlled so they don’t swamp the audio and video"
+  ],
+  "limits": [
+    "No signaling protocol: you must design or choose one, run a server for it, and operate STUN and TURN servers; when only a TURN relay works, all the media flows through your relay",
+    "Peer to peer doesn’t scale to big calls: in a mesh each participant sends its streams to every other participant, so larger groups need a selective forwarding middlebox (SFU) that receives each stream once",
+    "Connection attempts can reveal a user’s local and public IP addresses to the web application, more than plain HTTP does; RFC 8828 sets rules for how much browsers expose",
+    "Without SCTP message interleaving, data channel senders should keep messages to 16 KB, and TCP paths used where UDP is blocked can suffer head-of-line blocking"
+  ],
+  "worksWith": [
+    { "id": "udp", "how": "sends most of its media and data over" },
+    { "id": "tls", "how": "keys its media with DTLS, a datagram form of" },
+    { "id": "tcp", "how": "falls back via TURN or ICE-TCP to" },
+    { "id": "https", "how": "often carries its signaling over" }
+  ],
+  "snippet": {
+    "lang": "js",
+    "title": "Open a peer connection with an unreliable data channel (signaling is your own code)",
+    "source": [
+      "const signaling = new SignalingChannel(); // yours: WebSocket, HTTPS, anything",
+      "const pc = new RTCPeerConnection({",
+      "  iceServers: [",
+      "    { urls: 'stun:stun.example.org' },",
+      "    { urls: 'turn:turn.example.org', username: 'user', credential: 'secret' },",
+      "  ],",
+      "});",
+      "",
+      "// UDP-like: unordered, never retransmitted",
+      "const telemetry = pc.createDataChannel('telemetry', { ordered: false, maxRetransmits: 0 });",
+      "telemetry.onopen = () => telemetry.send(JSON.stringify({ speed: 1.2 }));",
+      "",
+      "pc.onicecandidate = ({ candidate }) => signaling.send({ candidate });",
+      "pc.onnegotiationneeded = async () => {",
+      "  await pc.setLocalDescription(); // creates the SDP offer",
+      "  signaling.send({ description: pc.localDescription });",
+      "};",
+      "",
+      "signaling.onmessage = async ({ data: { description, candidate } }) => {",
+      "  if (description) {",
+      "    await pc.setRemoteDescription(description);",
+      "    if (description.type === 'offer') {",
+      "      await pc.setLocalDescription(); // creates the answer",
+      "      signaling.send({ description: pc.localDescription });",
+      "    }",
+      "  } else if (candidate) {",
+      "    await pc.addIceCandidate(candidate);",
+      "  }",
+      "};"
+    ]
+  },
+  "history": {
+    "story": [
+      "Voice and video calls on the web used to mean installing a plugin or a separate application. In 2010 Google bought Global IP Solutions (GIPS), developer of the iSAC voice codec, for $68.2 million, and on 31 May 2011 Harald Alvestrand announced on the W3C’s public WebRTC list that Google had released WebRTC, an open-source package for real-time voice and video on the web that it would integrate into Chrome. It was published under a BSD license with a patent grant and included GIPS’s iSAC voice codec, VP8 video, echo cancellation and noise suppression.",
+      "Standardization split the work in two. The W3C WebRTC Working Group wrote the JavaScript API, publishing its first Working Draft on 27 October 2011, while the IETF’s RTCWEB working group defined the protocols between endpoints, built from existing pieces: ICE, STUN and TURN, DTLS, SRTP and SCTP. The resulting cluster of more than 40 interrelated RFCs came out together in January 2021, and on 26 January 2021 the W3C and IETF jointly announced WebRTC as an official standard, crediting it with carrying video calls through the COVID-19 pandemic.",
+      "Work continued on the edges. The W3C published an updated Recommendation with amendments in March 2025, and the IETF standardized WHIP (RFC 9725, March 2025), a simple HTTP-based signaling protocol for one-way ingest: pushing a WebRTC stream from a broadcasting tool into a streaming service or CDN."
+    ],
+    "choices": [
+      {
+        "choice": "Leave signaling to the application",
+        "why": "RFC 8825 puts the choice of signaling protocols outside the WebRTC suite, and JSEP hands the offer/answer state machine to JavaScript, so applications can use SIP, XMPP or their own protocol and interwork with legacy SIP devices through a signaling gateway, without a media gateway."
+      },
+      {
+        "choice": "Mandatory DTLS-SRTP encryption",
+        "why": "Once ICE checks pass, the endpoints run a DTLS handshake and key SRTP from it, so the channel’s keys aren’t known to any third party and the signaling service can’t mount a passive attack on the media (RFC 8827)."
+      },
+      {
+        "choice": "Full ICE with TURN required",
+        "why": "Browsers sit behind NATs and firewalls. RFC 8835 requires a full ICE implementation, TURN for NATs that block direct paths, and TURN over TCP and TLS for networks that block UDP, so calls can connect through NATs and UDP-blocking firewalls."
+      },
+      {
+        "choice": "Two mandatory video codecs",
+        "why": "To guarantee that any two browsers can talk, RFC 7742 requires both VP8 and H.264 Constrained Baseline, with a note that the working group wants to promote royalty-free codecs."
+      }
+    ],
+    "timeline": [
+      { "year": "2011", "text": "Google open-sources WebRTC, built on technology from its purchase of Global IP Solutions" },
+      { "year": "2011", "text": "First W3C Working Draft of the WebRTC API (27 October)" },
+      { "year": "2018", "text": "ICE revised as RFC 8445, the NAT traversal protocol WebRTC requires" },
+      { "year": "2021", "text": "More than 40 RFCs published together and the API becomes a W3C Recommendation (26 January)" },
+      { "year": "2025", "text": "Updated W3C Recommendation (13 March) and WHIP ingest signaling as RFC 9725" }
+    ],
+    "sources": [
+      { "label": "Harald Alvestrand: Google release of WebRTC source code (public-webrtc list, 31 May 2011)", "url": "https://lists.w3.org/Archives/Public/public-webrtc/2011May/0022.html" },
+      { "label": "The Register: Google open sources $68.2m realtime comm platform (Jun 2011)", "url": "https://www.theregister.com/2011/06/01/google_open_sources_webrtc/" },
+      { "label": "W3C: WebRTC publication history (first Working Draft, Recommendations)", "url": "https://www.w3.org/standards/history/webrtc/" },
+      { "label": "W3C and IETF press release: WebRTC becomes a W3C Recommendation and IETF standards (26 Jan 2021)", "url": "https://www.w3.org/press-releases/2021/webrtc-rec/" },
+      { "label": "IETF RTCWEB working group (cluster of more than 40 RFCs, January 2021)", "url": "https://datatracker.ietf.org/wg/rtcweb/about/" },
+      { "label": "RFC 9725: WebRTC-HTTP Ingestion Protocol (WHIP) (Mar 2025)", "url": "https://www.rfc-editor.org/rfc/rfc9725" },
+      { "label": "RFC 8445: Interactive Connectivity Establishment (ICE) (Jul 2018)", "url": "https://www.rfc-editor.org/rfc/rfc8445" },
+      { "label": "RFC 7742: WebRTC video processing and codec requirements", "url": "https://www.rfc-editor.org/rfc/rfc7742" }
+    ]
+  },
+  "sources": [
+    { "label": "W3C Recommendation: WebRTC, Real-Time Communication in Browsers (13 Mar 2025)", "url": "https://www.w3.org/TR/webrtc/" },
+    { "label": "RFC 8825: Overview, real-time protocols for browser-based applications (Jan 2021)", "url": "https://www.rfc-editor.org/rfc/rfc8825" },
+    { "label": "RFC 8829: JavaScript Session Establishment Protocol (JSEP)", "url": "https://www.rfc-editor.org/rfc/rfc8829" },
+    { "label": "RFC 8835: Transports for WebRTC (ICE, TURN, ICE-TCP, DTLS-SRTP, SCTP)", "url": "https://www.rfc-editor.org/rfc/rfc8835" },
+    { "label": "RFC 8445: Interactive Connectivity Establishment (candidate types)", "url": "https://www.rfc-editor.org/rfc/rfc8445" },
+    { "label": "RFC 9147: DTLS 1.3 (based on TLS 1.3, for datagrams)", "url": "https://www.rfc-editor.org/rfc/rfc9147" },
+    { "label": "RFC 8827: WebRTC security architecture (DTLS handshake, consent freshness)", "url": "https://www.rfc-editor.org/rfc/rfc8827" },
+    { "label": "RFC 8831: WebRTC data channels (SCTP, partial reliability, 16 KB message advice)", "url": "https://www.rfc-editor.org/rfc/rfc8831" },
+    { "label": "RFC 8828: WebRTC IP address handling requirements", "url": "https://www.rfc-editor.org/rfc/rfc8828" },
+    { "label": "RFC 7742: WebRTC video codec requirements (VP8 and H.264)", "url": "https://www.rfc-editor.org/rfc/rfc7742" },
+    { "label": "RFC 7874: WebRTC audio codec requirements (Opus and G.711)", "url": "https://www.rfc-editor.org/rfc/rfc7874" },
+    { "label": "RFC 7667: RTP topologies (mesh and selective forwarding middlebox)", "url": "https://www.rfc-editor.org/rfc/rfc7667" },
+    { "label": "IETF RTCWEB working group (publication of the RFC cluster)", "url": "https://datatracker.ietf.org/wg/rtcweb/about/" },
+    { "label": "W3C and IETF press release (26 Jan 2021): royalty-free, no plugins", "url": "https://www.w3.org/press-releases/2021/webrtc-rec/" },
+    { "label": "webrtc.org: all modern browsers, native library for Android and iOS", "url": "https://webrtc.org/" },
+    { "label": "libwebrtc LICENSE (BSD 3-Clause)", "url": "https://webrtc.googlesource.com/src/+/refs/heads/main/LICENSE" },
+    { "label": "libwebrtc PATENTS (additional patent grant)", "url": "https://webrtc.googlesource.com/src/+/refs/heads/main/PATENTS" }
+  ],
+  "checked": "2026-10-13"
+}

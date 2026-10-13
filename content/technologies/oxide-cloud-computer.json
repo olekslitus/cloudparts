@@ -1,0 +1,117 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Oxide Cloud Computer",
+  "concepts": ["vm", "block", "vpc"],
+  "provider": "vendor",
+  "vendor": "Oxide Computer Company",
+  "license": "Commercial hardware; its software is open source, mostly under MPL 2.0",
+  "website": "https://oxide.computer/",
+  "summary": "A whole rack sold as one computer: AMD EPYC sleds, two switches, power shelves and the software to run VMs, disks and private networks through one API, in your own data center.",
+  "intro": [
+    "The unit you buy is a full rack. It holds up to 32 first-generation or 24 second-generation compute sleds, two “Sidecar” switches built on Intel’s Tofino 2 chip, and two power shelves. A second-generation sled has one AMD EPYC 9005 processor with up to 192 cores, up to 1.5 TiB of DDR5 memory, ten NVMe bays of up to 30 TB each and two 100 GbE ports. Sleds plug into a cabled backplane at the back of the rack, so adding capacity means sliding one in: there is no front cabling. Per rack, guests can get up to 7,875 vCPUs, 30.6 TiB of memory and 1.7 PiB of block storage.",
+    "On top runs a public-cloud-style service, all of it written by Oxide. Operators split the rack into silos, isolated tenants with their own users and identity provider. Inside a silo, projects hold instances (VMs), disks, snapshots, images and a VPC. A distributed disk keeps three copies on three different sleds and encrypts the data on its way over the rack’s network; a local disk is one unreplicated copy on the VM’s own sled. VPCs are Geneve overlays with subnets, firewall rules, NAT for outbound traffic and floating IPs. Everything is reachable through one HTTP API, which the web console, the `oxide` CLI, SDKs for Rust, Go and TypeScript, and a Terraform provider all use.",
+    "What sets it apart is that the same company designed every layer. Each board has a service processor and a hardware root of trust instead of a traditional BMC, the host boots Oxide’s own illumos distribution, Helios, without a UEFI BIOS, VMs run on bhyve with Oxide’s Propolis, disks are served by Crucible and networking by OPTE and the rack’s own switch. Software arrives as one system release (v23 shipped in September 2026), and there are no per-feature licenses: the software is included with the hardware and published as open source."
+  ],
+  "strengths": [
+    "One vendor for compute, storage, networking and the software that ties them together, with no hypervisor or storage licenses to buy and renew",
+    "A cloud-style API for everything, including silos, projects, quotas, VPCs and floating IPs; the console is built on the same public API, and Terraform, Kubernetes (Cluster API, Omni, Rancher) and Packer integrations use it too",
+    "Distributed disks keep three copies on three sleds: guests keep reading and writing with one copy offline, and drop to read-only with two offline",
+    "A root of trust on every server and switch checks its own firmware, data at rest is encrypted, and sleds must form a trust quorum before storage unlocks"
+  ],
+  "limits": [
+    "You buy a whole rack, and it must be installed and configured under the guidance of Oxide technicians",
+    "One rack is one pool: the docs list joining several racks into a single pool of infrastructure as a roadmap item, not yet available",
+    "Guests must be x86 UEFI images with VirtIO drivers; nested virtualization is unsupported, and Windows versions that need a TPM, such as Windows 11, are not supported",
+    "A system update restarts sleds, and running instances on a sled go to the failed state when it restarts, so guests that dislike hard shutdowns should be stopped first"
+  ],
+  "worksWith": [
+    { "id": "terraform", "how": "is provisioned with" },
+    { "id": "kubernetes", "how": "runs nodes as VMs for" },
+    { "id": "packer", "how": "boots images built with" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "From zero to a running VM with the `oxide` CLI, as in the docs’ CLI quickstart",
+    "source": [
+      "oxide auth login --host https://engineering.cloud.example.com",
+      "oxide project create --name prototypes --description \"Experimental work\"",
+      "",
+      "# Import a raw cloud image as a disk, snapshot it and turn it into an image",
+      "curl -OL https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.raw",
+      "oxide disk import --path debian-12-genericcloud-amd64.raw --project prototypes \\",
+      "  --disk bookworm-boot --description \"Debian bookworm disk\" \\",
+      "  --snapshot bookworm-snapshot --image bookworm \\",
+      "  --image-description \"Debian bookworm image\" --image-os Debian --image-version 12",
+      "",
+      "oxide current-user ssh-key create --name personal --description \"My personal ssh key\" \\",
+      "  --public-key \"$(cat $HOME/.ssh/cloud_rsa.pub)\"",
+      "",
+      "# 8 vCPUs, 16 GiB of memory and a 200 GiB boot disk",
+      "oxide instance from-image --image bookworm --name pegasus --project prototypes \\",
+      "  --description \"Phasing cloaking device\" --hostname pegasus \\",
+      "  --memory 16g --ncpus 8 --size 200g --start",
+      "oxide instance external-ip list --project prototypes --instance pegasus"
+    ]
+  },
+  "history": {
+    "story": [
+      "Companies that run their own data centers buy servers, switches, storage and a hypervisor from different vendors, then integrate them themselves, while the public clouds design their own racks and keep them to themselves. When Bryan Cantrill, Steve Tuck and Jess Frazelle started Oxide Computer Company in 2019, Cantrill wrote that the hyperscalers’ rack-level designs were “a clear win” and asked why they were “cloistered among so few”, and that from running a cloud the hardest problems had come from hardware and firmware working at cross purposes with the system software.",
+      "Oxide built the whole stack: its own boards, a service processor and root of trust instead of a BMC, its own switch, host OS, hypervisor userspace, distributed storage and control plane. The first system software release, v1.0.0 for “Oxide Computer Model 0”, is dated July 2023, and on 26 October 2023 Cantrill announced general availability of what Oxide calls “the world’s first commercial cloud computer”, shipping in a single crate with all its software included and open source.",
+      "Software ships as numbered system releases: v18 (February 2026) added local disks and IPv6, and v23 (September 2026) IPv6-only rack networking. A second-generation sled, Cosmo, with an AMD EPYC 9005 processor, raised the core count per sled from 64 to up to 192. In its October 2026 Series D announcement Oxide said it had become profitable and had scaled manufacturing capacity by 20 times in a year, with demand still exceeding supply."
+    ],
+    "choices": [
+      {
+        "choice": "The rack, not the server, as the unit of design",
+        "why": "Cantrill’s launch post argues that a cloud computer means breaking out of the 1U or 2U server. Designing the rack let Oxide use taller sleds with 80 mm fans running as slow as 2,000 RPM, and a cabled backplane so sleds need no cabling at all."
+      },
+      {
+        "choice": "Build the switch too",
+        "why": "Integrating third-party switches would have brought back exactly the integration pain Oxide wanted to remove for customers, so it built the Sidecar switch and its networking software despite the extra scope."
+      },
+      {
+        "choice": "All software included, all of it open",
+        "why": "On-premises buyers suffer from license management: paying for unused licenses and juggling terms and expiry dates. Oxide includes all system software with no extra licensing, and publishes it as open source with no open-core split."
+      },
+      {
+        "choice": "Everything through the public API",
+        "why": "The console is built on the same API as the CLI and SDKs, so anything a user can click is also scriptable, which is what makes the rack feel like a cloud rather than an appliance."
+      }
+    ],
+    "timeline": [
+      { "year": "2019", "text": "Oxide Computer Company founded by Bryan Cantrill, Steve Tuck and Jess Frazelle" },
+      { "year": "2023", "text": "Software v1.0.0 for Oxide Computer Model 0 (July); general availability announced (October 26)" },
+      { "year": "2025", "text": "$100M Series B (July)" },
+      { "year": "2026", "text": "Local disks and IPv6 in release v18 (February); IPv6-only rack networking in v23 (September)" }
+    ],
+    "sources": [
+      { "label": "Bryan Cantrill: The Soul of a New Computer Company (Dec 2019)", "url": "https://bcantrill.dtrace.org/2019/12/02/the-soul-of-a-new-computer-company/" },
+      { "label": "Oxide blog: The Cloud Computer (Oct 2023)", "url": "https://oxide.computer/blog/the-cloud-computer" },
+      { "label": "Oxide docs: release notes v1.0.0 (July 2023)", "url": "https://docs.oxide.computer/release-notes/system/1-0-0" },
+      { "label": "Oxide docs: release notes v23 (Sep 2026)", "url": "https://docs.oxide.computer/release-notes/system/23" },
+      { "label": "Oxide blog: Our $100M Series B (Jul 2025)", "url": "https://oxide.computer/blog/our-100m-series-b" },
+      { "label": "PR Newswire: Oxide Raises $445M Series D (Oct 2026)", "url": "https://www.prnewswire.com/news-releases/oxide-raises-445m-series-d-as-the-company-proves-vision-of-full-stack-cloud-infrastructure-enterprises-can-own-302903159.html" },
+      { "label": "Oxide: Compute (second-generation sleds)", "url": "https://oxide.computer/product/compute" },
+      { "label": "Oxide docs: release notes v18 (local disks and IPv6, Feb 2026)", "url": "https://docs.oxide.computer/release-notes/system/18" },
+      { "label": "Oxide blog: Cosmo SP debugging (Dec 2025)", "url": "https://oxide.computer/blog/cosmo-sp" }
+    ]
+  },
+  "sources": [
+    { "label": "Oxide: Specifications", "url": "https://oxide.computer/product/specifications" },
+    { "label": "Oxide: Compute", "url": "https://oxide.computer/product/compute" },
+    { "label": "Oxide: Storage", "url": "https://oxide.computer/product/storage" },
+    { "label": "Oxide: Networking", "url": "https://oxide.computer/product/networking" },
+    { "label": "Oxide docs: Introduction (rack hardware, VPCs, multi-rack roadmap)", "url": "https://docs.oxide.computer/guides/introduction" },
+    { "label": "Oxide docs: Key entities and concepts (silos, projects, instances, disks)", "url": "https://docs.oxide.computer/guides/key-entities-and-concepts" },
+    { "label": "Oxide docs: Hypervisor and storage (guest support, distributed and local disks)", "url": "https://docs.oxide.computer/guides/architecture/os-hypervisor-storage" },
+    { "label": "Oxide docs: Rack components (service processors, switches, power shelves)", "url": "https://docs.oxide.computer/guides/architecture/rack-components" },
+    { "label": "Oxide docs: Quickstart with the CLI", "url": "https://docs.oxide.computer/guides/quickstart-cli" },
+    { "label": "Oxide docs: SDKs", "url": "https://docs.oxide.computer/api/guides/sdks" },
+    { "label": "Oxide docs: Terraform integration", "url": "https://docs.oxide.computer/guides/integrations/terraform" },
+    { "label": "Oxide docs: Kubernetes integration", "url": "https://docs.oxide.computer/guides/integrations/kubernetes" },
+    { "label": "Oxide docs: release notes v1.0.0 (security features, installation)", "url": "https://docs.oxide.computer/release-notes/system/1-0-0" },
+    { "label": "Oxide docs: release notes v23 (installation, upgrade behavior)", "url": "https://docs.oxide.computer/release-notes/system/23" },
+    { "label": "Oxide blog: The Cloud Computer (Oct 2023)", "url": "https://oxide.computer/blog/the-cloud-computer" },
+    { "label": "Oxide blog: Our $100M Series B (Jul 2025)", "url": "https://oxide.computer/blog/our-100m-series-b" }
+  ],
+  "checked": "2026-10-13"
+}

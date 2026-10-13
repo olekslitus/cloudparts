@@ -1,0 +1,112 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Dropshot",
+  "concepts": ["api-frameworks"],
+  "kinds": ["http-api-frameworks"],
+  "provider": "oss",
+  "vendor": "Oxide Computer Company",
+  "license": "Apache 2.0",
+  "website": "https://docs.rs/dropshot/latest/dropshot/",
+  "repo": "https://github.com/oxidecomputer/dropshot",
+  "summary": "A Rust crate for REST APIs whose OpenAPI document is generated from the handler functions’ types, written for the Oxide control plane and used across its services.",
+  "intro": [
+    "In Dropshot each endpoint is an `async` Rust function annotated with `#[endpoint { method = GET, path = \"/projects/project1\" }]`. Its first argument is a `RequestContext` carrying the server’s shared state; the rest are extractors such as `Path<P>`, `Query<Q>`, `Header<H>` or `TypedBody<J>`, each a struct that implements `serde::Deserialize` and `schemars::JsonSchema`. The return type, such as `Result<HttpResponseOk<Project>, HttpError>`, says which status code and body type a success produces. If a parameter fails to parse, Dropshot answers 400 before your code runs.",
+    "Because the inputs and outputs are concrete types with schemas, Dropshot can produce a precise OpenAPI document for the whole API, with each function’s doc comment as its description, without hand-written annotations drifting from the code. Since version 0.11 (August 2024) an API can also be declared as a Rust trait with `#[dropshot::api_description]`, which separates the interface from the implementation: the OpenAPI document comes from the trait alone, and tests can supply a mock implementation. The companion `dropshot-api-manager` generates those documents, checks in CI that they are current, and manages versioned APIs.",
+    "Dropshot deliberately has no middleware. Its README explains that chains of handlers that run before every request made control flow hard to follow in API servers Oxide’s engineers had maintained before, so shared logic, such as authentication, is an ordinary function a handler calls, which returns a typed value. Servers are configured with a small TOML file (bind address, request body limit, TLS) and log through `slog` in the Bunyan format."
+  ],
+  "strengths": [
+    "The OpenAPI document is derived from the code, so it can’t silently drift, and clients can be generated from it, for example with Oxide’s Progenitor",
+    "API traits let a large service keep its interface in its own crate, compile against it quickly and test against a fake implementation",
+    "Explicit control flow: no hidden middleware chain, every handler’s inputs are visible in its signature",
+    "Used across the Oxide rack: Nexus, the sled agent and Propolis serve their APIs with it (Crucible’s data path uses its own TCP protocol instead)"
+  ],
+  "limits": [
+    "Still a 0.x crate (0.17.1 in June 2026): minor releases have included breaking changes, such as the renamed request body limit in 0.14",
+    "No middleware means cross-cutting concerns like authentication must be called in each handler, and forgetting one is easy",
+    "Query, path and header parameters must be flat structs of simple values; nested values or enums carrying data aren’t supported there",
+    "Designed for JSON REST APIs in Rust; it has WebSocket support but no GraphQL or gRPC"
+  ],
+  "worksWith": [
+    { "id": "rust", "how": "is a REST API framework for" }
+  ],
+  "snippet": {
+    "lang": "rust",
+    "title": "One endpoint, registered in an `ApiDescription` that can start a server or emit OpenAPI (from the crate docs)",
+    "source": [
+      "use dropshot::{endpoint, ApiDescription, HttpError, HttpResponseOk, RequestContext};",
+      "use schemars::JsonSchema;",
+      "use serde::Serialize;",
+      "",
+      "/// Represents a project in our API.",
+      "#[derive(Serialize, JsonSchema)]",
+      "struct Project {",
+      "    /// Name of the project.",
+      "    name: String,",
+      "}",
+      "",
+      "/// Fetch a project.",
+      "#[endpoint {",
+      "    method = GET,",
+      "    path = \"/projects/project1\",",
+      "}]",
+      "async fn myapi_projects_get_project(",
+      "    rqctx: RequestContext<()>,",
+      ") -> Result<HttpResponseOk<Project>, HttpError> {",
+      "    let project = Project { name: String::from(\"project1\") };",
+      "    Ok(HttpResponseOk(project))",
+      "}",
+      "",
+      "fn main() {",
+      "    let mut api = ApiDescription::new();",
+      "    api.register(myapi_projects_get_project).unwrap();",
+      "    // ... use `api` with ServerBuilder::new(api, (), log).start()",
+      "}"
+    ]
+  },
+  "history": {
+    "story": [
+      "Oxide’s control plane was going to be many Rust services talking HTTP to each other, plus a large public API for customers. The team wanted precise OpenAPI documents for all of them, to generate clients and docs and to spot breaking changes between components updated at different times. Dropshot was written for that: its docs say it is general-purpose but “primarily intended to address the needs of the Oxide control plane”, and Oxide’s RFD 10 records the other crates considered.",
+      "The first version was published in June 2020. Its design reacted to experience with complex API servers built from per-route handler chains, where implicit dependencies between handlers made changes slow and error-prone; Dropshot instead relies on plain function calls. WebSocket support came in 0.8 (2022).",
+      "As Omicron grew, defining APIs only as functions made it hard to separate interfaces from implementations. RFD 479, by Rain Paharia, proposed API traits, which shipped in 0.11 in August 2024, followed by a builder for servers and experimental API versioning. Oxide also built Progenitor, which generates Rust clients from Dropshot’s OpenAPI output, and uses it for its own SDK and CLI."
+    ],
+    "choices": [
+      {
+        "choice": "Types as the source of the API description",
+        "why": "Handlers take and return concrete types with JSON schemas, so the OpenAPI document is generated statically from code, which Oxide uses to produce clients and to check update compatibility."
+      },
+      {
+        "choice": "No middleware",
+        "why": "Oxide’s engineers had found that before-and-after handler chains in long-lived API servers hid control flow and dependencies, so Dropshot shares code through ordinary functions that return typed values."
+      },
+      {
+        "choice": "API traits alongside functions",
+        "why": "A trait lets a big service’s interface live in a small crate that compiles fast, and supports multiple implementations, such as a mock for tests."
+      }
+    ],
+    "timeline": [
+      { "year": "2020", "text": "First published on crates.io (June)" },
+      { "year": "2022", "text": "WebSocket support in 0.8.0 (September)" },
+      { "year": "2024", "text": "API traits in 0.11.0 (August), per RFD 479; server builder in 0.13.0 (November)" },
+      { "year": "2026", "text": "0.17.1 released (June)" }
+    ],
+    "sources": [
+      { "label": "Dropshot crate docs (purpose, RFD 10)", "url": "https://docs.rs/dropshot/latest/dropshot/" },
+      { "label": "Dropshot README: design notes on middleware", "url": "https://github.com/oxidecomputer/dropshot/blob/main/README.adoc" },
+      { "label": "Dropshot CHANGELOG", "url": "https://github.com/oxidecomputer/dropshot/blob/main/CHANGELOG.adoc" },
+      { "label": "Oxide RFD 479: Dropshot API traits", "url": "https://rfd.shared.oxide.computer/rfd/0479" },
+      { "label": "crates.io: dropshot (first published June 2020)", "url": "https://crates.io/crates/dropshot" },
+      { "label": "Progenitor README", "url": "https://github.com/oxidecomputer/progenitor/blob/main/README.md" },
+      { "label": "oxide.rs README (CLI and SDK generated with Progenitor)", "url": "https://github.com/oxidecomputer/oxide.rs/blob/main/README.adoc" }
+    ]
+  },
+  "sources": [
+    { "label": "Dropshot crate docs: endpoints, extractors, API traits, API manager", "url": "https://docs.rs/dropshot/latest/dropshot/" },
+    { "label": "Dropshot README: configuration, logging, design notes", "url": "https://github.com/oxidecomputer/dropshot/blob/main/README.adoc" },
+    { "label": "Dropshot CHANGELOG (versions and breaking changes)", "url": "https://github.com/oxidecomputer/dropshot/blob/main/CHANGELOG.adoc" },
+    { "label": "Omicron docs: Control plane architecture (services use Dropshot and OpenAPI)", "url": "https://oxidecomputer.github.io/omicron/docs/control-plane-architecture/" },
+    { "label": "Propolis source: propolis-server depends on Dropshot", "url": "https://github.com/oxidecomputer/propolis/blob/master/bin/propolis-server/Cargo.toml" },
+    { "label": "Progenitor README (clients from Dropshot-generated OpenAPI)", "url": "https://github.com/oxidecomputer/progenitor/blob/main/README.md" },
+    { "label": "Dropshot LICENSE (Apache 2.0)", "url": "https://github.com/oxidecomputer/dropshot/blob/main/LICENSE" }
+  ],
+  "checked": "2026-10-13"
+}

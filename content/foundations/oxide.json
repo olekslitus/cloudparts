@@ -1,0 +1,184 @@
+{
+  "$schema": "../../.astro/collections/foundations.schema.json",
+  "type": "company",
+  "name": "Oxide Computer Company",
+  "vendor": "Oxide Computer Company",
+  "website": "https://oxide.computer/",
+  "summary": "The company behind the Oxide Cloud Computer, a rack whose boards, firmware, operating system, hypervisor, storage, network and control plane it designed together and publishes as open source.",
+  "intro": [
+    "Oxide sells one product: a whole rack that behaves like a private public cloud. A typical on-premises cloud is assembled from servers, switches, storage and a hypervisor bought from different vendors. Oxide, founded in 2019 and based in Emeryville, California, instead designed every layer of the rack itself so the pieces are built for each other: the compute sleds, the Sidecar switches and power shelves, the firmware on each board’s service processor (Hubris), the host operating system (Helios), the hypervisor (bhyve with Oxide’s Propolis), block storage (Crucible), virtual networking (OPTE) and the control plane (Omicron).",
+    "Seen from the bottom up, every board has a service processor and a hardware root of trust in place of a traditional BMC, reachable only over a separate management network inside the rack. Each sled’s host CPU boots Helios straight from flash, with no UEFI BIOS. On every sled a sled agent starts VMs, each one a Propolis process in its own illumos zone, while the sled’s SSDs serve Crucible storage and OPTE implements the VPC network in the kernel. The control plane’s services (Nexus, CockroachDB, ClickHouse, Oximeter and DNS) run as zones spread over the sleds, and the two sleds wired to the switches also run the switch software, Dendrite, and the gateway to the service processors.",
+    "One API ties it together. Nexus serves the public API for users and operators, and the web console, the `oxide` CLI, the SDKs and the Terraform provider are all clients of it. Inside the rack the same rule holds: Oxide’s services are written in Rust and talk HTTP through APIs built with Dropshot, which generates an OpenAPI description from the code. Almost all of it is open source, mostly under the Mozilla Public License 2.0; Oxide does not sell a closed edition."
+  ],
+  "sections": [
+    {
+      "type": "model",
+      "title": "How the pieces meet in one rack",
+      "intro": "One API request and one running VM. The top band is the control plane, which can run on any sled; the middle box is the sled hosting the VM; the disk’s three copies live on three other sleds, and its packets leave through a rack switch.",
+      "diagram": {
+        "caption": "API calls reach Nexus, which records each change in CockroachDB before answering, then hands work to the sled agent that starts the VM’s Propolis. The VM’s disk writes go through Crucible’s Upstairs, which encrypts each block and sends it to three Downstairs on three other sleds, all of which acknowledge. Its network packets go through OPTE’s firewall and NAT, then the Sidecar switch, to your network.",
+        "w": 900,
+        "h": 450,
+        "zones": [
+          { "x": 160, "y": 6, "w": 380, "h": 100, "label": "Control plane" },
+          { "x": 160, "y": 120, "w": 380, "h": 322, "label": "One sled" },
+          { "x": 560, "y": 132, "w": 200, "h": 210, "label": "Three other sleds" },
+          { "x": 560, "y": 352, "w": 200, "h": 90, "label": "Rack switch" },
+          { "x": 765, "y": 352, "w": 130, "h": 90, "label": "Your data center" }
+        ],
+        "nodes": [
+          {
+            "id": "clients", "x": 78, "y": 62, "label": "API clients", "sub": "CLI · console · SDKs",
+            "emit": { "every": 1100, "jitter": 0.4, "req": true, "color": 0 },
+            "out": ["nexus"]
+          },
+          {
+            "id": "nexus", "x": 255, "y": 62, "label": "Nexus", "sub": "API · sagas", "tech": "omicron",
+            "out": ["crdb"],
+            "emit": { "every": 2600, "jitter": 0.3, "color": 1, "type": "saga", "to": ["sled"] }
+          },
+          { "id": "crdb", "x": 440, "y": 62, "label": "CockroachDB", "sub": "control plane state", "tech": "cockroachdb", "mode": "reply", "delay": 60 },
+          { "id": "sled", "x": 255, "y": 178, "label": "Sled agent", "sub": "per-sled daemon", "tech": "omicron", "out": ["vm"] },
+          {
+            "id": "vm", "x": 255, "y": 300, "label": "Propolis", "sub": "runs one VM", "tech": "propolis",
+            "mode": "sink",
+            "rules": { "disk": ["up"], "net": ["opte"] },
+            "emit": { "every": 520, "jitter": 0.3, "req": true, "types": ["disk", "net"], "colorByType": { "disk": 2, "net": 3 }, "route": "type" }
+          },
+          { "id": "up", "x": 440, "y": 250, "label": "Crucible Upstairs", "sub": "encrypts · mirrors", "tech": "crucible", "route": "fanout", "out": ["ds1", "ds2", "ds3"] },
+          { "id": "ds1", "x": 660, "y": 190, "label": "Downstairs 1", "sub": "ZFS dataset", "tech": "crucible", "mode": "reply", "delay": 30 },
+          { "id": "ds2", "x": 660, "y": 250, "label": "Downstairs 2", "sub": "ZFS dataset", "tech": "crucible", "mode": "reply", "delay": 30 },
+          { "id": "ds3", "x": 660, "y": 310, "label": "Downstairs 3", "sub": "ZFS dataset", "tech": "crucible", "mode": "reply", "delay": 30 },
+          { "id": "opte", "x": 440, "y": 402, "label": "OPTE", "sub": "firewall · NAT · Geneve", "tech": "opte", "out": ["switch"] },
+          { "id": "switch", "x": 660, "y": 405, "label": "Sidecar switch", "sub": "Tofino 2 · P4", "out": ["net"] },
+          { "id": "net", "x": 830, "y": 405, "label": "Your network", "sub": "BGP · static", "mode": "reply", "delay": 80 }
+        ]
+      }
+    },
+    {
+      "type": "table",
+      "title": "Which part does which job",
+      "intro": "Every layer of the rack, from the board firmware up, with the generic idea it implements. Gimlet and Cosmo are the first and second generations of compute sled; Sidecar is the switch.",
+      "corner": "Job",
+      "columns": ["Oxide part", "Generic idea", "Where it runs"],
+      "rows": [
+        { "label": "Compute", "values": ["Compute sled (Gimlet, Cosmo)", "A server: one AMD EPYC CPU, up to 1.5 TiB of memory, 10 NVMe bays, 2 × 100 GbE", "Up to 32 first-generation or 24 second-generation sleds per rack"] },
+        { "label": "Board management", "values": ["Service processor running Hubris", "Replaces the BMC: thermal control, host power, serial console, some firmware updates", "A microcontroller on every sled, switch and power shelf controller"] },
+        { "label": "Firmware trust", "values": ["Root of trust running Hubris", "Hardware root of trust that checks its own firmware and anchors encryption at rest", "Beside every service processor"] },
+        { "label": "Host boot", "values": ["`phbl` (Pico Host Boot Loader)", "A boot loader instead of a UEFI BIOS", "The host CPU, loaded from flash by AMD’s platform security processor"] },
+        { "label": "Host OS", "values": ["Helios", "An illumos distribution with zones, ZFS and DTrace", "The host CPU of every sled"] },
+        { "label": "Hypervisor", "values": ["bhyve and Propolis", "Kernel hypervisor plus a Rust virtual machine monitor", "One Propolis zone per VM"] },
+        { "label": "Control plane API", "values": ["Nexus (part of Omicron)", "Stateless API and orchestration servers, with sagas and background reconcilers", "Zones on any sled, as many as needed"] },
+        { "label": "Per-sled agent", "values": ["Sled agent (part of Omicron)", "Node agent that creates VMs, disks and network ports", "Every sled"] },
+        { "label": "Control plane database", "values": ["CockroachDB", "Distributed SQL, the single source of truth for configuration", "Zones on several sleds"] },
+        { "label": "Metrics", "values": ["Oximeter and ClickHouse", "Metrics collector and columnar time series store", "Zones on several sleds"] },
+        { "label": "Block storage", "values": ["Crucible", "Network block storage, encrypted and mirrored 3 ways", "Upstairs inside Propolis; Downstairs on each sled’s SSDs"] },
+        { "label": "Virtual network", "values": ["OPTE", "VPC data plane: firewall, routing, NAT, Geneve encapsulation", "illumos kernel module on every sled"] },
+        { "label": "Rack switch", "values": ["Sidecar, driven by Dendrite", "Programmable switch (Intel Tofino 2, P4) and its control software", "Two per rack; Dendrite runs on the sled attached to each over PCIe"] },
+        { "label": "Routing", "values": ["Maghemite", "Delay-driven multipath inside the rack; BGP, static or OSPF to your network", "Sleds and switches"] },
+        { "label": "Board gateway", "values": ["Management Gateway Service (MGS)", "Bridge from the control plane to every service processor", "The two switch-attached sleds"] },
+        { "label": "Service APIs", "values": ["Dropshot", "Rust REST framework that generates OpenAPI from code", "Inside Nexus, sled agents, Propolis and other services"] },
+        { "label": "User tools", "values": ["Web console, `oxide` CLI, SDKs (Rust, Go, TypeScript), Terraform provider", "Clients of the public API", "Your browser and machines"] },
+        { "label": "Setup and support", "values": ["Wicket", "Text UI over the technician ports, used before networking is configured", "The two switch-attached sleds"] }
+      ],
+      "notes": ["Oxide-written parts are open source, mostly under MPL 2.0 (Dropshot is Apache 2.0). CockroachDB and ClickHouse are third-party databases that Omicron runs inside the rack."]
+    },
+    {
+      "type": "text",
+      "title": "Below the host: service processors, roots of trust and Hubris",
+      "body": [
+        "A conventional server has a baseboard management controller (BMC), a small second computer for remote power control and monitoring. Oxide left it out. Every sled, Sidecar switch and power shelf controller carries a service processor (SP), always paired with a hardware root of trust (RoT). On a sled the SP runs thermal control, powers the host on and off, exposes the host’s serial console and updates some device software. The SPs sit on a physically separate management network in the backplane, wired to a dedicated management switch in each Sidecar. The Management Gateway Service, on the sled attached to each switch, carries requests from Nexus and from the Wicket technician UI onto that network, and its traffic never crosses the data network or leaves the rack.",
+        "SPs and RoTs run Hubris, an operating system for microcontrollers that Oxide wrote in Rust after existing embedded systems kept being pushed out of their design centers. Cliff Biffle sketched it in early 2020. It is a memory-protected microkernel with a synchronous task model, and every task a board will ever run is fixed at build time, so the build produces a single image that can be attested, and a faulted task can always be restarted because its resources are reserved. Hubris and its debugger, Humility, were open-sourced in November 2021, and the repository has an application for each board: the Gimlet and Cosmo sleds, Sidecar, the power shelf controller and the root of trust.",
+        "The RoT checks that its own firmware is genuine and unmodified, and keys for encryption at rest are built on it. When a rack powers on, the sled agents must first form a trust quorum, which verifies the rack secret, before any sled can decrypt its local storage; only then do time sync, internal DNS, CockroachDB and Nexus start, in that order. On the host side Oxide also dropped the UEFI firmware stack: AMD’s platform security processor loads Oxide’s `phbl` loader from flash, which unpacks Helios and jumps straight into its kernel."
+      ]
+    },
+    {
+      "type": "text",
+      "title": "One API, from Nexus to your terminal",
+      "body": [
+        "Each silo, the rack’s unit of tenancy, gets its own console and API endpoint under a DNS name delegated to the rack, such as `engineering.sys.example.com`. Behind every endpoint is Nexus, and the public API reference is generated from the OpenAPI document that is itself generated from Nexus’s code. Oxide’s CLI and Rust SDK are generated from that document with its Progenitor tool, the Terraform provider is built on the Go SDK, and there is a TypeScript SDK as well. The console uses the same public API, so anything a user can click is also scriptable. The docs warn that the SDKs are still under development and may break between releases.",
+        "The same discipline applies inside. Nexus, the sled agents, Propolis and most other services expose Dropshot APIs with generated OpenAPI documents, which Oxide uses to catch breaking changes between components. That matters because a rack is never updated atomically: during an update, sleds run different software versions side by side, so only compatible combinations may be deployed. The exceptions are a few services with custom TCP protocols, such as Crucible’s data path and the trust quorum, which handle compatibility themselves."
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Where it strains",
+      "body": [
+        "It is all or nothing. You buy a whole rack with fixed hardware (one AMD CPU per sled, Oxide’s switches and power shelves), and as of release v23 it must be installed and configured under the guidance of Oxide technicians. You can’t slot your own servers or switches into it. Each rack is its own pool: the docs list combining several racks into a single pool of infrastructure as a roadmap priority that is not yet available.",
+        "The software is young, and each release lists known issues. Release v23’s include a limit of 1,024 NAT entries in the system before new instances can’t be created, and instances that can become unreachable on a sled that loses contact with the switches until a reboot. Updates restart sleds, and running instances on a restarted sled go to the failed state, so sensitive guests should be shut down first.",
+        "Open source here means open to read, not a community project. Omicron’s README says Oxide is focused on its own goals and can’t help outside contributors, many of the design documents it cites are internal RFDs, and some of the Helios build, such as AMD CPU firmware and Chelsio NIC firmware, is not yet public. And supply has been the limit lately: in October 2026 Oxide said it had scaled manufacturing capacity 20 times over twelve months and demand still exceeded it."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Bryan Cantrill, Steve Tuck and Jess Frazelle announced Oxide Computer Company in December 2019, with seed funding from Eclipse Ventures. Cantrill’s announcement traced the idea to years of running a cloud on PC-era servers, where the worst problems came from “the deepest bowels of the stack”, hardware and firmware working against the system software, while the hyperscalers kept their better rack-level designs to themselves. The name nodded to the earth’s crust, to silicon, which occurs in nature as an oxide, and to Rust, the language they expected to use heavily; it can also be written in hex as `0x1de`.",
+      "The next years went into building every layer. In early 2020 Cliff Biffle began Hubris for the service processors; by mid-2021 Oxide had settled on illumos and bhyve for the host and CockroachDB for the control plane database, and was writing its own storage and networking. Investors were skeptical: more than one venture capitalist told the founders they believed the team could build it but doubted there was a market. The first system software release, v1.0.0, is dated July 2023, and Oxide announced general availability of its “cloud computer” on 26 October 2023, with all of its software open source.",
+      "Having raised $89M in its first six years, Oxide raised a $100M Series B led by USIT in July 2025, a $200M Series C from existing investors in February 2026, and a $445M Series D led by Eclipse in October 2026, joined by new investors including AMD Ventures. By then it had become profitable, paying income tax on ordinary operations in the spring of 2026, and it said the money was mainly to buy components and expand manufacturing to work through a large order backlog."
+    ],
+    "choices": [
+      {
+        "choice": "Co-design hardware and software, rack-scale",
+        "why": "Cantrill’s founding belief was that hardware and software should each be built with the other in mind; at rack scale that let Oxide remove the BMC and UEFI BIOS, build its own switch and cable everything through a backplane."
+      },
+      {
+        "choice": "Rust from firmware to control plane",
+        "why": "The founders expected Rust to play a substantial role from the start; Hubris, Propolis, Crucible, OPTE, Dropshot and Omicron are all written in it, and RFD 26 weighed how well each OS candidate would accept Rust code."
+      },
+      {
+        "choice": "All software open, no open core",
+        "why": "Oxide sees open source as core to its commercial thesis and says customers need not worry about “hinky open core models or relicensing surprises”; that transparency also sped up sales, as new customers often came already knowing its podcast or documentation."
+      },
+      {
+        "choice": "Raise for independence",
+        "why": "Buyers of infrastructure have seen many startups acquired by the incumbents they set out to disrupt. Oxide says its 2026 Series C was raised without needing the money, to remove capital risk and assure customers of its survival and independence."
+      }
+    ],
+    "timeline": [
+      { "year": "2019", "text": "Founded by Bryan Cantrill, Steve Tuck and Jess Frazelle; seed round led by Eclipse (announced December)" },
+      { "year": "2021", "text": "Hubris and Humility open-sourced (November 30)" },
+      { "year": "2023", "text": "First system release v1.0.0 (July); general availability announced (October 26)" },
+      { "year": "2024", "text": "Helios, the host OS, open-sourced (January)" },
+      { "year": "2025", "text": "$100M Series B led by USIT (July)" },
+      { "year": "2026", "text": "$200M Series C (February); profitable; $445M Series D led by Eclipse with AMD Ventures (October 9)" }
+    ],
+    "sources": [
+      { "label": "Bryan Cantrill: The Soul of a New Computer Company (Dec 2019)", "url": "https://bcantrill.dtrace.org/2019/12/02/the-soul-of-a-new-computer-company/" },
+      { "label": "Bryan Cantrill: Hubris and Humility (Nov 2021)", "url": "https://bcantrill.dtrace.org/2021/11/30/hubris-and-humility/" },
+      { "label": "Oxide RFD 26: Host Operating System & Hypervisor (with 2024 postscript)", "url": "https://rfd.shared.oxide.computer/rfd/0026" },
+      { "label": "Oxide blog: The Cloud Computer (Oct 2023)", "url": "https://oxide.computer/blog/the-cloud-computer" },
+      { "label": "Oxide docs: release notes v1.0.0 (July 2023)", "url": "https://docs.oxide.computer/release-notes/system/1-0-0" },
+      { "label": "Oxide blog: Our $100M Series B (Jul 2025)", "url": "https://oxide.computer/blog/our-100m-series-b" },
+      { "label": "Oxide blog: Our $200M Series C (Feb 2026)", "url": "https://oxide.computer/blog/our-200m-series-c" },
+      { "label": "Oxide blog: Our $445M Series D (Oct 2026)", "url": "https://oxide.computer/blog/our-445m-series-d" },
+      { "label": "PR Newswire: Oxide Raises $445M Series D (Oct 2026)", "url": "https://www.prnewswire.com/news-releases/oxide-raises-445m-series-d-as-the-company-proves-vision-of-full-stack-cloud-infrastructure-enterprises-can-own-302903159.html" },
+      { "label": "SiliconANGLE: Oxide Computer raises $445M to step up data center rack production (Oct 2026)", "url": "https://siliconangle.com/2026/10/09/oxide-computer-raises-445m-to-step-up-data-center-rack-production/" },
+      { "label": "Eclipse: Built for the Compute Ownership Era (Oct 2026)", "url": "https://eclipse.capital/blog/built-for-the-compute-ownership-era" }
+    ]
+  },
+  "sources": [
+    { "label": "Oxide: Press (About Oxide)", "url": "https://oxide.computer/press" },
+    { "label": "Oxide: Specifications", "url": "https://oxide.computer/product/specifications" },
+    { "label": "Oxide docs: Introduction (rack hardware, OPTE, multi-rack roadmap)", "url": "https://docs.oxide.computer/guides/introduction" },
+    { "label": "Oxide docs: Rack components (service processors, Sidecars, power shelves)", "url": "https://docs.oxide.computer/guides/architecture/rack-components" },
+    { "label": "Oxide docs: Networking architecture (management network, OPTE, Dendrite, Maghemite)", "url": "https://docs.oxide.computer/guides/architecture/networking" },
+    { "label": "Oxide docs: Hypervisor and storage (bhyve, Helios, Propolis, disks)", "url": "https://docs.oxide.computer/guides/architecture/os-hypervisor-storage" },
+    { "label": "Oxide docs: Control plane architecture (components, telemetry)", "url": "https://docs.oxide.computer/guides/architecture/control-plane" },
+    { "label": "Omicron docs: Control plane architecture (Nexus, sled agent, switch zone, cold start, Dropshot)", "url": "https://oxidecomputer.github.io/omicron/docs/control-plane-architecture/" },
+    { "label": "Omicron README (generated API docs, contributions)", "url": "https://github.com/oxidecomputer/omicron/blob/main/README.adoc" },
+    { "label": "Oxide docs: Key entities and concepts (silos and their DNS endpoints)", "url": "https://docs.oxide.computer/guides/key-entities-and-concepts" },
+    { "label": "Oxide docs: SDKs", "url": "https://docs.oxide.computer/api/guides/sdks" },
+    { "label": "Oxide docs: Terraform integration (built on the Go SDK)", "url": "https://docs.oxide.computer/guides/integrations/terraform" },
+    { "label": "oxide.rs README (CLI and Rust SDK generated with Progenitor)", "url": "https://github.com/oxidecomputer/oxide.rs/blob/main/README.adoc" },
+    { "label": "Hubris README", "url": "https://github.com/oxidecomputer/hubris/blob/master/README.mkdn" },
+    { "label": "Hubris source: board applications (app/)", "url": "https://github.com/oxidecomputer/hubris/tree/master/app" },
+    { "label": "Oxide blog: Cosmo SP debugging (Hubris on the service processor, Dec 2025)", "url": "https://oxide.computer/blog/cosmo-sp" },
+    { "label": "phbl README (Pico Host Boot Loader)", "url": "https://github.com/oxidecomputer/phbl/blob/main/README.md" },
+    { "label": "Helios README (consolidations not yet public)", "url": "https://github.com/oxidecomputer/helios/blob/master/README.md" },
+    { "label": "Oxide docs: release notes v1.0.0 (root of trust, encryption at rest, trust quorum)", "url": "https://docs.oxide.computer/release-notes/system/1-0-0" },
+    { "label": "Oxide docs: release notes v23 (installation, upgrades, known issues)", "url": "https://docs.oxide.computer/release-notes/system/23" },
+    { "label": "Oxide blog: The Cloud Computer (Oct 2023)", "url": "https://oxide.computer/blog/the-cloud-computer" },
+    { "label": "PR Newswire: Oxide Raises $445M Series D (Oct 2026)", "url": "https://www.prnewswire.com/news-releases/oxide-raises-445m-series-d-as-the-company-proves-vision-of-full-stack-cloud-infrastructure-enterprises-can-own-302903159.html" }
+  ],
+  "checked": "2026-10-13"
+}

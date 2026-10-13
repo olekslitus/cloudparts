@@ -3,35 +3,38 @@
   "name": "KurrentDB",
   "concepts": ["persistence"],
   "kinds": ["event-sourcing"],
+  "uses": ["stream", "cqrs"],
   "provider": "vendor",
-  "vendor": "Kurrent",
-  "license": "Kurrent License v1 (source available, not OSI open source) since 25.0 in March 2025; Event Store License v2 for 24.10; a BSD 3-clause license for earlier versions",
-  "website": "https://www.kurrent.io/",
-  "status": { "stage": "renamed", "note": "Called EventStoreDB until version 25.0 in March 2025." },
+  "vendor": "Kurrent, Inc.",
+  "license": "Kurrent License v1 (source available; no offering it as a hosted service, some features need a license key) since 25.0 in March 2025; Event Store License v2 for 24.10; 3-clause BSD up to 24.6",
+  "website": "https://kurrentdb.kurrent.io/",
   "repo": "https://github.com/kurrent-io/KurrentDB",
-  "summary": "A database built for event sourcing, formerly EventStoreDB: it stores immutable events in streams on one append-only log and pushes them to subscribers.",
+  "status": { "stage": "renamed", "note": "Called EventStoreDB until version 25.0 on 13 March 2025; the company, Event Store, renamed itself Kurrent in December 2024.", "since": "2025-03-13" },
+  "summary": "A database built for event sourcing, formerly EventStoreDB: it appends immutable events to one ordered log, groups them into per-entity streams, and pushes them to subscribers.",
   "intro": [
-    "KurrentDB keeps every event in a single append-only log, in the order it was written. Each event also belongs to a stream, named by the application, usually one per entity, such as `order-123`. Reading a stream returns just that entity’s events, so the application can replay them to rebuild its state. Every append can name the version the writer expects the stream to be at (`NO_STREAM`, `EXISTS` or an exact number), and the write fails if another writer got there first: optimistic concurrency, per stream. Retrying an append with the same event IDs doesn’t create duplicates.",
-    "Events flow out through subscriptions. A catch-up subscription reads from a position the client tracks and then follows new events live. A persistent subscription keeps its position on the server and spreads events over a consumer group (competing consumers), with at-least-once delivery. Projections, written in JavaScript and run inside the server, react to JSON events and write or link them into new streams; five built-in ones, such as `$by_category`, group events by stream prefix or event type. The server is written in C#, runs self-hosted on Linux, Windows, macOS or Docker or as Kurrent Cloud, and has official clients for Python, Java, .NET, Node.js, Go and Rust.",
-    "Event Store Ltd renamed itself Kurrent in December 2024, and EventStoreDB became KurrentDB with version 25.0 in March 2025."
+    "KurrentDB keeps every event in a single append-only log, stored as a series of data files (chunks, 256 MB by default) in the order the events were written. Each event also belongs to a stream, named by the application and usually one per entity, such as `order-123`, and an append writes to the log and the stream at once. Reading a stream returns just that entity’s events, which the application replays to rebuild its state. Every append can name the state the writer expects the stream to be in (`NO_STREAM`, `EXISTS` or an exact version), and fails if another writer got there first: optimistic concurrency, per stream, without locks. Retrying an append with the same event IDs doesn’t write duplicates, and one append can cover several streams atomically. Events are never edited; you can only truncate a stream, cap it by age or count, or delete it.",
+    "Events flow out through subscriptions. A catch-up subscription reads from a position the client keeps, then follows new events live, in order. A persistent subscription keeps its position on the server and spreads events over a consumer group of competing consumers, with at-least-once delivery, retries and a parked-message stream for events that keep failing. Projections, written in JavaScript and run inside the server, react to JSON events and emit or link them into new streams. Secondary indexes on category and event type (25.1), user-defined indexes (26.0) and SQL queries over the indexed log (through Arrow Flight SQL since 26.1, run by an embedded DuckDB engine) now cover many queries that used to need a projection.",
+    "A cluster is shared-nothing: every node holds a full copy, writes go to the elected leader, and a write is acknowledged once a majority of nodes has it, so tolerating n failed nodes takes 2n + 1. Nodes find each other by gossip and elect the leader with a Paxos-based algorithm; 26.2 adds an optional Raft-based Kontrol Plane that appoints the leader instead. The server is written in C# and runs self-hosted on Linux, Windows, macOS or Docker, or managed as Kurrent Cloud on AWS, Azure and Google Cloud, with official gRPC clients for Python, Java, .NET, Node.js, Go and Rust."
   ],
   "strengths": [
-    "Made for event sourcing: per-entity streams, an expected-version check on every append and idempotent retries are built in",
-    "Catch-up and persistent subscriptions feed read models and other services from the same log, with server-side checkpoints and consumer groups for the latter",
-    "Server-side projections and system projections can regroup events into new streams without extra infrastructure",
-    "From 26.2, a single node gets every licensed feature that doesn’t need more nodes, without a license key"
+    "The event-sourcing primitives are built in: per-entity streams, an expected-version check on every append, idempotent retries by event ID and atomic multi-stream appends",
+    "One log feeds many readers: in-order catch-up subscriptions for read models, and persistent subscriptions with server-side checkpoints, consumer groups and retries for work queues",
+    "Queries over the history without a second database: projections, secondary and user-defined indexes, and SQL through Arrow Flight SQL",
+    "From 26.2 a single node runs in production with no license key, including backup and point-in-time recovery, connectors (Kafka, RabbitMQ, MongoDB, Elasticsearch, Pulsar, PostgreSQL), OAuth, LDAP and OpenTelemetry export"
   ],
   "limits": [
-    "Source available, not open source: the Kurrent License v1 forbids offering it to others as a hosted service",
-    "From 26.2, every multi-node deployment, including high-availability clusters and read-only replicas, requires an Enterprise license",
-    "Writes go only to the cluster’s leader node",
-    "You can’t delete one event from the middle of a stream; you can only truncate it, cap it by age or count, or delete the whole stream",
-    "Projections only work on JSON events, and Kurrent itself points many read-model problems to a catch-up subscription feeding another database instead"
+    "Source available, not open source: the Kurrent License v1 forbids offering it to others as a hosted or managed service, and forbids working around its license-key checks",
+    "From 26.2 every multi-node deployment needs an Enterprise license key on all nodes, even for development and test: high-availability clusters, read-only replicas and so archiving, whose archiver node is a replica",
+    "Only the leader takes writes, and the cluster size is fixed in configuration: adding a node means changing `ClusterSize` on every node first",
+    "You can’t delete one event from the middle of a stream; deleted and expired events only free space when a scavenge runs, and a deleted stream keeps one event as a marker. Projections only read JSON events"
   ],
   "worksWith": [
     { "id": "kafka", "how": "has sink and source connectors for" },
     { "id": "postgresql", "how": "can copy events, with a sink connector, into" },
-    { "id": "kubernetes", "how": "has its own operator for running on" }
+    { "id": "duckdb", "how": "answers SQL queries with an embedded" },
+    { "id": "s3", "how": "can archive old chunk files to" },
+    { "id": "kubernetes", "how": "has its own operator for running on" },
+    { "id": "csharp", "how": "is written in" }
   ],
   "snippet": {
     "lang": "python",
@@ -52,63 +55,71 @@
       "events = client.get_stream(stream_name=\"order-123\")  # replay these to rebuild the order",
       "version = events[-1].stream_position  # 0",
       "",
-      "client.append_to_stream(\"order-123\", events=[NewEvent(type=\"OrderPaid\", data=b\"{}\")],",
-      "                        current_version=version)",
+      "client.append_to_stream(stream_name=\"order-123\", current_version=version,",
+      "                        events=[NewEvent(type=\"OrderPaid\", data=b\"{}\")])",
       "try:  # a second writer that also read version 0",
-      "    client.append_to_stream(\"order-123\", events=[NewEvent(type=\"OrderCancelled\", data=b\"{}\")],",
-      "                            current_version=version)",
+      "    client.append_to_stream(stream_name=\"order-123\", current_version=version,",
+      "                            events=[NewEvent(type=\"OrderCanceled\", data=b\"{}\")])",
       "except WrongCurrentVersionError:",
       "    print(\"stream moved on: reload and decide again\")"
     ]
   },
   "history": {
     "story": [
-      "Event Store was first released in September 2012, as open source under a 3-clause BSD license. Its lead architect was Greg Young, the consultant who coined the term CQRS, and its event processing grew from his interest in “temporal correlation queries”: questions that link things that happened at different times, written in JavaScript over streams of events.",
-      "The business moved away from open source in steps. In September 2024 Event Store announced that EventStoreDB 24.10 would ship under the Event Store License v2, based on the Elastic License v2: one binary for everyone, with enterprise features unlocked by a license key. In December 2024 the company renamed itself Kurrent and raised $12 million in a round led by Crane Venture Partners; CEO Kirk Dunn said the name describes data flowing like an electrical current through a company. KurrentDB 25.0, in March 2025, was the first release under the new name and the new Kurrent License v1.",
-      "In 2026 Kurrent changed what the free edition covers. From 26.2 the old Paxos-derived clustering is replaced by Raft, which sits in the licensed edition, so every multi-node deployment needs an Enterprise license, while single nodes get almost all other licensed features for free."
+      "Event sourcing stores every change as a fact instead of overwriting the current state, which turns the database into a kind of time machine: you can write a new report today and run it as if it were a month ago. Event Store was built for exactly that. It was first released in September 2012, as open source under a 3-clause BSD license, with Greg Young, the consultant who coined the term CQRS, as lead architect. Greg Young’s interest in “temporal correlation queries”, questions that link things that happened at different times, shaped its JavaScript query language over streams, which became projections.",
+      "For twelve years the database stayed BSD-licensed, beside a separate commercial edition. In September 2024 Event Store announced that EventStoreDB 24.10 would ship as one build for everyone under the Event Store License v2, based on the Elastic License v2, with enterprise features unlocked by a license key and all source still public. In December 2024 the company renamed itself Kurrent and raised $12 million in a round led by Crane Venture Partners; CEO Kirk Dunn said the name describes data flowing like electrical current through a company, and the announcement described Kurrent as founded in 2019 by Greg Young and based in San Francisco. KurrentDB 25.0, on 13 March 2025, was the first release under the new name and the new Kurrent License v1.",
+      "Two years after introducing the key, Kurrent moved the line. Its features had been chosen as signs of scale, but connectors, authentication and observability turned out to be what small teams needed too, so few users had a reason to buy. From 26.2 nearly every licensed feature is free on a single node, and what needs a license is running more than one node, which Kurrent calls the most reliable sign that a database runs something commercially important."
     ],
     "choices": [
-      { "choice": "One global log, with streams as the unit you read and lock", "why": "Every event is appended once to the log and to its stream at the same time. Fine-grained streams per entity make reads fast and give each entity its own optimistic concurrency check, while the global log keeps a single order for subscribers that want everything." },
+      { "choice": "One global log, with streams as the unit you read and lock", "why": "Every event is appended to the log and to its stream at the same time. Fine-grained streams per entity make reads fast and give each entity its own optimistic concurrency check, while the global log keeps one order for subscribers that want everything." },
       { "choice": "Subscriptions both client-side and server-side", "why": "Catch-up subscriptions keep their position in the client and process events in order; persistent subscriptions keep it on the server so a group of consumers can share the work, at the price of events arriving out of order within a window." },
-      { "choice": "Projections inside the database", "why": "Kurrent built projections for “temporal correlation queries”, such as finding patients who got one treatment within three weeks of a diagnosis, and runs them continuously so their output is just another stream." },
-      { "choice": "A license key instead of separate builds", "why": "Since September 2024 everyone downloads the same package and source stays public, while a key turns on the paid features, which Kurrent says funds continued development." }
+      { "choice": "Queries written in JavaScript, running inside the database", "why": "Temporal correlation queries, such as finding patients put on one treatment within three weeks of a diagnosis, run continuously over the events, and their output is just another stream. JavaScript meant a web browser could be used to write and debug them." },
+      { "choice": "A license key instead of separate builds", "why": "Since 24.10 everyone downloads the same package and the source stays readable, while a key turns on the paid features, which Kurrent says funds continued development of the product." }
     ],
     "timeline": [
-      { "year": "2012", "text": "Event Store first released as open source (BSD 3-clause)" },
-      { "year": "2024", "text": "September: EventStoreDB 24.10 announced under the Event Store License v2" },
+      { "year": "2012", "text": "Event Store first released as open source under a 3-clause BSD license" },
+      { "year": "2024", "text": "September: EventStoreDB 24.10 announced under the Event Store License v2, one build with a license key" },
       { "year": "2024", "text": "December: Event Store renames itself Kurrent and raises $12M" },
-      { "year": "2025", "text": "KurrentDB 25.0, the first release under the new name, adds archiving" },
-      { "year": "2026", "text": "26.2 moves clustering to Raft and makes multi-node a licensed feature" }
+      { "year": "2025", "text": "March: KurrentDB 25.0, the first release under the new name and the Kurrent License v1, adds archiving" },
+      { "year": "2025", "text": "25.1 adds secondary indexes on category and event type" },
+      { "year": "2026", "text": "26.1 adds SQL access over Arrow Flight SQL; 26.2 licenses multi-node and frees most other features" }
     ],
     "sources": [
       { "label": "InfoQ: Greg Young on using complex event processing (Jan 2014), Event Store first released September 2012 under BSD 3-clause", "url": "https://www.infoq.com/news/2014/01/complex-event-processing" },
+      { "label": "kurrent-io/KurrentDB on GitHub: LICENSE.md at oss-v24.6.0 (3-clause BSD)", "url": "https://github.com/kurrent-io/KurrentDB/blob/oss-v24.6.0/LICENSE.md" },
       { "label": "Kurrent Discuss: EventStoreDB is transitioning to Event Store License v2 with 24.10 (Sep 2024)", "url": "https://discuss.kurrent.io/t/important-information-eventstoredb-is-transitioning-to-event-store-license-v2-eslv2-with-the-upcoming-24-10-lts-release/5423" },
-      { "label": "Kurrent docs: EventStoreDB 24.10 upgrade guide (single release under ESLv2)", "url": "https://docs.kurrent.io/server/v24.10/quick-start/upgrade-guide" },
+      { "label": "Kurrent docs: EventStoreDB 24.10 upgrade guide (one release under ESLv2, no more OSS and commercial versions)", "url": "https://docs.kurrent.io/server/v24.10/quick-start/upgrade-guide" },
       { "label": "Kurrent press (BigDATAwire): Event Store changes name to Kurrent, raises $12M (Dec 2024)", "url": "https://www.kurrent.io/press/event-store-changes-name-to-kurrent-raises-12m-to-unify-streams-and-databases/" },
       { "label": "Kurrent releases: KurrentDB 25.0, first release under the new name (Mar 2025)", "url": "https://www.kurrent.io/releases/kurrentdb/25-0/" },
+      { "label": "Kurrent docs: What’s new (25.1 secondary indexes, 26.1 SQL API, 26.2 licensing)", "url": "https://docs.kurrent.io/server/v26.2/quick-start/whatsnew" },
       { "label": "Kurrent blog: Licensing in KurrentDB v26.2 and beyond (Aug 2026)", "url": "https://kurrentdb.kurrent.io/blog/licensing-in-kurrentdb-v26-2-and-beyond-what-s-free-and-what-s-licensed" },
       { "label": "Kurrent docs: Introduction to projections (temporal correlation queries)", "url": "https://docs.kurrent.io/server/v26.2/features/projections/intro" },
+      { "label": "Kurrent docs: Concepts (event log, streams, optimistic concurrency)", "url": "https://docs.kurrent.io/getting-started/concepts" },
       { "label": "Kurrent docs: Persistent subscriptions", "url": "https://docs.kurrent.io/server/v26.2/features/persistent-subscriptions" }
     ]
   },
   "sources": [
     { "label": "Kurrent docs: Welcome to Kurrent (features, hosting, clients)", "url": "https://docs.kurrent.io/getting-started/introduction" },
     { "label": "Kurrent docs: Concepts (event log, streams, optimistic concurrency)", "url": "https://docs.kurrent.io/getting-started/concepts" },
-    { "label": "Kurrent docs: Event streams (metadata, $maxAge, $maxCount, truncation, deletes)", "url": "https://docs.kurrent.io/server/v26.2/features/streams" },
-    { "label": "Kurrent docs: Python client, appending events (consistency checks, idempotent appends, leader-only writes)", "url": "https://docs.kurrent.io/clients/python/v1.3/appending-events" },
+    { "label": "Kurrent docs: Event streams (metadata, $maxAge, $maxCount, truncation, soft and hard deletes)", "url": "https://docs.kurrent.io/server/v26.2/features/streams" },
+    { "label": "Kurrent docs: Python client, appending events (consistency checks, idempotent appends, multi-stream appends, leader-only writes)", "url": "https://docs.kurrent.io/clients/python/v1.3/appending-events" },
     { "label": "Kurrent docs: Python client, reading events", "url": "https://docs.kurrent.io/clients/python/v1.3/reading-events" },
     { "label": "Kurrent docs: Python client, catch-up subscriptions", "url": "https://docs.kurrent.io/clients/python/v1.3/subscriptions" },
     { "label": "Kurrent docs: Python client, getting started (Docker image, package)", "url": "https://docs.kurrent.io/clients/python/v1.3/getting-started" },
-    { "label": "Kurrent docs: Persistent subscriptions (consumer groups, at-least-once, checkpoints)", "url": "https://docs.kurrent.io/server/v26.2/features/persistent-subscriptions" },
+    { "label": "Kurrent docs: Persistent subscriptions (consumer groups, at-least-once, retries, parked messages)", "url": "https://docs.kurrent.io/server/v26.2/features/persistent-subscriptions" },
     { "label": "Kurrent docs: Introduction to projections (JSON only, catch-up alternative)", "url": "https://docs.kurrent.io/server/v26.2/features/projections/intro" },
-    { "label": "Kurrent docs: System projections", "url": "https://docs.kurrent.io/server/v26.2/features/projections/system" },
-    { "label": "Kurrent docs: What’s new in 26.2 (licensing changes)", "url": "https://docs.kurrent.io/server/v26.2/quick-start/whatsnew" },
+    { "label": "Kurrent docs: System projections (and the secondary indexes that supersede them)", "url": "https://docs.kurrent.io/server/v26.2/features/projections/system" },
+    { "label": "Kurrent docs: What’s new in 26.2 (licensing, Kontrol Plane, chunk limit, embedded DuckDB SQL engine) and earlier", "url": "https://docs.kurrent.io/server/v26.2/quick-start/whatsnew" },
+    { "label": "Kurrent docs: Release notes for 26.2", "url": "https://docs.kurrent.io/server/v26.2/release-schedule/release-notes" },
+    { "label": "Kurrent docs: Clustering (quorum writes, fixed cluster size, gossip, license key on all nodes)", "url": "https://docs.kurrent.io/server/v26.2/configuration/cluster" },
+    { "label": "Kurrent docs: Kontrol Plane (Paxos-based election by default, optional Raft)", "url": "https://docs.kurrent.io/server/v26.2/configuration/kontrol-plane" },
+    { "label": "Kurrent docs: Installation (license keys, Docker images)", "url": "https://docs.kurrent.io/server/v26.2/quick-start/installation" },
+    { "label": "Kurrent docs: Archiving (archiver node is a read-only replica, S3)", "url": "https://docs.kurrent.io/server/v26.2/features/archiving" },
+    { "label": "Kurrent docs: 26.2 upgrade guide (multi-node needs a license key on all nodes)", "url": "https://docs.kurrent.io/server/v26.2/quick-start/upgrade-guide" },
     { "label": "Kurrent blog: Licensing in KurrentDB v26.2 and beyond (Aug 2026), editions and connectors", "url": "https://kurrentdb.kurrent.io/blog/licensing-in-kurrentdb-v26-2-and-beyond-what-s-free-and-what-s-licensed" },
-    { "label": "Kurrent docs: Upgrade guide for KurrentDB 25.0 (rename from EventStoreDB)", "url": "https://docs.kurrent.io/server/v25.0/quick-start/upgrade-guide" },
     { "label": "Kurrent releases: KurrentDB 25.0 (license changed to Kurrent License v1)", "url": "https://www.kurrent.io/releases/kurrentdb/25-0/" },
-    { "label": "kurrent-io/KurrentDB on GitHub: LICENSE.md (Kurrent License v1)", "url": "https://github.com/kurrent-io/KurrentDB/blob/master/LICENSE.md" },
-    { "label": "kurrent-io/KurrentDB on GitHub: README (rebrand, clients)", "url": "https://github.com/kurrent-io/KurrentDB" },
-    { "label": "Kurrent docs: EventStoreDB 24.10 upgrade guide (ESLv2, not OSI-approved)", "url": "https://docs.kurrent.io/server/v24.10/quick-start/upgrade-guide" }
+    { "label": "kurrent-io/KurrentDB on GitHub: LICENSE.md (Kurrent License v1, Kurrent, Inc.)", "url": "https://github.com/kurrent-io/KurrentDB/blob/master/LICENSE.md" },
+    { "label": "kurrent-io/KurrentDB on GitHub: README (rebrand, Kurrent Cloud, clients)", "url": "https://github.com/kurrent-io/KurrentDB" }
   ],
-  "checked": "2026-10-08"
+  "checked": "2026-10-13"
 }

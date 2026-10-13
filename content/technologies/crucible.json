@@ -1,0 +1,94 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Crucible",
+  "concepts": ["block"],
+  "provider": "oss",
+  "vendor": "Oxide Computer Company",
+  "license": "MPL 2.0",
+  "website": "https://github.com/oxidecomputer/crucible",
+  "repo": "https://github.com/oxidecomputer/crucible",
+  "summary": "Oxide’s distributed block storage: the VM’s side encrypts every block and mirrors it to three storage servers on three different sleds, which keep it in files on ZFS.",
+  "intro": [
+    "Crucible splits a virtual disk into a smart client and dumb servers. The client half, the Upstairs, lives inside the process that uses the disk, which in an Oxide rack is Propolis, the VM’s monitor. The server half, the Downstairs, runs on the sled whose SSDs hold the data. The disk’s address range is divided into segments, and each segment is assigned to three Downstairs on three different sleds, a 3-way mirror. The Upstairs sends every write and flush to all three over the network, and a read can be served by any copy. The Downstairs does as little as it can get away with: all logic, including repair, is in the Upstairs, which keeps its state only in memory.",
+    "Each Downstairs stores its region as extent files, each holding many contiguous blocks, in a ZFS dataset delegated to its zone. Every block carries a hash for end-to-end integrity, and data is encrypted in the Upstairs before it is mirrored, with AES-GCM-SIV-256 and keys from the control plane, so the three copies are identical ciphertext that can be repaired without the keys. Snapshots use ZFS snapshots: the control plane starts a read-only Downstairs on the snapshot, and new disks are built on it as a read-only parent, which is how images and clones work.",
+    "In the Oxide rack this is the “distributed disk”: a guest keeps reading and writing with one of its three copies offline, and can still read with two offline. Data is lost only if all three copies fail. A separate local disk type skips Crucible and keeps one unreplicated copy on the VM’s own sled, for workloads that need raw speed or replicate data themselves."
+  ],
+  "strengths": [
+    "Three copies on three sleds by design, so a disk survives losing a whole server, not just a drive",
+    "Encrypted before it leaves the VM’s host, so data crosses the rack network and sits on remote SSDs only as ciphertext",
+    "Simple servers: the Downstairs just stores blocks and answers requests, which keeps the delicate failure-handling logic in one place",
+    "Snapshots and images come from ZFS snapshots served read-only, so creating many disks from one image does not copy it"
+  ],
+  "limits": [
+    "Every write goes to three servers over the network, so it costs more latency and bandwidth than a local NVMe disk; Oxide offers local disks for workloads where that matters",
+    "With two of the three copies offline, the guest’s disk goes read-only until the copies return",
+    "It is built for the Oxide rack: it needs Oxide’s control plane to allocate regions, and its README warns that its commands may change while it is under active development",
+    "It is block storage only: there is no shared file system or object store on top"
+  ],
+  "worksWith": [
+    { "id": "oxide-cloud-computer", "how": "stores the distributed disks of" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Three Downstairs on one machine, then the `crutest` client doing a write, flush and read across all three (from the README)",
+    "source": [
+      "# Create and run three Downstairs regions, each in its own terminal",
+      "cargo run -q -p crucible-downstairs -- create -u $(uuidgen) -d var/3810",
+      "cargo run -q -p crucible-downstairs -- run -p 3810 -d var/3810",
+      "cargo run -q -p crucible-downstairs -- create -u $(uuidgen) -d var/3820",
+      "cargo run -q -p crucible-downstairs -- run -p 3820 -d var/3820",
+      "cargo run -q -p crucible-downstairs -- create -u $(uuidgen) -d var/3830",
+      "cargo run -q -p crucible-downstairs -- run -p 3830 -d var/3830",
+      "",
+      "# Start an Upstairs that mirrors to all three and run the \"one\" test",
+      "cargo run -q -p crutest -- one -t 127.0.0.1:3830 -t 127.0.0.1:3820 -t 127.0.0.1:3810 -q --gen $(date \"+%s\")"
+    ]
+  },
+  "history": {
+    "story": [
+      "The Oxide rack needed highly available disks for its VMs, made only from the SSDs inside its own sleds. In RFD 60 (2020) Adam Leventhal laid out the options. Ceph was the obvious off-the-shelf choice, used by cloud providers such as DigitalOcean for block storage, but it had a reputation for pathological failures, high CPU use and needing hands-on attention: in a contact’s words, “Ceph is operated not shipped.” Oxide also tried building on ZFS alone, either with a volume manager on the storage side or by teaching ZFS about network mirrors.",
+      "Experiments after a June 2020 design meeting favored the “Northern Mux”: a client that splits a disk into ranges and forwards each write to three storage servers. Rebuilding ZFS to be network-aware looked like a similar effort with far more complexity around it, a conclusion Matt Ahrens agreed with when Oxide asked for a check on ZFS’s capabilities. RFD 177, by Alan Hanson, describes the implementation, named Crucible, with the North side called the Upstairs and the South side the Downstairs. The repository started in February 2021.",
+      "Crucible became the rack’s distributed disk when the first systems shipped in 2023, and Oxide discussed it on its Oxide and Friends podcast in February 2024. In 2026 Oxide added local disks as a second, unreplicated disk type for workloads that bring their own redundancy."
+    ],
+    "choices": [
+      {
+        "choice": "Write a new storage service rather than run Ceph",
+        "why": "Ceph met the functional requirements, but its operational reputation clashed with a rack that customers should not have to babysit."
+      },
+      {
+        "choice": "All logic in the client (the Upstairs)",
+        "why": "Keeping replication, repair and integrity checks in one place, with stateless storage servers, made the hard failure-handling code easier to reason about than spreading it across a cluster."
+      },
+      {
+        "choice": "ZFS underneath, not ZFS extended",
+        "why": "Downstairs regions live in ZFS datasets and snapshots reuse ZFS snapshots, but making ZFS itself mirror across the network was judged at least as much work with a much harder code base to test and maintain."
+      },
+      {
+        "choice": "Encrypt before mirroring",
+        "why": "When the Upstairs encrypts first, all three copies hold the same ciphertext, so the system can rebuild a copy without ever holding the key."
+      }
+    ],
+    "timeline": [
+      { "year": "2020", "text": "RFD 60 compares Ceph, ZFS-based designs and a “Northern Mux”" },
+      { "year": "2021", "text": "Repository started (February); RFD 177 describes the implementation" },
+      { "year": "2023", "text": "Ships as the distributed disk in the first Oxide racks" },
+      { "year": "2024", "text": "Oxide and Friends podcast episode on Crucible (February)" },
+      { "year": "2026", "text": "Unreplicated local disks added beside it in release v18 (February)" }
+    ],
+    "sources": [
+      { "label": "Oxide RFD 60: Storage Architecture Considerations", "url": "https://rfd.shared.oxide.computer/rfd/0060" },
+      { "label": "Oxide RFD 177: Implementation of Data Storage", "url": "https://rfd.shared.oxide.computer/rfd/0177" },
+      { "label": "Crucible README (origin, RFDs, podcast episode)", "url": "https://github.com/oxidecomputer/crucible/blob/main/README.md" },
+      { "label": "Oxide docs: release notes v18 (local disks, Feb 2026)", "url": "https://docs.oxide.computer/release-notes/system/18" }
+    ]
+  },
+  "sources": [
+    { "label": "Crucible README (Upstairs and Downstairs, running locally)", "url": "https://github.com/oxidecomputer/crucible/blob/main/README.md" },
+    { "label": "Oxide RFD 177: Implementation of Data Storage (extents, encryption, snapshots)", "url": "https://rfd.shared.oxide.computer/rfd/0177" },
+    { "label": "Oxide docs: Hypervisor and storage (distributed and local disks)", "url": "https://docs.oxide.computer/guides/architecture/os-hypervisor-storage" },
+    { "label": "Oxide: Storage (OpenZFS, checksums, snapshots)", "url": "https://oxide.computer/product/storage" },
+    { "label": "Oxide docs: Control plane architecture (Crucible Pantry)", "url": "https://docs.oxide.computer/guides/architecture/control-plane" },
+    { "label": "Crucible LICENSE (MPL 2.0)", "url": "https://github.com/oxidecomputer/crucible/blob/main/LICENSE" }
+  ],
+  "checked": "2026-10-13"
+}

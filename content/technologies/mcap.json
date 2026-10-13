@@ -1,0 +1,101 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "MCAP",
+  "concepts": ["file-formats"],
+  "kinds": ["binary-serialization"],
+  "uses": ["logs"],
+  "provider": "oss",
+  "vendor": "Foxglove Technologies Inc.",
+  "license": "MIT",
+  "website": "https://mcap.dev/",
+  "repo": "https://github.com/foxglove/mcap",
+  "summary": "An open container file format for robot logs: many channels of timestamped, already-serialized messages in one append-only file, with their schemas embedded and an optional index for fast seeking.",
+  "intro": [
+    "MCAP (pronounced “em-cap”) doesn’t encode messages itself. It stores messages that were already serialized in another format, such as ROS 1, ROS 2 (CDR), Protocol Buffers, FlatBuffers, Cap’n Proto, CBOR, MessagePack or JSON, and records which encoding and schema each channel uses. A file is a run of records, each a one-byte opcode, a length and the content, between magic bytes at the start and the end. Schema records hold the message definitions, Channel records name a topic and point at a schema, and Message records carry a channel ID, log and publish timestamps and the raw bytes. Attachments (calibration data, core dumps) and metadata records can ride along in the same file.",
+    "Writers append and never seek backwards, so a recorder can stream to disk or over the network, and a file cut short by a crash or power loss can still be recovered. Messages are usually grouped into chunks, each compressed with LZ4 or Zstandard and covered by an optional CRC32. At the end, an optional summary section repeats the schemas and channels and adds chunk indexes and statistics, so a reader can jump to one topic and time range without scanning the whole file, even over a slow remote connection. Chunking, indexing, CRCs and compression are all optional, so a writer can trade durability, size and seek speed.",
+    "Foxglove designed MCAP with feedback from the ROS Tooling Working Group and released it in 2022. It is the default storage format for ROS 2 bags since Iron Irwini, NVIDIA’s Isaac ROS 3.0 records to it, and the project ships readers and writers in C++, Go, Python, Rust, Swift and TypeScript, plus conformance tests and an `mcap` command-line tool."
+  ],
+  "strengths": [
+    "Serialization-agnostic: Protobuf, ROS, CDR, FlatBuffers and JSON channels can share one file, so mixed stacks need only one log format",
+    "Self-contained: schemas are embedded, so a file stays readable years later without the code or workspace that produced it",
+    "Append-only writing with optional chunk compression (LZ4 or Zstandard) keeps recording fast and leaves partially written files recoverable",
+    "The optional index lets readers fetch one topic or time range from local or remote files without reading everything; the CLI can read straight from `s3://`, `gs://` and `az://` URLs"
+  ],
+  "limits": [
+    "A container, not a codec: to read the payloads a tool still needs a decoder for each message encoding a file uses",
+    "Row-oriented: pulling one field out of a long recording means decoding every message on that channel, which costs more than reading one column of a columnar file such as Parquet",
+    "The index lives in the summary at the end of the file, so a recording cut off mid-write has no index: readers must scan it, or `mcap recover` can rewrite it into a valid file",
+    "ROS 2 bags recorded before Iron don’t embed their message definitions, so the `mcap` CLI can’t convert them directly; they need `ros2 bag convert` with the original workspace sourced"
+  ],
+  "worksWith": [
+    { "id": "protobuf", "how": "stores messages serialized with" },
+    { "id": "json", "how": "stores messages serialized with" },
+    { "id": "capnproto", "how": "stores messages serialized with" },
+    { "id": "kaitai-struct", "how": "publishes a format description for" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Convert a ROS bag, inspect it, and read one topic with the mcap CLI",
+    "source": [
+      "brew install mcap",
+      "",
+      "mcap convert demo.bag demo.mcap      # ROS 1 .bag or ROS 2 .db3 to MCAP",
+      "mcap info demo.mcap                  # profile, duration, compression, channels",
+      "# compression:",
+      "#   zstd: [14/14 chunks] [124.89 MB/61.46 MB (50.79%)] [7.90 MB/s]",
+      "# channels:",
+      "#   (2) /tf  774 msgs (99.3..99.5Hz) : tf2_msgs/TFMessage [ros1msg]",
+      "",
+      "# indexed read: print /tf messages as JSON lines",
+      "mcap cat demo.mcap --topics /tf --format=ndjson | head -n 1"
+    ]
+  },
+  "history": {
+    "story": [
+      "Robotics teams logged data in whatever their framework offered. ROS 1 used bag files, hard to work with outside ROS; ROS 2 used a SQLite-based format that isn’t fully self-contained, so third-party tools struggled to read it; teams without ROS wrote length-delimited Protobuf or stuffed opaque bytes into formats like HDF5, then had to build readers in every language they used.",
+      "Foxglove, which builds visualization and data tools for robotics, set out to design a general-purpose, open container for this data. It worked out the specification with members of the ROS Tooling Working Group, including Emerson Knapp and Michael Orlov, and announced MCAP in beta in February 2022, with libraries in C++, Python, Go and TypeScript and a CLI that converts `.bag` and `.db3` files.",
+      "Adoption came through ROS. Working with ROS 2 maintainers at Open Robotics and Apex AI, Foxglove helped make the `rosbag2_storage_mcap` plugin the rosbag2 default, so ROS 2 records MCAP from Iron Irwini on, with SQLite still supported. NVIDIA made MCAP the logging format for Isaac ROS 3.0 in 2024, and when Foxglove stopped open-sourcing its visualization app that year, it kept MCAP open, saying open formats are the only option for storing critical robotics data."
+    ],
+    "choices": [
+      {
+        "choice": "A container, not another serialization format",
+        "why": "Teams already used Protobuf, ROS messages, JSON and more. A container that stores pre-serialized messages with their schemas lets all of them, and several at once, share one file and one set of tools."
+      },
+      {
+        "choice": "Append-only, row-oriented writing",
+        "why": "Recorders run on robots that crash or lose power. Writing forward only lets data stream to disk or the network without seeking back, and makes partly written files recoverable."
+      },
+      {
+        "choice": "Embedded schemas",
+        "why": "ROS 2’s SQLite bags needed outside message definitions. MCAP files carry their own schemas, so they decode with no extra dependencies and stay readable as code changes."
+      },
+      {
+        "choice": "Optional index and chunk compression",
+        "why": "Like ROS 1 bags, MCAP supports indexed reads, so readers can pull one topic and time range quickly, even remotely; making each feature optional lets a writer pick its trade-offs."
+      }
+    ],
+    "timeline": [
+      { "year": "2022", "text": "Foxglove announces MCAP in beta (February)" },
+      { "year": "2022", "text": "rosbag2 makes the MCAP storage plugin its default (December)" },
+      { "year": "2023", "text": "ROS 2 Iron Irwini records MCAP by default" },
+      { "year": "2024", "text": "NVIDIA Isaac ROS 3.0 adopts MCAP; Foxglove keeps MCAP open after closing Studio" }
+    ],
+    "sources": [
+      { "label": "Foxglove blog: Introducing the MCAP file format (Feb 2022)", "url": "https://foxglove.dev/blog/introducing-the-mcap-file-format" },
+      { "label": "Foxglove blog: MCAP as the ROS 2 default bag format (Dec 2022)", "url": "https://foxglove.dev/blog/mcap-as-the-ros2-default-bag-format" },
+      { "label": "Foxglove blog: NVIDIA announces MCAP as the default logging format for Isaac ROS 3.0 (May 2024)", "url": "https://foxglove.dev/blog/nvidia-announces-mcap-as-the-default-logging-format-for-isaac-ros-3-0" },
+      { "label": "Foxglove blog: Foxglove 2.0 (MCAP stays open, Mar 2024)", "url": "https://foxglove.dev/blog/foxglove-2-0-unifying-robotics-observability" }
+    ]
+  },
+  "sources": [
+    { "label": "MCAP format specification (records, chunks, summary, magic bytes)", "url": "https://mcap.dev/spec" },
+    { "label": "MCAP format registry (message encodings, compression formats)", "url": "https://github.com/foxglove/mcap/blob/main/website/docs/spec/registry.md" },
+    { "label": "mcap.dev (row-oriented, append-only; LZ4 or Zstandard; language libraries; ROS 2 default)", "url": "https://mcap.dev/" },
+    { "label": "MCAP CLI guide (convert, info, cat, recover; remote URLs; pre-Iron bags)", "url": "https://mcap.dev/guides/cli" },
+    { "label": "foxglove/mcap LICENSE (MIT)", "url": "https://github.com/foxglove/mcap/blob/main/LICENSE" },
+    { "label": "Foxglove blog: Introducing the MCAP file format", "url": "https://foxglove.dev/blog/introducing-the-mcap-file-format" },
+    { "label": "Foxglove blog: MCAP as the ROS 2 default bag format", "url": "https://foxglove.dev/blog/mcap-as-the-ros2-default-bag-format" },
+    { "label": "Foxglove blog: Isaac ROS 3.0 adopts MCAP (C++, Go, Python, Rust, Swift, TypeScript)", "url": "https://foxglove.dev/blog/nvidia-announces-mcap-as-the-default-logging-format-for-isaac-ros-3-0" }
+  ],
+  "checked": "2026-10-13"
+}

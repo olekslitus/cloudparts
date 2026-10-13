@@ -1,0 +1,160 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Propolis",
+  "concepts": [
+    "hypervisors"
+  ],
+  "uses": [
+    "vm"
+  ],
+  "provider": "oss",
+  "vendor": "Oxide Computer Company",
+  "license": "MPL 2.0",
+  "website": "https://github.com/oxidecomputer/propolis",
+  "repo": "https://github.com/oxidecomputer/propolis",
+  "summary": "Oxide’s virtual machine monitor: a Rust program that pairs with the bhyve hypervisor in the illumos kernel and emulates the devices each VM in an Oxide rack sees.",
+  "intro": [
+    "A hypervisor has two halves. The kernel half, here bhyve in illumos, uses the CPU’s virtualization extensions to run guest code directly and to map guest memory. The user-space half, the virtual machine monitor (VMM), emulates everything else: the chipset, serial ports, disks and network cards, plus tasks like live migration. On Linux that half is usually QEMU. Propolis is Oxide’s replacement for it on illumos, written in Rust and talking to bhyve through its `ioctl` interface.",
+    "Propolis emulates a deliberately small set of devices: NVMe and virtio block disks, virtio network cards backed by illumos’s in-kernel `viona` driver, a UART for the serial console, PS/2 and the PCI and chipset plumbing around them. Guests boot UEFI firmware built from EDK2’s OVMF. A disk can be a local file or a Crucible volume: Propolis links in Crucible’s client, which sends each read, write and flush over the network to three storage servers.",
+    "It comes as `propolis-server`, which runs one VM and is driven over a REST API (in an Oxide rack, by the control plane, with one server per VM in its own illumos zone), `propolis-standalone`, which runs a VM from a TOML file for quick experiments, and `propolis-cli`. Live migration of a running VM between hosts is supported, primarily on AMD processors."
+  ],
+  "strengths": [
+    "A memory-safe device model: the code that parses everything a possibly hostile guest writes to its devices is Rust, not C",
+    "A small surface: only the devices modern Linux and Windows guests need, rather than QEMU’s catalog of emulated hardware",
+    "Built for a control plane: a REST API with an OpenAPI description, metrics through Oximeter, and live migration between sleds",
+    "Disks can come straight from Crucible’s replicated, encrypted network block storage, with no separate storage target to configure"
+  ],
+  "limits": [
+    "It only runs on illumos with bhyve, and needs recent illumos builds because it is tightly coupled to bhyve’s kernel interface",
+    "It works best on AMD hosts, where Oxide runs its CI; Intel hosts can run VMs, and live migration may work there",
+    "Guests must boot through UEFI on x86 and have VirtIO drivers; nested virtualization and a virtual TPM are not offered in the Oxide rack",
+    "Known issue in release v23: guests treat the TSC clock source as unreliable and fall back to much slower timestamp syscalls, unless you apply the documented workaround"
+  ],
+  "worksWith": [
+    {
+      "id": "crucible",
+      "how": "reads and writes VM disks through"
+    },
+    {
+      "id": "helios",
+      "how": "runs VMs on bhyve in"
+    }
+  ],
+  "snippet": {
+    "lang": "text",
+    "title": "A `propolis-standalone` config: 4 vCPUs, 1 GiB, an ISO on virtio-block and a viona NIC (`pfexec propolis-standalone vm.toml`)",
+    "source": [
+      "[main]",
+      "name = \"testvm\"",
+      "cpus = 4",
+      "bootrom = \"/path/to/bootrom/OVMF_CODE.fd\"",
+      "memory = 1024",
+      "",
+      "[block_dev.alpine_iso]",
+      "type = \"file\"",
+      "path = \"/path/to/alpine-extended-3.12.0-x86_64.iso\"",
+      "",
+      "[dev.block0]",
+      "driver = \"pci-virtio-block\"",
+      "block_dev = \"alpine_iso\"",
+      "pci-path = \"0.4.0\"",
+      "",
+      "[dev.net0]",
+      "driver = \"pci-virtio-viona\"",
+      "vnic = \"vnic_name\"",
+      "pci-path = \"0.5.0\""
+    ]
+  },
+  "history": {
+    "story": [
+      "Choosing a hypervisor for the Oxide rack meant choosing an operating system for the host, and Oxide’s RFD 26 weighed the two open-source options: KVM on Linux and bhyve on illumos. KVM was the most feature-rich, but its usual partner, QEMU, was ruled out as too complex and too often the subject of reliability and security bugs. bhyve, which began on FreeBSD, required modern CPU virtualization features and skipped nested virtualization, which made its code base much smaller, but its own C userspace had also been a source of bugs.",
+      "So Oxide decided to keep bhyve in the kernel and write a new userspace in Rust. The Propolis repository started in October 2020, and at Oxide’s May 2021 milestone demo Propolis booted an Alpine Linux guest on Helios. RFD 26’s determination, as of June 2021, was Helios as the host OS and “Propolis, our Rust-based userspace, and bhyve in the illumos kernel for guest workloads”.",
+      "Propolis was open source throughout its development, and shipped in every Oxide rack from 2023. It runs each customer VM, in its own zone, under the control of Omicron’s sled agent."
+    ],
+    "choices": [
+      {
+        "choice": "bhyve rather than KVM",
+        "why": "bhyve’s requirement for hardware virtualization and lack of nested virtualization kept it small and manageable. RFD 26 also weighed the host OS by how well a small team could find and fix defects from as few observed incidents as possible."
+      },
+      {
+        "choice": "A new Rust userspace instead of QEMU or bhyve’s C one",
+        "why": "Device emulation is where much of a VMM’s attack surface and bugs live. QEMU’s breadth came with reliability and security problems, and bhyve’s C userspace had its own, so Oxide wrote the device models in a memory-safe language."
+      },
+      {
+        "choice": "Live migration as a requirement",
+        "why": "RFD 26 calls live migration necessary: moving VMs off a server lets operators balance capacity and update or repair a node without taking guests down."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "2020",
+        "text": "Repository started (October)"
+      },
+      {
+        "year": "2021",
+        "text": "Boots an Alpine Linux guest at Oxide’s May milestone demo; RFD 26 commits to bhyve plus Propolis (June)"
+      },
+      {
+        "year": "2023",
+        "text": "Ships in the first Oxide racks"
+      },
+      {
+        "year": "2024",
+        "text": "RFD 26 postscript: Propolis open source throughout, Helios open-sourced in January"
+      }
+    ],
+    "sources": [
+      {
+        "label": "Oxide RFD 26: Host Operating System & Hypervisor",
+        "url": "https://rfd.shared.oxide.computer/rfd/0026"
+      },
+      {
+        "label": "GitHub: oxidecomputer/propolis (created October 2020)",
+        "url": "https://github.com/oxidecomputer/propolis"
+      },
+      {
+        "label": "Oxide docs: release notes v1.0.0 (July 2023)",
+        "url": "https://docs.oxide.computer/release-notes/system/1-0-0"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "Propolis README (components, AMD and Intel hosts, live migration, license)",
+      "url": "https://github.com/oxidecomputer/propolis/blob/master/README.md"
+    },
+    {
+      "label": "Propolis source: emulated hardware (lib/propolis/src/hw)",
+      "url": "https://github.com/oxidecomputer/propolis/tree/master/lib/propolis/src/hw"
+    },
+    {
+      "label": "Propolis source: propolis-server dependencies (Dropshot, Crucible, Oximeter)",
+      "url": "https://github.com/oxidecomputer/propolis/blob/master/bin/propolis-server/Cargo.toml"
+    },
+    {
+      "label": "propolis-standalone README (config file, OVMF bootrom)",
+      "url": "https://github.com/oxidecomputer/propolis/blob/master/bin/propolis-standalone/README.md"
+    },
+    {
+      "label": "Oxide docs: Hypervisor and storage (bhyve, Propolis, guest support)",
+      "url": "https://docs.oxide.computer/guides/architecture/os-hypervisor-storage"
+    },
+    {
+      "label": "Oxide RFD 177: Implementation of Data Storage (Crucible inside Propolis)",
+      "url": "https://rfd.shared.oxide.computer/rfd/0177"
+    },
+    {
+      "label": "Omicron source: sled-agent/src/instance.rs (one Propolis zone per VM)",
+      "url": "https://github.com/oxidecomputer/omicron/blob/main/sled-agent/src/instance.rs"
+    },
+    {
+      "label": "Oxide RFD 26: Host Operating System & Hypervisor",
+      "url": "https://rfd.shared.oxide.computer/rfd/0026"
+    },
+    {
+      "label": "Oxide docs: release notes v23 (known issues)",
+      "url": "https://docs.oxide.computer/release-notes/system/23"
+    }
+  ],
+  "checked": "2026-10-13"
+}
