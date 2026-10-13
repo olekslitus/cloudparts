@@ -169,7 +169,7 @@ export default function Search({ nav, base }: { nav: NavData; base: string }) {
         <span>Search…</span>
         <Kbd className="ml-auto">⌘K</Kbd>
       </Button>
-      <CommandDialog open={open} onOpenChange={setOpen} title="Search Cloud Parts" description="Find a topic, concept, technology or architecture, such as delivery, event loop or Kafka.">
+      <CommandDialog open={open} onOpenChange={setOpen} title="Search cloudparts" description="Find a topic, concept, technology or architecture, such as delivery, event loop or Kafka.">
         <Command shouldFilter={false}>
           <CommandInput placeholder="Try observability, event loop, Kafka…" value={query} onValueChange={setQuery} />
           <CommandList className="max-h-[min(60vh,420px)]">

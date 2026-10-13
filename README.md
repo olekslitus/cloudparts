@@ -1,4 +1,4 @@
-# Cloud Parts
+# cloudparts
 
 *Handbook for Modern Software Engineering.* An interactive guide to how software is written,
 shipped and kept running, at three levels:
