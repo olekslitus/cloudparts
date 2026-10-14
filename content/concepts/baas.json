@@ -1,0 +1,211 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Backend as a service (BaaS)",
+  "icon": "cloud-cog",
+  "category": "compute",
+  "order": 25,
+  "parent": "cloud-service-models",
+  "summary": "Hosted sign-in, database, file storage and realtime updates that a web or mobile app calls straight from the client through an SDK, with access rules enforced on the provider’s side instead of in an API server you write.",
+  "howItWorks": "With a PaaS you still write the backend: an API server that checks who the user is and decides what they may read. A BaaS removes that server for the common cases. Each project gets one endpoint and a public key that ships inside the app; Supabase says this publishable key is “safe to expose online” because it “only reaches what Row Level Security allows”. A user signs in through the BaaS’s auth service, which issues a JWT, and the SDK attaches that token to every later call. The data API reads the token and applies rules you wrote, on every request, on the provider’s servers. In Firebase these are Security Rules, such as `allow read, write: if request.auth != null && request.auth.uid == userId`. In Supabase they are Postgres row-level security policies, which Supabase describes as “adding a WHERE clause to every query”: with the policy `(select auth.uid()) = user_id`, a plain `select * from todos` returns only the caller’s rows. Supabase’s stack shows the usual parts: GoTrue issues JWTs, PostgREST turns the database into a REST API, Realtime streams database changes over WebSockets, the Storage API keeps files in S3-compatible storage with their metadata in Postgres, and Deno runs edge functions, all behind one gateway. Work that must not run in a user’s browser, such as charging a card, goes into a server-side function that holds a secret key; that key bypasses the rules, so it never ships in the client. You pay per use: Firebase’s no-cost Spark plan covers 50,000 Firestore document reads and 20,000 writes a day and 50,000 monthly active users for Authentication, and usage beyond that is billed at Google Cloud rates.",
+  "analogy": "A hotel’s key-card system instead of hiring a guard for every corridor. The front desk checks who you are once and hands you a card (the token). After that, every door reads the card and decides for itself whether it opens (the rules). You never staff the corridors, but the locks are only as good as their programming: set one door to “any card” and every guest can walk in.",
+  "useWhen": [
+    "A web or mobile app whose backend is mostly sign-in, reading and writing the user’s own records, file uploads and live updates",
+    "A small team or a prototype that would rather not build, deploy and scale an API server for create, read, update and delete",
+    "Screens that must update live, such as chat, presence or collaborative lists, where the BaaS already pushes changes over WebSockets",
+    "You want the database itself to enforce access, so that a bug in one client can’t read another user’s rows"
+  ],
+  "avoidWhen": [
+    "Nobody will write and test the access rules: in Supabase, a table in an exposed schema without row-level security “is readable and writable by any role with a grant on it”",
+    "Most of the logic is business rules that must not be bypassed, such as payments or multi-step workflows: anything in the client can be changed by the user, so that code belongs in server-side functions or your own API",
+    "You can’t afford to rewrite the client if the vendor goes away: when Parse shut down, every app had a year to move its data and switch to self-hosted Parse Server or another platform",
+    "Screens that read thousands of records per visit: per-operation pricing, such as Firestore’s charge per document read beyond the free 50,000 a day, grows with every user who opens them"
+  ],
+  "example": "A to-do app on Supabase stores tasks in a `todos` table with a `user_id` column. The team turns on row-level security and adds two policies: one lets signed-in users select rows where `(select auth.uid()) = user_id`, the other uses `with check` so an insert can’t create a row that belongs to someone else. The browser app ships with the project URL and the publishable key, signs users in through Supabase Auth, and queries the table through the generated REST API; each user sees only their own tasks, although the query has no filter. A shared list subscribes to changes through Realtime, so a task added on a phone appears on the laptop. A nightly function that emails reminders runs server-side with the secret key, which bypasses row-level security to read every user’s tasks. The team wrote no API server; what it owns is the schema, the policies and the tests that prove them.",
+  "providers": {
+    "aws": "AWS Amplify: define auth, data, storage and functions in TypeScript. Amplify Auth is powered by Amazon Cognito; Amplify Data deploys a real-time API on AWS AppSync backed by Amazon DynamoDB and secured by authorization rules",
+    "gcp": "Firebase: Authentication; Cloud Firestore and Realtime Database guarded by Firebase Security Rules; Cloud Storage for Firebase; Cloud Functions for Firebase; Data Connect for PostgreSQL on Cloud SQL with type-safe SDKs",
+    "azure": "No current all-in-one BaaS: Azure Mobile Apps is retired (the Community Toolkit Datasync library replaces it for .NET 8 and later), and Static Web Apps database connections ended on November 30, 2025. The nearest parts are Data API builder, a free open-source engine that serves REST and GraphQL over SQL Server, Azure SQL, Cosmos DB, PostgreSQL and MySQL, and managed Azure Functions",
+    "oss": "Supabase (Apache 2.0): Postgres with GoTrue auth, PostgREST, Realtime, Storage and Deno edge functions; Appwrite (BSD-3-Clause); PocketBase (MIT); Parse Server (Apache 2.0), open-sourced when Parse’s hosted service closed"
+  },
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "-- The access rules live in the database, not in an API server",
+      "alter table todos enable row level security;",
+      "",
+      "create policy \"Individuals can view their own todos.\"",
+      "on todos for select",
+      "to authenticated",
+      "using ( (select auth.uid()) = user_id );",
+      "",
+      "create policy \"Individuals can create their own todos.\"",
+      "on todos for insert",
+      "to authenticated",
+      "with check ( (select auth.uid()) = user_id );",
+      "",
+      "-- A client running `select * from todos` now gets only its own rows:",
+      "-- the policy is added to the query as `where auth.uid() = todos.user_id`"
+    ]
+  },
+  "related": ["cloud-service-models", "paas", "serverless", "serverless-architecture", "saas", "authentication", "web-api", "crud"],
+  "diagram": {
+    "caption": "The app in the browser calls one project endpoint with its token. The gateway sends sign-ins to the auth service, file uploads to storage and queries to the data API, which applies the access rules to every query: requests for rows that aren’t the user’s are refused before they reach the database.",
+    "h": 270,
+    "zones": [
+      { "x": 190, "y": 20, "w": 555, "h": 235, "label": "Run by the BaaS provider" }
+    ],
+    "nodes": [
+      {
+        "id": "app",
+        "x": 95,
+        "y": 135,
+        "label": "App",
+        "sub": "public key + user JWT",
+        "emit": { "every": 650, "jitter": 0.4, "req": true, "types": ["auth", "data", "data", "data", "files"], "colorByType": { "auth": 1, "data": 0, "files": 2 } },
+        "out": ["gw"]
+      },
+      {
+        "id": "gw",
+        "x": 270,
+        "y": 135,
+        "label": "Gateway",
+        "sub": "one URL per project",
+        "concept": "apigw",
+        "route": "type",
+        "rules": { "auth": ["auth"], "data": ["rules"], "files": ["storage"] },
+        "out": ["auth", "rules", "storage"]
+      },
+      {
+        "id": "auth",
+        "x": 470,
+        "y": 60,
+        "label": "Auth",
+        "sub": "sign-in, issues JWTs",
+        "concept": "authentication",
+        "mode": "reply",
+        "delay": 180
+      },
+      {
+        "id": "rules",
+        "x": 470,
+        "y": 135,
+        "label": "Data API",
+        "sub": "access rules per row",
+        "mode": "gate",
+        "p": 0.85,
+        "denyText": "not your row",
+        "out": ["db"]
+      },
+      {
+        "id": "db",
+        "x": 660,
+        "y": 135,
+        "label": "Database",
+        "sub": "where user_id = caller",
+        "concept": "relational",
+        "mode": "reply",
+        "delay": 90
+      },
+      {
+        "id": "storage",
+        "x": 470,
+        "y": 210,
+        "label": "File storage",
+        "sub": "uploads and images",
+        "concept": "object",
+        "mode": "reply",
+        "delay": 220
+      }
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Where BaaS sits",
+      "intro": "BaaS is not in NIST’s three service models. It sits beside PaaS and functions: instead of running your backend code, it replaces the common parts of a backend with ready-made services.",
+      "corner": "Model",
+      "columns": ["You write", "The client talks to", "Access control lives in"],
+      "rows": [
+        { "label": "Platform as a service", "values": ["An API server and its business logic", "Your API", "Your server code"] },
+        { "label": "Functions as a service", "values": ["One handler per event or route", "Your functions, usually behind an API gateway", "Your function code"] },
+        { "label": "Backend as a service", "values": ["The schema, the access rules and a few functions", "The provider’s auth, data, storage and realtime APIs, directly", "Rules on the provider’s side: Security Rules or row-level security"] }
+      ],
+      "notes": [
+        "Most BaaS products include functions for the logic that doesn’t fit rules, so in practice an app mixes the bottom two rows. Serverless architecture is the name for building a whole app this way."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "The usual building blocks",
+      "intro": "Providers bundle different sets, but most offer these, each reachable from client SDKs for the web, iOS, Android and Flutter.",
+      "items": [
+        { "name": "Authentication", "tag": "who", "text": "Sign-up, sign-in, password reset and OAuth sign-in with other providers. It issues the token that every other service reads." },
+        { "name": "Database API", "tag": "what", "text": "SQL or NoSQL storage reached through the SDK, REST or GraphQL, with per-user rules applied to every query: Firestore and Security Rules, Postgres and row-level security, DynamoDB behind AppSync." },
+        { "name": "File storage", "tag": "blobs", "text": "Uploads and downloads of images, media and other binary files, guarded by the same kind of rules as the database." },
+        { "name": "Realtime", "tag": "push", "text": "Clients subscribe over WebSockets and receive changes as they happen, for chat, presence and shared lists." },
+        { "name": "Functions", "tag": "escape hatch", "text": "Server-side code triggered by HTTP requests, database events or schedules, for logic that must not run in the client. It can hold the secret key that bypasses the rules." },
+        { "name": "Push and messaging", "tag": "reach", "text": "Some providers, such as Firebase and AWS Amplify, also send push notifications and emails to users." }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Two keys, and why the public one is safe",
+      "body": [
+        "A BaaS hands out two kinds of credentials. The public one goes into the app bundle, where anyone can read it; on its own it only reaches what the rules allow for an anonymous visitor. The secret one bypasses the rules entirely and belongs only in servers, functions and scheduled jobs. Supabase puts it as a building: the publishable key is taped to the front door and opens the lobby, while the secret key is the master key that stays in your pocket.",
+        "Supabase is replacing its older long-lived JWT keys, `anon` and `service_role`, with short `sb_publishable_` and `sb_secret_` keys, and is deprecating the old ones by the end of 2026. Both systems work side by side until the legacy keys are disabled in the dashboard. The safety of the public key still depends on the rules: Supabase notes that a new table can start with every privilege granted to the `anon` and `authenticated` roles, and adding policies doesn’t take those grants back."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Around 2011, every mobile app needed the same backend: user accounts, push notifications, links to social networks and cloud storage, each with its own API to wire up. A wave of startups, most founded in 2011 or later, sold these as one “mobile backend as a service” with an SDK. Parse, founded in 2011 by Tikhon Bernstam, Ilya Sukhar, James Yu and Kevin Lacker, let mobile developers store data in the cloud, manage log-ins, send push notifications and, from September 2012, run custom code on the back end; by 2012 about 20,000 developers used it. Firebase let apps listen to changes in its database over WebSockets.",
+      "The big platforms bought in. Facebook acquired Parse in 2013, and on October 21, 2014, Firebase announced it had joined Google, by then used by 110,000 developers, promising to stay platform agnostic with clients for iOS, Android and the web. Then the risk showed. On January 28, 2016, Parse announced it would wind down, fully retiring on January 28, 2017. It released a tool to move each app’s data to any MongoDB database and the open-source Parse Server, which runs most of the Parse API on your own Node.js server so apps could keep their client code.",
+      "The next generation leaned on open source and SQL. Paul Copplestone had hit scaling problems with Firebase, moved that part of a system to Postgres and rebuilt Firebase’s change stream on top of it as open source. When it gained traction, Copplestone and Anthony Wilson turned it into a company. Supabase launched in alpha in June 2020 and in beta that December, built on Postgres “rather than a NoSQL store” and on existing open-source tools, with the test “Can a user run this product with nothing but a Postgres database?” Firebase itself now offers Data Connect on PostgreSQL, and AWS Amplify defines the backend in TypeScript."
+    ],
+    "choices": [
+      { "choice": "Let the client call the database directly, guarded by rules on the server", "why": "Without an API server in the middle, the rules are the only gate. Firebase Security Rules “stand between your data and malicious users”, and Supabase calls row-level security “defense in depth” because it also protects data reached through other tools." },
+      { "choice": "One SDK in front of many services", "why": "Each backend feature had its own API that had to be wired into every app. BaaS providers bridged the frontend and those services with a unified API and SDK, so developers didn’t rebuild the same backend for each app." },
+      { "choice": "Realtime by default", "why": "Copplestone singled out Firebase’s system for listening to database changes over WebSockets as what was missing in Postgres, and rebuilt it first. Live sync is what lets a client keep its view current without polling." },
+      { "choice": "Postgres and open source instead of a proprietary store", "why": "After Parse, lock-in was a known risk. Supabase says it makes it easy to migrate in and out, keeps its cloud compatible with the self-hosted product, and uses standards such as pg_dump and CSV files for portability." }
+    ],
+    "timeline": [
+      { "year": "2011", "text": "Parse is founded; mobile backend as a service startups multiply" },
+      { "year": "2013", "text": "Facebook acquires Parse" },
+      { "year": "2014", "text": "Firebase joins Google on October 21, with 110,000 developers" },
+      { "year": "2016", "text": "Parse announces its shutdown on January 28 and open-sources Parse Server" },
+      { "year": "2017", "text": "Parse’s hosted service is retired in January" },
+      { "year": "2020", "text": "Supabase launches in alpha in June and beta in December" }
+    ],
+    "sources": [
+      { "label": "Wikipedia: Backend as a service (features, MBaaS, startups from 2011)", "url": "https://en.wikipedia.org/wiki/Backend_as_a_service" },
+      { "label": "Wikipedia: Parse, Inc. (founders, 2011; Facebook 2013; shutdown January 2017)", "url": "https://en.wikipedia.org/wiki/Parse,_Inc." },
+      { "label": "Parse blog: Moving On, by Kevin Lacker (Jan 28, 2016)", "url": "https://blog.parse.com/announcements/moving-on/", "archive": "https://web.archive.org/web/20160202050050/http://blog.parse.com/announcements/moving-on/" },
+      { "label": "Firebase blog: Firebase is Joining Google, by James Tamplin (Oct 21, 2014)", "url": "https://firebase.blog/posts/2014/10/firebase-is-joining-google" },
+      { "label": "The New Stack: Supabase Takes Aim at Firebase with a Scalable Postgres Service (Jan 4, 2022)", "url": "https://thenewstack.io/supabase-takes-aim-at-firebase-with-a-scalable-postgres-service/" },
+      { "label": "Supabase docs: Architecture (Postgres rather than NoSQL, product principles)", "url": "https://supabase.com/docs/guides/getting-started/architecture" },
+      { "label": "Firebase docs: Firebase Security Rules", "url": "https://firebase.google.com/docs/rules" }
+    ]
+  },
+  "sources": [
+    { "label": "Wikipedia: Backend as a service (common features, client SDKs, pricing models)", "url": "https://en.wikipedia.org/wiki/Backend_as_a_service" },
+    { "label": "Supabase docs: Architecture (GoTrue, PostgREST, Realtime, Storage, Deno, Envoy)", "url": "https://supabase.com/docs/guides/getting-started/architecture" },
+    { "label": "Supabase docs: Row Level Security (policies as WHERE clauses, grants, anon and authenticated roles)", "url": "https://supabase.com/docs/guides/database/postgres/row-level-security" },
+    { "label": "Supabase docs: Understanding API keys (publishable and secret keys, legacy key deprecation)", "url": "https://supabase.com/docs/guides/api/api-keys" },
+    { "label": "Firebase docs: Firebase Security Rules", "url": "https://firebase.google.com/docs/rules" },
+    { "label": "Firebase docs: Basic Security Rules (content-owner only access)", "url": "https://firebase.google.com/docs/rules/basics" },
+    { "label": "Firebase: Pricing (Spark and Blaze plans, Firestore and Authentication no-cost limits)", "url": "https://firebase.google.com/pricing" },
+    { "label": "Firebase docs: Firebase Data Connect (PostgreSQL on Cloud SQL)", "url": "https://firebase.google.com/docs/data-connect" },
+    { "label": "AWS Amplify docs: How Amplify works", "url": "https://docs.amplify.aws/react/how-amplify-works/" },
+    { "label": "AWS Amplify docs: Set up Amplify Data (AppSync and DynamoDB)", "url": "https://docs.amplify.aws/react/build-a-backend/data/set-up-data/" },
+    { "label": "AWS Amplify docs: Set up Amplify Auth (Amazon Cognito)", "url": "https://docs.amplify.aws/react/build-a-backend/auth/set-up-auth/" },
+    { "label": "Microsoft Learn: Azure Mobile Apps overview (retired)", "url": "https://learn.microsoft.com/en-us/azure/developer/mobile-apps/azure-mobile-apps/overview" },
+    { "label": "Microsoft Learn: Connecting to a database with Azure Static Web Apps (retirement on Nov 30, 2025)", "url": "https://learn.microsoft.com/en-us/azure/static-web-apps/database-overview" },
+    { "label": "Microsoft Learn: What is Data API builder?", "url": "https://learn.microsoft.com/en-us/azure/data-api-builder/overview" },
+    { "label": "Microsoft Learn: What is Azure Static Web Apps? (managed Azure Functions APIs)", "url": "https://learn.microsoft.com/en-us/azure/static-web-apps/overview" },
+    { "label": "Community Toolkit: Datasync", "url": "https://communitytoolkit.github.io/Datasync/" },
+    { "label": "supabase/supabase on GitHub (Apache 2.0)", "url": "https://github.com/supabase/supabase" },
+    { "label": "appwrite/appwrite on GitHub (BSD-3-Clause)", "url": "https://github.com/appwrite/appwrite" },
+    { "label": "pocketbase/pocketbase on GitHub (MIT)", "url": "https://github.com/pocketbase/pocketbase" },
+    { "label": "parse-community/parse-server on GitHub (Apache 2.0)", "url": "https://github.com/parse-community/parse-server" }
+  ]
+}

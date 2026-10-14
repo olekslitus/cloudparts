@@ -1,0 +1,133 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Release automation",
+  "icon": "tag",
+  "category": "delivery",
+  "order": 60,
+  "parent": "cicd",
+  "summary": "Tools that turn merged changes into a release without hand edits: they pick the next version number, write the changelog, tag the commit and publish the package.",
+  "howItWorks": "Cutting a release is four mechanical steps: choose the next version, record what changed, tag the commit, and publish the artifacts. Release tools do them from information already in the repository. Most follow Semantic Versioning, MAJOR.MINOR.PATCH, where an incompatible API change bumps the major number, a backward-compatible feature the minor, and a backward-compatible fix the patch. Tools differ first in where the bump comes from. semantic-release and release-please read the Conventional Commits since the last version tag: `fix:` means a patch, `feat:` a minor, and a `!` or a `BREAKING CHANGE:` footer a major; commits such as `chore:` release nothing. Changesets instead has each pull request add a small Markdown file whose front matter names the packages and their bump types and whose body becomes the changelog entry, which suits monorepos where one change touches several packages. GoReleaser takes the version from the latest Git tag, and release-it asks for it in a prompt unless run with `--ci`. Tools also differ in when a release happens. semantic-release runs in CI after every successful build on a release branch and publishes at once. release-please and the Changesets GitHub Action keep a release pull request open that collects the pending version bumps and changelog; merging it is the decision to release, after which the tool tags the commit and creates a GitHub release. Changesets then publishes every package whose version is newer than the registry’s, while release-please leaves publishing to a separate job. Publishing from CI needs registry credentials; npm’s trusted publishing replaces long-lived tokens with short-lived OIDC tokens issued to one authorized workflow, and adds provenance automatically.",
+  "analogy": "A newspaper’s print run. Reporters file stories all day; at press time the edition gets the next issue number and a front-page index of what’s inside, and goes to every newsstand at once. Nobody retypes the issue number by hand, and nothing reaches a stand without being in the index.",
+  "useWhen": [
+    "Libraries, SDKs and CLIs that others pin by version, where a wrong number or a missing changelog entry breaks users",
+    "Monorepos whose packages depend on each other and must be bumped and published together (Changesets)",
+    "Teams that want a person to choose the moment of release but no person to do the steps (a release pull request)"
+  ],
+  "avoidWhen": [
+    "Applications deployed continuously that nobody installs by version: a commit SHA or build number already identifies each deploy",
+    "Histories without a commit convention: commit-driven tools will skip or misjudge releases; use changeset files or choose versions by hand",
+    "Giving every CI job a long-lived publish token: publish from one restricted job, with trusted publishing where the registry supports it"
+  ],
+  "example": "A team maintains a TypeScript SDK at version 1.4.2 with release-please. Over two weeks they squash-merge `fix: retry uploads on 503` and `feat: add progress callback to upload`. After each merge release-please updates one open release pull request, now proposing 1.5.0 because a `feat` means a minor release, with both entries added to `CHANGELOG.md` and the version in `package.json` bumped. On Thursday a maintainer reviews and merges it; release-please tags `v1.5.0` and creates the GitHub release, and a second workflow job, triggered by that release, runs `npm publish` with trusted publishing. Nobody typed a version number.",
+  "snippet": {
+    "lang": "yaml",
+    "source": [
+      "# .github/workflows/release.yml: release every green push to main",
+      "on:",
+      "  push:",
+      "    branches: [main]",
+      "permissions:",
+      "  contents: read",
+      "jobs:",
+      "  release:",
+      "    runs-on: ubuntu-latest",
+      "    permissions:",
+      "      contents: write   # push the tag, publish the GitHub release",
+      "      id-token: write   # npm trusted publishing (OIDC), no NPM_TOKEN",
+      "    steps:",
+      "      - uses: actions/checkout@v4",
+      "        with:",
+      "          fetch-depth: 0   # every commit and tag since the last release",
+      "      - uses: actions/setup-node@v4",
+      "        with:",
+      "          node-version: \"lts/*\"",
+      "      - run: npm clean-install",
+      "      - run: npm test",
+      "      - run: npx semantic-release   # version, notes, tag, publish",
+      "        env:",
+      "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}"
+    ]
+  },
+  "related": ["cicd", "commit-conventions", "package-managers", "version-control"],
+  "diagram": {
+    "caption": "Each merge to main runs the release job, which reads the commit type: a `fix` cuts a patch release, a `feat` a minor one and a breaking change a major one, while `docs` and `chore` commits release nothing. Every release is tagged, gets notes and is published.",
+    "w": 800,
+    "h": 280,
+    "nodes": [
+      { "id": "merge", "x": 80, "y": 140, "label": "Merge to main", "sub": "CI passes", "emit": { "every": 1100, "jitter": 0.35, "types": ["fix", "fix", "fix", "feat", "feat", "docs", "chore", "breaking"], "colorByType": { "fix": 0, "feat": 1, "breaking": 2, "docs": 3, "chore": 3 } }, "out": ["analyze"] },
+      { "id": "analyze", "x": 240, "y": 140, "label": "Analyze commits", "sub": "since last tag", "route": "type", "rules": { "fix": ["patch"], "feat": ["minor"], "breaking": ["major"], "docs": ["none"], "chore": ["none"] }, "concept": "commit-conventions" },
+      { "id": "patch", "x": 410, "y": 60, "label": "Patch", "sub": "1.4.2 → 1.4.3", "out": ["tag"] },
+      { "id": "minor", "x": 410, "y": 140, "label": "Minor", "sub": "1.4.2 → 1.5.0", "out": ["tag"] },
+      { "id": "major", "x": 410, "y": 220, "label": "Major", "sub": "1.4.2 → 2.0.0", "out": ["tag"] },
+      { "id": "none", "x": 240, "y": 240, "label": "No release", "sub": "docs, chore", "mode": "sink" },
+      { "id": "tag", "x": 570, "y": 140, "label": "Tag and notes", "sub": "v1.5.0, CHANGELOG", "out": ["publish"] },
+      { "id": "publish", "x": 715, "y": 140, "label": "Publish", "sub": "registry, GitHub", "mode": "sink", "concept": "package-managers" }
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Five ways to cut a release",
+      "intro": "The tools agree on Semantic Versioning and differ in where the next version comes from and who decides when to ship.",
+      "corner": "Tool",
+      "columns": ["Next version comes from", "Release happens when", "Publishes packages?"],
+      "rows": [
+        { "label": "semantic-release", "values": ["Conventional Commits since the last tag", "Every CI run on a release branch that has releasable commits", "Yes, through plugins for each package manager"] },
+        { "label": "release-please", "values": ["Conventional Commits since the last release", "Someone merges the release pull request", "No: it tags and creates a GitHub release, and another job publishes"] },
+        { "label": "Changesets", "values": ["Changeset files added with each pull request", "The version pull request is merged and the publish step runs", "Yes: `changeset publish` publishes each package newer than the one on npm"] },
+        { "label": "GoReleaser", "values": ["The latest Git tag, pushed by a person or another tool", "A run starts on the tagged commit", "Yes: binaries, archives, packages and Docker images to the forge, registries and blob storage"] },
+        { "label": "release-it", "values": ["A prompt, or no prompts with `--ci`", "Someone runs it, locally or in CI", "Yes: npm, plus a GitHub or GitLab release"] }
+      ],
+      "notes": ["GitHub can also generate release notes for a release, listing its merged pull requests and contributors with a link to the full changelog, without any tool in the repository."]
+    }
+  ],
+  "history": {
+    "story": [
+      "Version numbers used to mean whatever each project wanted. Tom Preston-Werner, a cofounder of GitHub, wrote Semantic Versioning to get out of what it calls “dependency hell”: if the numbers follow fixed rules, a user can tell from MAJOR.MINOR.PATCH alone whether an upgrade might break them. Version 2.0.0 of the specification was marked final in June 2013. Olivier Lacan’s Keep a Changelog, first published in May 2014 and at 1.0.0 in June 2017, made the matching case for release notes: “Changelogs are for humans, not machines,” and a dump of commit messages is “full of noise”.",
+      "With rules for both, a machine could do the work. semantic-release, started by Stephan Bönnemann and first published to npm in February 2015, runs in CI after every green build on a release branch, reads Angular-style commit messages, picks the version, writes the notes and publishes, so releases are “unromantic and unsentimental”. In 2019 two tools put a person back in at different points. Changesets, first built for monorepos managed with the Bolt tool, has each contributor write the bump and the changelog line as a file in the pull request, and Google’s release-please collects pending changes in a release pull request that a maintainer merges when ready. Both released 1.0.0 on npm within three days of each other in May 2019.",
+      "The weak point left was the publish credential: a long-lived registry token stored in CI. npm’s trusted publishing, built on the OpenSSF trusted publishers standard that PyPI and RubyGems also follow, lets a named CI workflow publish with short-lived OIDC tokens that can’t be extracted or reused, and generates provenance automatically; semantic-release now recommends it as the default path."
+    ],
+    "choices": [
+      { "choice": "Derive the version from commit messages", "why": "If commits already say `fix` or `feat`, a tool can compute the bump and nobody argues over numbers. semantic-release says this “removes the immediate connection between human emotions and version numbers”." },
+      { "choice": "A release pull request instead of releasing on every merge", "why": "release-please keeps one pull request up to date as work lands, so a maintainer can review the proposed version and changelog and choose the moment to ship by merging it." },
+      { "choice": "Intent files instead of parsing commits", "why": "Changesets lets contributors “declare how their changes should be released” while the change is fresh, and in a monorepo it bumps the packages that depend on a changed one; commit messages can stay informal." },
+      { "choice": "Short-lived OIDC tokens for publishing", "why": "A long-lived write token “can be compromised, accidentally exposed in logs, or require manual rotation”. Trusted publishing issues a token per run, valid only for the workflow the package owner authorized." }
+    ],
+    "timeline": [
+      { "year": "2013", "text": "Semantic Versioning 2.0.0 is marked final (June 18)" },
+      { "year": "2014", "text": "Keep a Changelog’s first version is published (May 31)" },
+      { "year": "2015", "text": "semantic-release is first published to npm (February 2)" },
+      { "year": "2017", "text": "Keep a Changelog reaches 1.0.0 (June 20)" },
+      { "year": "2019", "text": "Changesets (May 6) and release-please (May 9) publish 1.0.0 to npm" }
+    ],
+    "sources": [
+      { "label": "Semantic Versioning 2.0.0 (dependency hell; authored by Tom Preston-Werner)", "url": "https://semver.org/" },
+      { "label": "semver/semver on GitHub: Mark 2.0.0 as RTM (Jun 18, 2013)", "url": "https://github.com/semver/semver/commit/7c834b3f3a4940d77ab593bc32583004d6a426a9" },
+      { "label": "Keep a Changelog 1.1.0 (guiding principles, commit log diffs, version history)", "url": "https://keepachangelog.com/en/1.1.0/" },
+      { "label": "npm registry: semantic-release package metadata (first published Feb 2, 2015)", "url": "https://registry.npmjs.org/semantic-release" },
+      { "label": "semantic-release on GitHub: first commit by Stephan Bönnemann", "url": "https://github.com/semantic-release/semantic-release/commit/ac7037d9482a04fb97b39aaa928ca048090dd6a6" },
+      { "label": "semantic-release README: how it works, CI after every build, “unromantic and unsentimental”", "url": "https://github.com/semantic-release/semantic-release" },
+      { "label": "Changesets docs: Using Changesets (originally designed for Bolt monorepos)", "url": "https://github.com/changesets/changesets/blob/main/docs/intro-to-using-changesets.md" },
+      { "label": "npm registry: @changesets/cli package metadata (1.0.0 on May 6, 2019)", "url": "https://registry.npmjs.org/@changesets/cli" },
+      { "label": "npm registry: release-please package metadata (1.0.0 on May 9, 2019)", "url": "https://registry.npmjs.org/release-please" },
+      { "label": "release-please README: release pull requests", "url": "https://github.com/googleapis/release-please" },
+      { "label": "npm Docs: Trusted publishing for npm packages (OIDC, OpenSSF standard)", "url": "https://docs.npmjs.com/trusted-publishers" },
+      { "label": "semantic-release docs: GitHub Actions recipe (trusted publishing recommended)", "url": "https://semantic-release.org/recipes/ci-configurations/github-actions/" }
+    ]
+  },
+  "sources": [
+    { "label": "Semantic Versioning 2.0.0 specification", "url": "https://semver.org/" },
+    { "label": "Keep a Changelog 1.1.0", "url": "https://keepachangelog.com/en/1.1.0/" },
+    { "label": "semantic-release README: release steps, commit format and release types", "url": "https://github.com/semantic-release/semantic-release" },
+    { "label": "semantic-release docs: GitHub Actions recipe (workflow, permissions, trusted publishing)", "url": "https://semantic-release.org/recipes/ci-configurations/github-actions/" },
+    { "label": "release-please README: release PRs, releasable units, no publishing to package managers", "url": "https://github.com/googleapis/release-please" },
+    { "label": "Changesets docs: Getting started (changeset files with YAML front matter)", "url": "https://changesets.dev/guide/getting-started" },
+    { "label": "Changesets docs: Using Changesets (version and publish commands)", "url": "https://github.com/changesets/changesets/blob/main/docs/intro-to-using-changesets.md" },
+    { "label": "changesets/action README: version pull request, publish, GitHub releases", "url": "https://github.com/changesets/action" },
+    { "label": "GoReleaser docs: How it works (build, publish, announce)", "url": "https://goreleaser.com/getting-started/how-it-works/" },
+    { "label": "GoReleaser docs: Quick start (uses the latest Git tag)", "url": "https://goreleaser.com/getting-started/quick-start/" },
+    { "label": "release-it README: interactive and CI modes", "url": "https://github.com/release-it/release-it" },
+    { "label": "npm Docs: Trusted publishing for npm packages", "url": "https://docs.npmjs.com/trusted-publishers" },
+    { "label": "GitHub Docs: Automatically generated release notes", "url": "https://docs.github.com/en/repositories/releasing-projects-on-github/automatically-generated-release-notes" }
+  ]
+}

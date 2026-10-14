@@ -1,0 +1,134 @@
+{
+  "$schema": "../../.astro/collections/concepts.schema.json",
+  "name": "Git hooks",
+  "icon": "fishing-hook",
+  "category": "delivery",
+  "order": 40,
+  "parent": "version-control",
+  "summary": "Programs Git runs at fixed points, such as just before a commit is made or before a push is accepted, so checks and automation happen without anyone remembering to run them.",
+  "howItWorks": "A hook is any executable file named after an event, such as `pre-commit` or `pre-push`, placed in the repository’s hooks directory: `.git/hooks` by default, or wherever `core.hooksPath` points. Git runs it at that moment and passes details as arguments or on standard input; when a hook that runs before an action, such as `pre-commit`, `commit-msg` or `pre-push`, exits with a non-zero status, Git aborts the action. Client-side hooks run on the developer’s machine. `pre-commit` runs before the commit message is prepared and is where formatters, linters and quick tests go; `commit-msg` gets the path of the message file and may rewrite or reject it; `pre-push` reads the refs about to be sent. `git commit --no-verify` skips `pre-commit` and `commit-msg`. Server-side hooks run in the repository that receives a push: `pre-receive` reads every ref update on standard input and can reject the whole push, `update` runs once per ref and can reject just that ref, and `post-receive` runs after the refs have moved, for notifications. Hooks are not tracked files and `git clone` doesn’t copy them, so teams share them another way: a committed directory plus `core.hooksPath`; a hook manager such as Husky, Lefthook or pre-commit that reads a checked-in config and installs itself into Git; or, since Git 2.54, named hooks in Git’s own config (`hook.<name>.command` and `hook.<name>.event`), which let several commands run for one event and can be set once for every repository. Anyone can skip or delete a local hook, so a rule that must hold is checked again in CI or by a server-side hook. Custom server hooks need a server you administer, such as GitHub Enterprise Server or GitLab Self-Managed; GitLab offers push rules as “a user-configurable Git hook interface” for the same jobs.",
+  "analogy": "A checklist taped inside your own front door versus the security check at the airport. The checklist (a client-side hook) catches the forgotten passport before you leave, but you can walk past it; the airport check (a server-side hook) stops everyone, whatever they remembered.",
+  "useWhen": [
+    "Fast checks on what is about to be committed: formatting, linting and secret scanning of the staged files",
+    "Checking or fixing commit messages before they exist, such as commitlint in `commit-msg` for Conventional Commits",
+    "Rules a self-hosted server must enforce for every pusher, such as fast-forward-only branches or no unannotated tags (`pre-receive`, `update`)"
+  ],
+  "avoidWhen": [
+    "Slow work such as the full test suite in `pre-commit`: people start reaching for `--no-verify`; move it to `pre-push` or CI",
+    "As the only line of defense: local hooks aren’t cloned and can be skipped, so CI or the server must check again",
+    "Running hooks from a repository you don’t trust: a hook is an arbitrary program that runs with your permissions"
+  ],
+  "example": "A 12-person TypeScript team uses Husky. Its `pre-commit` hook runs lint-staged, which formats and lints only the 3 staged files instead of all 2,000 in the repository, so the commit waits about two seconds; its `commit-msg` hook runs commitlint. One developer commits a work-in-progress with `--no-verify` and pushes it. The same lint job runs in CI on the pull request, fails, and the branch can’t merge until it’s fixed, so nothing unformatted reaches `main`.",
+  "snippet": {
+    "lang": "bash",
+    "source": [
+      "# A hook is an executable named after the event",
+      "cat > .git/hooks/pre-commit <<'EOF'",
+      "#!/bin/sh",
+      "# a non-zero exit aborts the commit",
+      "git diff --cached --check || exit 1   # whitespace errors in staged changes",
+      "exec npm run lint",
+      "EOF",
+      "chmod +x .git/hooks/pre-commit",
+      "",
+      "# Share hooks by committing them and pointing Git at the folder",
+      "git config core.hooksPath .githooks",
+      "",
+      "# Git 2.54+: named hooks in config, several per event",
+      "git config set hook.lint.command \"npm run lint\"",
+      "git config set --append hook.lint.event pre-commit",
+      "git hook list pre-commit",
+      "",
+      "git commit --no-verify -m \"WIP\"      # skips pre-commit and commit-msg"
+    ]
+  },
+  "related": ["version-control", "commit-conventions", "static-analysis", "cicd"],
+  "diagram": {
+    "caption": "Commits pass the local `pre-commit` and `commit-msg` hooks, which send some back to the author. A commit made with `--no-verify` (orange) skips them, so the server’s `pre-receive` hook checks every push again before it reaches `main`.",
+    "w": 860,
+    "h": 280,
+    "nodes": [
+      { "id": "dev", "x": 85, "y": 80, "label": "git commit", "sub": "staged changes", "emit": { "every": 1700, "jitter": 0.3, "color": 0 }, "out": ["pc"] },
+      { "id": "skip", "x": 85, "y": 200, "label": "--no-verify", "sub": "skips local hooks", "emit": { "every": 6500, "jitter": 0.2, "color": 2, "to": ["local"] } },
+      { "id": "pc", "x": 240, "y": 80, "label": "pre-commit", "sub": "format, lint", "mode": "gate", "p": 0.8, "deny": "author", "denyText": "lint failed", "out": ["cm"] },
+      { "id": "cm", "x": 390, "y": 80, "label": "commit-msg", "sub": "check message", "mode": "gate", "p": 0.9, "deny": "author", "denyText": "bad message", "out": ["local"] },
+      { "id": "author", "x": 315, "y": 200, "label": "Back to the author", "sub": "fix and retry", "mode": "sink" },
+      { "id": "local", "x": 530, "y": 140, "label": "Local commit", "sub": "git push", "out": ["pr"] },
+      { "id": "pr", "x": 670, "y": 140, "label": "pre-receive", "sub": "on the server", "mode": "gate", "p": 0.85, "deny": "rejected", "denyText": "push rejected", "out": ["main"] },
+      { "id": "rejected", "x": 670, "y": 235, "label": "Push rejected", "sub": "message on stderr", "mode": "sink" },
+      { "id": "main", "x": 795, "y": 140, "label": "main", "sub": "shared branch", "mode": "sink", "concept": "version-control" }
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "The hooks teams use most",
+      "intro": "Git supports more than twenty hooks; these are the ones most setups touch. Client-side hooks run in your clone, server-side hooks in the repository that receives the push.",
+      "corner": "Hook",
+      "columns": ["Runs", "Can it stop the action?", "Typical use"],
+      "rows": [
+        { "label": "`pre-commit`", "values": ["Before the commit message is prepared", "Yes; skipped by `--no-verify`", "Format and lint staged files, scan for secrets"] },
+        { "label": "`prepare-commit-msg`", "values": ["After Git writes the default message, before the editor opens", "Yes, but it is meant for editing the message and isn’t skipped by `--no-verify`", "Fill in a template; tidy generated messages for merges and squashes"] },
+        { "label": "`commit-msg`", "values": ["After the message is written, for `git commit` and `git merge`", "Yes; skipped by `--no-verify`", "Check or normalize the message, such as Conventional Commits"] },
+        { "label": "`post-commit`", "values": ["After the commit is made", "No", "Notifications"] },
+        { "label": "`pre-push`", "values": ["Before `git push` sends anything; the refs arrive on standard input", "Yes, the whole push", "Checks too slow for every commit"] },
+        { "label": "`pre-receive` (server)", "values": ["Once per push, before any ref is updated", "Yes, the whole push", "Policy for everyone: message format, blocked files, sensitive data"] },
+        { "label": "`update` (server)", "values": ["Once per ref being updated", "Yes, that ref only", "Fast-forward-only branches, refuse unannotated tags"] },
+        { "label": "`post-receive` (server)", "values": ["After the refs are updated", "No", "Send commit emails, notify other systems"] }
+      ],
+      "notes": ["`git init` copies sample scripts into `.git/hooks` with a `.sample` suffix; remove the suffix and make the file executable to enable one."]
+    }
+  ],
+  "history": {
+    "story": [
+      "Hooks arrived in Git’s first summer. On July 31, 2005, less than four months after Git’s first commit, a patch credited to Josef Weidendorfer made `git-receive-pack` run `$GIT_DIR/hooks/update` with the ref name and the old and new commit IDs just before updating a ref. Junio C Hamano rewrote it so the hook could decline the update by exiting with a non-zero status, and days later split out a separate `post-update` hook, partly on a suggestion from Linus Torvalds that refreshing the files dumb HTTP clients need should be optional. On August 2 Hamano added a template directory that `git init` copies into every new repository, to ship sample hooks. On August 18 came `pre-commit`, `commit-msg` and `post-commit`, and Git’s built-in commit checker moved into the sample `pre-commit` hook so each project could customize it.",
+      "Because the hooks directory lives inside `.git`, hooks were never versioned with the code, and Git’s own book warns that client-side hooks are not copied when you clone. Tools filled the gap. Husky, first published to npm in June 2014, installed hooks for JavaScript projects. The pre-commit framework was built because its authors “copied and pasted unwieldy bash scripts from project to project”; it became a package manager that installs hooks written in any language. In June 2016 Git 2.9 added `core.hooksPath`, because hooks stored in each repository’s `.git` directory were “a pain to manage” for anyone with a standard set; current Husky relies on it. Later managers such as Evil Martians’ Lefthook, a single Go binary, added parallel runs and per-file filtering.",
+      "Git itself caught up in 2026. Git 2.54, released on April 20, lets any config file, global or system-wide included, define named hooks with `hook.<name>.command` and attach them to events with `hook.<name>.event`, so several commands can run for one event and one script can serve many repositories; Git 2.55 in June let them run in parallel. Hooks also became a security concern: since Git 2.36 Git refuses to work in a repository owned by another user unless it is listed in `safe.directory`, to avoid being affected by that user’s config files and hooks."
+    ],
+    "choices": [
+      { "choice": "Hooks are plain executables named after the event", "why": "Git needs no plugin API: it passes arguments and standard input and reads the exit status. The samples are shell and Perl, but Pro Git notes that any properly named executable works, in whatever language you know." },
+      { "choice": "A non-zero exit can refuse the action", "why": "Weidendorfer’s first version ran after the update. Hamano changed it so `update` could decline a ref before it moved, which is what makes hooks usable for policy rather than only for notifications." },
+      { "choice": "Hooks stay out of clones", "why": "A hook is a program that runs with your permissions, so running ones that arrive with a clone would hand control to whoever published the repository. The cost is that teams need another way to share hooks, which is why core.hooksPath and the hook managers exist." },
+      { "choice": "Named hooks in config (Git 2.54)", "why": "One file per event per repository made it awkward to run a linter and a leak detector together, or to reuse one script across many repositories. Named hooks can be set globally, several can attach to one event, and wrapper tools can reuse the mechanism through `git hook run`." }
+    ],
+    "timeline": [
+      { "year": "2005", "text": "Git gains its `update` hook (July 31), sample hooks (August 2), and `pre-commit`, `commit-msg` and `post-commit` (August 18)" },
+      { "year": "2014", "text": "Husky is first published to npm (June)" },
+      { "year": "2016", "text": "Git 2.9 adds `core.hooksPath` (June 13)" },
+      { "year": "2022", "text": "Git 2.36 ignores repositories owned by other users unless listed in `safe.directory`, partly to avoid their hooks" },
+      { "year": "2026", "text": "Git 2.54 lets config files define hooks, several per event (April 20)" }
+    ],
+    "sources": [
+      { "label": "git/git on GitHub: Initial revision of “git” (Apr 7, 2005)", "url": "https://github.com/git/git/commit/e83c5163316f89bfbde7d9ab23ca2e25604af290" },
+      { "label": "git/git on GitHub: [PATCH] Added hook in git-receive-pack, Josef Weidendorfer (Jul 31, 2005)", "url": "https://github.com/git/git/commit/b1bf95bba26c8de1581f401dcab1f743bad7fc1d" },
+      { "label": "git/git on GitHub: receive-pack hooks updates (Aug 2, 2005)", "url": "https://github.com/git/git/commit/19614330ddaf02367a7faf2ff5e09f1f39fd63c4" },
+      { "label": "git/git on GitHub: Install sample hooks (Aug 2, 2005)", "url": "https://github.com/git/git/commit/8d5afef0f9b3a252f7b90406d35c295dc698e26d" },
+      { "label": "git/git on GitHub: Add commit hook and make the verification customizable (Aug 18, 2005)", "url": "https://github.com/git/git/commit/89e2c5f17b901edf28a8bb778ece3f6c18bbb721" },
+      { "label": "Pro Git: Customizing Git, Git Hooks (client-side hooks are not copied when you clone)", "url": "https://git-scm.com/book/en/v2/Customizing-Git-Git-Hooks" },
+      { "label": "npm registry: husky package metadata (first published June 9, 2014)", "url": "https://registry.npmjs.org/husky" },
+      { "label": "pre-commit: Introduction (why the framework was built)", "url": "https://pre-commit.com/" },
+      { "label": "The GitHub Blog: Git 2.9 has been released (Jun 13, 2016)", "url": "https://github.blog/open-source/git/git-2-9-has-been-released/" },
+      { "label": "Git 2.9 release notes: core.hooksPath", "url": "https://github.com/git/git/blob/master/Documentation/RelNotes/2.9.0.adoc" },
+      { "label": "Lefthook README: single Go binary, parallel execution, glob filters", "url": "https://github.com/evilmartians/lefthook" },
+      { "label": "Git 2.36 release notes: repositories owned by other users and their hooks", "url": "https://github.com/git/git/blob/master/Documentation/RelNotes/2.36.0.adoc" },
+      { "label": "Git 2.54 release notes: hook commands defined in configuration files", "url": "https://github.com/git/git/blob/master/Documentation/RelNotes/2.54.0.adoc" },
+      { "label": "Git 2.55 release notes: configured hooks can run in parallel", "url": "https://github.com/git/git/blob/master/Documentation/RelNotes/2.55.0.adoc" },
+      { "label": "Git docs: githooks (manual change history with release dates)", "url": "https://git-scm.com/docs/githooks" }
+    ]
+  },
+  "sources": [
+    { "label": "Git docs: githooks (every hook, its arguments, exit status and --no-verify)", "url": "https://git-scm.com/docs/githooks" },
+    { "label": "Git docs: git-hook (hook.<name>.command, hook.<name>.event, git hook run and list)", "url": "https://git-scm.com/docs/git-hook" },
+    { "label": "Pro Git: Customizing Git, Git Hooks", "url": "https://git-scm.com/book/en/v2/Customizing-Git-Git-Hooks" },
+    { "label": "Git 2.9 release notes: core.hooksPath", "url": "https://github.com/git/git/blob/master/Documentation/RelNotes/2.9.0.adoc" },
+    { "label": "Git 2.54 release notes: hooks defined in configuration", "url": "https://github.com/git/git/blob/master/Documentation/RelNotes/2.54.0.adoc" },
+    { "label": "Husky docs: features (uses core.hooksPath, supports all 13 client-side hooks)", "url": "https://typicode.github.io/husky/" },
+    { "label": "Husky docs: Get started (husky init, disabling with HUSKY=0)", "url": "https://typicode.github.io/husky/get-started.html" },
+    { "label": "Lefthook README: Git hooks manager, single Go binary, parallel execution", "url": "https://github.com/evilmartians/lefthook" },
+    { "label": "pre-commit: quick start (.pre-commit-config.yaml, pre-commit install)", "url": "https://pre-commit.com/" },
+    { "label": "lint-staged README: run tasks against staged files only", "url": "https://github.com/lint-staged/lint-staged" },
+    { "label": "commitlint docs: Local setup (lint messages in the commit-msg hook)", "url": "https://commitlint.js.org/guides/local-setup.html" },
+    { "label": "GitHub Docs: About pre-receive hooks (GitHub Enterprise Server)", "url": "https://docs.github.com/en/enterprise-server@latest/admin/enforcing-policies/enforcing-policy-with-pre-receive-hooks/about-pre-receive-hooks" },
+    { "label": "GitLab Docs: Git server hooks (GitLab Self-Managed; push rules as a user-configurable alternative)", "url": "https://docs.gitlab.com/administration/server_hooks/" }
+  ]
+}

@@ -1,0 +1,91 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Upjet",
+  "concepts": ["iac"],
+  "parent": { "id": "crossplane", "as": "extension" },
+  "provider": "oss",
+  "vendor": "Cloud Native Computing Foundation",
+  "license": "Apache 2.0",
+  "website": "https://github.com/crossplane/upjet",
+  "repo": "https://github.com/crossplane/upjet",
+  "summary": "A code generator and runtime that turns a Terraform provider into a Crossplane provider, so Terraform’s resource code sits behind Kubernetes-style managed resources.",
+  "intro": [
+    "At build time Upjet reads a Terraform provider’s schema and generates Go types, CRDs and reconciling controllers that follow Crossplane’s resource model, plus example manifests and API docs scraped from the Terraform documentation. The provider author configures each resource in Go: its external name (how it is identified and imported), references to other resources, sensitive fields, and whether calls are sync or async. Only resources with an external name configuration get generated. Upjet builds the official AWS, Azure and GCP providers and more than 50 community ones, such as Grafana and GitHub.",
+    "At runtime the generated controllers run Terraform’s resource logic while users see only Kubernetes objects. The first versions wrote JSON and ran the Terraform CLI for every operation. Since 2024 the controllers call the provider’s Go code directly (Terraform Plugin SDK v2) or speak its plugin protocol (Plugin Framework), with the CLI kept as one of three modes. Upjet v2 (October 2025) generates both the legacy cluster-scoped resources and namespaced ones for Crossplane v2, in API groups with an `.m.` such as `s3.aws.m.upbound.io`."
+  ],
+  "strengths": [
+    "Broad coverage fast: anything with a Terraform provider can become a set of managed resources, reusing resource logic the Terraform community already maintains",
+    "Skipping the Terraform CLI made providers much cheaper: creating 1,000 AWS RolePolicyAttachments, average time to ready fell from 19.55 minutes to about 1 second and peak memory from 1.79 GiB to 421 MiB",
+    "Generates the repetitive parts at scale (CRDs, controllers, references, examples, docs) and adds frameworks for API version conversion and migrating between providers",
+    "Apache 2.0 under the Crossplane project; without the Terraform CLI, providers avoid HashiCorp’s BSL license, and Terraform providers themselves stay MPL 2.0"
+  ],
+  "limits": [
+    "Resources behave the way the underlying Terraform provider does, and each one needs hand-written external name configuration before it is generated",
+    "Its own README says to write a native provider instead when no Terraform provider exists, when you need custom reconcile logic or exact control of the API, or when performance needs exceed what Terraform execution allows",
+    "Generated providers are large: a whole cloud means hundreds of CRDs, and Terraform schema changes have to be managed as CRD version changes",
+    "It is a framework for provider authors in Go; most Crossplane users only meet it through the providers it generates"
+  ],
+  "worksWith": [
+    { "id": "terraform", "how": "generates Crossplane providers from" },
+    { "id": "crossplane", "how": "builds the AWS, Azure and GCP providers of" }
+  ],
+  "snippet": {
+    "lang": "go",
+    "title": "Configuring two GitHub resources in an Upjet provider, then `make generate`",
+    "source": [
+      "// config/external_name.go: which Terraform resources to generate, and how each is identified",
+      "var ExternalNameConfigs = map[string]config.ExternalName{",
+      "\t\"github_repository\": config.NameAsIdentifier,",
+      "\t\"github_branch\": config.TemplatedStringAsIdentifier(\"branch\", \"{{ .parameters.repository }}:{{ .external_name }}:{{ .parameters.source_branch }}\"),",
+      "}",
+      "",
+      "// config/namespaced/branch/config.go",
+      "func Configure(p *config.Provider) {",
+      "\tp.AddResourceConfigurator(\"github_branch\", func(r *config.Resource) {",
+      "\t\tr.ShortGroup = \"branch\"",
+      "\t\t// a Branch refers to a Repository object instead of a raw name",
+      "\t\tr.References[\"repository\"] = config.Reference{",
+      "\t\t\tType: \"github.com/myorg/provider-github/apis/namespaced/repository/v1alpha1.Repository\",",
+      "\t\t}",
+      "\t})",
+      "}"
+    ]
+  },
+  "history": {
+    "story": [
+      "Crossplane is only as useful as its providers, and writing a controller by hand for every cloud resource was slow; the sheer number of resources was “way too many for one to develop one by one”. Earlier code generators, such as crossplane-tools and the AWS Controllers for Kubernetes pipeline, still needed resource-specific logic written by hand, because cloud APIs are not consistent enough for one generic pipeline. Terraform providers had already solved the same problem of talking to each cloud’s API.",
+      "Muvaffak Onus’s Terrajet design, approved by the Crossplane maintainers, chose to drive the Terraform CLI with generated JSON. It called the CLI “not the cleanest option”, but the fastest route to broad coverage, reusing Terraform’s tested diff and import logic. Terrajet appeared in 2021 with AWS, Azure and GCP providers; Upbound then created Upjet as its successor in 2022 to build its own official providers, and Terrajet was archived.",
+      "In September 2023 Upbound donated Upjet and its AWS, Azure and GCP providers to the Crossplane project. The Crossplane blog called it a governance change that stops Upbound from ever relicensing them under something more restrictive. In March 2024 the providers stopped running the Terraform CLI, which Upbound said was never built for continuous reconciliation, and called the provider code directly, for up to four times lower running cost. Upjet 1.0 shipped in November 2023, and 2.0, for Crossplane v2’s namespaced resources, in October 2025."
+    ],
+    "choices": [
+      { "choice": "Generate from Terraform providers, not from cloud APIs", "why": "Cloud APIs are too inconsistent for one generic generator, and Terraform providers already handle each API’s quirks, so the community could “build on top of the shoulders of the giants”." },
+      { "choice": "Drive the Terraform CLI at first", "why": "Providers are written to be consumed by the CLI and hide much of their logic; calling the CLI gave Terraform’s own diff and import behavior and the quickest path to coverage, behind an interface that could change later." },
+      { "choice": "Later bypass the CLI", "why": "The CLI caused heavy overhead in a control plane that reconciles continuously, and fixing it would have been too large an effort; calling providers directly also removed the BSL question." },
+      { "choice": "Donate it to the CNCF project", "why": "Moving from a vendor project under Upbound’s CLA to Crossplane governance means Upjet and its providers must stay Apache 2.0." }
+    ],
+    "timeline": [
+      { "year": "2021", "text": "Terrajet, Upjet’s predecessor, starts generating Crossplane providers through the Terraform CLI" },
+      { "year": "2022", "text": "Upbound releases Upjet as Terrajet’s successor" },
+      { "year": "2023", "text": "Donated to the Crossplane project in September; Upjet 1.0 in November" },
+      { "year": "2024", "text": "Generated providers drop the Terraform CLI and call provider code directly" },
+      { "year": "2025", "text": "Upjet 2.0 in October generates namespaced resources for Crossplane v2" }
+    ],
+    "sources": [
+      { "label": "Crossplane design doc: Terrajet, code generation for Terraform-based providers", "url": "https://github.com/crossplane/crossplane/blob/main/design/design-doc-terrajet.md" },
+      { "label": "crossplane/terrajet on GitHub (archived; points to Upjet)", "url": "https://github.com/crossplane/terrajet" },
+      { "label": "Crossplane blog: Crossplane expands charter and accepts Upbound’s donation of Upjet providers (Sep 2023)", "url": "https://blog.crossplane.io/charter-expansion-upjet-donation/" },
+      { "label": "Crossplane blog: New providers donated by Upbound bring up to 4x cost savings (Mar 2024)", "url": "https://blog.crossplane.io/new-providers-for-crossplane-donated-by-upbound-bring-up-to-4x-cost-savings/" },
+      { "label": "Upjet releases on GitHub (v1.0.0 Nov 2023, v2.0.0 Oct 2025)", "url": "https://github.com/crossplane/upjet/releases" }
+    ]
+  },
+  "sources": [
+    { "label": "Upjet README (architecture, execution modes, providers built with it, when to use it)", "url": "https://github.com/crossplane/upjet" },
+    { "label": "Upjet docs: Generating a Crossplane provider", "url": "https://github.com/crossplane/upjet/blob/main/docs/generating-a-provider.md" },
+    { "label": "Upjet docs: Upgrading the provider to Upjet v2 (namespaced MRs)", "url": "https://github.com/crossplane/upjet/blob/main/docs/upjet-v2-upgrade.md" },
+    { "label": "Crossplane blog: New providers donated by Upbound bring up to 4x cost savings (Mar 2024)", "url": "https://blog.crossplane.io/new-providers-for-crossplane-donated-by-upbound-bring-up-to-4x-cost-savings/" },
+    { "label": "Crossplane docs: Disabling unused managed resources (provider CRD counts)", "url": "https://docs.crossplane.io/latest/guides/disabling-unused-managed-resources/" },
+    { "label": "Crossplane docs: Get started with managed resources (s3.aws.m.upbound.io)", "url": "https://docs.crossplane.io/latest/get-started/get-started-with-managed-resources/" },
+    { "label": "Upjet releases on GitHub", "url": "https://github.com/crossplane/upjet/releases" }
+  ],
+  "checked": "2026-10-13"
+}

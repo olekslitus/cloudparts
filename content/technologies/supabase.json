@@ -1,0 +1,102 @@
+{
+  "$schema": "../../.astro/collections/technologies.schema.json",
+  "name": "Supabase",
+  "concepts": ["baas"],
+  "uses": ["relational", "authentication"],
+  "provider": "vendor",
+  "vendor": "Supabase, Inc.",
+  "license": "Apache 2.0 (platform repo); hosted service proprietary",
+  "website": "https://supabase.com",
+  "repo": "https://github.com/supabase/supabase",
+  "summary": "A backend built around one dedicated Postgres database per project, with a REST API generated from its schema, JWT auth, file storage, realtime updates and edge functions, all assembled from open-source parts you can also self-host.",
+  "intro": [
+    "Each project is a full Postgres database on its own server, and you can use it with full privileges. Around it Supabase runs separate open-source services: PostgREST reflects the schema into a REST API at `https://<project_ref>.supabase.co/rest/v1/` (with the `pg_graphql` extension for GraphQL), GoTrue issues JWTs for signed-in users, Realtime (in Elixir) streams database changes and broadcasts messages over WebSockets, the Storage API serves S3-compatible files while keeping their metadata in Postgres, Edge Functions run TypeScript on Deno, Supavisor pools connections and Envoy is the API gateway. Browsers can call the API directly because every request runs as a Postgres role (`anon` or `authenticated`) and Row Level Security policies decide which rows it may read or write; PostgREST turns each request into a single SQL statement.",
+    "On the hosted platform you pay for a plan and for compute per project, billed hourly. The Free plan gives 500 MB of database, 1 GB of files and 50,000 monthly active users, allows 2 active projects and pauses a project after a week of inactivity. Pro starts at $25 a month with $10 of compute credit, which covers one Micro instance (shared CPU, 1 GB of RAM); sizes go up to 16XL at $3,730 a month for 64 dedicated vCPUs and 256 GB. Self-hosting uses Docker Compose and runs as a single project, without branching, managed backups, point-in-time recovery or the Management API."
+  ],
+  "strengths": [
+    "It is plain Postgres: you can connect with any Postgres client or ORM, use extensions such as pgvector, and leave with `pg_dump`",
+    "Authorization lives in the database as Row Level Security policies, so the generated API, Realtime and Storage all enforce the same rules",
+    "Every component is open source (Postgres, PostgREST, GoTrue, Realtime, Storage, Supavisor), and the hosted platform is meant to stay compatible with self-hosting",
+    "Predictable entry pricing: a $25 Pro plan includes 100,000 monthly active users, 8 GB of disk, 250 GB of egress and 2 million Edge Function invocations"
+  ],
+  "limits": [
+    "A table in an exposed schema without RLS is readable and writable by any role with a grant on it, and views bypass RLS by default, so a missed policy exposes data to the browser",
+    "Compute is charged per project, so each extra project on a paid plan adds at least $10 a month; Free projects pause after 1 week of inactivity",
+    "Edge Functions get 256 MB of memory, 2 s of CPU time per request and a wall clock of 150 s (Free) or 400 s (paid), with no multithreaded Node libraries such as sharp",
+    "Self-hosted Supabase is one project per install, community-supported, and lacks branching, PITR and managed backups"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "gives each project its own" },
+    { "id": "envoy", "how": "routes API requests through" },
+    { "id": "s3", "how": "serves Storage over an API compatible with" },
+    { "id": "docker", "how": "is self-hosted with Compose on" },
+    { "id": "turso", "how": "announced in October 2026 it is acquiring" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "Let signed-in users read only their own rows through the generated API",
+    "source": [
+      "create table public.todos (",
+      "  id bigint generated always as identity primary key,",
+      "  user_id uuid not null references auth.users (id),",
+      "  task text not null",
+      ");",
+      "",
+      "alter table public.todos enable row level security;",
+      "",
+      "-- Grant only what each client role needs: signed-out visitors get nothing",
+      "revoke all on table public.todos from anon, authenticated;",
+      "grant select, insert, update, delete on table public.todos to authenticated;",
+      "",
+      "create policy \"Individuals can view their own todos.\"",
+      "  on public.todos for select",
+      "  to authenticated",
+      "  using ( (select auth.uid()) = user_id );",
+      "",
+      "-- GET https://<project_ref>.supabase.co/rest/v1/todos with the user's JWT",
+      "-- now returns only that user's rows"
+    ]
+  },
+  "history": {
+    "story": [
+      "Firebase made it easy to build an app without writing a backend, but it stored data in a NoSQL document database. Supabase started in early 2020 to give developers the same experience on Postgres. Its architecture page says it deliberately chose Postgres over a NoSQL store and, wherever possible, uses and supports existing open-source tools instead of building from scratch.",
+      "The first alpha, announced by co-founder and CEO Paul Copplestone in May 2020, could set up a Postgres database in about two minutes and auto-generate APIs from it; it was free to use thanks to DigitalOcean’s startup program and was not production ready. Magic-link auth and supabase-js 1.0 followed that autumn, and after about ten months of building Supabase entered beta in December 2020, along with a $6M seed round from Y Combinator, Mozilla and Coatue. Storage and a CLI for local development were next on the list.",
+      "Supabase declared general availability on 15 April 2024, saying it had kept the beta label until it could support every kind of customer. Since then most of its growth has come from AI tools: in its June 2026 Series F ($500M at a $10B pre-money valuation) it said more than 60% of new databases are launched by some kind of AI tool. In October 2026 it announced it is acquiring Turso, whose SQLite-based platform can manage millions of small databases per server, aiming at agents that create databases on demand."
+    ],
+    "choices": [
+      { "choice": "Postgres instead of a NoSQL store", "why": "Supabase says no other database offered the functionality needed to compete with Firebase while still scaling beyond it, and it does not abstract the database: you get full access to it." },
+      { "choice": "Assemble existing open-source tools", "why": "Its principles ask that each piece works on its own with nothing but a Postgres database, so it adopted PostgREST, GoTrue and Envoy and built only what was missing, such as Realtime and the Storage API." },
+      { "choice": "Authorization as Postgres Row Level Security", "why": "Because the API runs every request as a database role, policies written once in SQL protect the data whether it is read through REST, Realtime or Storage, which lets apps talk to the database straight from the browser." },
+      { "choice": "Portability over lock-in", "why": "The hosted platform is meant to stay compatible with self-hosting and to use standards such as `pg_dump` and CSV, so customers can migrate in and out; Supabase says it prefers upstreaming Postgres features to running a fork." }
+    ],
+    "timeline": [
+      { "year": "2020", "text": "First alpha in May: hosted Postgres with auto-generated APIs" },
+      { "year": "2020", "text": "Beta in December, with a $6M seed round" },
+      { "year": "2024", "text": "Generally available on 15 April" },
+      { "year": "2026", "text": "$500M Series F in June; Multigres v0.1 alpha released as open source" },
+      { "year": "2026", "text": "Announces it is acquiring Turso on 2 October" }
+    ],
+    "sources": [
+      { "label": "Supabase docs: Architecture (components, licenses, product principles)", "url": "https://supabase.com/docs/guides/getting-started/architecture" },
+      { "label": "Supabase blog: Supabase Alpha April 2020 (1 May 2020)", "url": "https://supabase.com/blog/supabase-alpha-april-2020" },
+      { "label": "Supabase blog: Supabase Alpha October 2020 (2 Nov 2020)", "url": "https://supabase.com/blog/supabase-alpha-october-2020" },
+      { "label": "Supabase blog: Supabase Beta December 2020 (2 Jan 2021)", "url": "https://supabase.com/blog/supabase-beta-december-2020" },
+      { "label": "Supabase: General Availability (15 April 2024)", "url": "https://supabase.com/ga" },
+      { "label": "Supabase blog: Supabase Series F (4 Jun 2026)", "url": "https://supabase.com/blog/supabase-series-f" },
+      { "label": "Supabase blog: Supabase is acquiring Turso (2 Oct 2026)", "url": "https://supabase.com/blog/supabase-is-acquiring-turso" }
+    ]
+  },
+  "sources": [
+    { "label": "Supabase docs: Architecture (Postgres, PostgREST, GoTrue, Realtime, Storage, Supavisor, Envoy)", "url": "https://supabase.com/docs/guides/getting-started/architecture" },
+    { "label": "Supabase docs: Data REST API (PostgREST, single SQL statement per request)", "url": "https://supabase.com/docs/guides/api" },
+    { "label": "Supabase docs: Row Level Security (grants, policies, views)", "url": "https://supabase.com/docs/guides/database/postgres/row-level-security" },
+    { "label": "Supabase docs: Edge Functions limits", "url": "https://supabase.com/docs/guides/functions/limits" },
+    { "label": "Supabase docs: Billing on Supabase (projects, compute per project)", "url": "https://supabase.com/docs/guides/platform/billing-on-supabase" },
+    { "label": "Supabase docs: Self-Hosting (Docker, differences from the platform)", "url": "https://supabase.com/docs/guides/self-hosting" },
+    { "label": "Supabase: Pricing (plans, compute sizes, usage rates)", "url": "https://supabase.com/pricing" },
+    { "label": "Supabase: General Availability (15 April 2024; pgvector, AWS Marketplace)", "url": "https://supabase.com/ga" },
+    { "label": "Supabase blog: Supabase is acquiring Turso (2 Oct 2026)", "url": "https://supabase.com/blog/supabase-is-acquiring-turso" },
+    { "label": "GitHub: supabase/supabase (Apache 2.0)", "url": "https://github.com/supabase/supabase" }
+  ],
+  "checked": "2026-10-13"
+}
