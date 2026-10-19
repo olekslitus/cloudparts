@@ -54,7 +54,7 @@ bun run preview    # serve dist/
 | `src/lib/sim/engine.ts` | The SVG simulation engine behind every live model and the playground. |
 | `src/lib/playground/model.ts` | The playground’s design format, design checks and share links. |
 | `src/components/` | `LiveModel`, `Playground`, `TechGraph`, `Search`, `MobileNav` and shadcn components in `ui/`. |
-| `src/pages/` | `/`, `/concepts/`, `/technologies/`, `/architectures/`, `/compare/` (each with `[id]` pages) and `/playground/`. |
+| `src/pages/` | `/`, `/concepts/`, `/technologies/`, `/architectures/`, `/compare/` (each with `[id]` pages), `/landscape/` and `/playground/`. |
 | `scripts/validate.ts` | `bun run validate`. |
 
 Links from the earlier single-file version (`#queue`, `#vs-messaging`) redirect to the new URLs.

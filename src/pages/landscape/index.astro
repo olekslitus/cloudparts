@@ -1,0 +1,297 @@
+---
+// Every technology on one map, like the CNCF landscape: area › topic › concept, one logo tile per product.
+import Glyph from '@/components/Glyph.astro';
+import Base from '@/layouts/Base.astro';
+import { getCatalog, type CatalogTech } from '@/lib/catalog';
+import { href, PROVIDER_NAMES, relationLabel, STAGE_LABELS, stageOf } from '@/lib/nav';
+
+const c = await getCatalog();
+const kindOf = (p: string) => (p === 'oss' ? 'oss' : p === 'vendor' ? 'vendor' : 'cloud');
+const types = [
+  { id: 'oss', label: 'Open source' },
+  { id: 'cloud', label: 'Cloud services' },
+  { id: 'vendor', label: 'Commercial' },
+];
+// area › topic › concept, keeping only the branches that have technologies
+const areas = c.parts.map(part => ({
+  part,
+  topics: part.categories.map(cat => ({
+    cat,
+    groups: c.concepts
+      .filter(p => p.category === cat.id)
+      .map(p => ({ concept: p, techs: c.technologies.filter(t => t.concepts[0] === p.id) }))
+      .filter(g => g.techs.length),
+  })).filter(x => x.groups.length),
+})).filter(a => a.topics.length);
+
+// "Kafka · Event streams · Open source", plus where it sits and its badge, for the tooltip
+const tip = (t: CatalogTech) => {
+  const stage = stageOf(t);
+  return [
+    t.name,
+    t.parent ? relationLabel(t.parent.as, c.tech(t.parent.id).name) : t.kind ? c.kind(t.kind).name : c.concept(t.concepts[0]).name,
+    PROVIDER_NAMES[t.provider],
+    stage && STAGE_LABELS[stage],
+    `since ${since(t)}`,
+  ].filter(Boolean).join(' · ') + `\n${t.summary}`;
+};
+/** The first year in its timeline: when it, or the project it grew out of, began. */
+const since = (t: CatalogTech) => Number(t.history.timeline[0].year);
+const years = c.technologies.map(since);
+const [first, last] = [Math.min(...years), Math.max(...years)];
+// for the browser: which technologies each architecture uses
+const data = {
+  names: Object.fromEntries(c.technologies.map(t => [t.id, t.name])),
+  archs: Object.fromEntries(c.architectures.map(a => [a.id, { title: a.title, path: href(`architectures/${a.id}/`), techs: a.techs }])),
+};
+const text = (t: CatalogTech) =>
+  [t.name, t.id, t.summary, t.vendor ?? '', t.license ?? '', ...t.concepts.map(id => c.concept(id).name), ...t.kinds.map(id => c.kind(id).name)].join(' ').toLowerCase();
+const chip = 'rounded-full border px-3 py-1 text-sm text-muted-foreground transition hover:border-foreground/30 hover:text-foreground aria-pressed:border-brand/40 aria-pressed:bg-brand-soft aria-pressed:font-medium aria-pressed:text-foreground';
+---
+
+<Base title="Landscape" description={`All ${c.technologies.length} technologies in the handbook on one map, grouped by area, topic and concept.`} section="landscape">
+  <div class="mx-auto max-w-[110rem]">
+    <header class="max-w-3xl">
+      <h1 class="text-4xl font-semibold tracking-tight text-balance sm:text-5xl">Landscape</h1>
+      <p class="mt-3 text-lg leading-relaxed text-muted-foreground">
+        All {c.technologies.length} technologies on one map, grouped by area, topic and the concept each one is an example of.
+        Open-source products have a border <span class="inline-block size-2.5 rounded-[3px] border border-foreground/40 bg-card align-middle" aria-hidden="true"></span>.
+        Hover a logo for what it is, or click it for its page. Pick an architecture to see its stack, or drag through the years to watch the map fill in.
+        The <a href={href('technologies/')} class="underline underline-offset-4 hover:text-foreground">technologies table</a> has the same products with licenses and dates.
+      </p>
+    </header>
+
+    <div class="mt-8 grid gap-3" data-filters>
+      <input
+        type="search"
+        data-q
+        placeholder="Filter by name, concept or description, e.g. rust, iceberg, queue"
+        aria-label="Filter technologies"
+        class="h-10 w-full max-w-xl rounded-lg border bg-background px-3 text-[15px] outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-brand/40"
+      />
+      <div class="flex flex-wrap items-center gap-1.5" role="group" aria-label="Type">
+        <span class="mr-1 text-sm text-muted-foreground">Type:</span>
+        <button type="button" class={chip} data-type="" aria-pressed="true">All</button>
+        {types.map(x => (
+          <button type="button" class:list={[chip, 'inline-flex items-center gap-1.5']} data-type={x.id} aria-pressed="false">
+            {x.id === 'oss' && <span class="inline-block size-2.5 rounded-[3px] border border-foreground/40 bg-card align-middle" aria-hidden="true"></span>}{x.label}
+          </button>
+        ))}
+      </div>
+      <div class="flex flex-wrap items-center gap-x-6 gap-y-3">
+        <label class="flex items-center gap-2 text-sm text-muted-foreground">
+          Stack:
+          <select data-arch class="h-8 rounded-md border bg-background px-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-brand/40">
+            <option value="">None</option>
+            {c.architectures.map(a => <option value={a.id}>{a.title}</option>)}
+          </select>
+        </label>
+        <div class="flex items-center gap-2 text-sm text-muted-foreground">
+          <button type="button" data-play class="inline-flex h-8 w-8 items-center justify-center rounded-md border text-foreground hover:border-foreground/30" aria-label="Play the years"><span aria-hidden="true">▶</span></button>
+          <label for="landscape-year">Year:</label>
+          <input id="landscape-year" type="range" data-year min={first} max={last} value={last} step="1" class="w-48 accent-[var(--brand)] sm:w-72" />
+          <span class="font-mono text-foreground tabular-nums" data-year-label>{last}</span>
+          <span data-year-count class="hidden sm:inline"></span>
+        </div>
+      </div>
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-muted-foreground">
+        <p aria-live="polite"><span data-count>{c.technologies.length}</span> of {c.technologies.length} technologies</p>
+        <nav class="flex flex-wrap items-center gap-x-3 gap-y-1" aria-label="Areas">
+          {areas.map(a => <a href={`#${a.part.id}`} class="underline-offset-4 hover:text-foreground hover:underline">{a.part.name}</a>)}
+        </nav>
+      </div>
+    </div>
+
+    <div class="mt-8 grid gap-12" data-map>
+      {areas.map(({ part, topics }) => (
+        <section id={part.id} class="scroll-mt-20" data-area>
+          <h2 class="flex items-center gap-2 border-b pb-2 text-xl font-semibold tracking-tight">
+            <Glyph icon={part.icon} class="size-5" />{part.name}
+            <span class="ml-1 text-sm font-normal text-muted-foreground">{part.blurb}</span>
+          </h2>
+          <div class="mt-4 flex flex-wrap gap-4">
+            {topics.map(({ cat, groups }) => (
+              <section class="max-w-full flex-auto rounded-xl bg-card p-3 ring-1 ring-foreground/10" data-topic>
+                <h3 class="mb-2 px-1">
+                  <a href={href(`topics/${cat.id}/`)} class="inline-flex items-center gap-2 font-semibold underline-offset-4 hover:text-brand hover:underline">
+                    <Glyph icon={cat.icon} />{cat.name}
+                  </a>
+                </h3>
+                <div class="flex flex-wrap gap-2">
+                  {groups.map(({ concept, techs }) => (
+                    <div class="flex-auto rounded-lg bg-muted/50 p-2 ring-1 ring-foreground/5" data-group>
+                      <a href={href(`concepts/${concept.id}/#technologies`)} class="block truncate px-1 font-mono text-[10px] tracking-wide text-muted-foreground uppercase underline-offset-4 hover:text-foreground hover:underline">
+                        {concept.name}
+                      </a>
+                      <ul class="mt-1.5 flex flex-wrap gap-1">
+                        {techs.map(t => (
+                          <li data-tile data-id={t.id} data-since={since(t)} data-type={kindOf(t.provider)} data-text={text(t)}>
+                            <a
+                              href={href(`technologies/${t.id}/`)}
+                              title={tip(t)}
+                              class:list={[
+                                'flex h-[4.5rem] w-[4.5rem] flex-col items-center justify-center gap-1 rounded-md border bg-card px-1 text-center transition hover:shadow-sm focus-visible:ring-2 focus-visible:ring-brand/40 focus-visible:outline-none',
+                                // open source has a border; the rest only show one on hover
+                                t.provider === 'oss' ? 'border-foreground/25 hover:border-foreground/50' : 'border-transparent hover:border-foreground/20',
+                                t.archived && 'opacity-50',
+                              ]}
+                            >
+                              <Glyph tech={t} class="size-7" />
+                              <span class="line-clamp-2 text-[10px] leading-tight text-foreground/80">{t.name}</span>
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+    <p data-empty hidden class="mt-6 text-muted-foreground">Nothing matches. Try fewer words, or set the type back to All.</p>
+  </div>
+  <div data-caption hidden aria-live="polite" class="fixed bottom-4 left-1/2 z-30 w-max max-w-[min(48rem,calc(100vw-2rem))] -translate-x-1/2 rounded-xl bg-popover px-4 py-2 text-pretty text-sm text-popover-foreground shadow-lg ring-1 ring-foreground/10"></div>
+  <script type="application/json" data-landscape set:html={JSON.stringify(data).replace(/</g, '\\u003c')} />
+</Base>
+
+<style>
+  [data-tile] { transition: opacity 150ms, filter 150ms; }
+  [data-map][data-dim] [data-tile]:not([data-lit]) { opacity: 0.15; }
+  [data-map][data-dim] [data-tile][data-lit] a { border-color: color-mix(in oklab, var(--brand) 45%, transparent); }
+  [data-map] [data-tile][data-future] { opacity: 0.07; filter: grayscale(1); }
+</style>
+
+<script>
+  // Filters the tiles by text and type, hides groups left empty, and keeps the filters in the URL.
+  // On top of that: a picked architecture lights up its stack, and the year slider fades out what
+  // didn't exist yet.
+  const box = document.querySelector<HTMLElement>('[data-filters]')!;
+  const map = document.querySelector<HTMLElement>('[data-map]')!;
+  const input = box.querySelector<HTMLInputElement>('[data-q]')!;
+  const archSelect = box.querySelector<HTMLSelectElement>('[data-arch]')!;
+  const slider = box.querySelector<HTMLInputElement>('[data-year]')!;
+  const play = box.querySelector<HTMLButtonElement>('[data-play]')!;
+  const caption = document.querySelector<HTMLElement>('[data-caption]')!;
+  const tiles = [...document.querySelectorAll<HTMLElement>('[data-tile]')];
+  const count = box.querySelector('[data-count]')!;
+  const empty = document.querySelector<HTMLElement>('[data-empty]')!;
+  const data: {
+    names: Record<string, string>;
+    archs: Record<string, { title: string; path: string; techs: string[] }>;
+  } = JSON.parse(document.querySelector('[data-landscape]')!.textContent!);
+  const last = Number(slider.max);
+  const state = { q: '', type: '', arch: '', year: last };
+  let started = '';
+
+  const esc = (s: string) => s.replace(/[&<>"]/g, ch => `&#${ch.charCodeAt(0)};`);
+  /** "Trino, Spark and 4 more", as buttons that jump to each tile. */
+  const names = (ids: string[], max: number) => {
+    const shown = ids.slice(0, max).map(id =>
+      `<button type="button" data-jump="${id}" class="underline decoration-foreground/30 underline-offset-4 hover:decoration-foreground">${esc(data.names[id])}</button>`);
+    const rest = ids.length - shown.length;
+    return rest > 0 ? `${shown.join(', ')} and ${rest} more` : shown.length > 1 ? `${shown.slice(0, -1).join(', ')} and ${shown.at(-1)}` : shown[0];
+  };
+  const tileOf = (id: string) => tiles.find(t => t.dataset.id === id);
+
+  // what's lit and what the caption says: the picked architecture, or else the year
+  const highlight = () => {
+    let lit: Set<string> | null = null;
+    let says = '';
+    if (state.arch) {
+      const a = data.archs[state.arch];
+      lit = new Set(a.techs);
+      says = `<b class="font-medium">${esc(a.title)}</b> uses ${names(a.techs, 12)} · <a href="${a.path}" class="text-brand underline-offset-4 hover:underline">See it run →</a>`;
+    }
+    if (!says && started) says = `<b class="font-mono font-medium">${state.year}</b> · ${started}`;
+    if (lit) map.dataset.dim = ''; else delete map.dataset.dim;
+    for (const t of tiles) {
+      t.toggleAttribute('data-lit', !!lit?.has(t.dataset.id!));
+    }
+    caption.innerHTML = says;
+    caption.hidden = !says;
+  };
+
+  const apply = () => {
+    const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
+    let n = 0;
+    let existed = 0;
+    for (const t of tiles) {
+      const show = (!state.type || t.dataset.type === state.type) && words.every(w => t.dataset.text!.includes(w));
+      const future = Number(t.dataset.since) > state.year;
+      t.hidden = !show;
+      t.toggleAttribute('data-future', future);
+      if (show) n++;
+      if (show && !future) existed++;
+    }
+    for (const sel of ['[data-group]', '[data-topic]', '[data-area]']) {
+      for (const el of document.querySelectorAll<HTMLElement>(sel)) el.hidden = !el.querySelector('[data-tile]:not([hidden])');
+    }
+    count.textContent = String(n);
+    empty.hidden = n > 0;
+    for (const b of box.querySelectorAll<HTMLButtonElement>('button[data-type]')) {
+      b.setAttribute('aria-pressed', String(b.dataset.type === state.type));
+    }
+    archSelect.value = state.arch;
+    slider.value = String(state.year);
+    box.querySelector('[data-year-label]')!.textContent = String(state.year);
+    started = state.year < last ? `${existed} of ${n} had started` : '';
+    box.querySelector('[data-year-count]')!.textContent = started && `· ${started}`;
+    highlight();
+    const url = new URL(location.href);
+    for (const k of ['q', 'type', 'arch'] as const) {
+      if (state[k]) url.searchParams.set(k, state[k]); else url.searchParams.delete(k);
+    }
+    if (state.year < last) url.searchParams.set('year', String(state.year)); else url.searchParams.delete('year');
+    history.replaceState(null, '', url);
+  };
+
+  const params = new URLSearchParams(location.search);
+  state.q = params.get('q') ?? '';
+  state.type = params.get('type') ?? '';
+  state.arch = data.archs[params.get('arch') ?? ''] ? params.get('arch')! : '';
+  const year = Number(params.get('year'));
+  if (year >= Number(slider.min) && year < last) state.year = year;
+  input.value = state.q;
+  input.addEventListener('input', () => { state.q = input.value; apply(); });
+  for (const b of box.querySelectorAll<HTMLButtonElement>('button[data-type]')) {
+    b.addEventListener('click', () => { state.type = b.dataset.type!; apply(); });
+  }
+  archSelect.addEventListener('change', () => {
+    state.arch = archSelect.value;
+    apply();
+    if (state.arch) tileOf(data.archs[state.arch].techs[0])?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+  caption.addEventListener('click', e => {
+    const id = (e.target as HTMLElement).closest<HTMLElement>('[data-jump]')?.dataset.jump;
+    if (id) tileOf(id)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+
+  // the year slider, and a button that plays it from the first year to now, lingering on years when something new appeared
+  const born = new Set(tiles.map(t => Number(t.dataset.since)));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const stop = () => {
+    clearTimeout(timer);
+    timer = undefined;
+    play.innerHTML = '<span aria-hidden="true">▶</span>';
+    play.setAttribute('aria-label', 'Play the years');
+  };
+  const step = () => {
+    state.year++;
+    apply();
+    if (state.year >= last) return stop();
+    timer = setTimeout(step, born.has(state.year + 1) ? 300 : 60);
+  };
+  slider.addEventListener('input', () => { stop(); state.year = Number(slider.value); apply(); });
+  play.addEventListener('click', () => {
+    if (timer) return stop();
+    if (state.year >= last) state.year = Number(slider.min);
+    play.innerHTML = '<span aria-hidden="true">❚❚</span>';
+    play.setAttribute('aria-label', 'Pause');
+    apply();
+    timer = setTimeout(step, 300);
+  });
+  apply();
+</script>
