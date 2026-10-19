@@ -29,7 +29,7 @@ export interface Where {
 }
 
 /** Icons the site uses outside the content: sections, kinds, comparisons, architectures, benchmarks. */
-export const SITE_ICONS = ['house', 'shapes', 'box', 'arrow-left-right', 'network', 'square-mouse-pointer', 'bookmark', 'gauge', 'folder', 'building-2', 'landmark', 'layout-grid'];
+export const SITE_ICONS = ['house', 'shapes', 'box', 'arrow-left-right', 'network', 'square-mouse-pointer', 'bookmark', 'gauge', 'folder', 'building-2', 'landmark', 'layout-grid', 'timeline'];
 
 export function navTree(c: Catalog, { section, page, active }: Where): NavNode[] {
   const on = (kind: Where['page'], id: string) => page === kind && active === id;
@@ -117,6 +117,7 @@ export function navTree(c: Catalog, { section, page, active }: Where): NavNode[]
   return [
     leaf('home', 'Home', '', 'house', section === 'home'),
     leaf('landscape', 'Landscape', 'landscape/', 'layout-grid', section === 'landscape'),
+    leaf('timeline', 'Timeline', 'timeline/', 'timeline', section === 'timeline'),
     branch({ ...leaf('concepts', 'Concepts', 'concepts/', 'shapes', section === 'concepts' && !active), open: true, children: handbook }),
     branch({ ...leaf('technologies', 'Technologies', 'technologies/', 'box', section === 'technologies' && !active), children: catalog }),
     branch({

@@ -29,16 +29,16 @@ bun install
 bun run dev        # http://localhost:4321
 bun run validate   # check content files
 bun run check      # validate + type-check
-bun run build      # static site in dist/
-bun run preview    # serve dist/
+bun run build      # static site in out/
+bun run preview    # serve out/
 ```
 
 ## Stack
 
-- [Astro](https://astro.build) builds every page to static HTML. Content is loaded through
-  content collections and validated with Zod at build time.
-- React islands for the interactive pieces: the live model, the playground, search (⌘K or `/`),
-  the theme toggle and the mobile menu.
+- [Next.js](https://nextjs.org) (App Router, static export) builds every page to static HTML.
+  Content is read from `content/` and validated with Zod at build time.
+- React server components for the pages, and client components for the interactive pieces: the
+  live model, the playground, search (⌘K or `/`), the theme toggle and the filters.
 - [shadcn/ui](https://ui.shadcn.com) components on Tailwind CSS v4, with the Geist typeface.
 - Shiki for code highlighting, at build time.
 
@@ -47,23 +47,24 @@ bun run preview    # serve dist/
 | Path | What it is |
 |------|------------|
 | `content/` | Categories, concepts, technologies, architectures, comparisons, foundations, resources, benchmarks and the home-page system map, as JSON. |
-| `src/content/schema.ts` | Zod schemas for all content. Also generates the JSON Schemas editors use. |
+| `src/content/schema.ts` | Zod schemas for all content. `scripts/schemas.ts` turns them into the JSON Schemas editors use. |
+| `src/content/load.ts` | Reads and parses every content file. |
 | `src/content/integrity.ts` | Cross-file checks: unknown ids, broken links between concepts, technologies and architectures. |
 | `src/content/play.ts` | How each concept behaves in the playground by default. |
 | `src/lib/catalog.ts` | Loads, checks and orders the catalog, derives codes like `MSG-02`, and works out which technologies and architectures link to what. |
 | `src/lib/sim/engine.ts` | The SVG simulation engine behind every live model and the playground. |
 | `src/lib/playground/model.ts` | The playground’s design format, design checks and share links. |
-| `src/components/` | `LiveModel`, `Playground`, `TechGraph`, `Search`, `MobileNav` and shadcn components in `ui/`. |
-| `src/pages/` | `/`, `/concepts/`, `/technologies/`, `/architectures/`, `/compare/` (each with `[id]` pages), `/landscape/` and `/playground/`. |
+| `src/components/` | `Shell` (the sidebar and frame of every page), `LiveModel`, `Playground`, `TechGraph`, `Search` and shadcn components in `ui/`. |
+| `src/app/` | The routes: `/`, `/concepts/`, `/technologies/`, `/architectures/`, `/compare/` (each with `[id]` pages), `/landscape/`, `/timeline/` and `/playground/`. |
 | `scripts/validate.ts` | `bun run validate`. |
 
 Links from the earlier single-file version (`#queue`, `#vs-messaging`) redirect to the new URLs.
 
 ## Deploy
 
-The site is live at <https://cloudparts.vercel.app/>. Vercel builds and publishes every push to
+The site is live at <https://cloudparts.dev/>. Vercel builds and publishes every push to
 `main`, and gives other branches and pull requests their own preview URL. Pushes and pull requests
 also run [`ci.yml`](.github/workflows/ci.yml), which validates the content, type-checks and builds.
 
 To host it under a sub-path instead, such as GitHub Pages, set `BASE_PATH` (e.g. `/cloudparts`)
-and `SITE` when building.
+when building.

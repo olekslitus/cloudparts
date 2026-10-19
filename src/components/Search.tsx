@@ -1,3 +1,5 @@
+'use client';
+
 import { useEffect, useMemo, useState } from 'react';
 import { SearchIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -14,7 +16,7 @@ interface Entry {
   /** Shown under the name. */
   sub: string;
   path: string;
-  /** A Lucide icon name from the page's sprite (IconSprite.astro); a logo replaces it. */
+  /** A Lucide icon name from the page's sprite (IconSprite.tsx); a logo replaces it. */
   icon: string;
   logo?: Logo;
   /** Other names people type for it: ids, product names, the concept it belongs to. */
@@ -112,10 +114,18 @@ function Glyph({ e }: { e: Entry }) {
     : <svg className="size-4 shrink-0 text-muted-foreground" aria-hidden="true"><use href={`#i-${e.icon}`} /></svg>;
 }
 
-/** The search button and dialog. Render it once per page: it also listens for ⌘K and "open-search" events. */
-export default function Search({ nav, base }: { nav: NavData; base: string }) {
+/** The search button and dialog. Render it once per page: it also listens for ⌘K and "open-search" events.
+ * What it searches is nav.json (src/app/nav.json/route.ts), fetched once the page is idle. */
+export default function Search({ base }: { base: string }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
+  const [nav, setNav] = useState<NavData>();
+
+  useEffect(() => {
+    const load = () => fetch(`${base}nav.json`).then(r => r.json()).then(setNav, () => {});
+    const idle = window.requestIdleCallback ?? ((f: () => void) => setTimeout(f, 200));
+    idle(load);
+  }, [base]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -143,7 +153,7 @@ export default function Search({ nav, base }: { nav: NavData; base: string }) {
     setOpen(false);
     window.location.href = base + path;
   };
-  const all = useMemo(() => entries(nav), [nav]);
+  const all = useMemo(() => (nav ? entries(nav) : []), [nav]);
   // a plain function, not a component, so items keep their identity between keystrokes
   const item = (e: Entry, label?: string) => (
     <CommandItem key={e.key} value={e.key} onSelect={() => go(e.path)} className="items-start gap-3">

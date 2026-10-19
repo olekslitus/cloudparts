@@ -1,8 +1,7 @@
 // Loads and cross-checks the catalog once per build, and adds derived fields
 // (category codes like MSG-02, ordering, lookups between concepts, technologies
 // and architectures) that pages share.
-import { getCollection } from 'astro:content';
-import systemMapJson from '../../content/system-map.json';
+import { loadContent } from '@/content/load';
 import { findProblems } from '@/content/integrity';
 import {
   diagram, RELATIONS, type Architecture, type Benchmark, type Category, type Part, type Comparison, type Concept, type Diagram, type Foundation, type Kind, type Resource, type Technology,
@@ -122,29 +121,23 @@ export interface Catalog {
   archsWithConcept: (conceptId: string) => CatalogArch[];
 }
 
-let cached: Promise<Catalog> | undefined;
+let cached: Catalog | undefined;
 
-export function getCatalog(): Promise<Catalog> {
+/** The whole catalog, loaded and checked on first use. Synchronous, so pages render in document order. */
+export function getCatalog(): Catalog {
   return (cached ??= load());
 }
 
 const uniq = <T>(xs: T[]) => [...new Set(xs)];
 
-async function load(): Promise<Catalog> {
-  const [partEntries, cats, conceptEntries, techEntries, archEntries, cmpEntries, fdnEntries, resEntries, benchEntries] = await Promise.all([
-    getCollection('parts'),
-    getCollection('categories'),
-    getCollection('concepts'),
-    getCollection('technologies'),
-    getCollection('architectures'),
-    getCollection('comparisons'),
-    getCollection('foundations'),
-    getCollection('resources'),
-    getCollection('benchmarks'),
-  ]);
-  const partList = partEntries.map(p => p.data).sort((a, b) => a.order - b.order);
+function load(): Catalog {
+  const {
+    parts: partEntries, categories: cats, concepts: conceptEntries, technologies: techEntries, architectures: archEntries,
+    comparisons: cmpEntries, foundations: fdnEntries, resources: resEntries, benchmarks: benchEntries, systemMap: systemMapJson,
+  } = loadContent();
+  const partList = [...partEntries].sort((a, b) => a.order - b.order);
   const partRank = new Map(partList.map((p, i) => [p.id, i]));
-  const categories = cats.map(c => c.data).sort((a, b) => (partRank.get(a.part) ?? 0) - (partRank.get(b.part) ?? 0) || a.order - b.order);
+  const categories = [...cats].sort((a, b) => (partRank.get(a.part) ?? 0) - (partRank.get(b.part) ?? 0) || a.order - b.order);
   const parts: CatalogPart[] = partList.map(p => ({ ...p, categories: categories.filter(c => c.part === p.id) }));
   const systemMap = diagram.parse(systemMapJson);
 

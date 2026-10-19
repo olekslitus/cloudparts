@@ -3,7 +3,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { z } from 'astro/zod';
+import type { z } from 'zod';
 import { findProblems } from '../src/content/integrity';
 import { architecture, benchmark, category, comparison, concept, diagram, foundation, part, resource, technology } from '../src/content/schema';
 

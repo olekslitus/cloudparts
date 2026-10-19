@@ -1,3 +1,5 @@
+'use client';
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CheckIcon, CopyIcon, ExternalLinkIcon, LinkIcon, PauseIcon, PlayIcon, PlusIcon, PowerIcon, RotateCcwIcon, SearchIcon, Trash2Icon, TriangleAlertIcon,

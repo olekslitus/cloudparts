@@ -137,11 +137,10 @@ export function navData(c: Catalog, logo: (id: string) => NavData['groups'][numb
   };
 }
 
-/** The GitHub repository, for "Improve this page" links. PUBLIC_REPO_URL overrides it, e.g. in a fork. */
-export const REPO_URL: string = import.meta.env.PUBLIC_REPO_URL || 'https://github.com/olekslitus/cloudparts';
+/** The GitHub repository, for "Improve this page" links. NEXT_PUBLIC_REPO_URL overrides it, e.g. in a fork. */
+export const REPO_URL: string = process.env.NEXT_PUBLIC_REPO_URL || 'https://github.com/olekslitus/cloudparts';
 
-/** Builds a link that respects the site's base path. */
+/** Builds a link that respects the site's base path (BASE_PATH, see next.config.ts). */
 export function href(path = ''): string {
-  const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
-  return base + path.replace(/^\//, '');
+  return `${process.env.NEXT_PUBLIC_BASE_PATH ?? ''}/${path.replace(/^\//, '')}`;
 }

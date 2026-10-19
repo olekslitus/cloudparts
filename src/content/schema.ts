@@ -1,7 +1,7 @@
-// Schemas for everything under /content. Astro uses them to validate the JSON at build
-// time and to generate the JSON Schema files that editors use for autocomplete
+// Schemas for everything under /content. The build validates the JSON with them (src/content/load.ts),
+// and scripts/schemas.ts turns them into the JSON Schema files that editors use for autocomplete
 // (the "$schema" line at the top of each content file).
-import { z } from 'astro/zod';
+import { z } from 'zod';
 import { icons as lucideIcons } from 'lucide-react';
 
 const id = z
@@ -299,8 +299,8 @@ export const concept = z.strictObject({
   sources,
 });
 
-// Row lengths, and that exactly one of concepts or technologies is set, are checked in integrity.ts: Astro's JSON Schema generator can't extend
-// an object schema that has a top-level refinement.
+// Row lengths, and that exactly one of concepts or technologies is set, are checked in integrity.ts, so the schema stays a plain object that
+// the JSON Schema generator and other schemas can extend.
 export const comparison = z.strictObject({
   $schema: z.string().optional(),
   title: text,

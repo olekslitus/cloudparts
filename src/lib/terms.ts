@@ -1,4 +1,4 @@
-// Finds names of technologies and concepts inside prose, so Md.astro can underline them and show a
+// Finds names of technologies and concepts inside prose, so Md.tsx can underline them and show a
 // short explanation on hover. Each term is marked once per page (its first mention), never on its own page.
 import type { Catalog } from '@/lib/catalog';
 import { href } from '@/lib/nav';
