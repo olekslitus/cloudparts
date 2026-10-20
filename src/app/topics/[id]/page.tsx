@@ -10,6 +10,7 @@ import { getCatalog } from '@/lib/catalog';
 import { meta } from '@/lib/meta';
 import { href, PROVIDER_SHORT, STAGE_LABELS, STAGE_WARN, stageOf } from '@/lib/nav';
 import { cn } from '@/lib/utils';
+import Md from '@/components/Md';
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -65,7 +66,7 @@ export default async function Topic({ params }: Params) {
                       <span className="font-medium group-hover:text-brand">{p.name}</span>
                       {n > 0 && <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{plural(n, 'technology')}</span>}
                     </span>
-                    <span className="mt-0.5 block text-sm leading-snug text-muted-foreground">{p.summary}</span>
+                    <span className="mt-0.5 block text-sm leading-snug text-muted-foreground"><Md text={p.summary} plain /></span>
                   </span>
                 </a>
               </li>

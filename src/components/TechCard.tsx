@@ -3,6 +3,7 @@ import Glyph from '@/components/Glyph';
 import StatusBadge from '@/components/StatusBadge';
 import type { CatalogTech } from '@/lib/catalog';
 import { href, PROVIDER_NAMES } from '@/lib/nav';
+import Md from '@/components/Md';
 
 interface Props {
   tech: CatalogTech;
@@ -24,7 +25,7 @@ export default function TechCard({ tech: t, also, note, family = [] }: Props) {
         <span className="ml-auto shrink-0 font-mono text-[10px] tracking-wide text-muted-foreground uppercase">{PROVIDER_NAMES[t.provider]}</span>
       </span>
       {note && <span className="mt-1 text-xs font-medium text-brand">{note}</span>}
-      <span className="mt-1 text-sm leading-snug text-muted-foreground">{t.summary}</span>
+      <span className="mt-1 text-sm leading-snug text-muted-foreground"><Md text={t.summary} plain /></span>
       {family.length > 0 && (
         <span className="mt-2 text-xs text-muted-foreground"><span className="font-medium text-foreground/80">+{family.length}</span> {family.slice(0, 4).map(x => x.name).join(', ')}{family.length > 4 && '…'}</span>
       )}

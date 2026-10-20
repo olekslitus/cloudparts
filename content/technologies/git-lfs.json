@@ -1,0 +1,99 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Git LFS",
+  "concepts": ["version-control"],
+  "parent": { "id": "git", "as": "extension" },
+  "provider": "oss",
+  "vendor": "GitHub and Git LFS contributors",
+  "license": "MIT",
+  "website": "https://git-lfs.com/",
+  "repo": "https://github.com/git-lfs/git-lfs",
+  "summary": "Git Large File Storage, a Git extension that commits small pointer files in place of large files and keeps their contents on a separate LFS server, downloading them only when a version is checked out.",
+  "intro": [
+    "Git keeps every version of every file in every clone, which is impractical for large binaries such as audio, video, datasets and graphics. Git LFS is a separate `git-lfs` program, written in Go, that hooks into stock Git through its clean and smudge filters. `git lfs track` writes a pattern such as `*.psd` to `.gitattributes`. When you `git add` a matching file, the clean filter hashes it with SHA-256, stores the contents in `.git/lfs/objects`, and hands Git a pointer file instead: three lines giving the spec version, the `oid` and the size, under 1024 bytes. Git commits, branches and merges the pointer like any small text file.",
+    "The contents travel separately. On `git push`, a pre-push hook first uploads any new large files to the LFS server, which by default lives at the Git remote’s URL plus `.git/info/lfs`; requests go through a JSON batch API over HTTP. On checkout, the smudge filter swaps each pointer for the real file, downloading it if it isn’t already local, so a clone fetches the large files for the version you check out rather than for all of history. Version 2.0 (March 2017) added file locking: `git lfs lock` marks a file as locked on the server, and pushes that modify files locked by someone else are refused, which helps with files that can’t be merged.",
+    "GitHub announced Git LFS in April 2015 and released it under the MIT license; GitLab supported it from November 2015, and its pointer format and server API are documented so that other servers and tools can implement them. A two-person core team runs the project today. The latest release is 3.8.0 (August 27, 2026), which adds zstd-compressed downloads."
+  ],
+  "strengths": [
+    "Repositories stay small: Git history holds only pointers, and the large files are downloaded for the versions you actually check out",
+    "Works with stock Git and the usual commands: after `git lfs install` and `git lfs track`, `git add`, `commit` and `push` behave as before",
+    "File locking for files that are difficult to merge, such as binaries",
+    "Existing repositories can be converted with `git lfs migrate import`, and converted back with `git lfs migrate export`"
+  ],
+  "limits": [
+    "Everyone needs it installed: without it a clone has pointer files instead of content, and a commit made without it stores the full file in Git, leaving files that always show as modified",
+    "Tracking a pattern doesn’t change existing history; moving old files into LFS with `git lfs migrate` rewrites commits and changes their hashes",
+    "The server must support LFS, and hosts may charge for its storage and bandwidth: GitHub launched it with 1 GB of free storage and 1 GB of monthly bandwidth",
+    "Files are chosen by path pattern only, not by size, so new large files of other types slip into Git unless someone tracks them"
+  ],
+  "worksWith": [
+    { "id": "git", "how": "runs as clean and smudge filters for" },
+    { "id": "go", "how": "is written in" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Track a file type, then see what Git really stores",
+    "source": [
+      "git lfs install                     # once per user: set up the clean and smudge filters",
+      "git lfs track '*.psd'               # writes the pattern to .gitattributes",
+      "git add .gitattributes design.psd",
+      "git commit -m 'Add design'",
+      "",
+      "git cat-file -p HEAD:design.psd     # Git holds only the pointer:",
+      "# version https://git-lfs.github.com/spec/v1",
+      "# oid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393",
+      "# size 12345",
+      "",
+      "git push                            # the pre-push hook uploads design.psd first",
+      "git lfs lock design.psd             # others can't push changes to it until you unlock",
+      "",
+      "GIT_LFS_SKIP_SMUDGE=1 git clone <url> repo && cd repo && git lfs pull   # pointers first, then contents",
+      "git lfs migrate import --everything --include='*.zip'                   # rewrite history to move old files in"
+    ]
+  },
+  "history": {
+    "story": [
+      "Distributed version control, as GitHub put it at launch, hadn’t always been practical for large files: every clone carries every version of every file. GitHub’s Risk Olson (@technoweenie) opened the project’s public repository in September 2013 from an internal prototype, and pre-release versions wrote pointer files with a `hawser.github.com` URL, which Git LFS can still read.",
+      "GitHub announced Git Large File Storage on April 8, 2015, as an open-source extension under the MIT license, with early access on GitHub.com, 1 GB of free storage and 1 GB of monthly bandwidth, and more for purchase. Version 0.6 that September added the batch API, so a client asks for many objects in one request, and 1.0 followed on October 1, 2015. On November 23, GitLab announced support on GitLab.com and in GitLab 8.2.",
+      "Version 2.0 in March 2017 added file locking, after a year of discussion, for teams editing files that are hard to merge. 3.0 in September 2021 added a pure SSH transfer protocol, though at the time no major forge was known to support it. The project is still led by a small core team, and 3.8.0 in August 2026 added zstd-compressed downloads and official packages for Debian 13."
+    ],
+    "choices": [
+      { "choice": "Pointer files inside ordinary Git", "why": "Instead of changing Git, Git LFS swaps the large file for a small text pointer and uses Git’s own clean and smudge filters and `.gitattributes`. Repositories stay valid Git, and every Git command and host keeps working on them." },
+      { "choice": "Contents on a separate HTTP server, fetched on checkout", "why": "Keeping file contents out of the object database means a clone carries only the pointers in history. The smudge filter downloads a file’s contents only when that version is checked out, and the server is found from the Git remote’s URL so it needs little configuration." },
+      { "choice": "An open specification", "why": "The pointer format and the batch API are documented as a guide for clients and servers, so other hosts and tools could implement them; GitLab shipped support seven months after the announcement." },
+      { "choice": "Locking for files that can’t be merged", "why": "Some files, binaries especially, are difficult to merge, so two people shouldn’t edit one at the same time. Locks on the LFS server let teams claim a file, and pushes that change a file locked by someone else are refused." }
+    ],
+    "timeline": [
+      { "year": "2013", "text": "Public repository started from an internal GitHub prototype (September 22)" },
+      { "year": "2015", "text": "Announced by GitHub (April 8); batch API in 0.6 (September); 1.0 (October 1); GitLab support (November 23)" },
+      { "year": "2017", "text": "Git LFS 2.0 adds file locking (March 1)" },
+      { "year": "2021", "text": "Git LFS 3.0 adds a pure SSH transfer protocol (September 24)" },
+      { "year": "2026", "text": "Git LFS 3.8.0 adds zstd-compressed downloads (August 27)" }
+    ],
+    "sources": [
+      { "label": "GitHub blog: Announcing Git Large File Storage (LFS) (Apr 8, 2015)", "url": "https://github.blog/news-insights/product-news/announcing-git-large-file-storage-lfs/" },
+      { "label": "git-lfs/git-lfs on GitHub: first commit, “rip off internal prototype’s README” (Sep 22, 2013)", "url": "https://github.com/git-lfs/git-lfs/commit/d8f780329b64e789553bc8ccccfb993ebc430325" },
+      { "label": "Git LFS: Specification (pointer format, hawser pre-release URL, clean and smudge filters)", "url": "https://github.com/git-lfs/git-lfs/blob/main/docs/spec.md" },
+      { "label": "Git LFS: Batch API (added in v0.6)", "url": "https://github.com/git-lfs/git-lfs/blob/main/docs/api/batch.md" },
+      { "label": "Git LFS CHANGELOG: 1.0 (Oct 1, 2015), 2.0.0 locking (Mar 1, 2017), 3.0.0 pure SSH protocol (Sep 24, 2021), 3.8.0 (Aug 27, 2026)", "url": "https://github.com/git-lfs/git-lfs/blob/main/CHANGELOG.md" },
+      { "label": "GitLab blog: Announcing Git LFS Support in GitLab (Nov 23, 2015)", "url": "https://about.gitlab.com/blog/announcing-git-lfs-support-in-gitlab/" },
+      { "label": "git-lfs/git-lfs README: Core Team", "url": "https://github.com/git-lfs/git-lfs/blob/main/README.md" },
+      { "label": "Pro Git: What is Git? (every clone has the entire history)", "url": "https://git-scm.com/book/en/v2/Getting-Started-What-is-Git%3F" }
+    ]
+  },
+  "sources": [
+    { "label": "Git LFS: Specification (pointer files, clean and smudge filters, pre-push upload)", "url": "https://github.com/git-lfs/git-lfs/blob/main/docs/spec.md" },
+    { "label": "Git LFS: Server Discovery (the LFS URL derived from the Git remote)", "url": "https://github.com/git-lfs/git-lfs/blob/main/docs/api/server-discovery.md" },
+    { "label": "Git LFS: Batch API", "url": "https://github.com/git-lfs/git-lfs/blob/main/docs/api/batch.md" },
+    { "label": "Git LFS man page: git-lfs-track (patterns written to .gitattributes)", "url": "https://github.com/git-lfs/git-lfs/blob/main/docs/man/git-lfs-track.adoc" },
+    { "label": "Git LFS man page: git-lfs-lock (pushes verified against other users’ locks)", "url": "https://github.com/git-lfs/git-lfs/blob/main/docs/man/git-lfs-lock.adoc" },
+    { "label": "Git LFS man page: git-lfs-migrate (import and export rewrite history)", "url": "https://github.com/git-lfs/git-lfs/blob/main/docs/man/git-lfs-migrate.adoc" },
+    { "label": "Git LFS man page: git-lfs-faq (no tracking by size, pointer files, always-modified files, GIT_LFS_SKIP_SMUDGE)", "url": "https://github.com/git-lfs/git-lfs/blob/main/docs/man/git-lfs-faq.adoc" },
+    { "label": "git-lfs/git-lfs README: written in Go, Core Team", "url": "https://github.com/git-lfs/git-lfs/blob/main/README.md" },
+    { "label": "git-lfs/git-lfs: LICENSE.md (MIT, GitHub, Inc. and Git LFS contributors)", "url": "https://github.com/git-lfs/git-lfs/blob/main/LICENSE.md" },
+    { "label": "GitHub blog: Announcing Git Large File Storage (LFS) (Apr 8, 2015; MIT, 1 GB storage and bandwidth)", "url": "https://github.blog/news-insights/product-news/announcing-git-large-file-storage-lfs/" },
+    { "label": "GitLab blog: Announcing Git LFS Support in GitLab (Nov 23, 2015)", "url": "https://about.gitlab.com/blog/announcing-git-lfs-support-in-gitlab/" },
+    { "label": "git-lfs/git-lfs on GitHub: release v3.8.0", "url": "https://github.com/git-lfs/git-lfs/releases/tag/v3.8.0" }
+  ],
+  "checked": "2026-10-20"
+}

@@ -3,6 +3,7 @@ import Shell from '@/components/Shell';
 import { getCatalog } from '@/lib/catalog';
 import { meta } from '@/lib/meta';
 import { href } from '@/lib/nav';
+import Md from '@/components/Md';
 
 export const metadata = meta('Concepts', 'The ideas behind modern software and the products that implement them, in five areas: build, infrastructure, data, ship and run, and teams.');
 
@@ -43,7 +44,7 @@ export default function ConceptsPage() {
                               <span className="font-medium group-hover:text-brand">{p.name}</span>
                               {k > 0 && <span className="shrink-0 text-xs text-muted-foreground">{k} {k === 1 ? 'technology' : 'technologies'}</span>}
                             </span>
-                            <span className="block text-sm leading-snug text-muted-foreground">{p.summary}</span>
+                            <span className="block text-sm leading-snug text-muted-foreground"><Md text={p.summary} plain /></span>
                           </span>
                         </a>
                       </li>

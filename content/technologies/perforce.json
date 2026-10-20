@@ -1,0 +1,105 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Perforce P4",
+  "concepts": ["version-control"],
+  "provider": "vendor",
+  "vendor": "Perforce Software",
+  "license": "Proprietary (free for up to 5 users and 20 workspaces)",
+  "website": "https://www.perforce.com/products/p4",
+  "status": { "stage": "renamed", "note": "Called Helix Core until March 2025, and Perforce, or P4 for short, before that.", "since": "2025-03-13" },
+  "summary": "A centralized version control server built for huge repositories and big binary files, long the standard in game studios: the server knows who has every file open, can lock files exclusively, and structures branches as streams.",
+  "intro": [
+    "One P4 Server (`p4d`) holds everything. Metadata, such as changelists, users, permissions and which files each person has open, lives in its database (`db.*` files), backed up by checkpoints and a journal; the file revisions themselves live separately in depots on disk. Each user defines a workspace, a view that maps depot paths such as `//depot/game/main/...` to a local folder, and `p4 sync` fetches only the files in that view. Files arrive read-only. `p4 edit` opens a file for editing, makes it writable and records it on the server, so anyone can see who has it open with `p4 opened -a`. `p4 submit` sends a numbered changelist atomically: every file in it is saved, or none is.",
+    "What sets it apart is handling files that can’t be merged. Marking a file type with the `+l` modifier, for one file or for every `.psd` through the server’s typemap, makes it exclusive-open: only one person can have it checked out at a time, which avoids two artists editing the same texture. Modifiers like `+S10` keep only the last ten revisions of bulky generated files. Branching is organized as streams: each stream records its parent and type (mainline, development, release, virtual, sparse), the server generates workspace views from it, and flow rules follow the principle “merge down, copy up”: a development stream merges in its parent’s changes first, then copies its finished work up. Git Connector, a separate service, stores Git repositories in the server and can mirror repositories from GitHub or GitLab.",
+    "Christopher Seiwald started writing Perforce in 1995; the product was known as Perforce, or P4 after its command-line tool, then as Helix Core, and since March 2025 as Perforce P4. Perforce says it is used by 19 of the top 20 AAA game studios and 9 of the top 10 semiconductor companies. It is free for up to 5 users and 20 workspaces, and paid beyond that. The latest server release is 2026.1 Patch 3 (October 7, 2026)."
+  ],
+  "strengths": [
+    "Built for size: Google ran its monolithic repository on one primary Perforce instance on a single machine, with custom caching, for more than ten years",
+    "Exclusive locks per file type, and a server that always knows who has which file open, suit binary art and design assets",
+    "Workspace views and sparse streams fetch only the paths you need instead of cloning everything",
+    "Streams turn a branching strategy into server-enforced structure: parents, stability levels and the direction changes should flow"
+  ],
+  "limits": [
+    "Proprietary and paid beyond 5 users and 20 workspaces",
+    "Centralized: submitting and browsing history need the server, and edits made offline or without `p4 edit` must be found with `p4 reconcile`",
+    "Its own vocabulary (depots, workspaces, changelists, integrate, streams) and tools; Git users need Git Connector to keep using Git",
+    "Running it is real operations work: checkpoints back up only metadata, so the versioned files need a separate backup"
+  ],
+  "worksWith": [
+    { "id": "git", "how": "can host repositories for clients of" },
+    { "id": "github", "how": "can mirror repositories from" },
+    { "id": "gitlab", "how": "can mirror repositories from" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Sync a workspace, check out a locked binary, submit",
+    "source": [
+      "p4 set P4PORT=ssl:p4.example.com:1666",
+      "p4 login",
+      "p4 client                                # edit this workspace’s view of the depot",
+      "p4 sync //depot/game/main/...            # fetch the files in the view",
+      "",
+      "p4 edit Content/Hero.uasset              # check out: writable, and locked if its type has +l",
+      "p4 opened -a Content/Hero.uasset         # who has it open, in any workspace",
+      "p4 submit -d \"New hero mesh\"             # one atomic, numbered changelist",
+      "",
+      "p4 reconcile                             # after editing without p4 edit, e.g. offline"
+    ]
+  },
+  "history": {
+    "story": [
+      "Christopher Seiwald had worked at Ingres on porting, networking and databases, and thought he could build a better software configuration management tool. He started coding in 1995 from Alameda, California, and incorporated Perforce Software in August 1996. The product was called Perforce, and often P4 after the `p4` command. Its Inter-File Branching let any set of files be copied within the depot as a codeline, with Perforce tracking the copies and propagating later changes between them (`p4 integrate`).",
+      "A central server that could take very large codebases became its niche. Google relied on one primary Perforce instance, hosted on a single machine with custom caching, for more than ten years before it built its own system, Piper. In 2011 Perforce added streams, which turned common branching patterns into built-in workflow. In March 2015 the company launched Helix, a platform aimed at large teams of artists, programmers and designers, and in February 2016 the private equity firm Summit Partners bought the company. Seiwald handed over as CEO, and after the ownership change and the purchase of Seapine Software the server was renamed Helix Core.",
+      "In March 2025 Perforce went back to the old name. Helix Core became Perforce P4, and related products followed: Helix Swarm became P4 Code Review, Helix DAM became P4 DAM, and the Snowtrack client Perforce had bought became P4 One. Releases continue twice a year: 2025.2 added a tech preview of a REST API, and 2026.1 changed how sparse streams branch files, only when a change is submitted."
+    ],
+    "choices": [
+      { "choice": "A server that tracks every open file", "why": "Because `p4 edit` registers each file on the server before it changes, the server can show who is working on what, enforce exclusive locks, and make each submit atomic. The cost is that everyday work depends on reaching the server." },
+      { "choice": "Branches as copies of file sets, linked by integration", "why": "Perforce’s Inter-File Branching mimicked how people branched by hand, by copying files, but let the server record the copy and carry later edits from one codeline to the other, so any set of files could be branched." },
+      { "choice": "Exclusive locking as a file-type setting", "why": "Merging and resolving aren’t meaningful for binary files, so the only safe way to avoid conflicts is to let one person edit at a time. Making `+l` part of the file type, set once in a typemap, applies it to every matching file automatically." },
+      { "choice": "Streams: put the branching strategy in the server", "why": "Ordinary branches carry no rules about how changes should move. Streams record each branch’s parent and stability, generate workspace views, and steer merges down and copies up, so teams follow the mainline model without hand-maintained branch specs." }
+    ],
+    "timeline": [
+      { "year": "1995", "text": "Christopher Seiwald starts writing Perforce in Alameda, California" },
+      { "year": "1996", "text": "Perforce Software incorporated (August)" },
+      { "year": "2011", "text": "Streams arrive in the 2011.1 server" },
+      { "year": "2015", "text": "Helix platform launched (March)" },
+      { "year": "2016", "text": "Summit Partners acquires Perforce (February); the server becomes Helix Core" },
+      { "year": "2025", "text": "Helix Core renamed Perforce P4 (March 13)" },
+      { "year": "2026", "text": "P4 Server 2026.1 (May 19); Patch 3 on October 7" }
+    ],
+    "sources": [
+      { "label": "Tech Monitor: Q&A with Christopher Seiwald, Why version control has moved beyond app dev (Dec 3, 2012)", "url": "https://techmonitor.ai/?p=2202" },
+      { "label": "Perforce blog: Re-Introducing P4, A Name Rooted in History and a Platform for the Future (Mar 13, 2025)", "url": "https://www.perforce.com/blog/vcs/introducing-the-p4-platform" },
+      { "label": "Perforce 98.2 Command Line User’s Guide: Branching (Inter-File Branching, codelines, integration)", "url": "https://legacy-docs.perforce.com/doc.982/cmdguide/branching.html" },
+      { "label": "Potvin and Levenberg: Why Google Stores Billions of Lines of Code in a Single Repository (CACM 2016)", "url": "https://research.google/pubs/why-google-stores-billions-of-lines-of-code-in-a-single-repository/" },
+      { "label": "Electronic Specifier: Perforce Software introduces workflow to its version management system (Streams in 2011.1, Jan 2012)", "url": "https://www.electronicspecifier.com/products/design-automation/perforce-streams-perforce-software-introduces-workflow-to-its-version-management-system/" },
+      { "label": "Game Developer: Perforce Software launches Helix collaboration platform (Mar 4, 2015)", "url": "https://gamedeveloper.com/production/perforce-software-launches-helix-collaboration-platform" },
+      { "label": "SD Times: Perforce Software acquired by Summit Partners (Feb 2, 2016)", "url": "https://sdtimes.com/christopher-seiwald/perforce-software-acquired-by-summit-partners" },
+      { "label": "Perforce: P4 Server release notes, 2024.1 to 2026.1 (REST API preview in 2025.2; branch-on-submit for sparse streams in 2026.1)", "url": "https://ftp.perforce.com/perforce/r26.1/doc/user/relnotes.txt" },
+      { "label": "P4 Guide: Stream types (mainline, development, release, merge down and copy up)", "url": "https://help.perforce.com/helix-core/server-apps/p4guide/current/Content/P4Guide/streams.types.html" },
+      { "label": "P4 Guide: Preventing multiple checkouts (merging binary files isn’t meaningful)", "url": "https://help.perforce.com/helix-core/server-apps/p4guide/current/Content/P4Guide/resolve.lock.exclusive.html" }
+    ]
+  },
+  "sources": [
+    { "label": "Perforce: P4 product page (19 of the top 20 AAA studios, file locking, streams, Git Connector)", "url": "https://www.perforce.com/products/p4" },
+    { "label": "Perforce: Free version control (up to 5 users and 20 workspaces)", "url": "https://www.perforce.com/products/p4/free-version-control" },
+    { "label": "Perforce blog: Re-Introducing P4 (Helix Core is now Perforce P4, Mar 13, 2025)", "url": "https://www.perforce.com/blog/vcs/introducing-the-p4-platform" },
+    { "label": "Perforce: P4 Server 2026.1 release notes (rebrand notice; 2026.1 Patch 3 on 2026/10/07)", "url": "https://ftp.perforce.com/perforce/r26.1/doc/user/relnotes.txt" },
+    { "label": "P4 Server Admin Guide: Checkpoint files (db.* metadata, journal, versioned files backed up separately)", "url": "https://help.perforce.com/helix-core/server-apps/p4sag/current/Content/P4SAG/backup-recovery-checkpoint.html" },
+    { "label": "P4 Command Reference: p4 edit (opens files for edit, turns on write permission)", "url": "https://help.perforce.com/helix-core/server-apps/cmdref/current/Content/CmdRef/p4_edit.html" },
+    { "label": "P4 Command Reference: p4 submit (atomic: all files or none)", "url": "https://help.perforce.com/helix-core/server-apps/cmdref/current/Content/CmdRef/p4_submit.html" },
+    { "label": "P4 Command Reference: p4 opened (-a lists files open in all workspaces)", "url": "https://help.perforce.com/helix-core/server-apps/cmdref/current/Content/CmdRef/p4_opened.html" },
+    { "label": "P4 Command Reference: p4 sync", "url": "https://help.perforce.com/helix-core/server-apps/cmdref/current/Content/CmdRef/p4_sync.html" },
+    { "label": "P4 Command Reference: p4 set", "url": "https://help.perforce.com/helix-core/server-apps/cmdref/current/Content/CmdRef/p4_set.html" },
+    { "label": "P4 Command Reference: p4 client", "url": "https://help.perforce.com/helix-core/server-apps/cmdref/current/Content/CmdRef/p4_client.html" },
+    { "label": "P4 Command Reference: p4 reconcile (after working offline)", "url": "https://help.perforce.com/helix-core/server-apps/cmdref/current/Content/CmdRef/p4_reconcile.html" },
+    { "label": "P4 Command Reference: p4 typemap (+l exclusive open, binary+lFS10)", "url": "https://help.perforce.com/helix-core/server-apps/cmdref/current/Content/CmdRef/p4_typemap.html" },
+    { "label": "P4 Guide: Preventing multiple checkouts (+l exclusive-open)", "url": "https://help.perforce.com/helix-core/server-apps/p4guide/current/Content/P4Guide/resolve.lock.exclusive.html" },
+    { "label": "P4 Guide: Streams (stream specs generate workspace views)", "url": "https://help.perforce.com/helix-core/server-apps/p4guide/current/Content/P4Guide/chapter.streams.html" },
+    { "label": "P4 Guide: Stream types (mainline, development, release, sparse, virtual)", "url": "https://help.perforce.com/helix-core/server-apps/p4guide/current/Content/P4Guide/streams.types.html" },
+    { "label": "Perforce: Git Connector 2026.1 release notes (Git repos stored in graph depots, HTTPS and SSH)", "url": "https://ftp.perforce.com/perforce/r26.1/doc/user/connectornotes.txt" },
+    { "label": "P4 Server Admin Guide: Git Connector mirroring from GitHub or GitLab over SSH", "url": "https://help.perforce.com/helix-core/server-apps/p4sag/current/Content/P4SAG/mirror-gitlabssh.html" },
+    { "label": "Potvin and Levenberg: Why Google Stores Billions of Lines of Code in a Single Repository (CACM 2016)", "url": "https://research.google/pubs/why-google-stores-billions-of-lines-of-code-in-a-single-repository/" }
+  ],
+  "checked": "2026-10-20"
+}

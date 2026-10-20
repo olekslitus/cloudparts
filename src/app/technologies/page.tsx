@@ -6,6 +6,7 @@ import { getCatalog } from '@/lib/catalog';
 import { meta } from '@/lib/meta';
 import { href, PROVIDER_TYPES, relationLabel, stageOf } from '@/lib/nav';
 import Filters from './Filters';
+import Md from '@/components/Md';
 
 export const metadata = meta('Technologies', 'Every product in the handbook, from Kafka to DuckLake, in one table you can search, filter and sort.');
 
@@ -90,7 +91,7 @@ export default function TechnologiesPage() {
                 <td className="min-w-60 px-3 py-2.5" data-v={t.name.toLowerCase()}>
                   <a href={href(`technologies/${t.id}/`)} className="inline-flex items-center gap-2 font-medium underline-offset-4 hover:text-brand hover:underline"><Glyph tech={t} />{t.name}</a>
                   {stageOf(t) && <span className="ml-1.5 align-middle"><StatusBadge tech={t} /></span>}
-                  <span className="mt-0.5 block text-xs leading-snug text-muted-foreground">{t.summary}</span>
+                  <span className="mt-0.5 block text-xs leading-snug text-muted-foreground"><Md text={t.summary} plain /></span>
                 </td>
                 <td className="min-w-40 px-3 py-2.5" data-v={concept.name}>
                   <a href={href(`concepts/${concept.id}/`)} className="underline-offset-4 hover:text-brand hover:underline">{concept.name}</a>

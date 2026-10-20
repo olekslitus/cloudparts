@@ -3,7 +3,8 @@ import Glyph from '@/components/Glyph';
 import Shell from '@/components/Shell';
 import { getCatalog, type CatalogTech } from '@/lib/catalog';
 import { meta } from '@/lib/meta';
-import { href, PROVIDER_NAMES, relationLabel, STAGE_LABELS, stageOf } from '@/lib/nav';
+import { MAKERS, makerOf } from '@/lib/makers';
+import { href, plain, PROVIDER_NAMES, relationLabel, STAGE_LABELS, stageOf } from '@/lib/nav';
 import { cn } from '@/lib/utils';
 import LandscapeScript from './LandscapeScript';
 
@@ -35,7 +36,7 @@ const tip = (t: CatalogTech) => {
     PROVIDER_NAMES[t.provider],
     stage && STAGE_LABELS[stage],
     `since ${since(t)}`,
-  ].filter(Boolean).join(' · ') + `\n${t.summary}`;
+  ].filter(Boolean).join(' · ') + `\n${plain(t.summary)}`;
 };
 /** The first year in its timeline: when it, or the project it grew out of, began. */
 const since = (t: CatalogTech) => Number(t.history.timeline[0].year);
@@ -48,6 +49,8 @@ const data = {
 };
 const text = (t: CatalogTech) =>
   [t.name, t.id, t.summary, t.vendor ?? '', t.license ?? '', ...t.concepts.map(id => c.concept(id).name), ...t.kinds.map(id => c.kind(id).name)].join(' ').toLowerCase();
+// the companies the picker offers, with how many of their products are on the map
+const makers = MAKERS.map(m => ({ ...m, count: c.technologies.filter(t => makerOf(t) === m).length })).filter(m => m.count);
 const chip = 'rounded-full border px-3 py-1 text-sm text-muted-foreground transition hover:border-foreground/30 hover:text-foreground aria-pressed:border-brand/40 aria-pressed:bg-brand-soft aria-pressed:font-medium aria-pressed:text-foreground';
 
 export const metadata = meta('Landscape', `All ${c.technologies.length} technologies in the handbook on one map, grouped by area, topic and concept.`);
@@ -60,6 +63,7 @@ export default function Landscape() {
           <h1 className="text-4xl font-semibold tracking-tight text-balance sm:text-5xl">Landscape</h1>
           <p className="mt-3 text-lg leading-relaxed text-muted-foreground">
             All {c.technologies.length} technologies on one map, grouped by area, topic and the concept each one is an example of.
+            Pick a company, such as AWS or Cloudflare, to see only what it makes.
             Open-source products have a border <span className="inline-block size-2.5 rounded-[3px] border border-foreground/40 bg-card align-middle" aria-hidden="true"></span>.
             Hover a logo for what it is, or click it for its page. Pick an architecture to see its stack, or drag through the years to watch the map fill in
             (the <a href={href('timeline/')} className="underline underline-offset-4 hover:text-foreground">timeline</a> says what happened each year).
@@ -85,6 +89,17 @@ export default function Landscape() {
             ))}
           </div>
           <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              Company:
+              <select data-maker className="h-8 rounded-md border bg-background px-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-brand/40">
+                <option value="">All</option>
+                {[{ label: 'Clouds', cloud: true }, { label: 'Other companies', cloud: false }].map(g => (
+                  <optgroup key={g.label} label={g.label}>
+                    {makers.filter(m => !!m.cloud === g.cloud).map(m => <option key={m.id} value={m.id}>{m.name} ({m.count})</option>)}
+                  </optgroup>
+                ))}
+              </select>
+            </label>
             <label className="flex items-center gap-2 text-sm text-muted-foreground">
               Stack:
               <select data-arch className="h-8 rounded-md border bg-background px-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-brand/40">
@@ -131,7 +146,7 @@ export default function Landscape() {
                           </a>
                           <ul className="mt-1.5 flex flex-wrap gap-1">
                             {techs.map(t => (
-                              <li key={t.id} data-tile data-id={t.id} data-since={since(t)} data-type={kindOf(t.provider)} data-text={text(t)}>
+                              <li key={t.id} data-tile data-id={t.id} data-since={since(t)} data-type={kindOf(t.provider)} data-maker={makerOf(t)?.id} data-text={text(t)}>
                                 <a
                                   href={href(`technologies/${t.id}/`)}
                                   title={tip(t)}
@@ -157,7 +172,7 @@ export default function Landscape() {
             </section>
           ))}
         </div>
-        <p data-empty hidden className="mt-6 text-muted-foreground">Nothing matches. Try fewer words, or set the type back to All.</p>
+        <p data-empty hidden className="mt-6 text-muted-foreground">Nothing matches. Try fewer words, or set the filters back to All.</p>
       </div>
       <div data-caption hidden aria-live="polite" className="fixed bottom-4 left-1/2 z-30 w-max max-w-[min(48rem,calc(100vw-2rem))] -translate-x-1/2 rounded-xl bg-popover px-4 py-2 text-pretty text-sm text-popover-foreground shadow-lg ring-1 ring-foreground/10"></div>
       <script type="application/json" data-landscape dangerouslySetInnerHTML={{ __html: JSON.stringify(data).replace(/</g, '\\u003c') }} />

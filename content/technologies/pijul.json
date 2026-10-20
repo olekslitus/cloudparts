@@ -1,0 +1,97 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Pijul",
+  "concepts": ["version-control"],
+  "provider": "oss",
+  "vendor": "The Pijul team (Pierre-Étienne Meunier, Florent Becker)",
+  "license": "GPL-2.0-or-later",
+  "website": "https://pijul.org/",
+  "status": { "stage": "beta", "note": "Version 1.0 has been in beta since January 2022; the latest release is 1.0.0-beta.24 (September 14, 2026).", "since": "2022-01-19" },
+  "repo": "https://nest.pijul.com/pijul/pijul",
+  "summary": "A distributed version control system that stores changes instead of snapshots, built on a mathematical theory of patches: independent changes apply in any order with the same result, and a conflict, once resolved, stays resolved.",
+  "intro": [
+    "Git records snapshots and works out the changes between them; Pijul records the changes themselves. Internally, a repository’s recorded state, the “pristine”, is a graph of lines. Each line is identified by the hash of the change that added it plus a position in that change, and each edge between lines is labelled with the change that created it and whether it is alive or deleted. A change only adds lines or relabels edges, and it depends on the changes that introduced its surrounding lines. For any two changes, either they commute or one depends on the other, so independent changes give the same result, and the same version identifier, in whatever order they are applied. Pulling A and B together is the same as pulling them one at a time, which the Pijul manual shows Git’s three-way merge doesn’t always guarantee.",
+    "Conflicts are a normal state of the graph rather than an error. Pijul applies both sides, then finds conflicts by looking at the result, and a resolution is itself a change, so it fixes the same conflict wherever those two changes meet, on every channel (Pijul’s rough equivalent of branches), and it doesn’t come back. Because a change keeps its identity wherever it is applied, rebase and merge are the same operation, and `pijul unrecord` can drop an old change from the log without rewriting the ones after it, as long as none of them depends on it. It also supports partial clones of a repository’s sub-parts.",
+    "Pijul is inspired by Darcs, a patch-based system, but solves its “exponential merge problem”: the FAQ says applying changes takes time logarithmic in the size of history when they don’t conflict, and never more than linear when they do. It is written in Rust, licensed GPLv2 or later, and developed by Pierre-Étienne Meunier and Florent Becker in Pijul itself, hosted on their Nest service. Version 1.0 has been in beta since January 2022. After 1.0.0-beta.9 in February 2024 there was no release until January 2026; releases have come every few weeks since May 2026, and the latest is 1.0.0-beta.24 (September 14, 2026)."
+  ],
+  "strengths": [
+    "Merges don’t depend on order: independent changes commute, so cherry-picking from the same remote again and again doesn’t create spurious conflicts",
+    "A conflict is resolved once, by a change, and that resolution applies on every channel where the same two changes meet",
+    "Old changes can be unrecorded or pulled selectively without changing the identity of the changes around them",
+    "Partial clones let you work on a sub-part of a large repository"
+  ],
+  "limits": [
+    "Still a 1.0 beta after more than four years, with a two-year gap in releases between 2024 and 2026",
+    "A small ecosystem: the authors’ Nest is the hosting service its docs describe, and Pijul can pull over HTTP but push only over SSH or to local repositories",
+    "No good diff algorithm for binary files yet, and some Darcs features such as `darcs replace` have no equivalent"
+  ],
+  "worksWith": [
+    { "id": "rust", "how": "is written in" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Record a change in one repository and push it to another",
+    "source": [
+      "pijul key generate alice          # changes are signed by your identity",
+      "mkdir a && cd a && pijul init",
+      "echo 'blabla' > file",
+      "pijul add file",
+      "pijul record -m 'First change'    # diff the working copy against the pristine",
+      "",
+      "cd .. && pijul clone a b && cd b",
+      "echo 'blibli' >> file",
+      "pijul record -m 'Second change'",
+      "pijul push ../a                   # send the new change back to a",
+      "",
+      "pijul log --hash-only",
+      "pijul unrecord <hash>             # drop a change; later independent changes keep their identity"
+    ]
+  },
+  "history": {
+    "story": [
+      "Pierre-Étienne Meunier switched to Darcs during his PhD, drawn by its patch theory, and then ran into its problems with conflicts, which in Darcs can make even a two-line merge take hours. The idea for Pijul came while he and Florent Becker, then one of Darcs’ core contributors, were writing a paper on self-assembly. They saw it had become nearly impossible to persuade colleagues to use Darcs and set out to keep the “mathematically designed” family of version control systems alive, with a theory of patches that would be sound and fast: an efficient, algorithmic version of a construction from category theory.",
+      "The first post on pijul.org is from October 2015, and version 0.2, the second public release, in February 2016 was a complete rewrite in Rust. The Nest, their hosting service, started in 2016 to test Pijul at scale, and they wrote their own storage engine, Sanakirja, a key-value store whose databases can be cloned cheaply. The early design stored lines in the database and grew too large and slow, so Meunier rewrote the core algorithms over the 2019 Christmas holidays; the result, with vertices pointing at byte ranges inside changes and changes compressed with zstd, shipped as 1.0 alpha in November 2020. “Patches” were renamed “changes” on the way.",
+      "The 1.0 beta followed in January 2022, with a promise that the formats wouldn’t change for a very long time. In May 2023 the Nest was rebuilt on Cloudflare Workers, with Sanakirja on a key-value store, and its code began to be released under the AGPL. Releases then stopped from February 2024 until January 2026, and resumed at a quicker pace from May 2026."
+    ],
+    "choices": [
+      { "choice": "Record changes, not snapshots", "why": "Changes are the natural unit of work and can be merged by formal rules. Snapshot systems must stitch versions together with a heuristic three-way merge, which can reorder lines and has no natural way to solve a conflict once and for all." },
+      { "choice": "A conflict-tolerant graph instead of Darcs’ patch commutation", "why": "In Darcs, conflicts could trigger the exponential merge problem. Pijul’s pristine stores conflicts as ordinary states, so new changes apply directly without recomputing history, and conflicting changes always commute." },
+      { "choice": "Its own storage engine, Sanakirja", "why": "Pijul needed an on-disk key-value store whose tables could be forked cheaply, in O(log n), for channels. The 2020 version also dropped memory-mapping as a requirement, so libpijul could target platforms such as WebAssembly." }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "First post on pijul.org (October 31)" },
+      { "year": "2016", "text": "Pijul 0.2, rewritten in Rust (February 2); the Nest starts" },
+      { "year": "2020", "text": "Rewritten core ships as 1.0 alpha (November)" },
+      { "year": "2022", "text": "1.0 beta (January), with formats meant to stay stable" },
+      { "year": "2023", "text": "The Nest is rebuilt on Cloudflare Workers, with its code released under the AGPL (May)" },
+      { "year": "2026", "text": "Releases resume with 1.0.0-beta.11 (January 13) after a gap since February 2024; 1.0.0-beta.24 on September 14" }
+    ],
+    "sources": [
+      { "label": "Initial Commit: Q&A with the Creator of the Pijul Version Control System (Nov 29, 2020)", "url": "https://initialcommit.com/blog/pijul-creator" },
+      { "label": "ICFP 2018 tutorial: Pijul, a purely functional version control system (Sep 29, 2018)", "url": "https://icfp18.sigplan.org/event/icfp-2018-tutorials-pijul-a-purely-functional-version-control-system-" },
+      { "label": "Pijul blog: index of posts (first post Oct 31, 2015)", "url": "https://pijul.org/posts" },
+      { "label": "Pijul blog: Pijul 0.2 (Feb 2, 2016)", "url": "https://pijul.org/posts/2016-02-02-pijul-0.2" },
+      { "label": "Pijul blog: Towards 1.0 (Nov 7, 2020)", "url": "https://pijul.org/posts/2020-11-07-towards-1.0" },
+      { "label": "Pijul blog: Pijul 1.0 beta (Jan 2022)", "url": "https://pijul.org/posts/2022-01-08-beta" },
+      { "label": "Pijul blog: The Nest: a new hope (May 2023)", "url": "https://pijul.org/posts/2023-05-23-nest-a-new-hope" },
+      { "label": "Pijul manual: Why Pijul? (Darcs’ exponential merge problem)", "url": "https://pijul.org/manual/why_pijul.html" },
+      { "label": "crates.io: pijul versions (1.0.0-beta.9 Feb 2024, 1.0.0-beta.11 Jan 2026, 1.0.0-beta.24 Sep 14, 2026)", "url": "https://crates.io/crates/pijul/versions" }
+    ]
+  },
+  "sources": [
+    { "label": "Pijul: home page (commutation, first-class conflicts, partial clones)", "url": "https://pijul.org/" },
+    { "label": "Pijul manual: Why Pijul? (commutation, associativity, conflicts, Darcs)", "url": "https://pijul.org/manual/why_pijul.html" },
+    { "label": "Pijul manual: Theory (the graph of lines, alive and deleted edges, dependencies)", "url": "https://pijul.org/manual/theory.html" },
+    { "label": "Pijul manual: Getting started (pristine, key generate, record)", "url": "https://pijul.org/manual/getting_started.html" },
+    { "label": "Pijul manual: Working with others (push over SSH, pull over HTTP)", "url": "https://pijul.org/manual/working_with_others.html" },
+    { "label": "Pijul manual: Conflicts", "url": "https://pijul.org/manual/conflicts.html" },
+    { "label": "Pijul manual: Working with channels (rebase and merge are the same operation)", "url": "https://pijul.org/manual/workflows/channels.html" },
+    { "label": "Pijul manual: pijul record", "url": "https://pijul.org/manual/reference/record.html" },
+    { "label": "Pijul manual: pijul unrecord", "url": "https://pijul.org/manual/reference/unrecord.html" },
+    { "label": "Pijul manual: pijul log", "url": "https://pijul.org/manual/reference/log.html" },
+    { "label": "Pijul FAQ: license, Darcs, binary files", "url": "https://pijul.org/faq" },
+    { "label": "Pijul Nest: pijul/pijul repository (GPL-2.0)", "url": "https://nest.pijul.com/pijul/pijul" },
+    { "label": "crates.io: pijul versions (GPL-2.0-or-later, latest 1.0.0-beta.24 on Sep 14, 2026)", "url": "https://crates.io/crates/pijul/versions" }
+  ],
+  "checked": "2026-10-20"
+}

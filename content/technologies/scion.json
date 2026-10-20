@@ -1,0 +1,73 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Scion",
+  "concepts": ["version-control"],
+  "provider": "vendor",
+  "vendor": "Anthropic",
+  "license": "Proprietary; internal to Anthropic, not released",
+  "website": "https://www.anthropic.com/engineering/redesigning-source-control",
+  "summary": "Anthropic’s in-house version control system for its monorepo, built for clients that are always online: the server makes commits and answers history questions, and clients fetch only the files they read.",
+  "intro": [
+    "Scion is the version control system Anthropic built after its monorepo outgrew Git, described in October 2026 once the monorepo had been fully migrated in five months. Git gives every clone the whole history so it can work offline. Scion assumes the opposite, because nearly all of Anthropic’s clients are agents, CI jobs and research jobs that are online by definition. The server answers questions about history and blame, creates commits and performs merges and rebases, so there is nothing to push. The client keeps a bounded local cache of objects, lays out working-copy files and watches them for changes, but can compute very little on its own. Every query the client makes is also an API, so many jobs, such as automated bisect and revert pipelines, need no local repository at all.",
+    "The unit of work is a changeset, an entry in a write-ahead log. Where a Git commit points to a tree of the whole project, a changeset lists only the files that changed relative to its first parent, with content-addressed pointers to their compressed contents in blob storage. There are no packfiles, locks or cross-server coordination, so the cost of a commit scales with the size of the change, not of the repository. Blame, path history and skip lists over the commit graph are “derived data”, each defined recursively from its value for the parents and computed eagerly or on demand. Refs are discouraged except for main and release branches; moving one is a compare-and-swap on a single Spanner row.",
+    "Checkouts are optional, and sparse by design. The `scn` client starts from a root tree and asks for the trees, then the blobs, that it lacks, instead of telling the server what it already has. Every request is for one object that never changes, so any cache can answer it and an interrupted fetch can resume. Anthropic reports that the system needs 200 times less CPU and memory than its previous Git mirrors, and that CI and research jobs check out code in seconds rather than minutes. It is internal and not released: Anthropic calls it “by no means a suitable replacement for git for general use”."
+  ],
+  "strengths": [
+    "Commits, merges and rebases run on the server without locks, at a cost that grows with the change, not the repository",
+    "History questions such as blame, ancestry and diffs against a merge base are API calls, so most jobs never fetch the repository",
+    "Scales out: data is content-addressed and spread over tiers of caches, no full copy of the repository exists anywhere, and there is no packfile maintenance",
+    "Permissions can be set per directory, so the most sensitive code stays protected inside one monorepo"
+  ],
+  "limits": [
+    "Internal to Anthropic and not released; it diverges so far from Git that adopting it would mean replacing code review, code search and CI too",
+    "Clients must be online: they hold only a bounded cache and ask the server for history and missing files",
+    "Built for enormous monorepos with tens of thousands of engineers or swarms of agents; Anthropic says its ideas only make sense at that scale",
+    "Anthropic dropped the global merge-queue lock for post-merge and pre-deploy testing, so concurrent changes can conflict after they land"
+  ],
+  "worksWith": [
+    { "id": "git", "how": "ingested the monorepo’s history from" }
+  ],
+  "sections": [
+    {
+      "type": "cards",
+      "title": "The tiers of a checkout",
+      "intro": "All four answer the same RPCs, so the client doesn’t need to know the cache topology, but each tier talks only to the one above it so a failure in one region can’t overwhelm the servers.",
+      "items": [
+        { "name": "scn", "tag": "the client", "text": "Lays out working-copy files, watches them for changes and asks for the trees and blobs it is missing. Sparse and virtualized checkouts need no special support: the client simply doesn’t ask for trees it doesn’t want." },
+        { "name": "scion-daemon", "tag": "one per machine", "text": "Stores objects for every job on the node, since most jobs need the same files. It starts from a periodically refreshed snapshot and talks only to the caches in its region." },
+        { "name": "scion-cache", "tag": "regional", "text": "Streams trees and blobs straight from memory, already in the format the daemon stores, so it does no delta compression or work out what the client is missing. Each tier keeps a hit rate above 99%." },
+        { "name": "scion-server", "tag": "authoritative", "text": "Serves the source control APIs, such as changesets, diffs and merge bases, reads from Spanner and cloud storage on a miss, and computes derived data on the fly." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In May 2026 Anthropic merged about 2,500 code changes a day into its monorepo; by September it merged over 30,000. Claude was writing the code, and the bottleneck had moved to infrastructure built for human scale: source control, builds and CI. The main branch’s history was almost 100 GB and a compressed working copy over 25 GB, and CI checked out code about 25 million times a day, which fetched naively would be over 600 PB of Git traffic a day. Anthropic had used shallow clones, sparse checkouts, promisor remotes, repository snapshots kept in blob storage and, at the peak, several hundred internal Git mirrors. They bought time but got harder to run as merges grew.",
+      "The team noticed it was using Git as a centralized system with one authoritative copy, while nearly all of its clients were agents and jobs that are always online. It designed for that instead, drawing on Google’s Piper and Meta’s Sapling, in particular the Bonsai data model of Sapling’s server, Mononoke. Early in the migration Scion only answered metadata queries such as ancestry and blame; the client, repository format and checkout protocol came later. A team of seven built Scion and the Antique code review tool, plus code search and a source control IAM system, and fully migrated the monorepo in five months while the number of changes merged each day grew tenfold.",
+      "The team had largely handwritten the first pipeline that ingested Git history into Scion. An early internal snapshot of Claude Mythos Preview rewrote it to use 20 times less memory and run 4 times faster. The engineers say their job shifted to design trade-offs and to telling Claude “no” when it broke system constraints, and that they now review the intent of each change rather than every line. Anthropic published the design on October 13, 2026, saying it would rather help Git platforms adopt parts of the model, such as server-side RPCs and a different fetch negotiation, than release Scion."
+    ],
+    "choices": [
+      { "choice": "Assume clients are always online", "why": "Git’s full offline clones were what stopped it scaling, and nearly all of Anthropic’s clients were agents and jobs with a network connection anyway. Putting history, blame and commits on the server lets clients hold far less data." },
+      { "choice": "Store each changeset as the files changed from its first parent", "why": "Accepting a changeset then needs no packfiles, locks or ref updates, so throughput is high. Using only the first parent of a merge is a stylistic choice: in trunk-based development people only care about history and blame on the main line." },
+      { "choice": "Ask for wanted objects instead of negotiating what the client has", "why": "Every request is for one immutable object, so any cache can answer it and the system looks like a classic tiered cache. There is no single multi-gigabyte packfile response, and sparse checkouts come for free." },
+      { "choice": "Discourage refs", "why": "Branches and tags are global state that every server has to agree on, which Anthropic saw as a looming scaling problem. Neither creating nor fetching commits involves refs, so only main and release branches use them." }
+    ],
+    "timeline": [
+      { "year": "2012", "text": "Google moves its monorepo from Perforce to Piper, its own centralized system" },
+      { "year": "2017", "text": "Meta publishes early code for Mononoke, a Mercurial server for large monorepos" },
+      { "year": "2022", "text": "Meta open-sources the Sapling client (November 15)" },
+      { "year": "2026", "text": "Anthropic’s merges grow from about 2,500 a day in May to over 30,000 in September; Scion described publicly on October 13" }
+    ],
+    "sources": [
+      { "label": "Anthropic Engineering: Redesigning source control at Anthropic (Oct 13, 2026; updated Oct 15)", "url": "https://www.anthropic.com/engineering/redesigning-source-control" },
+      { "label": "Potvin and Levenberg: Why Google Stores Billions of Lines of Code in a Single Repository (CACM, Jul 2016)", "url": "https://research.google/pubs/why-google-stores-billions-of-lines-of-code-in-a-single-repository/" },
+      { "label": "facebookexperimental/mononoke on GitHub: a Mercurial source control server for large monorepos (created May 2017, archived)", "url": "https://github.com/facebookexperimental/mononoke" },
+      { "label": "Engineering at Meta: Sapling, source control that’s user-friendly and scalable (Nov 15, 2022)", "url": "https://engineering.fb.com/2022/11/15/open-source/sapling-source-control-scalable/" },
+      { "label": "facebook/sapling on GitHub: bonsai.thrift, Mononoke’s Bonsai changeset (parents, metadata and a list of file changes)", "url": "https://github.com/facebook/sapling/blob/79071c2a3ea20c36ed71332608535e5801101bba/eden/mononoke/mononoke_types/serialization/bonsai.thrift" }
+    ]
+  },
+  "sources": [
+    { "label": "Anthropic Engineering: Redesigning source control at Anthropic (Oct 13, 2026; updated Oct 15)", "url": "https://www.anthropic.com/engineering/redesigning-source-control" }
+  ],
+  "checked": "2026-10-20"
+}

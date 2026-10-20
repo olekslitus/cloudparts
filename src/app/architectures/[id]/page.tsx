@@ -151,7 +151,7 @@ export default async function Architecture({ params }: Params) {
                 <a key={id} href={href(`concepts/${id}/`)} className="group flex flex-col rounded-xl border border-dashed p-4 transition hover:border-foreground/30">
                   <span className="font-medium group-hover:text-brand">{p.name}</span>
                   <span className="mt-1 text-xs font-medium text-muted-foreground">Any product will do</span>
-                  <span className="mt-1 line-clamp-2 text-sm leading-snug text-muted-foreground">{p.summary}</span>
+                  <span className="mt-1 line-clamp-2 text-sm leading-snug text-muted-foreground"><Md text={p.summary} plain /></span>
                 </a>
               );
             })}

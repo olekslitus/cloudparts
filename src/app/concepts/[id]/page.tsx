@@ -156,7 +156,7 @@ export default async function ConceptPage({ params }: Params) {
                     <Glyph icon={x.icon} className="mt-0.5 size-5" />
                     <span className="min-w-0 flex-1">
                       <span className="font-medium group-hover:text-brand">{x.name}</span>
-                      <span className="mt-0.5 block text-sm leading-snug text-muted-foreground">{x.summary}</span>
+                      <span className="mt-0.5 block text-sm leading-snug text-muted-foreground"><Md text={x.summary} plain /></span>
                     </span>
                   </a>
                 </li>

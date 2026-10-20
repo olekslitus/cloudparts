@@ -1,6 +1,9 @@
 import type { Relation, STAGES } from '@/content/schema';
 import type { Catalog } from './catalog';
 
+/** Content text without its `code` backticks, for places that show plain text. */
+export const plain = (s: string) => s.replace(/`/g, '');
+
 interface NavItem { id: string; name: string; summary: string }
 
 /** Trimmed catalog data passed to client-side islands (search, mobile nav). */
@@ -95,15 +98,15 @@ export function navData(c: Catalog, logo: (id: string) => NavData['groups'][numb
       concepts: c.concepts
         .filter(p => p.category === cat.id)
         .map(p => ({
-          id: p.id, code: p.code, name: p.name, summary: p.summary, icon: p.icon, products: Object.values(p.providers ?? {}).join(', '),
-          kinds: p.kinds.map(k => ({ id: k.id, name: k.name, summary: k.summary })),
+          id: p.id, code: p.code, name: p.name, summary: plain(p.summary), icon: p.icon, products: Object.values(p.providers ?? {}).join(', '),
+          kinds: p.kinds.map(k => ({ id: k.id, name: k.name, summary: plain(k.summary) })),
         })),
       technologies: c.technologies
         .filter(t => t.category === cat.id)
         .map(t => ({
           id: t.id,
           name: t.name,
-          summary: t.summary,
+          summary: plain(t.summary),
           conceptId: t.concepts[0],
           context: t.parent ? relationLabel(t.parent.as, c.tech(t.parent.id).name) : t.kind ? c.kind(t.kind).name : c.concept(t.concepts[0]).name,
           kind: t.kind,
@@ -126,12 +129,12 @@ export function navData(c: Catalog, logo: (id: string) => NavData['groups'][numb
     architectures: c.architectures.map(a => ({
       id: a.id,
       name: a.title,
-      summary: a.summary,
+      summary: plain(a.summary),
       terms: a.techs.map(t => c.tech(t).name).join(' '),
     })),
     comparisons: c.comparisons.map(m => ({ id: m.id, title: m.title })),
     makers: c.foundations.map(f => ({
-      id: f.id, name: f.name, summary: f.summary, path: f.path, company: f.type === 'company',
+      id: f.id, name: f.name, summary: plain(f.summary), path: f.path, company: f.type === 'company',
       terms: f.projects.map(t => t.name).join(' '),
     })),
   };
