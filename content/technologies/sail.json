@@ -1,0 +1,98 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Sail",
+  "concepts": ["query-engines"],
+  "provider": "oss",
+  "vendor": "LakeSail",
+  "license": "Apache 2.0",
+  "website": "https://lakesail.com/",
+  "repo": "https://github.com/lakehq/sail",
+  "summary": "A Spark Connect server written in Rust on Apache DataFusion: your PySpark code connects to it as if it were Spark, and it runs the queries without a JVM, on one machine or on Kubernetes.",
+  "intro": [
+    "Since Spark 3.4, a PySpark program can be a thin client that sends its DataFrame and SQL plans over gRPC to a Spark Connect server, which runs them and returns Arrow batches. Sail is a different server behind the same protocol. It parses the Spark SQL and DataFrame plans with its own Rust parser and analyzer, plans and runs them on Apache DataFusion over Apache Arrow batches, and streams the results back. You change the connection string to `sc://host:50051` and keep the code. Sail works with Spark 3.5 and Spark 4 clients, including 4.2, and with the small `pyspark-client` package, which has no JARs.",
+    "In local mode Sail is one process that runs each query on all CPU cores. In cluster mode a driver splits the plan into stages and sends tasks to stateless workers, which Sail starts as pods on Kubernetes and stops when idle. Shuffle data moves between workers over Arrow Flight, or, since 0.7, can be written to object storage first so a failed task doesn’t rerun earlier stages. It reads and writes Delta Lake and Iceberg tables natively, uses Iceberg REST, AWS Glue, Unity Catalog, Hive Metastore or OneLake as catalogs, and runs Python, Pandas and Arrow UDFs. LakeSail, the company behind it, releases it under Apache 2.0; the current version is 0.7.2 (September 2026)."
+  ],
+  "strengths": [
+    "No rewrite: existing PySpark and Spark SQL code runs against it by changing the remote address, and a script can start the server itself with `pip install pysail`",
+    "No JVM: one Rust binary with no garbage collector or JVM tuning; LakeSail’s derived TPC-H run at scale factor 100 took 53 s and 26 GB peak memory against Spark’s 535 s and 72 GB (its own benchmark)",
+    "Same engine from laptop to cluster: local mode for development and tests, cluster mode with workers on Kubernetes for larger jobs",
+    "Native Delta Lake and Iceberg reads and writes, including `MERGE` on Iceberg and `UPDATE` on Delta in recent releases"
+  ],
+  "limits": [
+    "Only what Spark Connect carries: the RDD API and `SparkContext` aren’t supported, pandas-on-Spark is still planned, and Structured Streaming is only partly supported",
+    "Many Spark settings have no effect, Hadoop storage options such as `s3a` settings are ignored, and error messages differ from Spark’s",
+    "Still 0.x: the docs warn that configuration isn’t stable yet, and on Kubernetes each Spark session is tied to one server pod, so the server runs as a single replica",
+    "Compatibility is checked per feature: the bundled scanner reports which PySpark functions your code uses that Sail implements, but not whether results match Spark’s"
+  ],
+  "worksWith": [
+    { "id": "spark", "how": "replaces the engine, not the client, of" },
+    { "id": "datafusion", "how": "plans and runs queries with" },
+    { "id": "arrow", "how": "keeps batches and shuffle data in" },
+    { "id": "rust", "how": "is written in" },
+    { "id": "delta-lake", "how": "reads and writes tables in" },
+    { "id": "iceberg", "how": "reads and writes tables in" },
+    { "id": "kubernetes", "how": "starts its cluster-mode workers on" },
+    { "id": "unity-catalog", "how": "can resolve tables through" },
+    { "id": "s3", "how": "reads data and shuffle files from" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Start a Sail server inside a script and use it from ordinary PySpark",
+    "source": [
+      "# pip install \"pysail==0.7.2\" \"pyspark-client==4.2.0\"",
+      "# (or run `sail spark server` and connect to sc://localhost:50051)",
+      "from pysail.spark import SparkConnectServer",
+      "from pyspark.sql import SparkSession",
+      "",
+      "server = SparkConnectServer()",
+      "server.start()",
+      "_, port = server.listening_address",
+      "",
+      "spark = SparkSession.builder.remote(f\"sc://localhost:{port}\").getOrCreate()",
+      "spark.sql(\"SELECT 1 + 1\").show()"
+    ]
+  },
+  "history": {
+    "story": [
+      "Spark is the default engine for large data jobs, but it runs on the JVM, so clusters need memory and tuning. Projects such as Gluten and DataFusion Comet keep Spark and replace only its execution with native code. Spark Connect, added in Spark 3.4, opened another route: clients send unresolved query plans as protocol buffers over gRPC, so a different server can answer them.",
+      "Shehab Amin and Heran Lin of LakeSail released Sail 0.1 as the `pysail` Python package in August 2024: “a drop-in replacement for Spark SQL and the DataFrame API” in a single process, written in Rust on Arrow and DataFusion. Its stated mission is to unify batch, stream and compute-intensive AI workloads, starting with Spark because so many people use it. A preview of distributed execution on Kubernetes followed in November 2024.",
+      "Later releases filled in the Spark surface and the lakehouse: an MCP server for LLM agents in March 2025, Spark 4.0 in 0.3 (July 2025), native Iceberg built on iceberg-rust in 0.4 (October 2025), more resilient distributed execution in 0.5 (February 2026), and in 0.7 (August 2026) Spark 4.2, blocking shuffle through object storage and checkpoints."
+    ],
+    "choices": [
+      { "choice": "Be a Spark Connect server", "why": "Clients already speak the protocol, so users keep their PySpark code and tools and only point them at a different address. The cost is that anything outside Spark Connect, such as the RDD API, can’t be supported." },
+      { "choice": "Rust on DataFusion and Arrow, no JVM", "why": "The 0.2 announcement cites memory safety, built-in `async`/`await` with Tokio for the control plane, and serialization-free data transfer with Arrow, which the authors tie to higher throughput and lower memory use." },
+      { "choice": "An actor model for the driver and workers", "why": "LakeSail wrote a small actor framework so the driver and workers keep state without locks, following “Don’t communicate by sharing memory; share memory by communicating.”" },
+      { "choice": "Stateless workers, job state in storage", "why": "Sail 0.7 treats separate storage and compute as its home: shuffle data and checkpoints go to object storage, so a failed or preempted worker doesn’t force upstream stages to rerun, and small clusters can run big jobs one stage at a time." }
+    ],
+    "timeline": [
+      { "year": "2024", "text": "Sail 0.1 ships as the `pysail` package in August" },
+      { "year": "2024", "text": "0.2 previews distributed execution on Kubernetes in November" },
+      { "year": "2025", "text": "An MCP server lets LLM agents run Spark SQL on Sail (March)" },
+      { "year": "2025", "text": "0.3 adds Spark 4.0 (July); 0.4 adds native Iceberg (October)" },
+      { "year": "2026", "text": "0.5 makes distributed execution resilient and observable (February)" },
+      { "year": "2026", "text": "0.7 adds Spark 4.2, blocking shuffle through object storage and checkpoints (August)" }
+    ],
+    "sources": [
+      { "label": "Spark docs: Spark Connect overview (introduced in Spark 3.4; plans sent over gRPC)", "url": "https://spark.apache.org/docs/latest/spark-connect-overview.html" },
+      { "label": "LakeSail blog: The First PySail Release, by Shehab Amin and Heran Lin (August 2024)", "url": "https://lakesail.com/blog/first-pysail-release/" },
+      { "label": "LakeSail blog: Sail 0.2 and the Future of Distributed Processing (November 2024)", "url": "https://lakesail.com/blog/the-future-of-distributed-processing/" },
+      { "label": "LakeSail blog: Sail MCP Server, Spark Analytics for LLM Agents (March 2025)", "url": "https://lakesail.com/blog/spark-mcp-server/" },
+      { "label": "LakeSail blog: Sail 0.3, Long Live Spark (July 2025)", "url": "https://lakesail.com/blog/sail-0-3/" },
+      { "label": "LakeSail blog: Sail 0.4, Native Apache Iceberg Support (October 2025)", "url": "https://lakesail.com/blog/sail-0-4/" },
+      { "label": "LakeSail blog: Sail 0.7, Stateless Compute, Durable Job State (August 2026)", "url": "https://lakesail.com/blog/sail-0-7-blocking-shuffle-checkpoint/" },
+      { "label": "LakeSail blog index (0.5 in February 2026)", "url": "https://lakesail.com/blog/" }
+    ]
+  },
+  "sources": [
+    { "label": "Spark docs: Spark Connect overview", "url": "https://spark.apache.org/docs/latest/spark-connect-overview.html" },
+    { "label": "GitHub: lakehq/sail README (Spark Connect, DataFusion, formats, catalogs, TPC-H results)", "url": "https://github.com/lakehq/sail" },
+    { "label": "GitHub: lakehq/sail releases (0.7.0 to 0.7.2)", "url": "https://github.com/lakehq/sail/releases" },
+    { "label": "Sail docs: Architecture (local and cluster mode, driver and worker actors, Arrow Flight shuffle)", "url": "https://docs.lakesail.com/sail/latest/concepts/architecture/" },
+    { "label": "Sail docs: Getting started (pysail, pyspark-client, SparkConnectServer)", "url": "https://docs.lakesail.com/sail/latest/introduction/getting-started/" },
+    { "label": "Sail docs: Migrating from Spark (RDD API, pandas-on-Spark, streaming, configuration)", "url": "https://docs.lakesail.com/sail/latest/introduction/migrating-from-spark/" },
+    { "label": "Sail docs: Kubernetes deployment (on-demand worker pods, single replica)", "url": "https://docs.lakesail.com/sail/latest/guide/deployment/kubernetes.html" },
+    { "label": "Sail docs: User guide (data sources, storage, catalogs, integrations)", "url": "https://docs.lakesail.com/sail/latest/guide/" },
+    { "label": "LakeSail blog: Sail 0.7 (blocking shuffle, checkpoints, Spark 4.2)", "url": "https://lakesail.com/blog/sail-0-7-blocking-shuffle-checkpoint/" }
+  ],
+  "checked": "2026-10-23"
+}

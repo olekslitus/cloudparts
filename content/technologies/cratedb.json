@@ -1,0 +1,111 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "CrateDB",
+  "concepts": ["olap", "search"],
+  "uses": ["tsdb", "vector"],
+  "provider": "oss",
+  "vendor": "Crate.io",
+  "license": "Apache 2.0 (every feature since 4.5, March 2021); CrateDB Cloud is a paid managed service",
+  "website": "https://cratedb.com/",
+  "repo": "https://github.com/crate/crate",
+  "summary": "A distributed SQL database built on Lucene: every column is indexed and stored column by column, so one cluster answers aggregations, full-text, geo and vector queries over fresh machine data.",
+  "intro": [
+    "CrateDB is a shared-nothing cluster written in Java. Each table is split into shards spread over the nodes, and each shard is a Lucene index made of immutable segments. Every column is indexed by default: text with a plain (whole-value) inverted index, or a full-text one if you give it an analyzer; numbers with BKD trees for range filters. Alongside the indexes it keeps doc values, Lucene’s column-by-column storage, which is on by default and serves sorting, grouping and aggregations without reading whole rows. A write is routed by its primary key (or `CLUSTERED BY` column) to a primary shard, logged in that shard’s translog, then applied on the replicas in parallel before the client gets an answer. New rows become visible to queries when the shard refreshes, once a second by default while the table is busy, or on `REFRESH`; lookups by primary key read the translog and see a write at once.",
+    "Clients speak SQL over the PostgreSQL wire protocol (port 5432) or an HTTP endpoint (port 4200, which also serves the Admin UI). Rows behave like JSON documents: `OBJECT` columns can add sub-columns on insert and are queried as `payload['firmware']`. `MATCH` runs BM25-ranked full-text search, geo types support shape queries, and `FLOAT_VECTOR` columns (up to 2,048 dimensions) answer `KNN_MATCH` nearest-neighbour searches through Lucene’s HNSW index. Tables can be partitioned by a generated column such as `date_trunc('month', ts)`; each partition gets its own shards, filters on the partition column skip whole partitions, and a `DELETE` that covers a partition drops it. There are no transactions: each row write is atomic, `BEGIN` and `COMMIT` are accepted and ignored, and concurrent updates are handled with row version numbers.",
+    "All of CrateDB is Apache 2.0. Crate.io offers it as CrateDB OSS, CrateDB Enterprise (self-hosted with support) and CrateDB Cloud, a managed service on AWS, Azure, Google Cloud and STACKIT. Since October 2026 the company and CrateDB are owned by Crate.io AG, a holding company in Vaduz, Liechtenstein. Version 6.5.0 came out on 13 October 2026."
+  ],
+  "strengths": [
+    "Indexes everything by default and stores columns too, so ad-hoc filters and aggregations over billions of rows work without designing indexes first",
+    "Search, analytics and documents in one SQL dialect: full-text with BM25 scores, geo shapes, vector kNN and nested `OBJECT` columns sit next to `GROUP BY` and joins",
+    "Scales out on its own: shards are created (by default `max(4, data nodes × 2)`), replicated and rebalanced automatically, and time-partitioned tables make old data cheap to drop",
+    "PostgreSQL wire protocol, so pgjdbc and tools such as Grafana’s PostgreSQL data source connect without a special driver"
+  ],
+  "limits": [
+    "No transactions: atomicity is per row, `BEGIN`/`COMMIT` are silently ignored, and the PostgreSQL interface reports `read uncommitted`",
+    "Queries see new rows only after a refresh, up to a second later by default; only primary-key lookups are read-after-write",
+    "Postgres-compatible on the wire, not in the dialect: no `JSON` type (use `OBJECT`), no `TIME` without time zone, no `COPY` sub-protocol, and full-text functions differ, so many Postgres tools only partly work",
+    "Upgrades can mean rebuilding: tables created before 5.x must be recreated to run on 6.x, and a new shard count only applies to partitions created afterwards"
+  ],
+  "worksWith": [
+    { "id": "elasticsearch", "how": "forked its clustering code from" },
+    { "id": "postgresql", "how": "speaks the wire protocol of" },
+    { "id": "grafana", "how": "is charted, via its Postgres source, by" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "Sensor data: a monthly-partitioned table with a document column and a full-text index",
+    "source": [
+      "CREATE TABLE readings (",
+      "  device_id   TEXT,",
+      "  ts          TIMESTAMP WITH TIME ZONE,",
+      "  temperature DOUBLE PRECISION,",
+      "  payload     OBJECT(DYNAMIC),            -- new keys become columns on insert",
+      "  note        TEXT INDEX USING FULLTEXT WITH (analyzer = 'english'),",
+      "  month       TIMESTAMP WITH TIME ZONE GENERATED ALWAYS AS date_trunc('month', ts)",
+      ") PARTITIONED BY (month);",
+      "",
+      "-- Aggregation over doc values, the column store",
+      "SELECT device_id, date_trunc('hour', ts) AS hour, avg(temperature)",
+      "FROM readings",
+      "WHERE ts >= CURRENT_TIMESTAMP - INTERVAL '1 day'",
+      "GROUP BY 1, 2 ORDER BY 2;",
+      "",
+      "-- Full-text search on the same table, ranked by BM25",
+      "SELECT device_id, note, _score",
+      "FROM readings",
+      "WHERE MATCH(note, 'fan overheating')",
+      "ORDER BY _score DESC LIMIT 10;"
+    ]
+  },
+  "history": {
+    "story": [
+      "CrateDB began in Dornbirn, Austria, where Christian Lutz, Bernd Dorn and Jodok Batlogg founded Crate in 2013 to build an open-source clustered database for fast text search and analytics; the first release came in April 2013. The founders had about ten years of history with Elasticsearch, including running some of Europe’s largest deployments. They started with their own Apache-licensed Elasticsearch plugins, such as `inout` and `timefacets`, which were merged into CrateDB, and built SQL on top of Elasticsearch’s clustering and Lucene’s indexes. Crate won TechCrunch Disrupt Europe in London in October 2014.",
+      "CrateDB 1.0 shipped in December 2016, after more than a million downloads, the same year the company moved its headquarters to San Francisco while development stayed in Austria. CrateDB 2.0 in May 2017 brought the first Enterprise Edition. With 4.0 in 2019 the team stopped tracking Elasticsearch directly and copied the code into its own repository, and the company adopted an open-core model that founder Christian Lutz later called a mistake. When Elastic moved Elasticsearch to the SSPL and Elastic License in January 2021, Crate.io said it would no longer use it as an upstream, and CrateDB 4.5 in March 2021 put every feature, including user management and privileges, under Apache 2.0; revenue was to come from support and CrateDB Cloud.",
+      "CrateDB 5.0 followed in July 2022 and 6.0 in July 2025. In October 2026 a newly formed holding company, Crate.io AG in Vaduz, Liechtenstein, took over the US company’s assets, including the Austrian subsidiary that holds the code, and Crate.io added STACKIT, a European cloud, as a CrateDB Cloud option."
+    ],
+    "choices": [
+      { "choice": "SQL on Elasticsearch’s clustering and Lucene’s indexes", "why": "The founders already ran large Elasticsearch clusters, and its Apache licence let them build on it freely; Bernd Dorn wrote that they would not have chosen it under the GPL. Lucene supplied the indexes underneath." },
+      { "choice": "Copy the Elasticsearch code in, then drop the upstream", "why": "From 4.0 the team wanted control over the modules it used, so it copied the code and only backported fixes. Elastic’s 2021 licence change ended any reason to follow Elastic’s releases." },
+      { "choice": "Speak the PostgreSQL wire protocol", "why": "Existing drivers and tools then work unchanged: pgjdbc connects, and Grafana reaches CrateDB through its ordinary PostgreSQL data source." },
+      { "choice": "One Apache 2.0 codebase instead of open core", "why": "Christian Lutz wrote that over 85% of paying customers wanted a managed service anyway, that features such as authentication mattered to every user, and that a single codebase was simpler to develop and to partner on." }
+    ],
+    "timeline": [
+      { "year": "2013", "text": "Crate is founded in Dornbirn, Austria; first release in April" },
+      { "year": "2014", "text": "Crate wins TechCrunch Disrupt Europe in London" },
+      { "year": "2016", "text": "CrateDB 1.0 ships in December; the company moves its headquarters to San Francisco" },
+      { "year": "2017", "text": "CrateDB 2.0 brings the first Enterprise Edition" },
+      { "year": "2019", "text": "CrateDB 4.0 copies Elasticsearch code into its own repository" },
+      { "year": "2021", "text": "Crate.io drops Elasticsearch as upstream; CrateDB 4.5 makes everything Apache 2.0" },
+      { "year": "2025", "text": "CrateDB 6.0 is released in July" },
+      { "year": "2026", "text": "Crate.io AG in Liechtenstein takes over CrateDB; 6.5.0 ships in October" }
+    ],
+    "sources": [
+      { "label": "Wikipedia: CrateDB (founders, Dornbirn, first release, TechCrunch Disrupt Europe, 1.0 and 2.0)", "url": "https://en.wikipedia.org/wiki/CrateDB" },
+      { "label": "CrateDB blog: Doubling down on permissive licensing and the Elasticsearch lockdown (Bernd Dorn, January 2021)", "url": "https://cratedb.com/blog/cratedb-doubling-down-on-permissive-licensing-and-the-elasticsearch-lockdown" },
+      { "label": "Crate.io press release: CrateDB will switch to an Elasticsearch fork (February 2021)", "url": "https://cratedb.com/press/cratedb-will-switch-to-an-elasticsearch-fork" },
+      { "label": "Crate.io: Open source licensing, a founder’s view (Christian Lutz, March 2021)", "url": "https://cratedb.com/a/opensource-licensing-founder/" },
+      { "label": "DevClass: CrateDB goes fully open source with release of v4.5 (March 2021)", "url": "https://devclass.com/2021/03/25/cratedb-goes-fully-open-source-with-release-of-v4-5" },
+      { "label": "Crate.io press release: Crate.io AG brings CrateDB back to Europe and partners with STACKIT (October 2026)", "url": "https://cratedb.com/press/crate.io-ag-brings-cratedb-back-to-europe" },
+      { "label": "Trending Topics: Crate.io moves back to Europe (October 2026)", "url": "https://www.trendingtopics.eu/crate-io-back-to-europe-liechtenstein-stackit/" },
+      { "label": "crate/crate releases on GitHub (5.0.0, 6.0.0, 6.5.0)", "url": "https://github.com/crate/crate/releases" }
+    ]
+  },
+  "sources": [
+    { "label": "CrateDB on GitHub: README (features, Docker quick start, Apache 2.0)", "url": "https://github.com/crate/crate" },
+    { "label": "CrateDB docs: Storage and consistency (shards, Lucene segments, translog, refresh, atomicity, versions)", "url": "https://cratedb.com/docs/crate/reference/en/latest/concepts/storage-consistency.html" },
+    { "label": "CrateDB guide: Indexing and storage (inverted indexes, BKD trees, doc values column store)", "url": "https://cratedb.com/docs/guide/feature/storage/indexing-and-storage.html" },
+    { "label": "CrateDB docs: CREATE TABLE (refresh interval, default shard count, replicas, column policy)", "url": "https://cratedb.com/docs/crate/reference/en/latest/sql/statements/create-table.html" },
+    { "label": "CrateDB docs: Partitioned tables (generated partition columns, dropping partitions)", "url": "https://cratedb.com/docs/crate/reference/en/latest/general/ddl/partitioned-tables.html" },
+    { "label": "CrateDB docs: Fulltext indices (plain index by default, analyzers)", "url": "https://cratedb.com/docs/crate/reference/en/latest/general/ddl/fulltext-indices.html" },
+    { "label": "CrateDB docs: Data types (OBJECT column policies, FLOAT_VECTOR up to 2,048 dimensions)", "url": "https://cratedb.com/docs/crate/reference/en/latest/general/ddl/data-types.html" },
+    { "label": "CrateDB guide: Full-text search (MATCH, analyzers, BM25, _score)", "url": "https://cratedb.com/docs/guide/feature/search/fts/index.html" },
+    { "label": "CrateDB guide: Vector search (FLOAT_VECTOR, KNN_MATCH, HNSW from Lucene)", "url": "https://cratedb.com/docs/guide/feature/search/vector/index.html" },
+    { "label": "CrateDB guide: Features (shared-nothing architecture inherited from Elasticsearch)", "url": "https://cratedb.com/docs/guide/feature/index.html" },
+    { "label": "CrateDB docs: PostgreSQL wire protocol (transactions ignored, type and dialect differences)", "url": "https://cratedb.com/docs/crate/reference/en/latest/interfaces/postgres.html" },
+    { "label": "CrateDB guide: Grafana (via the PostgreSQL data source)", "url": "https://cratedb.com/docs/guide/integrate/grafana/index.html" },
+    { "label": "CrateDB: Database overview (editions: OSS, Enterprise, Cloud on STACKIT, AWS, Azure, GCP)", "url": "https://cratedb.com/database" },
+    { "label": "CrateDB docs: Release notes 6.5.0 (13 October 2026; upgrade requirements)", "url": "https://cratedb.com/docs/crate/reference/en/master/appendices/release-notes/6.5.0.html" },
+    { "label": "Crate.io press release: Crate.io AG brings CrateDB back to Europe and partners with STACKIT (October 2026)", "url": "https://cratedb.com/press/crate.io-ag-brings-cratedb-back-to-europe" }
+  ],
+  "checked": "2026-10-23"
+}

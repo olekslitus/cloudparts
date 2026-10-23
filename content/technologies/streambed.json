@@ -1,0 +1,86 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Streambed",
+  "concepts": ["etl"],
+  "uses": ["lakehouse", "cdc"],
+  "provider": "oss",
+  "license": "Apache 2.0",
+  "website": "https://streambed.dev/",
+  "repo": "https://github.com/viggy28/streambed",
+  "status": { "stage": "preview", "note": "No tagged release yet: the changelog lists 0.1.0 as upcoming, and almost all commits come from one developer since April 2026." },
+  "summary": "A small Go program that copies Postgres changes into Iceberg or DuckLake tables on S3 through logical replication, and answers SQL over them through a Postgres-compatible server built on DuckDB.",
+  "intro": [
+    "Streambed connects to Postgres as a logical replication subscriber, so the source needs `wal_level = logical` and nothing else. One loop reads the WAL through the `pgoutput` plugin, decodes inserts, updates and deletes, and buffers rows per table in memory. Every 10,000 rows or 2 seconds by default it writes the buffer as a Parquet file to S3 (or MinIO or another S3-compatible store) and commits a new table snapshot. Updates and deletes are copy-on-write by default: Streambed reads the affected Parquet data, drops the old rows and writes the merged result; Iceberg v2 equality deletes are an opt-in alternative. It only acknowledges a WAL position to Postgres once the rows before it are on S3, so Postgres keeps any WAL it hasn’t flushed, and `resync` backfills a table with `COPY` under a consistent snapshot.",
+    "Tables can be written as Apache Iceberg, readable by any Iceberg engine, or as DuckLake, whose catalog lives in a DuckDB or SQLite file. The built-in query server embeds DuckDB and speaks the Postgres wire protocol, so you can point `psql` at port 5433 and run analytical queries, including time travel to a past commit with `AT (TIMESTAMP => …)`. Other commands list snapshots, expire old Iceberg snapshots and compact small files. With Postgres 16 or newer it can read changes from a hot-standby replica, using the primary only to create the publication."
+  ],
+  "strengths": [
+    "Very little to run: one Go binary, a Postgres with logical replication, and a bucket; no Kafka, Spark or warehouse in between",
+    "Data lands in open formats in your own bucket, as Parquet with Iceberg or DuckLake metadata, so other engines can read the same tables",
+    "Analysts query with the Postgres tools they know, through a DuckDB-backed server that answers columnar queries much faster than the row-store source",
+    "Can stream from a read replica to keep load off the primary, and keeps a snapshot per commit for time travel"
+  ],
+  "limits": [
+    "Very young: started in April 2026, no tagged release, and essentially one maintainer",
+    "Copy-on-write rewrites Parquet data for every batch of updates and deletes, and frequent small commits pile up Iceberg metadata and small files; the author’s own benchmark found DuckLake about 38 times faster than Iceberg on an update-heavy load (7 s against 269 s)",
+    "Time-travel timestamps are Streambed’s commit times, not the original Postgres transaction times, and expired snapshots can’t be queried",
+    "Equality-delete (merge-on-read) mode is one-way: once a table has equality deletes, Streambed refuses to start in copy-on-write mode"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "streams logical replication changes from" },
+    { "id": "iceberg", "how": "writes tables in" },
+    { "id": "ducklake", "how": "can write tables in" },
+    { "id": "duckdb", "how": "answers psql queries with an embedded" },
+    { "id": "s3", "how": "writes Parquet files and metadata to" },
+    { "id": "minio", "how": "runs its local demo and tests against" },
+    { "id": "sqlite", "how": "keeps replication positions in" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Stream a local Postgres into Iceberg on MinIO and query it with psql",
+    "source": [
+      "./streambed sync \\",
+      "  --source-url=\"postgres://postgres:test@localhost:5432/postgres\" \\",
+      "  --s3-bucket=\"streambed\" \\",
+      "  --s3-endpoint=\"http://localhost:9000\" \\",
+      "  --s3-prefix=\"test\" \\",
+      "  --query-addr=:5433",
+      "",
+      "# analytical queries go to DuckDB over Parquet, not to your primary",
+      "psql -h localhost -p 5433 -U postgres -d postgres"
+    ]
+  },
+  "history": {
+    "story": [
+      "Analytical queries on a production Postgres database eventually become too slow to run there but too important to drop. The usual answer is an ETL pipeline into a warehouse, with Spark, Airflow or a managed connector service, hours of delay and a copy that can drift from the source. Vignesh (viggy28 on GitHub), formerly at Cloudflare and a co-founder of Omnigres, started Streambed in April 2026 to skip that pipeline: subscribe to the WAL directly and write open table files to S3, seconds behind production.",
+      "The first version wrote only Iceberg. In August 2026 he added DuckLake as a second target after finding that change-data capture, with its stream of small commits, multiplies Iceberg metadata files and small Parquet files; DuckLake keeps that metadata in a database instead and fit the write path, which already used DuckDB. Reading from a hot-standby replica followed in September."
+    ],
+    "choices": [
+      { "choice": "Logical replication straight into table files", "why": "Skipping Kafka, batch jobs and Spark removes the moving parts and the hours of delay of a classic pipeline, and keeps the data seconds behind the source." },
+      { "choice": "A Postgres wire protocol query server on DuckDB", "why": "Users keep `psql` and their Postgres tools, while DuckDB’s columnar engine on Parquet handles the analytical queries that are slow on Postgres’s row storage." },
+      { "choice": "One goroutine for the whole pipeline", "why": "Reading, decoding, buffering, flushing and acknowledging in one loop, with no channels between stages, keeps ordering and backpressure easy to reason about." },
+      { "choice": "DuckLake alongside Iceberg", "why": "Small, frequent CDC commits create a lot of Iceberg metadata in object storage; a catalog in a database gives a shorter commit path, while Iceberg remains for engine interoperability." }
+    ],
+    "timeline": [
+      { "year": "2026", "text": "Repository created in April; “Why I built Streambed” published on 12 April" },
+      { "year": "2026", "text": "DuckLake target added in August" },
+      { "year": "2026", "text": "Streaming from a hot-standby replica in September" }
+    ],
+    "sources": [
+      { "label": "Streambed blog: Why I built Streambed (12 April 2026)", "url": "https://streambed.dev/blog/why-streambed/" },
+      { "label": "Streambed blog: The small-file problem gets worse with CDC (DuckLake target, 30 August 2026)", "url": "https://streambed.dev/blog/ducklake-target-support/" },
+      { "label": "Streambed blog: Stream Postgres changes from a replica (27 September 2026)", "url": "https://streambed.dev/blog/postgres-replica-cdc/" },
+      { "label": "GitHub: viggy28 (profile: ex-Cloudflare, co-founded Omnigres)", "url": "https://github.com/viggy28" }
+    ]
+  },
+  "sources": [
+    { "label": "Streambed homepage (how it works, architecture)", "url": "https://streambed.dev/" },
+    { "label": "Streambed README (quick start, mutation modes, DuckLake catalog, time travel, commands)", "url": "https://github.com/viggy28/streambed" },
+    { "label": "Streambed docs: Getting started (flush triggers, LSN acknowledgment)", "url": "https://github.com/viggy28/streambed/blob/main/site/content/docs/getting-started.md" },
+    { "label": "Streambed docs: Configuration (wal_level = logical, S3 and flush flags)", "url": "https://github.com/viggy28/streambed/blob/main/site/content/docs/configuration.md" },
+    { "label": "Streambed docs: Architecture (single goroutine, pgoutput decoder, SQLite state, query server)", "url": "https://github.com/viggy28/streambed/blob/main/site/content/docs/architecture.md" },
+    { "label": "Streambed CHANGELOG (0.1.0 upcoming)", "url": "https://github.com/viggy28/streambed/blob/main/CHANGELOG.md" },
+    { "label": "Streambed blog: The small-file problem gets worse with CDC (Iceberg vs DuckLake benchmark)", "url": "https://streambed.dev/blog/ducklake-target-support/" },
+    { "label": "Streambed blog: Stream Postgres changes from a replica (Postgres 16+, --primary-url)", "url": "https://streambed.dev/blog/postgres-replica-cdc/" }
+  ],
+  "checked": "2026-10-23"
+}

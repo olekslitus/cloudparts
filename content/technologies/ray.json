@@ -1,0 +1,129 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Ray",
+  "concepts": ["actors"],
+  "uses": ["mlops"],
+  "provider": "oss",
+  "vendor": "PyTorch Foundation, started at UC Berkeley and developed mainly by Anyscale",
+  "license": "Apache 2.0",
+  "website": "https://www.ray.io/",
+  "repo": "https://github.com/ray-project/ray",
+  "summary": "A Python framework that spreads functions (tasks) and stateful objects (actors) across a cluster, with libraries on top for data processing, training, tuning and model serving.",
+  "intro": [
+    "Ray turns ordinary Python into distributed code with one decorator. A function marked `@ray.remote` becomes a task: calling it with `.remote()` returns at once with an object reference, a future, while the function runs in a worker process somewhere in the cluster. A class marked the same way becomes an actor, a stateful worker that lives in its own process and runs its methods one call at a time. Each task or actor declares what it needs, such as CPUs, GPUs or a custom resource, and the scheduler places it on a node that has them. `ray.get` waits for results.",
+    "Results live in a shared-memory object store, one per node, and are passed between tasks by reference, so a large array or model is not copied for every call. When a store fills up, Ray spills objects to local disk. A cluster is one head node, which holds the cluster metadata in its Global Control Store (GCS), plus worker nodes; it can run on a laptop, on VMs in AWS, GCP or Azure, or on Kubernetes, YARN or Slurm, and an autoscaler adds and removes nodes as tasks and actors wait for resources.",
+    "On top of this core sit the AI libraries: Ray Data for streaming data loading and batch inference, Ray Train for distributed training with PyTorch, Hugging Face, XGBoost and others, Ray Tune for hyperparameter search, Ray Serve for online model serving and RLlib for reinforcement learning. Ray started at UC Berkeley; its creators founded Anyscale in 2019 to build a managed service around it, and in October 2025 Anyscale contributed Ray to the PyTorch Foundation."
+  ],
+  "strengths": [
+    "Small API: `@ray.remote`, `.remote()` and `ray.get` scale plain Python functions and classes from a laptop to thousands of cores",
+    "Tasks and actors in one system, so stateless fan-out and long-lived stateful workers (a loaded model, a simulator, a parameter server) share the same scheduler and object store",
+    "GPUs and other accelerators are first-class resources, and Ray Data streams CPU preprocessing straight into GPU inference or training to keep them busy",
+    "One cluster covers data preparation, training, tuning and serving, instead of a separate system for each step"
+  ],
+  "limits": [
+    "The head node is a single point of failure by default: if the GCS goes down, the whole cluster fails, unless you back it with an external Redis",
+    "Scheduling and autoscaling follow the resources each task or actor declares, not what it actually uses, so wrong declarations oversubscribe or waste nodes",
+    "Memory needs watching: a full object store spills to disk, and above 95% of node memory Ray kills tasks or actors to free space",
+    "Debugging spans many processes and machines; failures show up as remote exceptions, lost objects or killed workers rather than a local stack trace"
+  ],
+  "worksWith": [
+    { "id": "kubernetes", "how": "runs clusters as pods on" },
+    { "id": "redis", "how": "can keep its head node’s state in" },
+    { "id": "prometheus", "how": "exports cluster metrics to" },
+    { "id": "grafana", "how": "ships dashboards for" },
+    { "id": "s3", "how": "reads and writes datasets in" },
+    { "id": "parquet", "how": "reads and writes datasets as" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "A task fanned out four times, and an actor that keeps state between calls",
+    "source": [
+      "import ray",
+      "ray.init()  # starts a local cluster, or connects to an existing one",
+      "",
+      "@ray.remote",
+      "def square(x):",
+      "    return x * x",
+      "",
+      "futures = [square.remote(i) for i in range(4)]  # returns object refs at once",
+      "print(ray.get(futures))  # [0, 1, 4, 9]",
+      "",
+      "@ray.remote(num_cpus=1)",
+      "class Counter:",
+      "    def __init__(self):",
+      "        self.i = 0",
+      "",
+      "    def incr(self, value):",
+      "        self.i += value",
+      "",
+      "    def get(self):",
+      "        return self.i",
+      "",
+      "counter = Counter.remote()  # a process of its own, somewhere in the cluster",
+      "for _ in range(10):",
+      "    counter.incr.remote(1)",
+      "print(ray.get(counter.get.remote()))  # 10"
+    ]
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "The libraries on top of Ray Core",
+      "intro": "Each library is a Python package built from tasks and actors, so they share one cluster and can pass data to each other through the object store.",
+      "items": [
+        { "name": "Ray Data", "tag": "data", "text": "Loads and transforms datasets from Parquet, CSV, JSON, images, audio, video and object storage, using Arrow underneath. Its streaming engine feeds batches from CPU preprocessing into GPU workers, which suits batch inference and feeding training jobs." },
+        { "name": "Ray Train", "tag": "training", "text": "Runs one training script across many workers and GPUs, with fault tolerance, for PyTorch, Lightning, Hugging Face Transformers and Accelerate, DeepSpeed, TensorFlow, XGBoost, LightGBM and JAX." },
+        { "name": "Ray Tune", "tag": "tuning", "text": "Runs many training trials with different hyperparameters in parallel. It plugs in search libraries such as Optuna and HyperOpt, and schedulers such as ASHA stop poor trials early." },
+        { "name": "Ray Serve", "tag": "serving", "text": "Serves models as HTTP endpoints. Each deployment is a set of actor replicas that scales up and down; several models and plain Python logic can be chained into one application, with FastAPI routes, request batching and streaming." },
+        { "name": "RLlib", "tag": "reinforcement learning", "text": "Distributed reinforcement learning, the workload Ray was first built for: many simulator actors gather experience while learners update the policy." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Ray began at UC Berkeley in 2016, the work of Robert Nishihara, Philipp Moritz, Ion Stoica, Michael I. Jordan and colleagues. They were aiming at what they called the next generation of AI applications: programs that keep interacting with an environment and learning from it, as in reinforcement learning. Such programs mix many small parallel computations with long-lived stateful ones, so the team built a single engine that could express both task-parallel and actor-based computation.",
+      "The first release, 0.1, appeared in May 2017. The paper “Ray: A Distributed Framework for Emerging AI Applications”, posted in December 2017 and presented at OSDI 2018, described a distributed scheduler and a fault-tolerant store for control state, and reported more than 1.8 million tasks per second. By Ray 1.0 it shipped its own libraries for reinforcement learning (RLlib), hyperparameter tuning (Tune), serving (Ray Serve) and training (RaySGD).",
+      "Nishihara, Moritz and Stoica founded Anyscale in 2019 to build a managed Ray service. Ray 1.0 came out on September 30, 2020, at the first Ray Summit, and Ray 2.0 followed in August 2022. Usage grew with large-model training and inference, and on October 22, 2025, Anyscale contributed Ray to the PyTorch Foundation, part of the Linux Foundation, next to PyTorch and vLLM. Releases continue roughly monthly; 2.59.0 came out in October 2026."
+    ],
+    "choices": [
+      { "choice": "Tasks and actors in one engine", "why": "Reinforcement learning needs both stateless work (simulations) and stateful work (a model held in GPU memory). Putting both behind one API and one scheduler avoids gluing a batch system to a separate service framework." },
+      { "choice": "Futures everywhere", "why": "Every call returns an object reference at once and the work runs in the background, so a program can launch more work as results arrive. The paper calls this a dynamic execution engine, as opposed to a job graph fixed before it starts." },
+      { "choice": "A shared-memory object store on each node", "why": "Tasks on the same node read large results from shared memory instead of each receiving its own copy, which matters when the objects are arrays, tensors or model weights." },
+      { "choice": "Libraries instead of separate systems", "why": "Data, Train, Tune, Serve and RLlib are built from the same tasks and actors, so one cluster and one set of operations cover a whole ML workflow." }
+    ],
+    "timeline": [
+      { "year": "2016", "text": "Repository created at UC Berkeley" },
+      { "year": "2017", "text": "Ray 0.1 released in May; the Ray paper posted in December" },
+      { "year": "2018", "text": "Paper presented at USENIX OSDI" },
+      { "year": "2019", "text": "Ray’s creators found Anyscale" },
+      { "year": "2020", "text": "Ray 1.0 released on September 30 at the first Ray Summit" },
+      { "year": "2022", "text": "Ray 2.0 released in August" },
+      { "year": "2025", "text": "Contributed to the PyTorch Foundation on October 22" },
+      { "year": "2026", "text": "Ray 2.59.0 released in October" }
+    ],
+    "sources": [
+      { "label": "arXiv: Ray: A Distributed Framework for Emerging AI Applications (Moritz, Nishihara et al., Dec 2017; OSDI 2018)", "url": "https://arxiv.org/abs/1712.05889" },
+      { "label": "Anyscale: Ray by Anyscale joins the PyTorch Foundation (Nishihara, Moritz, Stoica, Oct 22, 2025)", "url": "https://www.anyscale.com/blog/ray-by-anyscale-joins-pytorch-foundation" },
+      { "label": "Linux Foundation: PyTorch Foundation welcomes Ray (Oct 22, 2025)", "url": "https://www.linuxfoundation.org/press/pytorch-foundation-welcomes-ray-to-deliver-a-unified-open-source-ai-compute-stack" },
+      { "label": "Anyscale press: Anyscale announces Ray 1.0 at the first Ray Summit", "url": "https://www.anyscale.com/press/anyscale-announces-ray-1-0" },
+      { "label": "Ray releases on GitHub (0.1.0 May 2017, 1.0.0 Sep 2020, 2.0.0 Aug 2022, 2.59.0 Oct 2026)", "url": "https://github.com/ray-project/ray/releases" }
+    ]
+  },
+  "sources": [
+    { "label": "Ray docs: Overview (Ray Core, AI libraries, cluster deployment options)", "url": "https://docs.ray.io/en/latest/ray-overview/index.html" },
+    { "label": "Ray docs: Key concepts (tasks, actors, objects, placement groups)", "url": "https://docs.ray.io/en/latest/ray-core/key-concepts.html" },
+    { "label": "Ray docs: Ray Core walkthrough (remote functions, actors, ray.get)", "url": "https://docs.ray.io/en/latest/ray-core/walkthrough.html" },
+    { "label": "Ray docs: Object spilling", "url": "https://docs.ray.io/en/latest/ray-core/objects/object-spilling.html" },
+    { "label": "Ray docs: Out-of-memory prevention (memory monitor kills tasks or actors)", "url": "https://docs.ray.io/en/latest/ray-core/scheduling/ray-oom-prevention.html" },
+    { "label": "Ray docs: GCS fault tolerance (head node failure, external Redis)", "url": "https://docs.ray.io/en/latest/ray-core/fault_tolerance/gcs.html" },
+    { "label": "Ray docs: KubeRay autoscaling (logical resource requests)", "url": "https://docs.ray.io/en/latest/cluster/kubernetes/user-guides/configuring-autoscaling.html" },
+    { "label": "Ray docs: Collecting and monitoring metrics (Prometheus format, Grafana dashboards)", "url": "https://docs.ray.io/en/latest/cluster/metrics.html" },
+    { "label": "Ray docs: Ray Data", "url": "https://docs.ray.io/en/latest/data/data.html" },
+    { "label": "Ray docs: Ray Train", "url": "https://docs.ray.io/en/latest/train/train.html" },
+    { "label": "Ray docs: Ray Tune", "url": "https://docs.ray.io/en/latest/tune/index.html" },
+    { "label": "Ray docs: Ray Serve", "url": "https://docs.ray.io/en/latest/serve/index.html" },
+    { "label": "Ray repository on GitHub (licence, releases)", "url": "https://github.com/ray-project/ray" },
+    { "label": "Linux Foundation: PyTorch Foundation welcomes Ray (Oct 22, 2025)", "url": "https://www.linuxfoundation.org/press/pytorch-foundation-welcomes-ray-to-deliver-a-unified-open-source-ai-compute-stack" }
+  ],
+  "checked": "2026-10-23"
+}

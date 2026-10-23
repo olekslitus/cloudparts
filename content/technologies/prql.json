@@ -1,0 +1,97 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "PRQL",
+  "concepts": ["compile-to-sql"],
+  "provider": "oss",
+  "vendor": "PRQL project (community, started by Maximilian Roos)",
+  "license": "Apache 2.0",
+  "website": "https://prql-lang.org/",
+  "repo": "https://github.com/PRQL/prql",
+  "summary": "Pipelined Relational Query Language (“Prequel”): a query language where each line transforms the result of the line before, compiled by a Rust compiler into SQL for DuckDB, PostgreSQL, ClickHouse and other databases.",
+  "intro": [
+    "A PRQL query is a linear pipeline: `from employees`, then `filter`, `derive` new columns, `group` with `aggregate`, `sort` and `take`, one transform per line. It adds things SQL lacks, such as variables that later columns can use, functions defined with `let`, f-strings, `??` for coalesce, date literals like `@2021-01-01` and ranges like `take 1..20`. There is one `filter` for both SQL’s `WHERE` and `HAVING`: the compiler decides which one to emit from where the filter sits in the pipeline. When PRQL can’t express something, an s-string such as `s\"LEFT(country, 2)\"` passes SQL through unchanged. The language is deliberately analytical: it reads and transforms data, and doesn’t do inserts or transactions.",
+    "The compiler, `prqlc`, is written in Rust and is both a library and a command-line tool. A `target` setting picks the SQL dialect. ClickHouse, DuckDB, GlareDB, MySQL, PostgreSQL, SQLite and generic SQL are supported and tested on every commit; BigQuery, Snowflake, SQL Server, ANSI and Oracle are implemented but tested minimally or not at all. Bindings exist for Python, JavaScript and R, with nascent ones for Java, C, C++, Elixir, .NET and PHP. Some databases accept PRQL directly: ClickHouse has an experimental `prql` dialect, DuckDB has a community extension, Databend supports it natively, and PostgreSQL gets PRQL functions through plprql. There are also a VS Code extension, Jupyter magics and an online playground. The project says it “will never have a commercial product”."
+  ],
+  "strengths": [
+    "Reads in execution order, top to bottom, so long queries avoid nested subqueries and repeated expressions",
+    "Database-agnostic: change the target and the same query compiles to another dialect",
+    "Small and embeddable: one Rust compiler with bindings for Python, JavaScript and R, and native or extension support in ClickHouse, DuckDB and Databend",
+    "Generated SQL is plain and readable, and s-strings let you mix in raw SQL where needed"
+  ],
+  "limits": [
+    "Its own README (July 2026) says PRQL still has bugs and missing features and is probably only ready for non-technical teams’ fairly simple queries",
+    "Development has slowed while the team works out a new resolver, and contributions to the compiler are concentrated in a few people",
+    "Still 0.x (0.13.14 in July 2026), and several dialects, including BigQuery and Snowflake, are only minimally tested",
+    "Read-only by design: no inserts, updates or DDL, and the ClickHouse dialect is still flagged experimental"
+  ],
+  "worksWith": [
+    { "id": "duckdb", "how": "runs inside, via a community extension," },
+    { "id": "clickhouse", "how": "is an experimental query dialect of" },
+    { "id": "databend", "how": "is a native query language of" },
+    { "id": "postgresql", "how": "compiles to SQL, or runs via plprql, in" },
+    { "id": "mysql", "how": "compiles queries to SQL for" },
+    { "id": "vscode", "how": "has a language extension for" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Compile a pipeline with the Python bindings and run the SQL on DuckDB",
+    "source": [
+      "import duckdb",
+      "import prqlc   # pip install prqlc",
+      "",
+      "query = \"\"\"",
+      "from orders",
+      "filter amount > 30                       # before grouping: becomes WHERE",
+      "group country (",
+      "  aggregate {revenue = sum amount, n = count this}",
+      ")",
+      "filter revenue > 100                     # after grouping: becomes HAVING",
+      "sort {-revenue}",
+      "\"\"\"",
+      "",
+      "opts = prqlc.CompileOptions(target=\"sql.duckdb\", signature_comment=False)",
+      "sql = prqlc.compile(query, opts)",
+      "print(sql)",
+      "# SELECT country, COALESCE(SUM(amount), 0) AS revenue, COUNT(*) AS n",
+      "# FROM orders WHERE amount > 30 GROUP BY country",
+      "# HAVING COALESCE(SUM(amount), 0) > 100 ORDER BY revenue DESC",
+      "",
+      "db = duckdb.connect()",
+      "db.sql(\"CREATE TABLE orders AS SELECT * FROM (VALUES ('DE', 120), ('DE', 80), ('FR', 50),\"",
+      "       \" ('US', 300), ('US', 20), ('US', 90)) t(country, amount)\")",
+      "print(db.sql(sql).fetchall())   # [('US', 390, 2), ('DE', 200, 2)]"
+    ]
+  },
+  "history": {
+    "story": [
+      "Maximilian Roos made the first commit to PRQL on 1 January 2022: not a compiler, but a README with examples and a language specification describing SQL as a pipeline of transformations. A work-in-progress parser followed a week later. The pitch was to keep SQL’s declarative, relational model but fix its ergonomics: queries that read in the order they run, variables and functions, and one way to express each operation.",
+      "A growing group of contributors built out the Rust compiler, and the project shipped 0.2 releases by July 2022, then bindings, a playground and editor support. Databases started to adopt it: ClickHouse added PRQL as an experimental dialect, contributed by János Benjamin Antal, in release 23.7 in 2023; DuckDB got a community extension and Databend native support. By 2026 the repository had more than 10,000 GitHub stars, but the July 2026 status note says development has slowed while the team decides how to build a new resolver."
+    ],
+    "choices": [
+      { "choice": "Compile to SQL instead of running queries itself", "why": "So it can be used with any database that speaks SQL, and teams can adopt it without changing their database." },
+      { "choice": "One pipeline, one transform per line", "why": "Each line transforms the previous result, which removes SQL’s fixed clause order and the subqueries needed to work around it, and lets `filter` replace both `WHERE` and `HAVING`." },
+      { "choice": "A compiler in Rust with bindings", "why": "One reference implementation can be embedded in Python, JavaScript, R and databases such as ClickHouse and DuckDB, instead of each tool reimplementing the language." },
+      { "choice": "Open, with no commercial product", "why": "The project promises it will never have a commercial product, so databases and tools can adopt it without depending on a vendor." }
+    ],
+    "timeline": [
+      { "year": "2022", "text": "First commit by Maximilian Roos (1 January); 0.2 releases by July" },
+      { "year": "2023", "text": "ClickHouse 23.7 adds experimental PRQL support" },
+      { "year": "2026", "text": "Release 0.13.14 (July); status note says development has slowed pending a new resolver" }
+    ],
+    "sources": [
+      { "label": "GitHub: PRQL/prql (repository created January 2022; commit history)", "url": "https://github.com/PRQL/prql" },
+      { "label": "PRQL Language Book (changelog, including 0.2.x releases in 2022)", "url": "https://prql-lang.org/book/" },
+      { "label": "ClickHouse blog: ClickHouse Release 23.7 (experimental support for PRQL, by János Benjamin Antal)", "url": "https://clickhouse.com/blog/clickhouse-release-23-07" },
+      { "label": "PRQL README: Current Status, July 2026", "url": "https://github.com/PRQL/prql/blob/main/README.md" }
+    ]
+  },
+  "sources": [
+    { "label": "PRQL website: principles, example, integrations, bindings, Apache 2.0", "url": "https://prql-lang.org/" },
+    { "label": "PRQL README: language overview and current status (July 2026)", "url": "https://github.com/PRQL/prql/blob/main/README.md" },
+    { "label": "PRQL Language Book: targets and dialects, s-strings, integrations, bindings", "url": "https://prql-lang.org/book/" },
+    { "label": "ClickHouse docs: Alternative query languages (PRQL is experimental)", "url": "https://clickhouse.com/docs/guides/developer/alternative-query-languages" },
+    { "label": "DuckDB community extensions: prql", "url": "https://duckdb.org/community_extensions/extensions/prql" },
+    { "label": "crates.io: prqlc (latest 0.13.14)", "url": "https://crates.io/crates/prqlc" }
+  ],
+  "checked": "2026-10-23"
+}

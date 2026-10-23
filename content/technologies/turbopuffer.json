@@ -1,0 +1,95 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "turbopuffer",
+  "concepts": ["vector"],
+  "uses": ["search"],
+  "provider": "vendor",
+  "vendor": "turbopuffer",
+  "license": "Proprietary; managed service, or run in your own AWS, GCP or Azure account (BYOC)",
+  "website": "https://turbopuffer.com/",
+  "summary": "A managed vector and full-text search engine that keeps every index in object storage and caches the active parts on NVMe and in memory, trading occasional slow cold queries for a much lower price per GB.",
+  "intro": [
+    "turbopuffer stores documents in namespaces: each has an id, optional dense or sparse vectors and attributes, and lives under its own prefix in S3 or Google Cloud Storage. Object storage is the only source of truth. A write appends a file to the namespace’s write-ahead log in the bucket and returns once it is durable there, which takes about 200 ms, and concurrent writes are batched into at most one log entry per second per namespace. The log is then indexed in the background: vectors into a centroid-based approximate-nearest-neighbour index derived from SPFresh, text into a BM25 inverted index, and attributes into exact indexes for filters. Data not yet indexed is still found by scanning the recent log.",
+    "The query nodes are stateless Rust binaries. The first query to a namespace reads straight from object storage in as few round trips as possible (p50 of about 874 ms for a million documents); after that the namespace sits in an NVMe and memory cache on the node it is routed to, and queries take about 14 ms. Reads are consistent by default, which costs one metadata check against the bucket (about 10 ms); eventually consistent reads skip it. A query can rank by vector similarity, by BM25 over one or more fields, or by combinations of them, filter on attributes, aggregate, and use hosted embedding and reranking models. turbopuffer runs as a multi-tenant service in AWS and GCP regions, with Azure in private preview, as single-tenant clusters, or inside your own cloud account (BYOC)."
+  ],
+  "strengths": [
+    "Cheap at scale: storage is $0.33 per GB-month, because data lives in object storage and only the active part is cached; the founders estimate about $70 per TB-month, against $600 for triple-replicated SSD and $3,600 with RAM on top",
+    "Built for many tenants: unlimited namespaces (250 million seen), each searched on its own, so a namespace per customer keeps queries small",
+    "Vector, BM25 full-text, hybrid search, filters and aggregations in one API, with hosted embedding and reranking models",
+    "Large proven scale: more than a trillion documents and 10 million writes per second across customers, up to 128 billion documents in one sharded namespace, with copy-on-write namespace branching"
+  ],
+  "limits": [
+    "Cold namespaces are slow: the first query after data leaves the cache costs hundreds of milliseconds, so latency-sensitive apps call the warm-cache endpoint ahead of time",
+    "Writes are high-latency (about 200 ms to commit, at most one log entry per second per namespace), so it suits search workloads, not transactional ones",
+    "Closed source with no free tier: plans start at a $16 monthly minimum (Launch), $256 (Scale) and $4,096 (Enterprise), and there are no migration tools",
+    "Deliberately limited ranking: it is built for first-stage retrieval, and complex ranking is left to a reranker or your own code"
+  ],
+  "worksWith": [
+    { "id": "s3", "how": "keeps each namespace and its WAL in" },
+    { "id": "gcs", "how": "keeps namespaces, in its GCP regions, in" },
+    { "id": "python", "how": "has an official client SDK for" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Write documents with a full-text and an auto-embedded field, then search them",
+    "source": [
+      "import os, turbopuffer  # pip install turbopuffer",
+      "",
+      "tpuf = turbopuffer.Turbopuffer(",
+      "    api_key=os.getenv(\"TURBOPUFFER_API_KEY\"), region=\"gcp-us-east4\")",
+      "ns = tpuf.namespace(\"docs-acme\")  # created on first write",
+      "",
+      "ns.write(",
+      "    upsert_rows=[",
+      "        {\"id\": 1, \"category\": [\"mammal\"], \"public\": True, \"text\": \"walrus narwhal\"},",
+      "        {\"id\": 2, \"category\": [\"fish\"], \"public\": False, \"text\": \"pufferfish swordfish\"},",
+      "    ],",
+      "    distance_metric=\"cosine_distance\",",
+      "    schema={\"text\": {\"type\": \"string\", \"full_text_search\": True,",
+      "                     \"embed\": {\"model\": \"nvidia/nemotron-3-embed-8b\", \"dims\": 1024}}},",
+      ")",
+      "",
+      "# Vector search, with a filter",
+      "ns.query(rank_by=(\"text\", \"ANN\", (\"Embed\", \"arctic sea mammal\")),",
+      "         filters=(\"public\", \"Eq\", True), limit=10)",
+      "",
+      "# BM25 full-text search on the same namespace",
+      "ns.query(rank_by=(\"text\", \"BM25\", \"walrus\"), limit=10)"
+    ]
+  },
+  "history": {
+    "story": [
+      "In late 2022 Simon Hørup Eskildsen, who had worked at Shopify, was helping Readwise add recommendations and semantic search over more than 100 million documents. The vector databases of the time kept data in memory at over $2 per GB, and he estimated the feature at more than $20,000 a month, four times what Readwise paid for its main database, so it was shelved. Object storage had become available everywhere and NVMe disks cheap and fast, so he designed a search engine that kept everything in object storage and cached only what was being queried.",
+      "He and Justine Li, also from Shopify, launched turbopuffer in October 2023. Cursor moved its search to it in November 2023 and, by turbopuffer’s account, cut its costs by 95%. The company stayed small and commercial-only, is backed by Lachy Groom and Thrive, opened public AWS regions in early 2025 and declared turbopuffer generally available in May 2025. Customers now include Anthropic, Notion, Linear and Atlassian; 2026 brought namespace branching, sharding of single namespaces and native embedding."
+    ],
+    "choices": [
+      { "choice": "Object storage as the only source of truth", "why": "Search writes look more like a data warehouse’s than a transactional database’s. Paying for replicated SSD or RAM for all of it made semantic search too expensive; object storage costs cents per GB, and a cache covers the data actually in use." },
+      { "choice": "A centroid-based vector index instead of a graph", "why": "Graph indexes such as HNSW or DiskANN need many dependent reads. With clusters around centroids, a cold query downloads the small centroid index and then fetches the nearest clusters in one large round trip of about 100 ms." },
+      { "choice": "No dependencies on the critical path besides object storage", "why": "Using the bucket itself as the write-ahead log keeps the query nodes stateless, so any node can serve any namespace and failures don’t lose data." },
+      { "choice": "Accept cold queries", "why": "Keeping all data hot is what makes other systems expensive. Taking a few hundred milliseconds on the first query lets cost follow the data that is actually used." }
+    ],
+    "timeline": [
+      { "year": "2022", "text": "Vector search for Readwise proves too costly, prompting the design" },
+      { "year": "2023", "text": "Launch in October; Cursor moves to turbopuffer in November" },
+      { "year": "2025", "text": "Public AWS regions in March; generally available in May" },
+      { "year": "2026", "text": "Namespace branching in May, sharding and native embedding in July, an Azure region in preview in August" }
+    ],
+    "sources": [
+      { "label": "turbopuffer blog: turbopuffer, fast search on object storage (Simon Hørup Eskildsen)", "url": "https://turbopuffer.com/blog/turbopuffer" },
+      { "label": "turbopuffer: About (founders, Shopify, Canadian remote-first company, investors)", "url": "https://turbopuffer.com/about" },
+      { "label": "turbopuffer docs: Roadmap and changelog (launch October 2023, GA May 2025, 2026 features)", "url": "https://turbopuffer.com/docs/roadmap" }
+    ]
+  },
+  "sources": [
+    { "label": "turbopuffer homepage (customers, scale, cost calculator)", "url": "https://turbopuffer.com/" },
+    { "label": "turbopuffer docs: Architecture (WAL on object storage, caching, SPFresh-based ANN, BM25, latencies)", "url": "https://turbopuffer.com/docs/architecture" },
+    { "label": "turbopuffer docs: Tradeoffs (write latency, cold queries, consistent reads, no free tier or open source)", "url": "https://turbopuffer.com/docs/tradeoffs" },
+    { "label": "turbopuffer docs: Limits (documents, namespaces, shards, throughput)", "url": "https://turbopuffer.com/docs/limits" },
+    { "label": "turbopuffer docs: Regions (AWS, GCP, Azure preview, dedicated and BYOC)", "url": "https://turbopuffer.com/docs/regions" },
+    { "label": "turbopuffer docs: Security (SOC 2, HIPAA, CMEK, private networking)", "url": "https://turbopuffer.com/docs/security" },
+    { "label": "turbopuffer docs: Branching (copy-on-write namespace clones)", "url": "https://turbopuffer.com/docs/branching" },
+    { "label": "turbopuffer docs: Quickstart (Python client, write and query)", "url": "https://turbopuffer.com/docs/quickstart" },
+    { "label": "turbopuffer pricing (plan minimums and usage rates, checked 2026-10-23)", "url": "https://turbopuffer.com/pricing" }
+  ],
+  "checked": "2026-10-23"
+}

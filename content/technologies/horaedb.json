@@ -1,0 +1,105 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Apache HoraeDB",
+  "concepts": ["tsdb"],
+  "uses": ["metrics"],
+  "provider": "oss",
+  "vendor": "Ant Group (retired Apache Incubator podling)",
+  "license": "Apache 2.0",
+  "website": "https://github.com/apache/horaedb",
+  "repo": "https://github.com/apache/horaedb",
+  "archived": {
+    "since": "2026-03-03",
+    "reason": "The project retired from the Apache Incubator on 3 March 2026, after it missed its report to the Incubator, and its GitHub repositories are now read-only archives. The last release, 2.1.0, came out in November 2024, and the new metric engine announced for the end of 2025 never shipped.",
+    "alternatives": ["greptimedb", "influxdb", "questdb"]
+  },
+  "summary": "A distributed time-series database in Rust, started at Ant Group as CeresDB, that keeps recent writes in a WAL and memtable and flushes them as Parquet files to object storage.",
+  "intro": [
+    "HoraeDB began as CeresDB, the storage layer of Ant Group’s monitoring system, and aimed at both time-series and analytic workloads. Classic time-series databases build an inverted index on every tag, which gets expensive when a tag has very many distinct values. HoraeDB instead leaned on scanning and pruning, as analytic databases do: tables are stored sorted by primary key in Parquet files, each file keeps statistics such as minimum and maximum values, and queries skip files that can’t match. The SQL layer adds `TAG` columns and a `timestamp KEY` to an ordinary table definition, and planning and execution are delegated to Apache DataFusion, which is also how PromQL was implemented.",
+    "The storage engine, called Analytic, is a log-structured merge design. A write goes to a write-ahead log and an in-memory skiplist memtable; full memtables are flushed as Parquet SST files, split by a per-table `segment_duration` so each file covers one time segment, and a compactor merges small files with size-tiered or time-window strategies borrowed from Cassandra. The WAL lives in RocksDB on local disk for a single node, or in Kafka or OceanBase for a cluster; SST files go to the local file system or object storage. In cluster mode, HoraeMeta assigns shards (groups of tables) to HoraeDB nodes, with etcd underneath, and follower shards serve reads by replaying the WAL. Clients write over HTTP, gRPC or the MySQL protocol, and HoraeDB also accepts Prometheus remote write and read, the InfluxDB 1.8 write and query API, and OpenTSDB `put`."
+  ],
+  "strengths": [
+    "Compute and storage are separate: SST files sit in object storage and the WAL in a shared service, so shards can move between nodes without copying data",
+    "No inverted index by default, so high-cardinality tags don’t blow up index size; filters prune Parquet files by their statistics instead",
+    "Speaks several existing protocols: Prometheus remote write and read, InfluxDB 1.8 line protocol and InfluxQL, OpenTSDB `put`, and MySQL clients",
+    "Apache 2.0 throughout, with the code, design documents and RFCs still readable in the archived repositories"
+  ],
+  "limits": [
+    "Unmaintained: the podling retired in March 2026, the repositories are archived, and nobody ships fixes or security updates",
+    "The last release, 2.1.0 (November 2024), is the legacy Analytic engine; the `main` branch holds an unfinished rewrite, so building from source gives you neither",
+    "Its own docs said the Parquet-based SST format suited analytic queries better than typical time-series lookups",
+    "A highly available cluster needs Kafka or OceanBase for the WAL, etcd for HoraeMeta and an object store, which is many moving parts for one database"
+  ],
+  "worksWith": [
+    { "id": "datafusion", "how": "plans and runs its queries with" },
+    { "id": "parquet", "how": "writes its SST files as" },
+    { "id": "kafka", "how": "can keep its write-ahead log in" },
+    { "id": "rocksdb", "how": "keeps a single node’s WAL in" },
+    { "id": "etcd", "how": "stores cluster metadata, via HoraeMeta, in" },
+    { "id": "prometheus", "how": "takes remote write and remote read from" },
+    { "id": "influxdb", "how": "accepts the 1.8 write and query API of" },
+    { "id": "opentsdb", "how": "accepts the HTTP `put` format of" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Create a table with a tag and a timestamp key, then write and read over HTTP",
+    "source": [
+      "docker run -d --name horaedb-server -p 8831:8831 -p 3307:3307 -p 5440:5440 apache/horaedb-server",
+      "",
+      "curl -X POST 'http://127.0.0.1:5440/sql' -d '",
+      "CREATE TABLE `demo` (",
+      "  `name` string TAG,",
+      "  `value` double NOT NULL,",
+      "  `t` timestamp NOT NULL,",
+      "  timestamp KEY (t))",
+      "ENGINE=Analytic WITH (enable_ttl=\"false\")'",
+      "",
+      "curl -X POST 'http://127.0.0.1:5440/sql' -d '",
+      "INSERT INTO demo (t, name, value) VALUES (1702224000000, \"horaedb\", 100)'",
+      "",
+      "curl -X POST 'http://127.0.0.1:5440/sql' -d 'SELECT * FROM `demo`'"
+    ]
+  },
+  "history": {
+    "story": [
+      "A team at Ant Group started building the database in 2021 as the storage layer for the company’s monitoring system. They found that the popular time-series databases either lacked native clustering or struggled with high-cardinality tags, because the inverted index they build on every tag grows too costly. They chose Rust, built on Apache Arrow and DataFusion, and put data on object storage. The project went public on GitHub as CeresDB in June 2022 under Apache 2.0, and 1.0 followed in March 2023.",
+      "Because Ant Group wanted to keep the CeresDB brand, the open-source project was renamed HoraeDB in late 2023 and entered the Apache Incubator on 11 December 2023. Its ten initial committers came from Ant Group, Tencent, Greptime and Zhejiang University. Version 2.0.0 in April 2024 was the first under the new name and needed a migration from CeresDB settings; 2.1.0 in November 2024 was the last release.",
+      "In August 2024 the team wrote an RFC for a new engine aimed at metrics with hundreds of millions of series, with an index modelled on VictoriaMetrics’, and moved the old engine to an `analytic-engine` branch. The rewrite stayed unfinished. Commits thinned out through 2025, the podling missed its report to the Incubator, and in February 2026 the Incubator’s report said it was very likely to retire. It retired on 3 March 2026."
+    ],
+    "choices": [
+      { "choice": "Scan and prune instead of indexing every tag", "why": "Inverted indexes on high-cardinality tags were too costly to store and search in Ant Group’s workloads. Sorted columnar files with per-file statistics let queries skip data instead, the way analytic databases do." },
+      { "choice": "A pluggable WAL and object storage underneath", "why": "Separating compute from storage was meant to make failover, load balancing and scaling simple: a shard can move to another node because its files and log live in shared services." },
+      { "choice": "Build on DataFusion rather than write a query engine", "why": "DataFusion gave a SQL planner and executor that could be extended with custom operators, which is how PromQL was added." }
+    ],
+    "timeline": [
+      { "year": "2021", "text": "Development starts at Ant Group as CeresDB" },
+      { "year": "2022", "text": "CeresDB open-sourced on GitHub in June" },
+      { "year": "2023", "text": "Version 1.0 in March; renamed HoraeDB and enters the Apache Incubator in December" },
+      { "year": "2024", "text": "2.0.0 in April, RFC for a new metric engine in August, 2.1.0 in November" },
+      { "year": "2026", "text": "Retires from the Apache Incubator on 3 March; repositories archived" }
+    ],
+    "sources": [
+      { "label": "Apache Incubator wiki: HoraeDB proposal (origins at Ant Group, rename, rationale, committers)", "url": "https://cwiki.apache.org/confluence/spaces/INCUBATOR/pages/278466865/HoraeDB+Proposal" },
+      { "label": "Apache Incubator: HoraeDB project status (entered 2023-12-11, retired 2026-03-03)", "url": "https://incubator.apache.org/projects/horaedb.html" },
+      { "label": "Apache Incubator board report, February 2026 (HoraeDB failed to report, likely to retire)", "url": "https://cwiki.apache.org/confluence/spaces/INCUBATOR/pages/406619826/February2026" },
+      { "label": "Apache Incubator board report, March 2026 (vote underway to retire HoraeDB)", "url": "https://cwiki.apache.org/confluence/display/INCUBATOR/March2026" },
+      { "label": "GitHub: HoraeDB releases (v0.2.0 2022 to v2.1.0 November 2024)", "url": "https://github.com/apache/horaedb/releases" },
+      { "label": "GitHub: HoraeDB v2.0.0 release notes (upgrading from CeresDB)", "url": "https://github.com/apache/horaedb/releases/tag/v2.0.0" },
+      { "label": "HoraeDB RFC: new engine for massive metrics data (August 2024, in Chinese)", "url": "https://github.com/apache/horaedb/blob/main/docs/rfcs/20240827-metric-engine.md" },
+      { "label": "Database of Databases: HoraeDB", "url": "https://dbdb.io/db/horaedb" }
+    ]
+  },
+  "sources": [
+    { "label": "GitHub: HoraeDB README on main (new engine notice, legacy engine branch, licence)", "url": "https://github.com/apache/horaedb" },
+    { "label": "GitHub: HoraeDB README on the analytic-engine branch (Docker quick start, SQL examples)", "url": "https://github.com/apache/horaedb/tree/analytic-engine" },
+    { "label": "HoraeDB docs: Introduction to HoraeDB’s architecture (SQL layer, DataFusion, WAL, memtable, SST, object storage)", "url": "https://github.com/apache/horaedb-docs/blob/main/content/en/docs/design/architecture.md" },
+    { "label": "HoraeDB docs: Storage (LSM variant, Parquet SSTs, segment_duration, compaction strategies)", "url": "https://github.com/apache/horaedb-docs/blob/main/content/en/docs/design/storage.md" },
+    { "label": "HoraeDB docs: Architecture of a HoraeDB cluster (HoraeMeta, shards, leaders and followers)", "url": "https://github.com/apache/horaedb-docs/blob/main/content/en/docs/design/clustering.md" },
+    { "label": "HoraeDB docs: Prometheus remote write and remote read", "url": "https://github.com/apache/horaedb-docs/blob/main/content/en/docs/user-guide/ecosystem/prometheus.md" },
+    { "label": "HoraeDB docs: InfluxDB 1.8 write and query API", "url": "https://github.com/apache/horaedb-docs/blob/main/content/en/docs/user-guide/ecosystem/influxdb.md" },
+    { "label": "HoraeDB docs: OpenTSDB put", "url": "https://github.com/apache/horaedb-docs/blob/main/content/en/docs/user-guide/ecosystem/opentsdb.md" },
+    { "label": "GitHub: HoraeDB v2.0.0 release notes (etcd root path for horaedb and horaemeta)", "url": "https://github.com/apache/horaedb/releases/tag/v2.0.0" },
+    { "label": "Apache Incubator: HoraeDB project status", "url": "https://incubator.apache.org/projects/horaedb.html" }
+  ],
+  "checked": "2026-10-23"
+}

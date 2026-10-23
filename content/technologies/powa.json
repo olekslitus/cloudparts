@@ -1,0 +1,102 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "PoWA",
+  "concepts": ["metrics"],
+  "uses": ["observability"],
+  "provider": "oss",
+  "vendor": "The PoWA team (started at DALIBO)",
+  "license": "PostgreSQL License",
+  "website": "https://powa.readthedocs.io/",
+  "repo": "https://github.com/powa-team/powa",
+  "summary": "PostgreSQL Workload Analyzer: snapshots pg_stat_statements and related extensions into a PostgreSQL repository, and shows per-query history, wait events and index suggestions in a web UI.",
+  "intro": [
+    "PoWA is built from PostgreSQL extensions and two small programs. `pg_stat_statements` is the one required data source: it keeps cumulative counters per normalized query. Optional extensions add more: `pg_qualstats` samples the predicates in `WHERE` and `JOIN` clauses, `pg_stat_kcache` adds the real reads and writes the filesystem did for each query, `pg_wait_sampling` samples wait events and `pg_track_settings` records configuration changes and restarts. The `powa` extension, powa-archivist, takes snapshots of these counters on a schedule (every 5 minutes by default), stores them compactly and purges old data (after 1 day by default). powa-web, a Python and Tornado application, turns the deltas between snapshots into graphs per server, database and query.",
+    "There are two ways to run it. In local mode a background worker inside each server takes the snapshots, which needs a restart, adds overhead, and can’t work on read-only standbys. The recommended remote mode, added in PoWA 4 (2020), stores everything on a separate repository database: the powa-collector daemon connects to each registered server, including standbys, and copies the snapshots there. With `pg_qualstats` installed, PoWA suggests missing indexes for one query or the whole workload of a database, and with HypoPG on the target database it creates each suggested index hypothetically and checks with `EXPLAIN` whether the planner would use it. PoWA is free under the PostgreSQL License. Version 5.0 (November 2024) was a rework with no upgrade path; 5.3, in August 2026, followed changes in the PostgreSQL 19 betas."
+  ],
+  "strengths": [
+    "History per normalized query: calls, time, rows, block I/O and, with `pg_stat_kcache`, real filesystem reads and writes, for every snapshot",
+    "Index suggestions for a whole database’s workload, checked with hypothetical indexes before you build anything",
+    "Remote mode keeps the stored data and the UI’s queries off production servers and covers standbys",
+    "Its extensions also cover `pg_stat_activity`, `pg_stat_io`, replication, WAL, archiver and wait events, so one UI shows server-wide activity too"
+  ],
+  "limits": [
+    "Each monitored server still needs `pg_stat_statements` and any other stats extensions in `shared_preload_libraries`, which means a restart and, on managed services, only the extensions the provider offers",
+    "Several parts to install and keep in step: extensions on every server, a repository database, powa-collector and powa-web; 5.0 had no upgrade path from 4.x",
+    "Reports rely on counters only ever growing; calling `pg_stat_statements_reset()` makes them meaningless for that period",
+    "`pg_qualstats` samples 1% of queries by default, so index suggestions need time or a higher sample rate, which costs performance on busy servers"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "snapshots query statistics from" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "Remote mode: register a monitored server on the repository database",
+    "source": [
+      "-- On the repository server, in a dedicated database",
+      "CREATE DATABASE powa;",
+      "\\c powa",
+      "CREATE EXTENSION pg_stat_statements;",
+      "CREATE EXTENSION btree_gist;",
+      "CREATE EXTENSION powa;",
+      "",
+      "-- Declare a remote server and the stats extensions it has;",
+      "-- powa-collector then snapshots it and stores the data here",
+      "SELECT powa_register_server(hostname => 'myserver.domain.com',",
+      "    alias => 'myserver',",
+      "    password => 'mypassword',",
+      "    extensions => '{pg_stat_kcache,pg_qualstats,pg_wait_sampling}');"
+    ]
+  },
+  "history": {
+    "story": [
+      "PostgreSQL’s `pg_stat_statements` shows totals since the last reset, not how a query behaved yesterday at 3 p.m. PoWA began at the PostgreSQL company DALIBO in 2014 to keep snapshots of those counters and chart them; its first releases had a Perl web interface built on Mojolicious.",
+      "PoWA 2.0, in March 2015, split the project into powa-archivist, the extension that stores snapshots, and powa-web, a rewritten interface in Python on Tornado, and added `pg_qualstats` and `pg_stat_kcache`. PoWA 3.0, in December 2015, used predicate statistics to propose the smallest set of indexes for a whole database, checked with HypoPG’s hypothetical indexes. PoWA 4.0, in April 2020, added remote mode and powa-collector, so data could live on a separate server and standbys could be monitored.",
+      "Since 2018 the copyright has been held by the PoWA team rather than DALIBO. PoWA 5.0 followed in November 2024 as a rework that adds server-wide statistics views; releases in 2026 have kept pace with PostgreSQL 19."
+    ],
+    "choices": [
+      {
+        "choice": "Build on PostgreSQL extensions rather than an external agent",
+        "why": "The statistics already live inside the server, in `pg_stat_statements` and friends, so an extension can read them and keep a consistent view across PostgreSQL versions."
+      },
+      {
+        "choice": "Store snapshots in PostgreSQL itself",
+        "why": "No extra database to run: the history is ordinary tables that PoWA aggregates and purges, and powa-web reads them with SQL."
+      },
+      {
+        "choice": "Add a remote mode in version 4",
+        "why": "A background worker on each server cost performance, needed restarts and couldn’t write on read-only standbys; a collector writing to a separate repository fixed all three."
+      }
+    ],
+    "timeline": [
+      { "year": "2014", "text": "PoWA 1.0 at DALIBO" },
+      { "year": "2015", "text": "PoWA 2.0 splits archivist and web UI; 3.0 adds whole-database index suggestions" },
+      { "year": "2020", "text": "PoWA 4.0 adds remote mode and powa-collector" },
+      { "year": "2024", "text": "PoWA 5.0, a rework with no upgrade path" },
+      { "year": "2026", "text": "PoWA 5.3 follows PostgreSQL 19 beta changes" }
+    ],
+    "sources": [
+      { "label": "PoWA docs: What’s new in PoWA 2.0 (March 2015; Tornado replaces Mojolicious)", "url": "https://powa.readthedocs.io/en/latest/releases/v2.0.html" },
+      { "label": "PoWA docs: What’s new in PoWA 3.0.0 (December 2015)", "url": "https://powa.readthedocs.io/en/latest/releases/v3.0.0.html" },
+      { "label": "PoWA docs: What’s new in PoWA 4.0.0 (April 2020)", "url": "https://powa.readthedocs.io/en/latest/releases/v4.0.0.html" },
+      { "label": "GitHub: powa-team/powa licence (DALIBO 2014–2017, PoWA team since 2018)", "url": "https://github.com/powa-team/powa/blob/master/LICENSE.md" },
+      { "label": "GitHub: powa-archivist changelog (5.0.0 rework)", "url": "https://github.com/powa-team/powa-archivist/blob/master/CHANGELOG.md" },
+      { "label": "GitHub: powa-web changelog (5.3.0, PostgreSQL 19 beta)", "url": "https://github.com/powa-team/powa-web/blob/master/CHANGELOG" }
+    ]
+  },
+  "sources": [
+    { "label": "PoWA docs: Home (components, local and remote mode)", "url": "https://powa.readthedocs.io/en/latest/" },
+    { "label": "PoWA docs: Architecture (local vs remote mode)", "url": "https://powa.readthedocs.io/en/latest/architecture.html" },
+    { "label": "PoWA docs: Remote setup (powa_register_server)", "url": "https://powa.readthedocs.io/en/latest/remote_setup.html" },
+    { "label": "PoWA docs: Quickstart (extensions, shared_preload_libraries)", "url": "https://powa.readthedocs.io/en/latest/quickstart.html" },
+    { "label": "PoWA docs: powa-archivist configuration (frequency, retention)", "url": "https://powa.readthedocs.io/en/latest/components/powa-archivist/configuration.html" },
+    { "label": "PoWA docs: HypoPG (index suggestions with hypothetical indexes)", "url": "https://powa.readthedocs.io/en/latest/components/hypopg.html" },
+    { "label": "PoWA docs: powa-web installation (Python, psycopg2, Tornado)", "url": "https://powa.readthedocs.io/en/latest/components/powa-web/installation.html" },
+    { "label": "PoWA docs: FAQ (pg_qualstats sample rate, two snapshots)", "url": "https://powa.readthedocs.io/en/latest/FAQ.html" },
+    { "label": "GitHub: pg_stat_kcache (real reads and writes by the filesystem layer)", "url": "https://github.com/powa-team/pg_stat_kcache" },
+    { "label": "PoWA docs: Impact on performances", "url": "https://powa.readthedocs.io/en/latest/impact_on_perf.html" },
+    { "label": "GitHub: powa-archivist changelog (5.0.0 metrics and rework)", "url": "https://github.com/powa-team/powa-archivist/blob/master/CHANGELOG.md" },
+    { "label": "GitHub: powa-team/powa-web", "url": "https://github.com/powa-team/powa-web" },
+    { "label": "GitHub: powa-team/powa (PostgreSQL License)", "url": "https://github.com/powa-team/powa" }
+  ],
+  "checked": "2026-10-23"
+}

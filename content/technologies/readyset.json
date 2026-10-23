@@ -1,0 +1,107 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Readyset",
+  "concepts": ["cache"],
+  "uses": ["cdc"],
+  "provider": "vendor",
+  "vendor": "ReadySet, Inc.",
+  "license": "Business Source License 1.1 (source-available; since May 2026 free production use is capped at 2 GB of RAM in total and excludes managed services; each version becomes Apache 2.0 four years after release)",
+  "website": "https://readyset.io/",
+  "repo": "https://github.com/readysettech/readyset",
+  "summary": "A SQL cache that speaks the PostgreSQL and MySQL wire protocols, sits between the app and the database, and keeps cached query results fresh by reading the database’s replication stream instead of waiting for a TTL.",
+  "intro": [
+    "Readyset is a proxy that looks like a database. You point the application’s connection string at it; queries you have cached are answered from Readyset’s memory, and every other query, including all writes, passes through to PostgreSQL or MySQL. To know when cached results go stale, it registers with the upstream database as a replica. On start it snapshots the tables it needs, several at a time, then follows the change stream: on PostgreSQL through a publication named `readyset` and a logical replication slot, on MySQL through the binlog, tracked by file and position or by GTID. Its own docs say it is eventually consistent: there is a short delay between a write and the cached result that reflects it.",
+    "A cache is either deep or shallow, picked with `CREATE DEEP CACHE` or `CREATE SHALLOW CACHE`. A deep (push-based) cache turns the query into a dataflow graph: base-table nodes take in changes from the replication stream, inner nodes compute the joins, filters and aggregates, and reader nodes hold the results in lock-free in-memory maps, so a read is a key lookup however complex the query. The graph is only partly materialized: results are kept only for the parameter values that are actually requested, filled on a miss and evicted when memory runs short, an idea from MIT’s Noria research system. A shallow (pull-based) cache simply stores a query’s results for a TTL and refreshes them in the background, which works for more SQL than the dataflow engine supports. Shallow is the default mode.",
+    "In July 2026 the company folded the cache into the Readyset Platform, alongside QueryPilot, a Rust proxy that decides by itself which queries are safe and worth caching and how fresh each must be, and `rdst`, a free command-line tool with an MCP server. Readyset Cloud runs it as a managed service. The engine is in Rust, published on GitHub with monthly stable releases (`stable-261022` came out on 22 October 2026), under the Business Source License."
+  ],
+  "strengths": [
+    "No application changes: it speaks the PostgreSQL and MySQL protocols, so ORMs and drivers keep working, and you add caches one query at a time with SQL",
+    "No invalidation code: deep caches are updated incrementally from the replication stream, so results are only as stale as the replication lag",
+    "Reads from a deep cache cost a key lookup regardless of joins or aggregates, and only the parameter values people ask for take memory",
+    "Queries it can’t or shouldn’t cache are proxied unchanged, and `SHOW PROXIED SUPPORTED QUERIES` lists the ones it could take over"
+  ],
+  "limits": [
+    "Eventually consistent: a read right after a write can return the old result, which the docs warn is unsuitable for some parts of an application",
+    "Deep caching supports only part of SQL; other queries fall back to TTL-based shallow caches or the database, and several engine features are flagged experimental and not for production",
+    "It needs replication access and holds a replication slot on PostgreSQL, so a stopped Readyset makes the database keep WAL; the first snapshot copies every table it will cache",
+    "Not open source: a May 2026 change to the BSL grant limits free production use to 2 GB of RAM across all instances and bars offering it as a service, though the README still says it is free on any number of nodes",
+    "Shallow cache entries are keyed by query and parameters, not by user, so any client can read any cached result; cache only results that every allowed user may see"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "caches queries via logical replication for" },
+    { "id": "mysql", "how": "caches queries, reading the binlog, for" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "Run through psql or mysql connected to Readyset instead of the database",
+    "source": [
+      "-- Queries seen so far that Readyset could cache",
+      "SHOW PROXIED SUPPORTED QUERIES;",
+      "",
+      "-- Push-based: a dataflow graph kept current from the replication stream",
+      "CREATE DEEP CACHE FROM",
+      "  SELECT p.id, p.title, COUNT(*) AS votes",
+      "  FROM posts p JOIN votes v ON v.post_id = p.id",
+      "  WHERE p.author_id = $1",
+      "  GROUP BY p.id, p.title;",
+      "",
+      "-- Pull-based: results kept for 30 seconds, refreshed in the background",
+      "CREATE SHALLOW CACHE WITH (POLICY TTL 30 SECONDS) FROM",
+      "  SELECT * FROM products WHERE category_id = $1;",
+      "",
+      "SHOW CACHES;",
+      "SHOW READYSET STATUS;"
+    ]
+  },
+  "history": {
+    "story": [
+      "Readyset grew out of Noria, a research system Jon Gjengset and colleagues built at MIT and presented at OSDI in 2018. Noria took a relational schema and the parameterized queries a web app runs, compiled them into a dataflow program that precomputed the results, and applied each write incrementally. Its “partially-stateful” dataflow could evict state and rebuild it on demand, so it did not need memory for every possible result. On a real web application’s queries the prototype handled five times the load of a hand-optimized MySQL setup.",
+      "Gjengset and his PhD labmate Alana Marzoev founded ReadySet to turn the research into a product. In April 2022 they announced a $24 million Series A led by Index Ventures, $28.9 million in total with an earlier seed round. Where Noria was meant to be an application’s storage back end, the product sat in front of an existing MySQL or PostgreSQL database and fed its dataflow from the database’s replication stream. In June 2022 the company made ReadySet Core freely available under the Business Source License, which turns each version into Apache 2.0 after four years.",
+      "The company then moved toward deciding what to cache for you. QueryPilot, which picks and caches expensive queries automatically, launched in 2025 on top of ProxySQL; in July 2026 it was rebuilt as Readyset’s own Rust proxy and combined with the cache, TTL-based shallow caches and the `rdst` tool as the Readyset Platform. In May 2026 the licence’s additional use grant was rewritten to cap free production use at 2 GB of RAM in total and to rule out offering Readyset as a managed service."
+    ],
+    "choices": [
+      {
+        "choice": "Partially-stateful dataflow instead of full materialized views",
+        "why": "Materializing every result of a parameterized query for every possible parameter would need unbounded memory. Keeping only the results people ask for, and rebuilding evicted ones on a miss, keeps the hot set in memory and the rest on the database."
+      },
+      {
+        "choice": "Sit in front of the existing database and read its replication stream",
+        "why": "Teams would not move their data to a research store. Speaking the MySQL and PostgreSQL protocols and following the replication log let Readyset cache queries with no change to the schema or the application, and without code to invalidate entries."
+      },
+      {
+        "choice": "Accept eventual consistency",
+        "why": "Waiting for every cached result to update before acknowledging a write would put the cache on the write path. Applying changes asynchronously keeps writes as fast as before, at the cost of a short window in which reads can be stale."
+      },
+      {
+        "choice": "Add TTL-based shallow caches",
+        "why": "The dataflow engine cannot run every SQL construct. Storing results for a fixed time and refreshing them in the background covers a wider range of queries, with freshness bounded by the TTL instead of the replication lag."
+      }
+    ],
+    "timeline": [
+      { "year": "2018", "text": "Noria, the MIT dataflow system behind Readyset, is presented at OSDI" },
+      { "year": "2022", "text": "ReadySet raises a $24M Series A in April and releases ReadySet Core under the BSL in June" },
+      { "year": "2025", "text": "QueryPilot launches automatic query caching, built on ProxySQL" },
+      { "year": "2026", "text": "Licence grant capped at 2 GB of RAM in May; the Readyset Platform launches in July" }
+    ],
+    "sources": [
+      { "label": "USENIX OSDI ’18: Noria, dynamic, partially-stateful data-flow for high-performance web applications (Gjengset et al.)", "url": "https://www.usenix.org/conference/osdi18/presentation/gjengset" },
+      { "label": "Readyset blog: Introducing Readyset (April 2022)", "url": "https://readyset.io/blog/introducing-readyset" },
+      { "label": "TechCrunch: ReadySet raises $29M to expedite access to enterprise-scale app data (April 2022)", "url": "https://techcrunch.com/2022/04/05/readyset-raises-29m-to-expedite-access-to-enterprise-scale-app-data/" },
+      { "label": "Readyset blog: ReadySet, next-generation SQL caching, freely available (June 2022)", "url": "https://readyset.io/blog/readyset-core" },
+      { "label": "Readyset blog: Nobody wants a cache, introducing the Readyset Platform (July 2026)", "url": "https://readyset.io/blog/nobody-wants-a-cache" },
+      { "label": "readysettech/readyset: history of the LICENSE file (use grant updated May 2026)", "url": "https://github.com/readysettech/readyset/commits/main/LICENSE" }
+    ]
+  },
+  "sources": [
+    { "label": "readysettech/readyset on GitHub (README)", "url": "https://github.com/readysettech/readyset" },
+    { "label": "readysettech/readyset: LICENSE (BSL 1.1, additional use grant, change license)", "url": "https://github.com/readysettech/readyset/blob/main/LICENSE" },
+    { "label": "readysettech/readyset releases (stable-261022, October 2026)", "url": "https://github.com/readysettech/readyset/releases" },
+    { "label": "Readyset docs: Overview of the Readyset Platform (QueryPilot, deep and shallow caches, rdst)", "url": "https://readyset.io/docs/" },
+    { "label": "Readyset docs: Push-based (deep) caching (dataflow graph, partial materialization, replication, eventual consistency)", "url": "https://readyset.io/docs/concepts/deep-caching" },
+    { "label": "Readyset docs: Pull-based (shallow) caching (TTL, refresh, shared entries)", "url": "https://readyset.io/docs/concepts/shallow-caching" },
+    { "label": "Readyset docs: Configuration and SQL support (publication, replication slot, GTID, snapshotting, cache mode)", "url": "https://readyset.io/docs/reference/config-options" },
+    { "label": "Readyset docs: Command reference (CREATE CACHE, SHOW PROXIED QUERIES, replication commands)", "url": "https://readyset.io/docs/reference/command-reference" },
+    { "label": "Readyset blog: Nobody wants a cache, introducing the Readyset Platform (July 2026)", "url": "https://readyset.io/blog/nobody-wants-a-cache" }
+  ],
+  "checked": "2026-10-23"
+}

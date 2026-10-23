@@ -1,0 +1,174 @@
+{
+  "$schema": "../../.schemas/concepts.schema.json",
+  "name": "Languages that compile to SQL",
+  "icon": "file-code",
+  "category": "analytics",
+  "order": 72,
+  "summary": "Query languages such as Malloy, PRQL and Logica that a compiler turns into SQL, so you write in a cleaner syntax and the database you already have runs the result.",
+  "howItWorks": "The language is only a front end. You write a query in its own syntax: a pipeline of steps (PRQL), a semantic model plus queries over it (Malloy, Looker’s LookML), logic rules (Logica), or method calls in a host language (LINQ in C#, Ibis in Python). A compiler parses that, resolves names against the tables or model, builds a relational plan and prints SQL for a target dialect, so the same query can come out with `LIMIT 10` for DuckDB and `OFFSET 0 ROWS FETCH FIRST 10 ROWS ONLY` for SQL Server. The database receives ordinary SQL and parses, optimizes and executes it as if a person had written it; the language adds no server, storage or engine of its own. Because a compiler is only as broad as what it can translate, most of these languages keep an escape hatch for raw SQL, such as PRQL’s `s\"...\"` strings or Malloy’s SQL sources. The opposite approach changes SQL itself: GoogleSQL’s pipe syntax lets a query read as a pipeline of `|>` steps inside SQL, with no separate compiler or new language to adopt.",
+  "analogy": "Dictating to a stenographer. You speak in your own shorthand and the stenographer types up a formal letter. The person who receives it (the database) only ever sees the formal letter, so nothing changes on their side, but you never have to write one yourself.",
+  "useWhen": [
+    "Analysts write long SQL with nested subqueries, repeated expressions and copy-pasted logic, and want variables, functions or pipelines instead",
+    "The same query has to run on several engines, such as DuckDB on a laptop and BigQuery or Snowflake in production",
+    "Business definitions (an on-time rate, net revenue) should live once in a model and be reused by every query",
+    "You want to read, review and test the SQL that actually runs, rather than trust an opaque tool"
+  ],
+  "avoidWhen": [
+    "Your team already writes good SQL and the engine supports what you need, including pipe syntax where it exists: another language is one more thing to learn and debug",
+    "Queries depend on engine-specific features the compiler doesn’t translate; you’ll fall back to raw SQL anyway",
+    "Writes and transactions: these languages are built for reading and transforming data, not for `INSERT`, `UPDATE` or DDL",
+    "Every tool in the chain (BI, notebooks, CI linting, the database console) would need to understand the new language"
+  ],
+  "example": "A product analyst’s weekly report is 200 lines of SQL: three nested subqueries, the same `CASE` expression pasted four times, and a `HAVING` clause nobody can explain. She rewrites it in PRQL as one pipeline: `from orders`, `filter`, `derive` the shared expression once, `group` by country with `aggregate`, then `filter` again on the totals. The compiler turns the first `filter` into `WHERE` and the second into `HAVING`, and prints SQL for the team’s DuckDB notebooks and for ClickHouse in production. The pull request includes both the PRQL and the generated SQL, so reviewers who only know SQL can still check what will run.",
+  "providers": {
+    "aws": "No compile-to-SQL language of its own. SQL produced by these compilers runs on Athena or Redshift like any hand-written query",
+    "gcp": "Looker, whose SQL generator compiles LookML models into SQL; BigQuery pipe syntax (`|>`) as the in-SQL alternative, on by default for all users since February 2025; Logica, an open-source language from Google engineers (not an official Google product)",
+    "azure": "No compile-to-SQL query language as a cloud service. In .NET, LINQ queries over `IQueryable` are translated to SQL by providers such as Entity Framework Core",
+    "oss": "Malloy (MIT), PRQL (Apache 2.0), Logica (Apache 2.0), Ibis (Python dataframes compiled to SQL), Apache Spark SQL pipe syntax (since Spark 4.0)"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "import sqlite3",
+      "",
+      "# A tiny pipeline language: each step works on the previous step's result",
+      "pipeline = [",
+      "    (\"from\", \"orders\"),",
+      "    (\"filter\", \"amount > 30\"),",
+      "    (\"group\", \"country\", \"SUM(amount) AS revenue\"),",
+      "    (\"filter\", \"revenue > 100\"),   # after grouping, so it filters groups",
+      "    (\"sort\", \"revenue DESC\"),",
+      "]",
+      "",
+      "def compile_to_sql(steps):",
+      "    sql = None",
+      "    for i, (op, *args) in enumerate(steps):",
+      "        src = f\"({sql}) AS s{i}\" if sql else None",
+      "        if op == \"from\":",
+      "            sql = f\"SELECT * FROM {args[0]}\"",
+      "        elif op == \"filter\":",
+      "            sql = f\"SELECT * FROM {src} WHERE {args[0]}\"",
+      "        elif op == \"group\":",
+      "            sql = f\"SELECT {args[0]}, {args[1]} FROM {src} GROUP BY {args[0]}\"",
+      "        elif op == \"sort\":",
+      "            sql = f\"SELECT * FROM {src} ORDER BY {args[0]}\"",
+      "    return sql",
+      "",
+      "sql = compile_to_sql(pipeline)",
+      "print(sql)",
+      "# SELECT * FROM (SELECT * FROM (SELECT country, SUM(amount) AS revenue FROM (SELECT * FROM",
+      "#   (SELECT * FROM orders) AS s1 WHERE amount > 30) AS s2 GROUP BY country) AS s3",
+      "#   WHERE revenue > 100) AS s4 ORDER BY revenue DESC",
+      "",
+      "# The database only ever sees SQL",
+      "db = sqlite3.connect(\":memory:\")",
+      "db.execute(\"CREATE TABLE orders (country TEXT, amount INT)\")",
+      "db.executemany(\"INSERT INTO orders VALUES (?, ?)\",",
+      "               [(\"DE\", 120), (\"DE\", 80), (\"FR\", 50), (\"US\", 300), (\"US\", 20), (\"US\", 90)])",
+      "print(db.execute(sql).fetchall())   # [('US', 390), ('DE', 200)]"
+    ]
+  },
+  "related": ["semantic-layer", "olap", "warehouse", "query-engines", "orm"],
+  "sections": [
+    {
+      "type": "cards",
+      "title": "Four ways to avoid writing SQL by hand",
+      "intro": "All of them end up as SQL; they differ in what you write instead.",
+      "items": [
+        {
+          "name": "Pipelines",
+          "tag": "PRQL, SaneQL",
+          "text": "A query is a list of steps, each transforming the result of the one before, read top to bottom. PRQL’s `filter` becomes `WHERE` or `HAVING` depending on where it sits. SaneQL, proposed at CIDR 2024, chains operators in the same way; its prototype translates to SQL."
+        },
+        {
+          "name": "Semantic models",
+          "tag": "Malloy, LookML",
+          "text": "Joins, dimensions and measures are defined once in a model, and queries refer to them by name. Malloy and Looker both generate the SQL, including the joins, from the model; Malloy can also nest one query’s results inside each row of another."
+        },
+        {
+          "name": "Logic programming",
+          "tag": "Logica, Datalog",
+          "text": "Queries are written as Datalog-style rules that can build on each other, and the compiler turns them into SQL. Logica, released by Google engineers in 2021 as the successor to Google’s Yedalog, targets BigQuery, PostgreSQL, SQLite and DuckDB."
+        },
+        {
+          "name": "Host-language queries",
+          "tag": "LINQ, Ibis",
+          "text": "The query is code in a general-purpose language. C#’s LINQ builds expression trees that providers such as Entity Framework Core translate to SQL; Ibis builds a lazy Python expression and compiles it to the SQL dialect of the chosen backend. This overlaps with ORMs."
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "A new language, or pipes inside SQL?",
+      "intro": "Google’s pipe syntax paper argues that new languages haven’t displaced SQL because adopting them is costly, and adds pipelines to SQL itself instead.",
+      "corner": "",
+      "columns": ["Language that compiles to SQL", "Pipe syntax in SQL"],
+      "rows": [
+        { "label": "What you write", "values": ["A different syntax (PRQL, Malloy, Logica)", "SQL, with `FROM` first and `|>` between steps"] },
+        { "label": "Where it runs", "values": ["Any database the compiler has a dialect for", "Only engines that implement it: BigQuery and other GoogleSQL systems, Spark 4.0 and later"] },
+        { "label": "Extra tooling", "values": ["A compiler, plus editor and notebook support", "None beyond the engine"] },
+        { "label": "Beyond plain SQL", "values": ["Variables, functions, reusable models, nested results", "Clauses in any order, any number of times; existing queries keep working"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "SQL has had critics almost since it appeared, and many attempts to replace it never left the database they were built for. A different idea is to keep SQL as the format that databases receive and put a better language in front of it. Microsoft’s LINQ did this inside C#, with providers that translate queries to SQL. Looker’s LookML did it for business intelligence: analysts describe joins, dimensions and measures, and Looker’s SQL generator writes the queries. In April 2021 Google engineers Konstantin Tretyakov and Evgeny Skvortsov released Logica, a Datalog-like successor to Google’s Yedalog, arguing that SQL’s main flaw is its very limited support for abstraction.",
+      "The same year, Looker co-founder and LookML inventor Lloyd Tabb and a team at Google started Malloy, a modelling and query language that compiles to SQL and handles nested data; it reached its stable 4.0 version in October 2023 and is now a Linux Foundation (LF Projects) series. On 1 January 2022 Maximilian Roos made the first commit to PRQL, a pipelined language whose compiler is written in Rust. ClickHouse added PRQL as an experimental dialect in release 23.7 in 2023, and DuckDB gained a community extension for it. The GitHub list “Languages that compile to SQL” gathers these and others, from Ermine to Datalog converters.",
+      "In 2024 two papers took stock. At CIDR, Thomas Neumann and Viktor Leis of TU Munich analysed real queries (50,683 of those submitted to the HyPer website, 38%, failed, mostly with compile-time errors) and proposed SaneQL, whose prototype translates to SQL. At VLDB, Jeff Shute and colleagues at Google argued that none of the replacement languages had been successful enough to displace SQL, PRQL included, because adoption means learning a new language and leaving the SQL ecosystem. They added pipe syntax to GoogleSQL instead, shared by F1, BigQuery, Spanner and Procella; BigQuery turned it on for all users in February 2025, and Apache Spark 4.0 shipped its own SQL pipe syntax."
+    ],
+    "choices": [
+      {
+        "choice": "Compile to SQL instead of building an engine",
+        "why": "Databases already parse, optimise and run SQL well, and most data is reachable through SQL somewhere. Emitting SQL lets a new language work with existing engines, permissions and tools from day one."
+      },
+      {
+        "choice": "Pipelines instead of fixed clause order",
+        "why": "SQL’s clauses run in an order different from how they are written, and doing anything out of order needs a subquery. A pipeline reads in execution order, and each step can follow any other."
+      },
+      {
+        "choice": "Escape hatches to raw SQL",
+        "why": "No compiler covers every engine’s functions. PRQL’s s-strings and Malloy’s SQL sources let users drop to the target dialect where the language falls short."
+      },
+      {
+        "choice": "Fix SQL from within",
+        "why": "Google’s team concluded that adoption cost, not syntax, kept SQL alternatives niche, so pipe syntax extends SQL backward-compatibly and can be adopted one query at a time."
+      }
+    ],
+    "timeline": [
+      { "year": "2021", "text": "Google engineers release Logica (April); the Malloy repository starts (August)" },
+      { "year": "2022", "text": "Maximilian Roos makes the first commit to PRQL (1 January)" },
+      { "year": "2023", "text": "ClickHouse 23.7 adds experimental PRQL support; Malloy 4.0 ends the “experimental” label (October)" },
+      { "year": "2024", "text": "CIDR paper proposes SaneQL; VLDB paper on pipe syntax in GoogleSQL" },
+      { "year": "2025", "text": "BigQuery enables pipe syntax for all users (4 February); Spark 4.0 adds SQL pipe syntax" }
+    ],
+    "sources": [
+      { "label": "Google Open Source Blog: Logica, organizing your data queries, making them universally reusable and fun (Apr 2021)", "url": "https://opensource.googleblog.com/2021/04/logica-organizing-your-data-queries.html" },
+      { "label": "Santa Cruz Works (from Datanami): Looker founder helps create new data exploration language, Malloy (May 2022)", "url": "https://www.santacruzworks.org/news/looker-founder-helps-create-new-data-exploration-language-malloy" },
+      { "label": "Malloy blog: Announcing Malloy 4.0 (Oct 2023)", "url": "https://docs.malloydata.dev/blog/2023-10-03-malloy-four/" },
+      { "label": "Malloy website (Malloy a Series of LF Projects, LLC)", "url": "https://www.malloydata.dev/" },
+      { "label": "PRQL/prql on GitHub (repository and commit history)", "url": "https://github.com/PRQL/prql" },
+      { "label": "ClickHouse blog: ClickHouse Release 23.7 (experimental PRQL support)", "url": "https://clickhouse.com/blog/clickhouse-release-23-07" },
+      { "label": "GitHub: ajnsit/languages-that-compile-to-sql", "url": "https://github.com/ajnsit/languages-that-compile-to-sql" },
+      { "label": "Thomas Neumann and Viktor Leis: A Critique of Modern SQL and a Proposal Towards a Simple and Expressive Query Language (CIDR 2024)", "url": "https://www.vldb.org/cidrdb/papers/2024/p48-neumann.pdf" },
+      { "label": "Jeff Shute et al.: SQL Has Problems. We Can Fix Them: Pipe Syntax In SQL (PVLDB 17(12), 2024)", "url": "https://www.vldb.org/pvldb/vol17/p4051-shute.pdf" },
+      { "label": "Google Cloud blog: Revolutionizing SQL with pipe syntax, now available in BigQuery and Cloud Logging (Oct 2024, updated for 4 February 2025)", "url": "https://cloud.google.com/blog/products/data-analytics/simplify-your-sql-with-pipe-syntax-in-bigquery-and-cloud-logging" },
+      { "label": "Apache Spark: Spark Release 4.0.0 (SQL pipe syntax, SPARK-49555)", "url": "https://spark.apache.org/releases/spark-release-4-0-0.html" }
+    ]
+  },
+  "sources": [
+    { "label": "GitHub: ajnsit/languages-that-compile-to-sql (curated list by category)", "url": "https://github.com/ajnsit/languages-that-compile-to-sql" },
+    { "label": "PRQL website: principles, dialects and integrations", "url": "https://prql-lang.org/" },
+    { "label": "PRQL Language Book (targets and dialects, s-strings, integrations)", "url": "https://prql-lang.org/book/" },
+    { "label": "GitHub: malloydata/malloy README (semantic models, nested data, supported databases)", "url": "https://github.com/malloydata/malloy" },
+    { "label": "Looker docs: What is LookML? (the Looker SQL generator)", "url": "https://docs.cloud.google.com/looker/docs/what-is-lookml" },
+    { "label": "GitHub: EvgSkv/logica README (compiles to SQL; BigQuery, PostgreSQL, SQLite, DuckDB)", "url": "https://github.com/EvgSkv/logica" },
+    { "label": "Microsoft Learn: Language Integrated Query (LINQ), IQueryable providers such as Entity Framework Core", "url": "https://learn.microsoft.com/en-us/dotnet/csharp/linq/" },
+    { "label": "Ibis docs: Why Ibis? (compiles expressions to SQL with SQLGlot)", "url": "https://ibis-project.org/why" },
+    { "label": "BigQuery docs: Work with pipe query syntax", "url": "https://docs.cloud.google.com/bigquery/docs/pipe-syntax-guide" },
+    { "label": "Apache Spark docs: SQL Pipe Syntax (4.0.0)", "url": "https://spark.apache.org/docs/4.0.0/sql-pipe-syntax.html" },
+    { "label": "Jeff Shute et al.: SQL Has Problems. We Can Fix Them: Pipe Syntax In SQL (PVLDB 2024)", "url": "https://www.vldb.org/pvldb/vol17/p4051-shute.pdf" },
+    { "label": "Thomas Neumann and Viktor Leis: A Critique of Modern SQL and a Proposal Towards a Simple and Expressive Query Language (CIDR 2024)", "url": "https://www.vldb.org/cidrdb/papers/2024/p48-neumann.pdf" },
+    { "label": "ClickHouse docs: Alternative query languages (PRQL and KQL dialects)", "url": "https://clickhouse.com/docs/guides/developer/alternative-query-languages" }
+  ]
+}

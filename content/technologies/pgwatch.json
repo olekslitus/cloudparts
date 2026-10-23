@@ -1,0 +1,118 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "pgwatch",
+  "concepts": ["metrics"],
+  "uses": ["observability"],
+  "provider": "oss",
+  "vendor": "CYBERTEC PostgreSQL International GmbH",
+  "license": "BSD 3-Clause",
+  "website": "https://pgwat.ch/",
+  "repo": "https://github.com/cybertec-postgresql/pgwatch",
+  "summary": "A PostgreSQL-only monitoring collector from CYBERTEC: metrics are plain SQL queries run on a schedule, stored in Postgres, TimescaleDB or Prometheus, and shown in ready-made Grafana dashboards.",
+  "intro": [
+    "pgwatch is a single Go daemon. It reads a list of sources (databases to watch) and a set of metric definitions, connects to each database, runs the queries on their intervals and writes the results to one or more sinks. A metric is just a named SQL query that returns an `epoch_ns` column plus whatever columns you want stored, with separate versions per PostgreSQL major version and for primaries or standbys; columns named `tag_*` become indexed tags. A preset maps metric names to intervals, for example `basic` or `exhaustive`, so many databases can share one profile. Sources and metrics live either in a small PostgreSQL schema, edited through the built-in web UI, or in YAML files. A source can be one database, every database on an instance (continuous discovery), a Patroni cluster found through etcd, PgBouncer, Pgpool-II, or, since v6, an existing Prometheus exporter endpoint.",
+    "Sinks are PostgreSQL 14 or later (optionally with TimescaleDB compression), a Prometheus endpoint for scraping, a JSON file, or your own gRPC server. With the Postgres sink, pgwatch partitions the tables (daily by default) and deletes data older than 14 days unless told otherwise. Grafana does the visualising: pgwatch ships dashboards for health checks, top statements, locks, replication and more. On the monitored side it asks for little: a role with `pg_monitor`, `pg_stat_statements` for the query dashboards, and PL/Python helper functions only for OS metrics such as CPU load, which it does not create unless you pass `--create-helpers`. pgwatch is free under the BSD 3-Clause licence; CYBERTEC sells support for it. v6.0 came out in September 2026."
+  ],
+  "strengths": [
+    "Every metric is an SQL query in YAML, so adding one means writing a `SELECT`, not an exporter",
+    "Stores metrics in plain PostgreSQL or TimescaleDB, so you can query months of history with SQL as well as in Grafana",
+    "Finds databases on its own: all databases on an instance, or all members of a Patroni cluster",
+    "Asks for little on monitored servers: a `pg_monitor` role, no agent and no required extension"
+  ],
+  "limits": [
+    "PostgreSQL only: for hosts and other services it can at most scrape an existing Prometheus exporter (since v6)",
+    "Most query-level panels stay empty without `pg_stat_statements`, which needs `shared_preload_libraries` and a server restart",
+    "OS metrics such as CPU and disk need PL/Python helper functions installed as superuser in each database, which managed services usually don’t allow",
+    "Fast-moving: major versions 4, 5 and 6 arrived within a year, after the move from pgwatch2 dropped its InfluxDB and Graphite storage"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "runs SQL metric queries against" },
+    { "id": "grafana", "how": "ships dashboards for" },
+    { "id": "timescaledb", "how": "can store compressed metrics in" },
+    { "id": "prometheus", "how": "exposes metrics for scraping by" },
+    { "id": "patroni", "how": "discovers cluster members, via etcd, from" },
+    { "id": "docker", "how": "ships a one-container demo image for" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "A custom metric and preset in YAML, one source, two sinks",
+    "source": [
+      "cat > metrics.yaml <<'EOF'",
+      "metrics:",
+      "  connections:",
+      "    sqls:",
+      "      11: |                  # this version runs on PostgreSQL 11 and later",
+      "        select /* pgwatch_generated */",
+      "          (extract(epoch from now()) * 1e9)::int8 as epoch_ns,",
+      "          count(*)::int8 as value",
+      "        from pg_stat_activity;",
+      "    gauges: ['*']            # goes up and down, so not a Prometheus counter",
+      "    is_instance_level: true",
+      "presets:",
+      "  tiny:",
+      "    metrics:",
+      "      connections: 30        # seconds",
+      "EOF",
+      "",
+      "cat > sources.yaml <<'EOF'",
+      "- name: prod-main",
+      "  kind: postgres",
+      "  conn_str: postgresql://pgwatch@db1:5432/app",
+      "  preset_metrics: tiny",
+      "  is_enabled: true",
+      "EOF",
+      "",
+      "pgwatch --sources=sources.yaml --metrics=metrics.yaml \\",
+      "  --sink=postgresql://pgwatch@localhost:5432/metrics \\",
+      "  --sink=prometheus://:9187"
+    ]
+  },
+  "history": {
+    "story": [
+      "Kaarel Moppel started the project in 2016, and it was first released in 2017 as pgwatch2, under CYBERTEC’s GitHub organisation. The idea, in the project’s words, was to do the minimal work needed and glue together proven pieces: a collector that ran SQL queries, an existing database to keep the numbers (PostgreSQL, InfluxDB, Graphite or Prometheus) and Grafana for the dashboards.",
+      "Pavlo Golub then rewrote the collector as a new codebase. pgwatch 3.0.0 came out in December 2024 and the pgwatch2 repository was archived the same month. The rewrite narrowed storage to PostgreSQL, TimescaleDB, Prometheus, JSON files and a gRPC interface for anything else, and kept configuration in either Postgres or YAML. Releases have been frequent since: 4.0 in September 2025, 5.0 in February 2026 and 6.0 in September 2026, which added Prometheus exporters as sources, rebuilt every dashboard and changed the collector to run one goroutine per source instead of one per source and metric."
+    ],
+    "choices": [
+      {
+        "choice": "Metrics are SQL queries in configuration, not compiled code",
+        "why": "PostgreSQL already exposes its statistics as views, so a query per metric is enough, and DBAs can add or change metrics without touching the Go code."
+      },
+      {
+        "choice": "Reuse existing storage and Grafana instead of building a UI",
+        "why": "The project set out to do the minimal work needed; storing numbers and drawing charts were already solved by Postgres, Prometheus and Grafana."
+      },
+      {
+        "choice": "Least privilege on monitored servers",
+        "why": "Monitoring should not need superuser on production databases, so the collector runs as a `pg_monitor` role and creates helper functions only with `--create-helpers`; managed services get presets that use only what their low-privilege users can see."
+      }
+    ],
+    "timeline": [
+      { "year": "2016", "text": "Kaarel Moppel starts the project" },
+      { "year": "2017", "text": "First release, as pgwatch2" },
+      { "year": "2024", "text": "pgwatch 3.0.0, rewritten by Pavlo Golub; pgwatch2 is archived" },
+      { "year": "2025", "text": "pgwatch 4.0 in September" },
+      { "year": "2026", "text": "pgwatch 6.0: Prometheus exporters as sources, rebuilt dashboards" }
+    ],
+    "sources": [
+      { "label": "pgwatch docs: Hello world! (history: Kaarel Moppel, pgwatch2, Pavlo Golub)", "url": "https://github.com/cybertec-postgresql/pgwatch/blob/master/docs/index.md" },
+      { "label": "pgwatch docs: Components (minimal work, proven pieces)", "url": "https://pgwat.ch/latest/concept/components.html" },
+      { "label": "GitHub: cybertec-postgresql/pgwatch2 (archived; InfluxDB, Graphite storage)", "url": "https://github.com/cybertec-postgresql/pgwatch2" },
+      { "label": "GitHub: pgwatch releases (3.0.0 to 6.0.0)", "url": "https://github.com/cybertec-postgresql/pgwatch/releases" },
+      { "label": "GitHub: pgwatch v6.0.0 release notes (September 2026)", "url": "https://github.com/cybertec-postgresql/pgwatch/releases/tag/v6.0.0" }
+    ]
+  },
+  "sources": [
+    { "label": "pgwatch docs: Hello world! (what, how, where; sinks)", "url": "https://github.com/cybertec-postgresql/pgwatch/blob/master/docs/index.md" },
+    { "label": "pgwatch docs: Components (collector, configuration, storage options)", "url": "https://pgwat.ch/latest/concept/components.html" },
+    { "label": "pgwatch docs: Metrics and presets (SQL metrics, tag_ columns, gauges)", "url": "https://github.com/cybertec-postgresql/pgwatch/blob/master/docs/concept/metrics_and_presets.md" },
+    { "label": "pgwatch docs: Source types (continuous discovery, Patroni, PgBouncer, Prometheus)", "url": "https://github.com/cybertec-postgresql/pgwatch/blob/master/docs/reference/source_types.md" },
+    { "label": "pgwatch docs: Sinks options", "url": "https://pgwat.ch/latest/reference/sinks_options.html" },
+    { "label": "pgwatch docs: Command-line options (partitioning, retention defaults)", "url": "https://github.com/cybertec-postgresql/pgwatch/blob/master/docs/reference/cli_env.md" },
+    { "label": "pgwatch docs: Preparing databases for monitoring (pg_monitor, pg_stat_statements, helpers)", "url": "https://github.com/cybertec-postgresql/pgwatch/blob/master/docs/tutorial/preparing_databases.md" },
+    { "label": "pgwatch docs: Managed PostgreSQL provider support (presets, no PL/Python)", "url": "https://github.com/cybertec-postgresql/pgwatch/blob/master/docs/reference/managed_postgres_support.md" },
+    { "label": "pgwatch sample metrics.yaml", "url": "https://github.com/cybertec-postgresql/pgwatch/blob/master/contrib/sample.metrics.yaml" },
+    { "label": "GitHub: pgwatch v6.0.0 release notes (September 2026)", "url": "https://github.com/cybertec-postgresql/pgwatch/releases/tag/v6.0.0" },
+    { "label": "GitHub: cybertec-postgresql/pgwatch (BSD 3-Clause)", "url": "https://github.com/cybertec-postgresql/pgwatch" }
+  ],
+  "checked": "2026-10-23"
+}

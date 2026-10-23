@@ -1,0 +1,114 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Ray Serve",
+  "concepts": ["mlops"],
+  "provider": "oss",
+  "vendor": "Anyscale (Ray is a PyTorch Foundation project)",
+  "license": "Apache 2.0",
+  "website": "https://docs.ray.io/en/latest/serve/index.html",
+  "repo": "https://github.com/ray-project/ray",
+  "summary": "Ray’s library for online inference: Python classes become deployments whose replicas run as Ray actors across a cluster, with request batching, model composition, autoscaling to zero and an OpenAI-compatible LLM server built on vLLM.",
+  "intro": [
+    "A Ray Serve app is ordinary Python. The `@serve.deployment` decorator turns a class or function into a deployment, and each deployment runs as one or more replicas, copies of the class in separate Ray actor processes that can sit on any machine in the Ray cluster. Replicas can ask for CPUs, GPUs or a fraction of a GPU, so several small models can share one card. The top-level, or ingress, deployment receives HTTP requests, directly or through a FastAPI app attached with `@serve.ingress`, and calls other deployments through `DeploymentHandle`s, which look like method calls but run on other replicas. That is how a pipeline of preprocessing, several models and business logic becomes one application, with each step scaled on its own hardware. It works with any framework, from PyTorch to scikit-learn, because it serves Python code rather than a model file.",
+    "`@serve.batch` collects concurrent requests into one call, by default up to 10 requests within 10 ms. Autoscaling counts requests rather than CPU: with `num_replicas=\"auto\"` Serve aims for 2 ongoing requests per replica, caps each at 5, and scales between 1 and 100 replicas; `min_replicas: 0` scales an idle deployment to zero. When there is no room for a new replica, the Ray autoscaler asks the cloud for another node, and on the way down Serve packs replicas so whole nodes can be released. Ray Serve LLM, added in Ray 2.44, wraps vLLM (or SGLang) in Serve deployments and exposes an OpenAI-compatible API, with multi-node tensor and pipeline parallelism, prefix-aware routing, separate scaling of prefill and decode, and multiple LoRA adapters on one base model.",
+    "On Kubernetes, Ray Serve runs through KubeRay’s `RayService` resource, which holds a Ray cluster spec and the Serve config together. KubeRay applies config-only changes in place and, for cluster changes, starts a new Ray cluster, switches the Kubernetes service to it once it is ready, and then deletes the old one. Ray was developed at UC Berkeley and by Anyscale, and joined the PyTorch Foundation in October 2025. The latest release is Ray 2.59, from October 2026."
+  ],
+  "strengths": [
+    "Model composition in plain Python: preprocessing, several models and business logic in one app, each part with its own replicas, resources and autoscaling",
+    "Fractional GPUs and multi-node placement, so small models share a GPU and large ones span several machines",
+    "Request-based autoscaling down to zero, tied to the Ray autoscaler so the cluster adds and removes machines with demand",
+    "The same library and cluster serve classic models and LLMs, with an OpenAI-compatible server around vLLM"
+  ],
+  "limits": [
+    "You run a Ray cluster: a head node, workers and, on Kubernetes, the KubeRay operator, which is more to operate than a container behind a load balancer",
+    "Not a full ML platform: Ray’s own docs say it lacks model lifecycle management, so tracking and the registry come from tools like MLflow",
+    "No model-specific optimizations of its own; speed comes from what runs inside a replica, such as vLLM, ONNX Runtime or a compiled PyTorch model",
+    "A cluster-level change on Kubernetes starts a second Ray cluster, so the Kubernetes cluster needs room for both during the switch"
+  ],
+  "worksWith": [
+    { "id": "fastapi", "how": "routes HTTP requests through apps built with" },
+    { "id": "ray", "how": "runs its replicas as actors on" },
+    { "id": "kuberay", "how": "is deployed to Kubernetes with" },
+    { "id": "grafana", "how": "ships LLM serving dashboards for" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Ray Serve LLM quickstart: an OpenAI-compatible endpoint for an open model",
+    "source": [
+      "from ray import serve",
+      "from ray.serve.llm import LLMConfig, build_openai_app",
+      "",
+      "llm_config = LLMConfig(",
+      "    model_loading_config={",
+      "        \"model_id\": \"qwen-0.5b\",",
+      "        \"model_source\": \"Qwen/Qwen2.5-0.5B-Instruct\",",
+      "    },",
+      "    deployment_config={",
+      "        \"autoscaling_config\": {",
+      "            \"min_replicas\": 1,",
+      "            \"max_replicas\": 2,",
+      "        }",
+      "    },",
+      "    # Pass the desired accelerator type (e.g. A10G, L4, etc.)",
+      "    accelerator_type=\"A10G\",",
+      "    # You can customize the engine arguments (e.g. vLLM engine kwargs)",
+      "    engine_kwargs={",
+      "        \"tensor_parallel_size\": 2,",
+      "    },",
+      ")",
+      "",
+      "app = build_openai_app({\"llm_configs\": [llm_config]})",
+      "serve.run(app, blocking=True)",
+      "# Any OpenAI client can now call http://localhost:8000/v1"
+    ]
+  },
+  "history": {
+    "story": [
+      "Ray was developed at UC Berkeley, where the RISELab had earlier built Clipper, a research model server with batching and caching. In a July 2020 post, Ray Serve engineer Simon Mo described the gap Ray Serve was released to fill. Wrapping a model in Flask is simple but becomes unmanageable with many models, since each model needs its own replicas, routing and hundreds of megabytes of weights in memory. Specialized servers such as TensorFlow Serving and TorchServe scale, but expose a “tensor-in, tensor-out” API, so request handling stays in a separate web service and teams end up running two systems.",
+      "Ray 1.4, in June 2021, rebuilt Serve around deployments, replacing the earlier “backends”, and added `@serve.batch` and FastAPI integration. Ray 2.0, in August 2022, added a deployment graph API for composition, a Kubernetes-native way to deploy Serve through KubeRay’s RayService, survival of Ray GCS failures, and scale to zero, with autoscaling marked stable.",
+      "As LLMs took over inference workloads, Anyscale moved its separate RayLLM project into Ray itself: Ray 2.44, released in March 2025, added `ray.serve.llm` with vLLM integration and an OpenAI-compatible API. In October 2025 Anyscale contributed Ray to the PyTorch Foundation, which also hosts vLLM and DeepSpeed."
+    ],
+    "choices": [
+      {
+        "choice": "Serve Python code, not a model format",
+        "why": "Real requests need parsing, preprocessing and business logic around the model. Keeping that code in the same deployment as the model avoids the split between a web server and a “tensor-in, tensor-out” model server."
+      },
+      {
+        "choice": "Replicas as Ray actors",
+        "why": "Ray already scheduled stateful processes with CPU, GPU and fractional-GPU requests across a cluster. Building replicas on actors let Serve reuse Ray’s scheduler for placement and multi-node scaling instead of writing its own."
+      },
+      {
+        "choice": "Autoscale on requests in flight",
+        "why": "Model calls are slow and vary in length, so the number of requests waiting on each replica is a direct measure of load. Counting ongoing requests per replica reacts to that queue, and tying it to the Ray autoscaler adds machines only when replicas need them."
+      }
+    ],
+    "timeline": [
+      { "year": "2020", "text": "Ray Serve is released; “Machine Learning Serving is Broken” (July); Ray 1.0 (September)" },
+      { "year": "2021", "text": "Ray 1.4: deployments API, `@serve.batch`, FastAPI ingress (June)" },
+      { "year": "2022", "text": "Ray 2.0: deployment graphs, RayService on Kubernetes, scale to zero (August)" },
+      { "year": "2025", "text": "Ray 2.44 adds Ray Serve LLM (March); Ray joins the PyTorch Foundation (October)" },
+      { "year": "2026", "text": "Ray 2.59 (October)" }
+    ],
+    "sources": [
+      { "label": "Simon Mo: Machine Learning Serving is Broken (July 20, 2020)", "url": "https://medium.com/distributed-computing-with-ray/machine-learning-serving-is-broken-f59aff2d607f", "archive": "https://web.archive.org/web/20211206215332/https://medium.com/distributed-computing-with-ray/machine-learning-serving-is-broken-f59aff2d607f" },
+      { "label": "Crankshaw et al.: Clipper, A Low-Latency Online Prediction Serving System (RISELab, 2016)", "url": "https://arxiv.org/abs/1612.03079" },
+      { "label": "GitHub: Ray 1.0.0 release (Sept 30, 2020)", "url": "https://github.com/ray-project/ray/releases/tag/ray-1.0.0" },
+      { "label": "GitHub: Ray 1.4.0 release notes (Serve deployments API, June 2021)", "url": "https://github.com/ray-project/ray/releases/tag/ray-1.4.0" },
+      { "label": "GitHub: Ray 2.0.0 release notes (Serve deployment graphs, RayService, scale to zero, Aug 2022)", "url": "https://github.com/ray-project/ray/releases/tag/ray-2.0.0" },
+      { "label": "Anyscale blog: LLM APIs in Ray Data and Ray Serve (Apr 2, 2025, Ray 2.44)", "url": "https://anyscale.com/blog/llm-apis-ray-data-serve" },
+      { "label": "Linux Foundation: PyTorch Foundation welcomes Ray (Oct 22, 2025; developed at UC Berkeley)", "url": "https://www.linuxfoundation.org/press/pytorch-foundation-welcomes-ray-to-deliver-a-unified-open-source-ai-compute-stack" }
+    ]
+  },
+  "sources": [
+    { "label": "Ray docs: Ray Serve overview (features, quickstart, comparison with other tools)", "url": "https://docs.ray.io/en/latest/serve/index.html" },
+    { "label": "Ray docs: Ray Serve key concepts (deployments, replicas, applications, handles, ingress)", "url": "https://docs.ray.io/en/latest/serve/key-concepts.html" },
+    { "label": "Ray docs: Dynamic request batching (@serve.batch defaults)", "url": "https://docs.ray.io/en/latest/serve/advanced-guides/dyn-req-batch.html" },
+    { "label": "Ray docs: Ray Serve autoscaling (defaults, scale to zero, Ray autoscaler)", "url": "https://docs.ray.io/en/latest/serve/autoscaling-guide.html" },
+    { "label": "Ray docs: Serving LLMs (Ray Serve LLM features)", "url": "https://docs.ray.io/en/latest/serve/llm/index.html" },
+    { "label": "Ray docs: Ray Serve LLM quickstart", "url": "https://docs.ray.io/en/latest/serve/llm/quick-start.html" },
+    { "label": "Ray docs: Deploy on Kubernetes (KubeRay RayService, upgrades)", "url": "https://docs.ray.io/en/latest/serve/production-guide/kubernetes.html" },
+    { "label": "GitHub: Ray 2.59.0 release (Oct 2026)", "url": "https://github.com/ray-project/ray/releases/tag/ray-2.59.0" },
+    { "label": "Anyscale blog: Ray by Anyscale joins the PyTorch Foundation (Oct 2025)", "url": "https://www.anyscale.com/blog/ray-by-anyscale-joins-pytorch-foundation" }
+  ],
+  "checked": "2026-10-23"
+}

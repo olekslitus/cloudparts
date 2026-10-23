@@ -1,0 +1,318 @@
+{
+  "$schema": "../../.schemas/concepts.schema.json",
+  "name": "Dashboards and BI",
+  "icon": "chart-column",
+  "category": "analytics",
+  "order": 75,
+  "summary": "Business intelligence tools let people who don’t write SQL explore a warehouse through charts, filters and dashboards: authors define datasets and metrics once, and the tool turns every click into a query, caches the answer and limits rows to what each viewer may see.",
+  "howItWorks": "A BI tool starts from a connection to a warehouse, an OLAP database or another SQL source. Superset, for example, talks to any database with a Python DB-API driver and a SQLAlchemy dialect. An author then registers a dataset: a table or a saved SQL query, plus a thin model on top, such as metrics (`SUM(amount)`), calculated columns, joins and friendly names. Power BI calls this a semantic model, Looker writes it in LookML, and Superset keeps it in its dataset editor. Viewers pick a chart type, a metric and the columns to group and filter by, and the tool generates the SQL, usually a `GROUP BY` query, in the source’s dialect. A dashboard is a page of such charts with shared filters, and a SQL editor lets analysts query the source directly. Data reaches the charts in one of two ways. Live queries send SQL to the source on each view, with a cache in front: Looker reuses results for identical queries for an hour by default, and Superset keeps chart data in Redis or another Flask-Caching backend. Or the tool imports a copy into its own compressed in-memory engine on a schedule: Power BI Import mode (VertiPaq), Tableau extracts (`.hyper`) and Amazon Quick Sight’s SPICE. Row-level security adds a filter per user or role to every generated query, so one dashboard serves every region or customer. To embed dashboards in another product, the product’s backend asks the BI tool for a short-lived token that names the dashboard and the viewer’s row filters, and the page shows it in an iframe.",
+  "analogy": "A car’s dashboard. Engineers decide which sensors feed which gauge and how to scale them; the driver just reads speed and fuel at a glance, and nobody opens the bonnet to check the oil.",
+  "useWhen": [
+    "Many people who don’t write SQL need the same numbers every day or week: revenue against plan, sign-ups, orders by region",
+    "Self-service: people want to filter, drill down and build their own charts on curated datasets without asking an analyst each time",
+    "Customer-facing analytics in a product: embed dashboards with per-tenant row-level security instead of building charts yourself",
+    "Scheduled reports and alerts on warehouse data, run by the BI tool’s workers"
+  ],
+  "avoidWhen": [
+    "One-off exploration of unfamiliar data: a notebook or SQL editor is quicker than building a dataset and a dashboard first",
+    "Watching services in production (latency, errors, CPU): an observability tool such as Grafana reads metrics and log stores and alerts on them",
+    "Live dashboards on a per-scan-billed warehouse that many people open: each uncached view can become a query, so use caching, an imported copy or rollups",
+    "Metrics that several tools and apps must agree on: define them in a semantic layer that the BI tool reads, not only inside one BI tool’s model"
+  ],
+  "example": "A retail chain loads the day’s sales into its warehouse every night. An analyst registers the `orders` table as a dataset, adds the metrics `revenue = SUM(amount)` and `orders = COUNT(*)`, and builds one dashboard: revenue by week, top products and a map of stores, with a region filter. Forty store managers open it each morning. Chart results are cached until the next load, so the warehouse runs each chart’s query once per role instead of once per manager. A row-level security rule gives the North managers’ role the filter `region = 'North'`, so each manager sees only their own stores; finance has no rule and sees everything. Later the company puts the same dashboard in its supplier portal: the portal’s backend requests a short-lived token for each supplier with a filter on their supplier ID, and the page embeds the dashboard in an iframe.",
+  "providers": {
+    "aws": "Amazon Quick Sight, the BI part of Amazon Quick (formerly Amazon QuickSight)",
+    "gcp": "Looker (governed BI on LookML models), Data Studio (formerly Looker Studio; free, plus Data Studio Pro)",
+    "azure": "Power BI, part of Microsoft Fabric",
+    "oss": "Apache Superset, Metabase (AGPL); BI as code: Evidence, Observable Framework; commercial: Tableau (Salesforce), Hex"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "import sqlite3",
+      "",
+      "warehouse = sqlite3.connect(\":memory:\")",
+      "warehouse.executescript(\"\"\"",
+      "    CREATE TABLE orders (region TEXT, product TEXT, amount REAL);",
+      "    INSERT INTO orders VALUES ('North', 'tea', 12), ('North', 'cake', 30),",
+      "                              ('South', 'tea', 8),  ('South', 'cake', 25);",
+      "\"\"\")",
+      "",
+      "# 1. The dataset: a table plus named metrics, defined once by an author",
+      "dataset = {\"table\": \"orders\",",
+      "           \"metrics\": {\"revenue\": \"SUM(amount)\", \"orders\": \"COUNT(*)\"}}",
+      "",
+      "# 2. Row-level security: each role adds a WHERE clause (None = sees all rows)",
+      "rls = {\"north_manager\": \"region = 'North'\", \"finance\": None}",
+      "",
+      "cache = {}  # generated SQL -> rows",
+      "",
+      "def chart(metric, group_by, role):",
+      "    \"\"\"What a chart does on every view: build SQL, check the cache, query.\"\"\"",
+      "    sql = f\"SELECT {group_by}, {dataset['metrics'][metric]} FROM {dataset['table']}\"",
+      "    if rls[role]:",
+      "        sql += f\" WHERE {rls[role]}\"",
+      "    sql += f\" GROUP BY {group_by} ORDER BY {group_by}\"",
+      "    if sql not in cache:  # the key is the final SQL, so roles never share rows",
+      "        print(\"  warehouse <-\", sql)",
+      "        cache[sql] = warehouse.execute(sql).fetchall()",
+      "    return cache[sql]",
+      "",
+      "print(chart(\"revenue\", \"product\", \"north_manager\"))  # runs the query: [('cake', 30.0), ('tea', 12.0)]",
+      "print(chart(\"revenue\", \"product\", \"north_manager\"))  # same SQL: from the cache",
+      "print(chart(\"revenue\", \"product\", \"finance\"))        # no filter, other SQL: [('cake', 55.0), ('tea', 20.0)]"
+    ]
+  },
+  "related": [
+    "semantic-layer",
+    "notebooks",
+    "olap",
+    "warehouse",
+    "static-read-models",
+    "observability"
+  ],
+  "sections": [
+    {
+      "type": "table",
+      "title": "Live queries or an imported copy?",
+      "intro": "Most BI tools offer both, per dataset or even per table. The choice decides freshness, speed and who pays for each view.",
+      "columns": [
+        "Live queries",
+        "Imported copy"
+      ],
+      "rows": [
+        {
+          "label": "How it works",
+          "values": [
+            "Each chart or filter change sends SQL to the source; the tool may cache the result",
+            "The tool loads the data into its own compressed in-memory engine and answers from there"
+          ]
+        },
+        {
+          "label": "Freshness",
+          "values": [
+            "As fresh as the source, minus the cache timeout",
+            "As fresh as the last refresh; Power BI allows 8 scheduled refreshes a day on shared capacity and 48 on Premium"
+          ]
+        },
+        {
+          "label": "Speed and size",
+          "values": [
+            "Depends on the source and the query; good on a fast warehouse or OLAP database",
+            "Fast once loaded; Power BI Import models compress about 10 times, but the whole model must fit in memory"
+          ]
+        },
+        {
+          "label": "Cost on per-query sources",
+          "values": [
+            "Every uncached view can scan data",
+            "The source is queried when the copy is created and refreshed; Quick Sight reuses SPICE data without further source charges"
+          ]
+        },
+        {
+          "label": "Examples",
+          "values": [
+            "Superset, Looker, Power BI DirectQuery, Quick Sight direct query, Tableau live connections",
+            "Power BI Import (VertiPaq), Tableau extracts (`.hyper`), Quick Sight SPICE"
+          ]
+        }
+      ],
+      "notes": [
+        "The two mix: Power BI composite models set Import, DirectQuery or Dual per table, and a hybrid table keeps older partitions imported and the newest rows live."
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Row-level security, and where it leaks",
+      "body": [
+        "Each tool turns “who is looking” into a filter, but the rules differ. Superset assigns a filter clause such as `department = 'finance'` to datasets and to users, groups or roles, and adds it to the generated query’s `WHERE` clause; Regular filters apply to the listed subjects, Base filters to everyone except them, and filters with the same group key are combined with OR. Power BI defines roles in the semantic model as DAX expressions such as `[Region] = \"West\"` or `[UserEmail] = USERPRINCIPALNAME()`. Quick Sight attaches a permissions dataset that lists a user or group and the values they may see in each restricted column.",
+        "The edges matter more than the happy path. Power BI applies row-level security only to workspace Viewers: Admins, Members and Contributors can edit the model and see every row. Quick Sight dataset owners also see all data, users with no rule see nothing, and rules work only on text columns. When a Power BI report is embedded with a service principal, `USERPRINCIPALNAME()` returns the app, not the person, so the embedding app must pass an effective identity in the embed token. Superset embedding works the same way: the host app’s backend requests a guest token, which can carry `rls` rules, and the embedded SDK shows the dashboard in an iframe."
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "name": "Open-source BI servers",
+      "summary": "Self-hosted web apps with a chart builder, dashboards and a SQL editor over your own databases.",
+      "technologies": [
+        "superset"
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "The term is older than the products. In October 1958 Hans Peter Luhn of IBM published “A Business Intelligence System” in the IBM Journal of Research and Development, describing an automatic system to deliver information to the people in an organisation who need it, “a communication facility serving the conduct of a business”. In November 1991 Business Objects filed a patent, granted in 1996, for letting end users query relational databases without knowing their structure or SQL, through business terms mapped onto the tables. In January 2003 Pat Hanrahan, Chris Stolte and Christian Chabot founded Tableau to turn Polaris, a visualisation research project from Stanford, into a product.",
+      "The cloud brought BI as a service priced per user. In July 2015 Microsoft made the new Power BI generally available, with a free tier and Power BI Pro at $9.99 per user per month. In October 2015 AWS previewed QuickSight, built around SPICE, its “Super-fast, Parallel, In-memory Calculation Engine”. The same year Maxime Beauchemin started Superset at an Airbnb hackathon as a fast front end for the Druid database; Airbnb open-sourced it in March 2016 under the name Caravel, it became Superset that November, and it graduated to a top-level Apache project in January 2021. The big vendors consolidated: Salesforce completed its purchase of Tableau on 1 August 2019, and Google completed its acquisition of Looker in February 2020.",
+      "The latest shift wraps BI in AI assistants. In October 2025 AWS folded QuickSight into Amazon Quick Suite, an agentic workspace, and its BI features became Quick Sight. In April 2026 Google renamed Looker Studio back to Data Studio, keeping Looker as its governed enterprise platform built on a central semantic model. Superset now ships an MCP server that lets AI clients list dashboards, query datasets and create charts."
+    ],
+    "choices": [
+      {
+        "choice": "A model between the tables and the charts",
+        "why": "People think in metrics and business terms, not table structures. Business Objects’ 1991 patent mapped business objects onto SQL, and today’s tools keep the idea as datasets, semantic models or LookML, so viewers pick “revenue” and the tool writes the query."
+      },
+      {
+        "choice": "Copy the data into memory, or query it live",
+        "why": "Querying the source on every click can be slow, or costly on per-query sources, so Power BI (Import), Tableau (extracts) and QuickSight (SPICE) can keep a compressed copy that answers quickly. The copy is only as fresh as its last refresh, so the same tools also offer live queries."
+      },
+      {
+        "choice": "Security in the query, not in the dashboard",
+        "why": "Copying a dashboard per region or per customer doesn’t scale. Adding a per-user filter to every generated query lets one dashboard serve everyone, including customers who see it embedded in another product."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "1958",
+        "text": "Hans Peter Luhn publishes “A Business Intelligence System” at IBM"
+      },
+      {
+        "year": "1991",
+        "text": "Business Objects files its patent for querying databases through business terms"
+      },
+      {
+        "year": "2003",
+        "text": "Tableau is founded to commercialise Stanford’s Polaris research"
+      },
+      {
+        "year": "2015",
+        "text": "Power BI becomes generally available; AWS previews QuickSight with its SPICE engine"
+      },
+      {
+        "year": "2016",
+        "text": "Airbnb open-sources Superset, first released as Caravel"
+      },
+      {
+        "year": "2019",
+        "text": "Salesforce completes its acquisition of Tableau"
+      },
+      {
+        "year": "2025",
+        "text": "QuickSight becomes Quick Sight, part of Amazon Quick Suite"
+      },
+      {
+        "year": "2026",
+        "text": "Google renames Looker Studio back to Data Studio"
+      }
+    ],
+    "sources": [
+      {
+        "label": "InformationWeek: BI at 50 turns back to the future (Seth Grimes, Nov 2008; Luhn’s 1958 paper)",
+        "url": "https://www.informationweek.com/it-sectors/bi-at-50-turns-back-to-the-future"
+      },
+      {
+        "label": "Wikipedia: Hans Peter Luhn (IBM Journal of Research and Development, vol. 2 no. 4, 1958)",
+        "url": "https://en.wikipedia.org/wiki/Hans_Peter_Luhn"
+      },
+      {
+        "label": "Google Patents: US5555403A, Relational database access system using semantically dynamic objects (Business Objects, filed 1991)",
+        "url": "https://patents.google.com/patent/US5555403A/en"
+      },
+      {
+        "label": "Wikipedia: Tableau Software (Polaris at Stanford, founded January 2003)",
+        "url": "https://en.wikipedia.org/wiki/Tableau_Software"
+      },
+      {
+        "label": "PCWorld: Microsoft’s Power BI visualization service will be generally available July 24 (Jul 2015)",
+        "url": "https://www.pcworld.com/article/428504/microsofts-power-bi-visualization-service-will-be-generally-available-july-24.html"
+      },
+      {
+        "label": "AWS News Blog: Amazon QuickSight, fast and easy-to-use business intelligence for big data (Oct 2015; SPICE)",
+        "url": "https://aws.amazon.com/blogs/aws/amazon-quicksight-fast-easy-to-use-business-intelligence-for-big-data-at-110th-the-cost-of-traditional-solutions/"
+      },
+      {
+        "label": "Airbnb Engineering: Superset, Airbnb’s data exploration platform (Mar 2016; first released as Caravel)",
+        "url": "https://medium.com/airbnb-engineering/caravel-airbnb-s-data-exploration-platform-15a72aa610e5",
+        "archive": "https://web.archive.org/web/20170113005213/https://medium.com/airbnb-engineering/caravel-airbnb-s-data-exploration-platform-15a72aa610e5"
+      },
+      {
+        "label": "Preset blog: Announcing Preset (Oct 2019; Superset began at a 2015 Airbnb hackathon as a Druid front end)",
+        "url": "https://preset.io/blog/2019-10-09-series-a-announcement/"
+      },
+      {
+        "label": "Apache Software Foundation: Apache Superset becomes a top-level project (Jan 2021)",
+        "url": "https://news.apache.org/foundation/entry/the-apache-software-foundation-announces70"
+      },
+      {
+        "label": "Salesforce: Salesforce completes exchange offer for Tableau common stock (Aug 2019)",
+        "url": "https://investor.salesforce.com/news/news-details/2019/Salesforce-Completes-Exchange-Offer-for-Tableau-Common-Stock/default.aspx"
+      },
+      {
+        "label": "Google Cloud blog: Welcoming Looker to Google Cloud (Feb 2020)",
+        "url": "https://cloud.google.com/blog/topics/inside-google-cloud/google-completes-looker-acquisition"
+      },
+      {
+        "label": "AWS News Blog: Reimagine the way you work with AI agents in Amazon Quick Suite (Oct 2025)",
+        "url": "https://aws.amazon.com/blogs/aws/reimagine-the-way-you-work-with-ai-agents-in-amazon-quick-suite/"
+      },
+      {
+        "label": "Google Cloud blog: Looker Studio is Data Studio (Apr 2026)",
+        "url": "https://cloud.google.com/blog/products/data-analytics/looker-studio-is-data-studio"
+      },
+      {
+        "label": "Superset docs: MCP server (list dashboards, query datasets, create charts)",
+        "url": "https://superset.apache.org/admin-docs/6.1.0/configuration/mcp-server"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "Apache Superset README (SQLAlchemy dialects, semantic layer, caching, security roles)",
+      "url": "https://github.com/apache/superset"
+    },
+    {
+      "label": "Superset docs: Creating your first dashboard (datasets, metrics, calculated columns, Explore)",
+      "url": "https://superset.apache.org/user-docs/using-superset/creating-your-first-dashboard"
+    },
+    {
+      "label": "Superset docs: Caching (Flask-Caching backends, chart data cache)",
+      "url": "https://superset.apache.org/admin-docs/configuration/cache"
+    },
+    {
+      "label": "Superset docs: Security (roles, row level security filters)",
+      "url": "https://superset.apache.org/admin-docs/security/"
+    },
+    {
+      "label": "Superset docs: Embedding (embedded SDK, guest tokens with RLS rules)",
+      "url": "https://superset.apache.org/user-docs/using-superset/embedding"
+    },
+    {
+      "label": "Microsoft Learn: Semantic model modes in the Power BI service (Import, DirectQuery, Composite, refresh limits)",
+      "url": "https://learn.microsoft.com/en-us/power-bi/connect-data/service-dataset-modes-understand"
+    },
+    {
+      "label": "Microsoft Learn: Row-level security (RLS) with Power BI (Viewer-only, DAX roles, embedding with service principals)",
+      "url": "https://learn.microsoft.com/en-us/fabric/security/service-admin-row-level-security"
+    },
+    {
+      "label": "Google Cloud docs: Looker, caching queries (identical queries, one-hour default, datagroups)",
+      "url": "https://docs.cloud.google.com/looker/docs/caching-and-datagroups"
+    },
+    {
+      "label": "Google Cloud docs: Introduction to Looker (LookML, dashboards, embedding)",
+      "url": "https://docs.cloud.google.com/looker/docs/intro"
+    },
+    {
+      "label": "Google Cloud blog: Looker Studio is Data Studio (Data Studio and Data Studio Pro)",
+      "url": "https://cloud.google.com/blog/products/data-analytics/looker-studio-is-data-studio"
+    },
+    {
+      "label": "Tableau help: Extract your data (.hyper extracts, full and incremental refresh)",
+      "url": "https://help.tableau.com/current/pro/desktop/en-us/extracting_data.htm"
+    },
+    {
+      "label": "AWS docs: Importing data into SPICE (Amazon Quick Sight)",
+      "url": "https://docs.aws.amazon.com/quick/latest/userguide/spice.html"
+    },
+    {
+      "label": "AWS docs: Using row-level security with user-based rules (Amazon Quick)",
+      "url": "https://docs.aws.amazon.com/quick/latest/userguide/restrict-access-to-a-data-set-using-row-level-security.html"
+    },
+    {
+      "label": "AWS: Amazon Quick Sight product page",
+      "url": "https://aws.amazon.com/quick/quicksight/"
+    },
+    {
+      "label": "Metabase README (open-source BI and embedded analytics; AGPL and commercial licences)",
+      "url": "https://github.com/metabase/metabase"
+    }
+  ]
+}

@@ -1,0 +1,100 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Akumuli",
+  "concepts": ["tsdb"],
+  "uses": ["metrics"],
+  "provider": "oss",
+  "vendor": "Eugene Lazin (independent project)",
+  "license": "Apache 2.0",
+  "website": "https://akumuli.org/",
+  "repo": "https://github.com/akumuli/Akumuli",
+  "archived": {
+    "since": "2020-05-21",
+    "reason": "The last release, 0.8.80, came out on 21 May 2020, two days after the last commit, and the GitHub repository has since been archived read-only. Packages exist only for Linux releases up to Ubuntu 18.04, Debian Stretch and CentOS 7.",
+    "alternatives": ["questdb", "influxdb", "timescaledb", "prometheus"]
+  },
+  "summary": "A single-node C++ time-series database that keeps one compressed B+tree per series, with its own codecs for timestamps and floating-point values.",
+  "intro": [
+    "Akumuli is a server, `akumulid`, built on a storage engine library. A series is a metric name plus tags, such as `cpu.user host=pg-balancer region=NE`, and each point is a nanosecond timestamp and a double, or a string for event series whose names start with `!`. Writes arrive over TCP (port 8282) or UDP (8383) in a format borrowed from Redis’s RESP, or as OpenTSDB telnet `put` lines, so collectors such as Netdata, collectd and tcollector can feed it. Queries are JSON objects posted to `/api/query` on the HTTP port (8181): select, aggregate, group-aggregate over a time step, and join, with tag filters and functions such as `rate` and `ewma`. Results stream back as RESP.",
+    "Storage is one Numeric B+tree (NB+tree) per series. Leaves hold about 1,000 compressed points; when a level fills, it is written to disk and linked into the level above, so data is never rewritten, unlike compaction in an LSM tree. Inner nodes carry aggregates, which lets downsampling queries skip reading leaves, without rollups set up in advance. Timestamps are delta-encoded, then each chunk subtracts its smallest delta and stores the rest in a byte-aligned variable-length code with 4-bit length flags. Values are XORed with a guess from a DFCM predictor, which learns from past differences between values, and only the non-zero bytes are kept. The disk is split into fixed-size volumes (4 GB by default), so it can use a fixed amount of space, like RRDtool; with `nvolumes = 0` it grows on demand instead."
+  ],
+  "strengths": [
+    "High single-node ingest: the README reports 16.1 million writes a second on a 32-core EC2 c3.8xlarge",
+    "Compact storage without tuning: a point takes 0.1 to 9 bytes depending on how random the data is, and 1 to 2 bytes for many integer monitoring series",
+    "Fast downsampling and aggregation from aggregates kept in tree nodes, without materialized views",
+    "Takes OpenTSDB `put` lines, so existing collectors work, and has a Grafana data source and a Prometheus remote-storage adapter"
+  ],
+  "limits": [
+    "Unmaintained since 2020, with the repository archived and packages only for old Linux releases",
+    "One node only: no clustering or replication, and the roadmap’s out-of-order inserts, updates and deletes never shipped",
+    "Memory grows with the number of series, because each series keeps a resident part of its tree; about 10 GB of RAM for a million series of up to 4 GB each",
+    "Its own JSON query format instead of SQL or PromQL, and no Windows support"
+  ],
+  "worksWith": [
+    { "id": "grafana", "how": "is charted, through its own data source, by" },
+    { "id": "prometheus", "how": "can be remote storage, via an adapter, for" },
+    { "id": "netdata", "how": "takes OpenTSDB-protocol metrics from" },
+    { "id": "opentsdb", "how": "accepts the telnet `put` lines of" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Write two points over RESP, then ask for one-minute minimums and maximums",
+    "source": [
+      "# a series name, a timestamp and a value per point, each line ending in CRLF",
+      "printf '+cpu.user host=machine1 region=NW\\r\\n+20180530T123000\\r\\n+22.5\\r\\n+cpu.user host=machine1 region=NW\\r\\n+20180530T123010\\r\\n+23.0\\r\\n' \\",
+      "  | nc localhost 8282",
+      "",
+      "curl -s localhost:8181/api/query -d '{",
+      "  \"group-aggregate\": { \"metric\": \"cpu.user\", \"step\": \"1m\", \"func\": [\"min\", \"max\"] },",
+      "  \"range\": { \"from\": \"20180530T123000\", \"to\": \"20180530T130000\" },",
+      "  \"where\": { \"region\": \"NW\" }",
+      "}'"
+    ]
+  },
+  "history": {
+    "story": [
+      "Eugene Lazin began Akumuli around 2013; the name is Esperanto for “accumulate”. In a January 2015 post he listed what he found missing in open-source time-series databases: compression that can’t be turned off, sustained writes above a million points a second, a fixed disk footprint like RRDtool’s, simple retrieval by series and time range, and one executable with one configuration file. He argued that a single modern machine is enough for most monitoring workloads, so the project stayed standalone rather than distributed.",
+      "The first engine was a log-structured store over memory-mapped files. By September 2016 Lazin was rewriting it: the old design couldn’t backfill data, had to read a whole time range to draw one series, ran only on 64-bit Linux and had a single writer thread. The replacement, the NB+tree described in 2017, gave every series its own tree, along with new codecs for timestamps and floats; the README claims they beat Facebook’s Gorilla compression.",
+      "Work in 2018 and 2019 added support for high-cardinality data, scalable downsampling and a write-ahead log, and the 0.8 releases added joins and expression evaluation. The last blog post, in March 2020, analyzed 500 billion rows, and 0.8.80 in May 2020 was the final release."
+    ],
+    "choices": [
+      { "choice": "One B+tree per series instead of time-partitioned chunks", "why": "Queries usually read a few series, so keeping each series in its own page-aligned tree avoids reading unrelated data, and appends need no reads at all." },
+      { "choice": "Link full levels instead of merging files", "why": "LSM trees rewrite data during compaction and keep many files open, which made one tree per series impractical; promoting a full extent only adds a pointer to the level above." },
+      { "choice": "A specialized codec instead of a general compressor", "why": "Libraries like LZ4 need about 12 KB of state per stream, roughly 1 GB for 100,000 series. Delta coding for timestamps and predictive XOR coding for values need far less: the predictor’s table holds 128 entries." },
+      { "choice": "A DFCM predictor rather than the previous value", "why": "Gorilla’s XOR against the previous value works for slowly changing series. A predictor that learns repeating differences also handles steady growth and repeating patterns." }
+    ],
+    "timeline": [
+      { "year": "2014", "text": "GitHub repository created in January; v0.2.0 tagged in December" },
+      { "year": "2015", "text": "Lazin publishes the project’s goals and RESP-based write protocol" },
+      { "year": "2016", "text": "Rewrite around a new Numeric B+tree storage engine begins" },
+      { "year": "2017", "text": "NB+tree design and the float codec published" },
+      { "year": "2018", "text": "Posts on scalable downsampling and high-cardinality support" },
+      { "year": "2020", "text": "Final release, 0.8.80, in May" }
+    ],
+    "sources": [
+      { "label": "Akumuli blog: Motivation (January 2015)", "url": "https://akumuli.org/akumuli/2015/01/16/motivation/" },
+      { "label": "Akumuli blog: Standalone (October 2015)", "url": "https://akumuli.org/akumuli/2015/10/12/standalone/" },
+      { "label": "Akumuli blog: What’s next (September 2016)", "url": "https://akumuli.org/akumuli/2016/09/14/next/" },
+      { "label": "Akumuli blog: NB+tree (April 2017)", "url": "https://akumuli.org/akumuli/2017/04/29/nbplustree/" },
+      { "label": "Akumuli blog: Compression, part 1, timestamps (December 2016)", "url": "https://akumuli.org/akumuli/2016/12/30/compression_part1/" },
+      { "label": "Akumuli blog: Compression, part 2, floating-point values (February 2017)", "url": "https://akumuli.org/akumuli/2017/02/05/compression_part2/" },
+      { "label": "Akumuli blog: index of posts (2015 to March 2020)", "url": "https://akumuli.org/blog/" },
+      { "label": "GitHub: Akumuli releases (0.8.80, May 2020)", "url": "https://github.com/akumuli/Akumuli/releases" },
+      { "label": "GitHub: Akumuli CHANGELOG", "url": "https://github.com/akumuli/Akumuli/blob/master/CHANGELOG.md" }
+    ]
+  },
+  "sources": [
+    { "label": "GitHub: Akumuli README (features, ingest benchmarks, roadmap, collectors, Grafana and Prometheus integrations)", "url": "https://github.com/akumuli/Akumuli" },
+    { "label": "Akumuli: home page (Apache 2.0, standalone, fixed disk space)", "url": "https://akumuli.org/" },
+    { "label": "Akumuli docs: Getting started (packages, volumes, nvolumes, ports)", "url": "https://docs.akumuli.org/getting-started" },
+    { "label": "Akumuli docs: Data model (metrics, tags, events)", "url": "https://docs.akumuli.org/data-model" },
+    { "label": "Akumuli docs: Writing data (RESP, OpenTSDB put, timestamps)", "url": "https://docs.akumuli.org/writing-data" },
+    { "label": "Akumuli docs: Query language (select, aggregate, group-aggregate, join)", "url": "https://docs.akumuli.org/query-language" },
+    { "label": "Akumuli docs: API endpoints (/api/query, /api/search, functions)", "url": "https://docs.akumuli.org/api-endpoints" },
+    { "label": "Akumuli docs: Hardware requirements (memory per series, bytes per point)", "url": "https://docs.akumuli.org/hardware-requirements" },
+    { "label": "Akumuli blog: NB+tree (extents, leaf size, aggregates in inner nodes)", "url": "https://akumuli.org/akumuli/2017/04/29/nbplustree/" },
+    { "label": "Akumuli blog: Storage engine design, part 2 (no reads on write, memory per series)", "url": "https://akumuli.org/akumuli/2017/08/01/storage-engine-design2/" },
+    { "label": "Akumuli source: compression.h (DeltaDelta, VByte, DFCM float encoder)", "url": "https://github.com/akumuli/Akumuli/blob/master/libakumuli/storage_engine/compression.h" }
+  ],
+  "checked": "2026-10-23"
+}

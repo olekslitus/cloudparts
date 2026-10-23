@@ -47,6 +47,32 @@
       "  older_than => TIMESTAMP '2026-09-01 00:00:00');"
     ]
   },
+  "sections": [
+    {
+      "type": "text",
+      "title": "Copy-on-write or merge-on-read",
+      "body": [
+        "Iceberg never edits a data file, so a row-level `DELETE`, `UPDATE` or `MERGE` has two options. Copy-on-write rewrites every data file that holds an affected row and commits a snapshot that swaps the old files for the new ones: reads stay as fast as before, but changing one row rewrites its whole file. Merge-on-read, available from format v2, leaves the data files alone and writes a small delete file that marks the removed rows; an update becomes a delete plus the new row in a new data file. Writes get cheap, and every reader pays by applying the deletes during its scan. Spark picks the mode per command from the table properties `write.delete.mode`, `write.update.mode` and `write.merge.mode`, which all default to `copy-on-write`.",
+        "Format v2 has two kinds of delete file. A position delete file lists a data file’s path and the positions of deleted rows in it, sorted by path and position so a reader can stream through it. An equality delete file lists column values, such as `id = 5`, and removes every matching row; the writer doesn’t need to know where the row is, which is why the spec notes that engines using equality deletes avoid reading existing data before writing. The price is at read time, when each row must be checked against the delete values. Every commit gets a sequence number: position deletes apply to data files with the same or a lower number, so a commit can delete rows it just added, and equality deletes only to strictly older files. Both apply only within the same partition, except equality deletes written unpartitioned, which apply to the whole table.",
+        "Format v3 replaces position delete files with deletion vectors: one bitmap of deleted row positions per data file, built from Roaring bitmaps, and stored as a `deletion-vector-v1` blob in a Puffin file. A delete manifest points to each vector by file, offset and length, and one Puffin file can hold vectors for many data files. A snapshot may have at most one vector per data file, so a writer must merge new deletes into the existing vector, and any old position delete files, instead of adding another file; readers then apply one bitmap per data file. New position delete files are not allowed in v3 tables, though old ones stay valid. The v4 draft goes further: it keeps a data file’s vector in the same manifest entry and forbids new equality delete files.",
+        "Engines pick different encodings. Spark uses copy-on-write unless a table opts in; in merge-on-read it writes position delete files to v2 tables and, since Iceberg 1.8, deletion vectors to v3 tables. Flink’s upsert mode, for v2 and later tables with a primary key, writes equality deletes, so a streaming job can apply changes without looking up existing rows; Iceberg 1.12 (September 2026) adds a Flink maintenance task, `ConvertEqualityDeletes`, that turns them into deletion vectors on v3 tables. Trino writes position delete files for row-level changes to v2 tables and deletion vectors to v3 tables, whose support it still calls experimental.",
+        "Merge-on-read tables need compaction to stay fast, because each delete file adds work to every scan. Spark’s `rewrite_data_files` procedure rewrites data files with their deletes applied; its `delete-file-threshold` and `delete-ratio-threshold` (default 0.3) options select files with many deletes, and `remove-dangling-deletes` drops delete files that no longer match any live data file. `rewrite_position_delete_files` merges small position delete files and drops entries for data files that are gone. In Trino, `optimize` also rewrites data files that have delete files attached."
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Ways to record a row-level change",
+      "intro": "From the Iceberg table spec and engine docs, checked 2026-10-23.",
+      "corner": "Encoding",
+      "columns": ["Format versions", "What it records", "Write cost", "Read cost", "Written by"],
+      "rows": [
+        { "label": "Copy-on-write", "values": ["All", "Nothing extra: affected data files are rewritten", "High: whole files rewritten", "None", "Spark by default"] },
+        { "label": "Position delete file", "values": ["v2 (no new ones in v3)", "Data file path and row positions", "Low", "Merge positions into each scan", "Spark and Trino merge-on-read on v2"] },
+        { "label": "Equality delete file", "values": ["v2 and v3 (no new ones in v4 draft)", "Column values; matches rows in older files", "Lowest: no lookup of existing rows", "Highest: compare rows with delete values", "Flink upsert mode"] },
+        { "label": "Deletion vector", "values": ["v3 and later", "A bitmap of deleted positions for one data file, in a Puffin file", "Low, plus merging with the file’s existing vector", "Low: one bitmap per data file", "Spark and Trino merge-on-read on v3; Flink’s equality-delete converter"] }
+      ]
+    }
+  ],
   "history": {
     "story": [
       "Netflix ran its analytics on Hive tables, the de facto standard layout that Hive, Presto and Spark all used. A Hive table tracks its partitions in a central metastore and finds the files inside by listing directories. On S3 that listing is slow, and while S3 listings were eventually consistent it could return wrong results. Changes to a table couldn’t be atomic, object stores have no real rename, and the metastore became a bottleneck when planning jobs.",
@@ -100,6 +126,14 @@
     { "label": "Amazon S3 docs: Working with S3 Tables and table buckets", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html" },
     { "label": "BigQuery docs: Apache Iceberg managed tables", "url": "https://docs.cloud.google.com/bigquery/docs/biglake-iceberg-tables-in-bigquery" },
     { "label": "Trino docs: Iceberg connector (format version 3 is experimental)", "url": "https://trino.io/docs/current/connector/iceberg.html" },
+    { "label": "Iceberg table spec: Row-level deletes, delete formats, deletion vectors and scan planning", "url": "https://iceberg.apache.org/spec/#row-level-deletes" },
+    { "label": "Iceberg Puffin spec: deletion-vector-v1 blob type", "url": "https://iceberg.apache.org/puffin-spec/" },
+    { "label": "Iceberg docs: Configuration (write.delete.mode, write.update.mode, write.merge.mode)", "url": "https://iceberg.apache.org/docs/latest/configuration/" },
+    { "label": "Iceberg docs: Spark writes (copied rows in copy-on-write and merge-on-read)", "url": "https://iceberg.apache.org/docs/latest/spark-writes/" },
+    { "label": "Iceberg docs: Flink writes (upsert mode on tables with a primary key)", "url": "https://iceberg.apache.org/docs/latest/flink-writes/" },
+    { "label": "Iceberg docs: Flink maintenance (ConvertEqualityDeletes to deletion vectors)", "url": "https://iceberg.apache.org/docs/latest/flink-maintenance/" },
+    { "label": "GitHub: Apache Iceberg 1.8.0 release notes (Spark writes DVs for v3 merge-on-read tables)", "url": "https://github.com/apache/iceberg/releases/tag/apache-iceberg-1.8.0" },
+    { "label": "GitHub: Apache Iceberg 1.12.0 release notes (Flink equality delete conversion)", "url": "https://github.com/apache/iceberg/releases/tag/apache-iceberg-1.12.0" },
     { "label": "Athena docs: Query Apache Iceberg tables (v2 tables only)", "url": "https://docs.aws.amazon.com/athena/latest/ug/querying-iceberg.html" }
   ],
   "checked": "2026-10-05"

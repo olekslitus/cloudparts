@@ -1,0 +1,105 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Parseable",
+  "concepts": ["observability"],
+  "uses": ["logs", "traces", "metrics"],
+  "provider": "oss",
+  "vendor": "Parseable",
+  "license": "AGPL-3.0 (open-source server); Parseable Cloud and Enterprise are commercial",
+  "website": "https://www.parseable.com/",
+  "repo": "https://github.com/parseablehq/parseable",
+  "summary": "A Rust server that stores logs, metrics and traces as Parquet files on object storage and queries them with SQL, without indexing at ingest.",
+  "intro": [
+    "Parseable is one binary that contains both the storage engine and its web UI, Prism. Data arrives over HTTP as JSON, as OpenTelemetry (OTLP/HTTP) logs, metrics and traces, or from Kafka; each request names a dataset in the `X-P-Stream` header. The receiving node converts events to Apache Arrow, writes them to a local staging directory, and every minute converts the staged data to compressed Parquet and uploads it to S3, Google Cloud Storage, Azure Blob or MinIO, along with manifest files that record which columns and time ranges each file holds. Data still in staging can already be queried. Nested JSON is flattened into columns, and the schema is detected from the data.",
+    "Queries are PostgreSQL-flavoured SQL run by Apache DataFusion, and each must give a start and end time. The query node reads the manifests, picks only the Parquet files that overlap the time range and filters, and fetches just the needed columns with ranged S3 GETs. Nothing is indexed by default; full-text indexes are built on demand. A standalone node can run on local disk; in distributed mode, nodes take roles (ingestor, querier, indexer and the Prism leader) and coordinate through metadata files in the bucket rather than a consensus service. The open-source build is AGPL-3.0 and supports one query node. Parseable Cloud costs $0.39 per GB ingested with 365 days of retention, and Enterprise, from $15,000 a year, runs in your own cloud or on premises and adds high-availability clusters, a PromQL engine, a hot-tier cache and custom partitioning."
+  ],
+  "strengths": [
+    "Object storage is the only dependency, and the data stays as plain Parquet in your bucket, which other engines can read",
+    "No index is built at ingest, so writing is cheap; filtering by time and column reads only the files and byte ranges a query needs",
+    "One binary with its own UI, dashboards, alerts and RBAC, and OpenTelemetry logs, metrics and traces accepted without extra configuration",
+    "SQL over all signals through DataFusion, including regex operators and window functions"
+  ],
+  "limits": [
+    "Open core: the AGPL build has one query node, and HA clustering, PromQL, the hot-tier cache, custom partitioning and the AI features are Cloud or Enterprise only",
+    "Every query must give a time range, and text search without an on-demand index reads the whole column for every file in that range",
+    "Data reaches object storage once a minute, so the staging disk must survive a node failure; the docs recommend a redundant volume such as EBS or EFS",
+    "A distributed deployment can’t be turned back into a standalone one, and the indexer and Prism leader are single nodes"
+  ],
+  "worksWith": [
+    { "id": "s3", "how": "stores its Parquet files in" },
+    { "id": "gcs", "how": "can store its Parquet files in" },
+    { "id": "azure-blob", "how": "can store its Parquet files in" },
+    { "id": "minio", "how": "can store its Parquet files in" },
+    { "id": "parquet", "how": "writes its data files as" },
+    { "id": "arrow", "how": "stages incoming events as" },
+    { "id": "datafusion", "how": "runs its SQL queries on" },
+    { "id": "opentelemetry", "how": "ingests OTLP logs, metrics and traces from" },
+    { "id": "kafka", "how": "can ingest events from" },
+    { "id": "logstash", "how": "can receive logs over HTTP from" },
+    { "id": "grafana", "how": "is queried, through a plugin, by" },
+    { "id": "kubernetes", "how": "runs, through its Helm chart, on" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Run Parseable locally, send an event, query it with SQL",
+    "source": [
+      "# standalone mode on local disk; UI at http://localhost:8000 (admin / admin)",
+      "docker run -p 8000:8000 parseable/parseable:edge parseable local-store",
+      "",
+      "# send events to the dataset named in X-P-Stream",
+      "curl -u admin:admin http://localhost:8000/api/v1/ingest \\",
+      "  -H 'X-P-Stream: frontend' -H 'Content-Type: application/json' \\",
+      "  -d '[{\"level\": \"error\", \"message\": \"payment failing\", \"status\": 502},",
+      "       {\"level\": \"info\", \"message\": \"ok\", \"status\": 200}]'",
+      "",
+      "# SQL over a time range (start can be a duration such as 10m)",
+      "curl -u admin:admin http://localhost:8000/api/v1/query \\",
+      "  -H 'Content-Type: application/json' \\",
+      "  -d \"{\\\"query\\\": \\\"SELECT level, count(*) AS n FROM frontend WHERE message ~ 'fail' GROUP BY level\\\",",
+      "       \\\"startTime\\\": \\\"10m\\\", \\\"endTime\\\": \\\"now\\\"}\"",
+      "# [{\"level\":\"error\",\"n\":1}]"
+    ]
+  },
+  "history": {
+    "story": [
+      "Nitish Tiwari started Parseable in Bengaluru in 2022, and its first release, v0.0.1, was tagged on GitHub that September. In a December 2022 article he argued that search engines used as log stores index everything at ingest, which costs CPU and slows writes, and that with a columnar format such as Parquet on ordinary object storage, logs can be compressed and queried without an index, and read by other tools such as Spark or Presto.",
+      "The project started as log analytics. Version 1.0 in April 2024 added a distributed mode with separate ingest and query nodes, and in May 2024 the company raised a $2.75 million seed round led by Surge and NP-Hard Ventures. Version 2.0 in April 2025 introduced the Prism UI, on-demand indexing and an Enterprise edition built on the AGPL core, with metrics and traces accepted in OpenTelemetry format. Version 3.0 in August 2026 added multi-tenancy, an MCP server and agent observability."
+    ],
+    "choices": [
+      { "choice": "Columnar Parquet files instead of a search index", "why": "Indexing every log line at ingest takes CPU and can roughly double storage. Columnar files compress well and let queries read only the columns they need, so Parseable skips the index by default and builds one only when asked." },
+      { "choice": "Object storage as the only persistent store", "why": "Buckets are cheap and durable, and they separate storage from compute so ingest and query nodes can scale independently and hold little state of their own." },
+      { "choice": "Stage in Arrow, flush to Parquet every minute", "why": "Writing a Parquet file per request would create huge numbers of tiny objects. Batching in a local Arrow staging area makes larger files while keeping fresh data queryable." },
+      { "choice": "Manifests instead of a metadata database", "why": "Manifest files in the bucket record which columns and time ranges each Parquet file covers, so the query node can plan without a separate database and fetch only the byte ranges it needs." }
+    ],
+    "timeline": [
+      { "year": "2022", "text": "Parseable v0.0.1 released on GitHub in September" },
+      { "year": "2024", "text": "Version 1.0 adds distributed mode in April; $2.75 million seed round in May" },
+      { "year": "2025", "text": "Version 2.0 brings Prism, on-demand indexing and an Enterprise edition" },
+      { "year": "2026", "text": "Version 3.0 in August adds multi-tenancy and an MCP server" }
+    ],
+    "sources": [
+      { "label": "Nitish Tiwari: Simplified logging and analysis with Parseable (Open Source For You, Dec 2022)", "url": "https://www.opensourceforu.com/2022/12/simplified-logging-and-analysis-with-parseable/" },
+      { "label": "GitHub: Parseable v0.0.1 release (Sep 2022)", "url": "https://github.com/parseablehq/parseable/releases/tag/v0.0.1" },
+      { "label": "GitHub: Parseable v1.0.0 release notes (Apr 2024, distributed mode)", "url": "https://github.com/parseablehq/parseable/releases/tag/v1.0.0" },
+      { "label": "TechNode Global: Bengaluru’s Parseable raises $2.75M in seed round (May 2024)", "url": "https://technode.global/2024/05/07/bengalurus-parseable-raises-2-75m-in-seed-round-led-by-surge-and-np-hard-ventures/" },
+      { "label": "Parseable blog: Announcing Parseable 2.0 (May 2025)", "url": "https://www.parseable.com/blog/announcing-parseable-20" },
+      { "label": "Parseable blog: Parseable 3 release recap (Aug 2026)", "url": "https://www.parseable.com/blog/parseable-3-release-recap" }
+    ]
+  },
+  "sources": [
+    { "label": "Parseable README (architecture, ingestion, licence)", "url": "https://github.com/parseablehq/parseable" },
+    { "label": "Parseable docs: What is Parseable", "url": "https://www.parseable.com/docs/introduction" },
+    { "label": "Parseable docs: Architecture (staging, Parquet upload, manifests, node roles)", "url": "https://www.parseable.com/docs/architecture" },
+    { "label": "Parseable docs: Ingestion (headers, payload limit, staging)", "url": "https://www.parseable.com/docs/ingestion" },
+    { "label": "Parseable docs: Query (DataFusion, start and end time, ranged reads)", "url": "https://www.parseable.com/docs/key-concepts/query" },
+    { "label": "Parseable docs: High availability (node types, migration to distributed)", "url": "https://www.parseable.com/docs/key-concepts/high-availability" },
+    { "label": "Parseable docs: OpenTelemetry ingestion", "url": "https://www.parseable.com/docs/ingest-data/otel" },
+    { "label": "Parseable docs: PromQL (Enterprise only)", "url": "https://www.parseable.com/docs/user-guide/promql" },
+    { "label": "Parseable docs: Quickstart", "url": "https://www.parseable.com/docs/get-started" },
+    { "label": "Parseable docs, single-file text: Parseable OSS, Pro and Enterprise (what each includes)", "url": "https://www.parseable.com/llms-full.txt" },
+    { "label": "Parseable pricing (checked 2026-10-23)", "url": "https://www.parseable.com/pricing" },
+    { "label": "Parseable source: HTTP routes (ingest and query endpoints)", "url": "https://github.com/parseablehq/parseable/blob/main/src/handlers/http/modal/server.rs" },
+    { "label": "GitHub: Parseable releases (v3.2.5, Oct 2026)", "url": "https://github.com/parseablehq/parseable/releases" }
+  ],
+  "checked": "2026-10-23"
+}

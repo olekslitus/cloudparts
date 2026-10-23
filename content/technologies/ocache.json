@@ -1,0 +1,136 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "OCache",
+  "concepts": [
+    "object"
+  ],
+  "uses": [
+    "cache"
+  ],
+  "parent": {
+    "id": "tigris",
+    "as": "tool"
+  },
+  "provider": "oss",
+  "vendor": "Tigris Data",
+  "license": "Apache 2.0",
+  "website": "https://github.com/tigrisdata/ocache",
+  "repo": "https://github.com/tigrisdata/ocache",
+  "summary": "A disk-backed cache for objects of any size, from Tigris, that runs as a server, a cluster or a Go library; TAG’s cache layer.",
+  "intro": [
+    "OCache stores byte values under string keys on local disk, sized for objects rather than small records. Values under 64 KB go into RocksDB; larger ones are appended to 256 MB segment files on disk, and background compaction rewrites segments once enough of their space is dead. Entries can carry a TTL, and with a disk cap set it evicts by least recent access (LRU) or oldest write (FIFO). A server answers over gRPC (port 9000) and a REST API over HTTP (port 9001), and an `embedded` Go module runs the same cache inside another program with no network hop. That is how Tigris’s TAG gateway uses it.",
+    "In cluster mode, nodes find each other by gossip with HashiCorp’s memberlist and share keys out on a consistent-hash ring from Grafana’s dskit library, 512 tokens per node by default. Clients learn the topology and send each request straight to the node that owns the key, and nodes forward requests that reach the wrong one. The replication factor defaults to 1, as the data can be fetched again from its source: when a node fails, its keys are unavailable until gossip drops it from the ring. OCache is written in Go and links RocksDB through cgo, ships as a Docker image, and exports Prometheus metrics."
+  ],
+  "strengths": [
+    "Handles both tiny and multi-gigabyte values: RocksDB for small ones, append-only segment files for large ones",
+    "One cache three ways: a standalone server, a gossip-discovered cluster, or a library embedded in a Go service",
+    "LRU or FIFO eviction under a disk cap, TTLs, and throttled background compaction",
+    "Apache 2.0, and already the cache inside TAG"
+  ],
+  "limits": [
+    "No replication by default, so a failed node’s keys are gone from the cache until it comes back",
+    "Built through cgo against RocksDB, which makes builds heavier than a pure Go program",
+    "A key-value cache, not object storage: no buckets, S3 API or durability; TAG adds the S3 layer on top",
+    "Small community: a few stars on GitHub and documentation written mostly for TAG’s needs"
+  ],
+  "worksWith": [
+    {
+      "id": "rocksdb",
+      "how": "keeps small objects and metadata in"
+    },
+    {
+      "id": "grpc",
+      "how": "serves and routes requests over"
+    },
+    {
+      "id": "prometheus",
+      "how": "exposes metrics to"
+    }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "A three-node cluster, then a put and get through the HTTP API",
+    "source": [
+      "# three nodes on one host: gRPC on 900N, HTTP on 910N, gossip on 700N",
+      "for n in 1 2 3; do",
+      "  ./ocache -cluster-enabled -node-id node$n -disk /var/cache/ocache$n \\",
+      "    -listen-addr :900$n -listen-http :910$n -cluster-addr :700$n \\",
+      "    -seeds \"localhost:7001,localhost:7002,localhost:7003\" &",
+      "done",
+      "",
+      "# the cluster-aware CLI sends each key to the node that owns it",
+      "./ocachecli --addr \"localhost:9001,localhost:9002,localhost:9003\" put mykey \"hello\"",
+      "./ocachecli --addr \"localhost:9001,localhost:9002,localhost:9003\" get mykey",
+      "",
+      "# the HTTP API takes base64 values and an optional TTL",
+      "curl -X POST localhost:9101/v1/cache/greeting -d '{\"data\":\"aGVsbG8gd29ybGQ=\",\"ttl_seconds\":3600}'"
+    ]
+  },
+  "history": {
+    "story": [
+      "Tigris Data started OCache in July 2025 as a cache service for its own storage stack, with RocksDB for small objects and separate disk storage for large ones. It reached 1.0.0 on 17 January 2026, three days before the first release of TAG, the Tigris Acceleration Gateway, which embeds it as its cache. By September 2026 it was at 1.13.0.",
+      "Instead of writing its own membership and partitioning, OCache reuses pieces from other distributed systems: HashiCorp’s memberlist for gossip and failure detection, and the consistent-hash ring from Grafana’s dskit library."
+    ],
+    "choices": [
+      {
+        "choice": "Two stores by size",
+        "why": "RocksDB is efficient for many small values but wasteful for multi-megabyte ones, which are cheaper to append to large segment files and reclaim in bulk."
+      },
+      {
+        "choice": "Embeddable as a library",
+        "why": "TAG runs the cache in its own process, so a cache hit doesn’t pay for another network hop."
+      },
+      {
+        "choice": "Replication factor 1 by default",
+        "why": "Everything in the cache can be fetched again from object storage, so keeping one copy gives the most capacity per disk."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "2025",
+        "text": "Repository started in July"
+      },
+      {
+        "year": "2026",
+        "text": "1.0.0 in January, as the cache inside TAG; 1.13.0 in September"
+      }
+    ],
+    "sources": [
+      {
+        "label": "GitHub: tigrisdata/ocache releases",
+        "url": "https://github.com/tigrisdata/ocache/releases"
+      },
+      {
+        "label": "GitHub: tigrisdata/tag releases",
+        "url": "https://github.com/tigrisdata/tag/releases"
+      },
+      {
+        "label": "GitHub: tigrisdata/ocache, docs/cluster.md (memberlist, dskit ring)",
+        "url": "https://github.com/tigrisdata/ocache/blob/main/docs/cluster.md"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "GitHub: tigrisdata/ocache (README: dual storage, cluster mode, HTTP API, flags)",
+      "url": "https://github.com/tigrisdata/ocache"
+    },
+    {
+      "label": "GitHub: tigrisdata/ocache, docs/cluster.md (gossip, consistent hashing, failure handling)",
+      "url": "https://github.com/tigrisdata/ocache/blob/main/docs/cluster.md"
+    },
+    {
+      "label": "GitHub: tigrisdata/ocache, docs/configuration.md (thresholds, segments, eviction, compaction)",
+      "url": "https://github.com/tigrisdata/ocache/blob/main/docs/configuration.md"
+    },
+    {
+      "label": "GitHub: tigrisdata/ocache, docs/embedded.md (embedded Go client)",
+      "url": "https://github.com/tigrisdata/ocache/blob/main/docs/embedded.md"
+    },
+    {
+      "label": "GitHub: tigrisdata/tag, docs/architecture.md (TAG embeds OCache)",
+      "url": "https://github.com/tigrisdata/tag/blob/main/docs/architecture.md"
+    }
+  ],
+  "checked": "2026-10-23"
+}

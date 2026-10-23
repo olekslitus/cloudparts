@@ -1,0 +1,90 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "TigrisFS",
+  "concepts": ["object"],
+  "uses": ["file"],
+  "parent": { "id": "tigris", "as": "tool" },
+  "provider": "oss",
+  "vendor": "Tigris Data",
+  "license": "Apache 2.0",
+  "website": "https://www.tigrisdata.com/docs/training/tigrisfs/",
+  "repo": "https://github.com/tigrisdata/tigrisfs",
+  "summary": "A FUSE file system that mounts a Tigris or other S3-compatible bucket as a local directory.",
+  "intro": [
+    "TigrisFS mounts a bucket as a folder on Linux or macOS, so programs that only know files (`rsync`, `ffmpeg`, training scripts) can read and write objects. It is a Go program built on FUSE and a fork of GeeseFS, Yandex Cloud’s file system for S3, which is itself a fork of Goofys. Each file is stored as one ordinary object under its own path, with no separate metadata service, so the same data stays readable through the S3 API and any S3 tool. JuiceFS, by contrast, splits files into blocks with names only it understands.",
+    "Speed comes from caching and parallelism. Reads and writes go through an in-memory buffer (`--memory-limit`, 1 GB by default); writes land there first and are flushed to the bucket in the background by a pool of flusher threads (`--max-flushers`, 16 by default), and file attributes are cached for `--stat-cache-ttl` (60 seconds by default). It works against any S3-compatible store. Against Tigris it adds POSIX permissions, special files and symlinks, fetches the contents of small files in the same request that lists a directory, and can prefetch a directory’s data into the local Tigris region. Packages for Debian and RPM install a systemd unit, `tigrisfs@<bucket>`, that mounts a bucket per user or system-wide."
+  ],
+  "strengths": [
+    "Files stay ordinary objects under their own names, so the same bucket can be used through the mount and through the S3 API",
+    "Write-back caching and parallel flushes; Tigris measured 1,630 to 2,802 MiB/s reads and 1,118 to 1,279 MiB/s writes with fio on a 24-core VM",
+    "Directory listings on Tigris bring small files along in one round trip, which helps workloads with many small files",
+    "Apache 2.0, with DEB and RPM packages, a systemd unit per bucket and builds for Linux and macOS"
+  ],
+  "limits": [
+    "A file system over HTTP: files not yet cached are slower than a local disk, and FUSE makes one mount hard to share between several users",
+    "Writes are acknowledged from memory and uploaded later, so a crash or network failure before the flush can lose them; `fsync` waits for the upload",
+    "POSIX gaps inherited from GeeseFS: no hard links, no file locking, and no reading a file after it’s deleted while still open",
+    "Permissions, symlinks and special files are only kept on Tigris; on other S3 services they aren’t restored from listings"
+  ],
+  "worksWith": [
+    { "id": "s3", "how": "mounts buckets that speak the API of" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Mount a bucket with a bigger cache and more flushers",
+    "source": [
+      "# credentials come from ~/.aws, AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY or /etc/default/tigrisfs",
+      "mkdir -p ~/mnt/datasets",
+      "tigrisfs --memory-limit 4096 --max-flushers 64 --stat-cache-ttl 15m \\",
+      "  acme-datasets ~/mnt/datasets",
+      "",
+      "cp -r ./run-42 ~/mnt/datasets/checkpoints/      # written back in the background",
+      "aws s3 ls s3://acme-datasets/checkpoints/run-42/ # the same files, as objects",
+      "",
+      "# or let systemd mount it, now and at every login",
+      "systemctl --user enable --now tigrisfs@acme-datasets"
+    ]
+  },
+  "history": {
+    "story": [
+      "Goofys, started in 2015, mounted an S3 bucket as what its README calls a “filey system”: performance first and POSIX second, so random writes failed and per-file permissions were faked. In 2021 Yandex Cloud released GeeseFS, a fork aimed at the usual weak spots of S3 file systems, small files and metadata operations, using aggressive parallelism and asynchronous writes. Unlike Goofys it supports read-after-write, partial writes, truncation and `fsync`.",
+      "In December 2024 Tigris showed its buckets mounted in Kubernetes through Yandex’s csi-s3 driver, which runs GeeseFS underneath. On 1 July 2025 it announced TigrisFS, its own fork. The first releases replaced GeeseFS’s bundled AWS SDK, which had known vulnerabilities, upgraded other dependencies, fixed the race conditions the Go race detector found and turned on linting and more tests in CI. Tigris-specific features came on top. Tigris calls it the native file system interface for its storage, aimed at AI workloads whose datasets don’t fit on a local disk."
+    ],
+    "choices": [
+      {
+        "choice": "Fork GeeseFS rather than write a new file system",
+        "why": "GeeseFS already performed well with small files and kept one object per file. Tigris chose to fix its security and reliability problems and add features for its own storage."
+      },
+      {
+        "choice": "Keep objects readable",
+        "why": "Files stay plain objects under their own names, unlike JuiceFS’s blocks, so the S3 API and the file system can be used on the same data."
+      },
+      {
+        "choice": "Use Tigris’s own API features when available",
+        "why": "Standard S3 doesn’t return user metadata in listings, so GeeseFS restores permissions and symlinks only on Yandex’s own storage. TigrisFS supports them on Tigris, and preloads the contents of small files along with a directory listing."
+      }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "Goofys, a performance-first S3 file system in Go, first released" },
+      { "year": "2021", "text": "Yandex Cloud releases GeeseFS, a fork of Goofys" },
+      { "year": "2024", "text": "Tigris shows GeeseFS mounting buckets in Kubernetes via csi-s3" },
+      { "year": "2025", "text": "TigrisFS 1.1.0 in April; announced on 1 July" },
+      { "year": "2026", "text": "Version 1.2.4 released in September" }
+    ],
+    "sources": [
+      { "label": "GitHub: kahing/goofys (README and releases)", "url": "https://github.com/kahing/goofys" },
+      { "label": "GitHub: yandex-cloud/geesefs (README, POSIX compatibility matrix)", "url": "https://github.com/yandex-cloud/geesefs" },
+      { "label": "Tigris blog: Using Tigris as a filesystem (December 2024)", "url": "https://www.tigrisdata.com/blog/tigris-filesystem/" },
+      { "label": "Tigris blog: mount -t tigrisfs (1 July 2025)", "url": "https://www.tigrisdata.com/blog/tigrisfs/" },
+      { "label": "GitHub: tigrisdata/tigrisfs releases", "url": "https://github.com/tigrisdata/tigrisfs/releases" }
+    ]
+  },
+  "sources": [
+    { "label": "GitHub: tigrisdata/tigrisfs (README: GeeseFS lineage, Tigris-specific features, installation)", "url": "https://github.com/tigrisdata/tigrisfs" },
+    { "label": "Tigris docs: TigrisFS (caching flags and defaults, systemd mounts)", "url": "https://www.tigrisdata.com/docs/training/tigrisfs/" },
+    { "label": "Tigris blog: mount -t tigrisfs (changes from GeeseFS, fio benchmarks, JuiceFS comparison)", "url": "https://www.tigrisdata.com/blog/tigrisfs/" },
+    { "label": "GitHub: yandex-cloud/geesefs (non-POSIX behaviours and limitations)", "url": "https://github.com/yandex-cloud/geesefs" },
+    { "label": "GitHub: tigrisdata/tigrisfs releases", "url": "https://github.com/tigrisdata/tigrisfs/releases" }
+  ],
+  "checked": "2026-10-23"
+}

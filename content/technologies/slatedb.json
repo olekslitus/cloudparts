@@ -1,0 +1,100 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "SlateDB",
+  "concepts": ["key-value", "lsm-trees"],
+  "provider": "oss",
+  "vendor": "SlateDB project (Commonhaus Foundation)",
+  "license": "Apache 2.0",
+  "website": "https://slatedb.io/",
+  "repo": "https://github.com/slatedb/slatedb",
+  "summary": "An embedded key-value store in Rust, built as an LSM tree that keeps everything, including its write-ahead log, in object storage such as S3, GCS or Azure Blob Storage instead of on local disk.",
+  "intro": [
+    "SlateDB is a library, like RocksDB: your program opens a database at a path in a bucket and calls `put`, `get`, `delete`, `scan` and `merge` on byte keys and values. Underneath it is an LSM tree. Writes go to an in-memory write-ahead log buffer and a MemTable and return a `WriteHandle` straight away; a background flusher writes the WAL buffer to object storage when it fills or a flush interval passes, and `await_durable()` on the handle waits until that has happened. Full MemTables are frozen and flushed as level-0 SSTs, and compaction merges L0 files into range-partitioned sorted runs. A manifest file lists which SSTs make up the database and is updated atomically with conditional writes, which is also how SlateDB fences a stale “zombie” writer that thinks it still owns the database.",
+    "SSTs (sorted string tables) are immutable files of data blocks followed by an optional Bloom filter, an index block, an optional stats block and a FlatBuffers footer, with a CRC32 checksum on every block. SlateDB writes the same format twice for different jobs: WAL SSTs hold rows in sequence-number order for recovery and change data capture, while compacted SSTs hold rows in key order for reads. A `get` checks the MemTables, then L0, then the sorted runs, using Bloom filters, an in-memory block cache and an optional local disk cache to avoid object-store requests. There is one writer per database, but any number of `DbReader` instances on other machines can read it from a checkpoint, and compaction and garbage collection can run as separate processes. Transactions with snapshot isolation, merge operators, checkpoints and cheap clones are built in. Official bindings exist for Go, Java, Node.js and Python."
+  ],
+  "strengths": [
+    "No disks to manage or replicate: durability, capacity and cross-zone availability come from the object store",
+    "Batching writes into WAL and SST objects keeps PUT costs down compared with one object per key",
+    "Readers, compactors and garbage collectors can run on other machines against the same bucket, and clones and checkpoints are cheap because SSTs are immutable",
+    "Used in production by Dropbox, ZeroFS, HelixDB, Opendata and others, according to the project"
+  ],
+  "limits": [
+    "Object storage latency: the docs target workloads that tolerate 50–100 ms writes, or accept losing unflushed writes on a crash",
+    "Only one writer per database; partitioning, and multi-writer setups, are up to you",
+    "Pre-1.0 (0.17 in September 2026): storage formats are compatible between adjacent versions, but the API can still break",
+    "Built for key-value OLTP; the FAQ points analytical scans of columnar data to other systems, and its own benchmarks put read throughput well below RocksDB on NVMe because of slower p99 reads"
+  ],
+  "worksWith": [
+    { "id": "s3", "how": "keeps its WAL, SSTs and manifest in" },
+    { "id": "gcs", "how": "keeps its WAL, SSTs and manifest in" },
+    { "id": "azure-blob", "how": "keeps its WAL, SSTs and manifest in" },
+    { "id": "minio", "how": "can store its data in" },
+    { "id": "tigris", "how": "can store its data in" },
+    { "id": "rocksdb", "how": "is an object-storage alternative to" },
+    { "id": "denormalized", "how": "held checkpointed operator state for" }
+  ],
+  "snippet": {
+    "lang": "rust",
+    "title": "Open a database on an object store, write, wait for durability, read",
+    "source": [
+      "use slatedb::{Db, Error};",
+      "use slatedb::object_store::{ObjectStore, memory::InMemory};",
+      "use std::sync::Arc;",
+      "",
+      "#[tokio::main]",
+      "async fn main() -> Result<(), Error> {",
+      "    // InMemory for the example; use an S3, GCS or Azure store in production",
+      "    let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());",
+      "    let db = Db::open(\"/tmp/test_kv_store\", object_store).await?;",
+      "",
+      "    // put() returns once the write is in the in-memory WAL and MemTable",
+      "    let handle = db.put(b\"user:42\", b\"Ada\").await?;",
+      "    handle.await_durable().await?;   // wait until the WAL SST is in the bucket",
+      "",
+      "    assert_eq!(db.get(b\"user:42\").await?, Some(\"Ada\".into()));",
+      "",
+      "    let mut iter = db.scan(\"user:\"..\"user;\").await?;   // range scan",
+      "    while let Ok(Some(item)) = iter.next().await {",
+      "        println!(\"{:?} = {:?}\", item.key, item.value);",
+      "    }",
+      "    db.close().await",
+      "}"
+    ]
+  },
+  "history": {
+    "story": [
+      "Object storage is cheap, extremely durable and readable from anywhere, and systems such as WarpStream and turbopuffer showed it could back online systems, not just data lakes. But requests take 50–100 ms, every PUT and GET is billed, and objects can only be replaced whole. SlateDB’s authors first tried running RocksDB’s storage API on top of S3 and found the mismatch too large: RocksDB relies on file locks, the filesystem cache and hard links for checkpoints, none of which object stores provide. They built a new LSM tree in async Rust that batches writes, caches reads and coordinates writers with conditional `IF-MATCH` writes on a manifest.",
+      "Chris Riccomini and Rohan Desai presented it as a cloud-native LSM on object storage at P99 CONF in 2024, and version 0.1.0 shipped in August 2024. Releases followed roughly every two months, adding transactions, merge operators, clones, change data capture and bindings for Go, Java, Node.js and Python, and the project joined the Commonhaus Foundation. It was never formally announced until a June 2026 post by Almog, Chris, Rohan and team, which said Dropbox, ZeroFS, HelixDB and Opendata already ran it in production and that 1.0 was near."
+    ],
+    "choices": [
+      { "choice": "Everything in object storage, including the WAL", "why": "RocksDB-Cloud keeps its WAL on local disk, Kafka or Kinesis. Putting the WAL in the bucket too removes a second system, at the cost of write latency." },
+      { "choice": "A WAL separate from L0", "why": "Flushing writes often as L0 SSTs would create too many L0 files to track in memory. A WAL that is only read during recovery lets SlateDB flush frequently for lower durable-write latency without that cost." },
+      { "choice": "One writer, fenced through the manifest", "why": "Object stores have no file locks. Conditional writes on the manifest let a new writer take over and stop a zombie writer, which also makes partitioning across nodes straightforward to build on top." },
+      { "choice": "Immutable SSTs referenced by a manifest", "why": "Data files are only deleted when no manifest references them, so checkpoints, clones and key-range splits are metadata operations instead of copies." }
+    ],
+    "timeline": [
+      { "year": "2024", "text": "Repository created (March); talk at P99 CONF; 0.1.0 released (August)" },
+      { "year": "2025", "text": "Releases 0.5 to 0.10 add features every two months or so" },
+      { "year": "2026", "text": "First official announcement post (June); 0.17.0 released (September)" }
+    ],
+    "sources": [
+      { "label": "SlateDB blog: SlateDB, an Object-Native LSM for Online Systems (June 2026)", "url": "https://slatedb.io/blog/introducing-slatedb/" },
+      { "label": "SlateDB README (talks, adopters, Commonhaus Foundation)", "url": "https://github.com/slatedb/slatedb" },
+      { "label": "P99 CONF: Building a Cloud Native LSM on Object Storage (Rohan Desai and Chris Riccomini, 2024; listed in the README)", "url": "https://www.p99conf.io/session/building-a-cloud-native-lsm-on-object-storage/" },
+      { "label": "SlateDB FAQ (separate WAL, comparison with RocksDB-Cloud)", "url": "https://slatedb.io/docs/get-started/faq/" },
+      { "label": "GitHub: slatedb/slatedb releases", "url": "https://github.com/slatedb/slatedb/releases" }
+    ]
+  },
+  "sources": [
+    { "label": "SlateDB README (architecture, features, bindings, release schedule, adopters)", "url": "https://github.com/slatedb/slatedb" },
+    { "label": "SlateDB docs: Introduction (single writer, fencing, use cases, 50–100 ms writes)", "url": "https://slatedb.io/docs/get-started/introduction/" },
+    { "label": "SlateDB docs: FAQ (OLTP focus, WAL, durability, key and value limits)", "url": "https://slatedb.io/docs/get-started/faq/" },
+    { "label": "SlateDB docs: Design overview (WAL, MemTables, L0, sorted runs, manifest)", "url": "https://slatedb.io/docs/design/overview/" },
+    { "label": "SlateDB docs: Writes", "url": "https://slatedb.io/docs/design/writes/" },
+    { "label": "SlateDB docs: Readers (DbReader and checkpoints)", "url": "https://slatedb.io/docs/design/readers/" },
+    { "label": "SlateDB docs: Sorted String Tables (SST layout)", "url": "https://slatedb.io/docs/design/sorted-string-table/" },
+    { "label": "SlateDB blog: SlateDB, an Object-Native LSM for Online Systems (benchmarks, production users)", "url": "https://slatedb.io/blog/introducing-slatedb/" },
+    { "label": "GitHub: slatedb/slatedb releases (v0.17.0, Sept 2026)", "url": "https://github.com/slatedb/slatedb/releases" }
+  ],
+  "checked": "2026-10-23"
+}

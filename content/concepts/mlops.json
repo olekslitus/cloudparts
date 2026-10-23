@@ -1,0 +1,165 @@
+{
+  "$schema": "../../.schemas/concepts.schema.json",
+  "name": "Model serving and MLOps",
+  "icon": "package-check",
+  "category": "ai",
+  "order": 40,
+  "summary": "The work between a trained model and a running product: recording every training run and model version, packaging a model with its code and dependencies as a service, and serving it with batching and autoscaling so you always know which model answers and how it was made.",
+  "howItWorks": "Three jobs make up the loop. Tracking comes first: each training run logs its parameters, metrics and output files to a tracking server. In MLflow, a run’s metadata goes to a backend store, a database such as PostgreSQL, MySQL or SQLite, and large files such as model weights go to an artifact store such as Amazon S3. A registry turns the good runs into named, numbered versions: the first model registered as `churn` becomes version 1, the next version 2, and a mutable alias such as `champion` points at one of them, so a server loads `models:/churn@champion` and a rollout or rollback is a change of pointer. Packaging bundles the model with the code that calls it and the libraries both need, usually into a container image: `bentoml build` makes a Bento and `bentoml containerize` turns it into a Docker image; `mlflow models build-docker` does the same for an MLflow model. Serving runs that image as an HTTP service with several replicas. Because one model call can keep a CPU or GPU busy for tens of milliseconds, model servers batch: Ray Serve’s `@serve.batch` waits up to 10 ms by default for up to 10 requests and runs them as one call, and BentoML’s adaptive batching tunes the batch window itself within a `max_latency_ms` limit, returning `503` when it can’t keep up. Autoscaling then adds or removes replicas by load, not CPU: Ray Serve aims for an average of 2 ongoing requests per replica by default, can go down to zero replicas, and asks the cluster autoscaler for new machines when there is no room for another GPU replica. New versions go out beside old ones: an Azure Machine Learning endpoint can send 90% of traffic to a `blue` deployment and 10% to `green`, or copy traffic to `green` without returning its answers.",
+  "analogy": "A bakery with a test kitchen. The test kitchen keeps a notebook of every batch: the flour, the oven temperature and how it tasted (tracking). Recipes that pass go into a binder as numbered versions, and a sticky note marks the one the shop bakes today, so moving the note changes the bread without reprinting the binder (registry and alias). The shop doesn’t bake one loaf per customer: it fills a tray before it fires the oven (batching), and lights more ovens when the queue gets long (autoscaling).",
+  "useWhen": [
+    "Models are retrained regularly and you must be able to say which data, code and parameters produced the model that is live right now",
+    "Several people train models for the same problem and compare results: one tracking server replaces spreadsheets and folder names like `model_final_v3`",
+    "A model runs on GPUs and requests arrive one at a time: server-side batching turns many small calls into one pass over the hardware",
+    "Traffic varies and GPU time is expensive: replicas scale with the number of requests in flight, and rarely used models scale to zero",
+    "You want to try a new version on a share of real traffic, and roll back by moving an alias or a traffic split instead of rebuilding"
+  ],
+  "avoidWhen": [
+    "You call a hosted model API such as Claude or GPT: the provider does the serving, and what you need is a gateway and tracing, not a model server",
+    "The model scores a table once a night: a batch job over the data is simpler and cheaper than an endpoint that runs all day",
+    "One person, one small model, few requests: a FastAPI app in a Docker container is enough, and a tracking database, registry and Kubernetes operator are more to run than the model itself",
+    "Every millisecond of latency counts for a small, fast model: batching makes the first request wait for others, so keep the wait short or turn batching off"
+  ],
+  "example": "A team retrains a churn model every Monday. Each training run logs its parameters and validation AUC to a shared MLflow tracking server, which keeps metadata in PostgreSQL and model files in S3. This week’s best run is registered as version 7 of `churn`, and after checking it on held-out data the team moves the `champion` alias from version 6 to 7. The model is served by a Ray Serve deployment whose replicas load `models:/churn@champion` when they start, batch up to 32 requests per call and autoscale between 1 and 10 replicas to keep about 2 requests in flight per replica. After the alias moves, the team redeploys, Ray Serve starts new replicas that load version 7, and the old ones drain. When the support dashboard shows odd scores on Tuesday, rolling back is moving `champion` back to version 6 and redeploying: nothing is rebuilt, and the run that produced version 6 still shows exactly what it was trained on.",
+  "providers": {
+    "aws": "Amazon SageMaker AI: real-time endpoints with automatic scaling (down to zero instances), SageMaker Model Registry (Model Groups, versions, approval status), and fully managed MLflow (MLflow Apps and MLflow tracking servers)",
+    "gcp": "Agent Platform Endpoints and Online Inference, Agent Platform Model Registry and Experiments on Agent Platform: the former Vertex AI services, renamed in April 2026 as part of Gemini Enterprise Agent Platform",
+    "azure": "Azure Machine Learning: managed online endpoints that split or mirror traffic between deployments, batch endpoints, and workspaces that act as an MLflow tracking server and model registry",
+    "oss": "Serving: BentoML, Ray Serve (on Kubernetes with KubeRay), KServe; tracking and registry: MLflow (Apache 2.0, a Linux Foundation project)"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "import mlflow, pandas as pd",
+      "from ray import serve",
+      "",
+      "# Training: log the run, register a new version, point the alias at it",
+      "with mlflow.start_run():",
+      "    mlflow.log_param(\"max_depth\", 6)",
+      "    mlflow.log_metric(\"val_auc\", 0.91)",
+      "    mlflow.sklearn.log_model(sk_model=model, name=\"model\", registered_model_name=\"churn\")",
+      "mlflow.MlflowClient().set_registered_model_alias(\"churn\", \"champion\", version=7)",
+      "",
+      "# Serving: load whatever \"champion\" points to, batch requests, autoscale",
+      "@serve.deployment(autoscaling_config={",
+      "    \"min_replicas\": 1, \"max_replicas\": 10, \"target_ongoing_requests\": 2})",
+      "class Churn:",
+      "    def __init__(self):",
+      "        self.model = mlflow.pyfunc.load_model(\"models:/churn@champion\")",
+      "",
+      "    @serve.batch(max_batch_size=32, batch_wait_timeout_s=0.01)",
+      "    async def score(self, rows: list[dict]) -> list[float]:",
+      "        return list(self.model.predict(pd.DataFrame(rows)))",
+      "",
+      "    async def __call__(self, request):",
+      "        return await self.score(await request.json())",
+      "",
+      "serve.run(Churn.bind())"
+    ]
+  },
+  "related": ["llms", "model-hubs", "local-inference", "model-gateways", "autoscaling", "containers", "canary", "observability"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "Who does which job",
+      "intro": "Open-source tools usually do one or two of the jobs; cloud platforms bundle all of them.",
+      "corner": "Job",
+      "columns": ["MLflow", "BentoML", "Ray Serve", "Amazon SageMaker AI"],
+      "rows": [
+        { "label": "Track runs", "values": ["Runs, parameters, metrics and artifacts; autologging for scikit-learn, PyTorch and others", "No", "No", "Managed MLflow"] },
+        { "label": "Registry", "values": ["Registered models, numbered versions, aliases and tags", "A local Model Store and Bentos with versions", "No", "SageMaker Model Registry, fed automatically from MLflow’s registry"] },
+        { "label": "Package", "values": ["MLflow Models with flavors; `mlflow models build-docker`", "`bentoml build` makes a Bento; `bentoml containerize` makes an image", "Python code plus a Serve config file", "`ModelBuilder` prepares MLflow models for an endpoint"] },
+        { "label": "Serve", "values": ["`mlflow models serve`, or deploy to SageMaker, Azure ML or Kubernetes", "HTTP server with adaptive batching, workers and multi-model pipelines", "Replicas on a Ray cluster, `@serve.batch`, model composition, LLM serving", "Real-time endpoints, which can also be invoked through OpenAI-compatible APIs"] },
+        { "label": "Autoscale", "values": ["Left to the platform it deploys to", "On BentoCloud", "Ongoing requests per replica, scale to zero, cluster autoscaler", "Application Auto Scaling policies, scale to zero instances"] }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Batching trades latency for throughput",
+      "body": [
+        "A GPU that runs one request at a time spends most of its time idle between kernels, while 32 requests stacked into one tensor cost little more than one. Clipper, a research serving system from UC Berkeley published in 2016, put batching, caching and model selection into a layer between applications and ML frameworks, and the idea is now standard. Ray Serve’s `@serve.batch` is a fixed rule: wait up to `batch_wait_timeout_s` (10 ms by default) for up to `max_batch_size` requests (10 by default), then call the method once with a list. BentoML’s dispatcher learns from recent traffic: it builds larger batches when traffic is heavy and smaller ones when it is light, within the `max_batch_size` and `max_latency_ms` you set.",
+        "The cost is that the first request in a batch waits for the others, and a batched method must take a list and return a list of the same length. Large language models are a special case: engines such as vLLM batch continuously at the level of individual tokens, so LLM serving layers such as Ray Serve LLM put the engine inside a replica and concentrate on routing, autoscaling and an OpenAI-compatible API around it."
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "name": "Serving frameworks",
+      "summary": "Python libraries that turn model code into an HTTP service with batching, replicas and autoscaling.",
+      "technologies": ["bentoml", "ray-serve"]
+    },
+    {
+      "name": "Experiment tracking and registries",
+      "summary": "Record training runs and keep named, versioned models that servers load by alias.",
+      "technologies": ["mlflow"]
+    }
+  ],
+  "history": {
+    "story": [
+      "By the mid-2010s many companies had working models and no reliable way to run them. In 2015 a Google team led by D. Sculley described machine learning in production as a source of “massive ongoing maintenance costs”, from tangled data dependencies to feedback loops. When Uber described its Michelangelo platform in September 2017, it wrote that before it “there was no established path to deploying a model into production”: teams built a custom serving container for every project. Michelangelo gave each model a UUID and an optional tag or alias, so a new model could replace an old one without changing clients.",
+      "Serving became its own research topic. Google described TensorFlow Serving, its internal and open-source model server, and UC Berkeley’s RISELab published Clipper (2016), which added caching, batching and model selection between applications and ML frameworks. Then came open tools for the rest of the loop. Databricks released MLflow in June 2018 to track experiments, package code and save models in a common format, and gave it to the Linux Foundation in 2020. BentoML was open-sourced in 2019 by Chaoyu Yang, an early Databricks engineer. Ray Serve followed in 2020, arguing that wrapping a model in Flask didn’t scale and that specialized servers forced a “tensor-in, tensor-out” API on developers.",
+      "Large language models shifted the work again. MLflow 3 (June 2025) added tracing and evaluation for LLM apps and agents, and Ray 2.44 (March 2025) gave Ray Serve an LLM module with vLLM inside. The tools also consolidated: Modular bought BentoML in February 2026, and BentoML’s Kubernetes operator, Yatai, was archived in June 2026 after two years without a release."
+    ],
+    "choices": [
+      {
+        "choice": "Batch requests in the server, within a latency budget",
+        "why": "Models run far faster on a batch than on single inputs, but callers send one request at a time. Clipper showed that the serving layer can collect requests for a few milliseconds and run them together, without changing the ML framework; BentoML and Ray Serve both ship this as a decorator."
+      },
+      {
+        "choice": "Name versions, and point at them with aliases",
+        "why": "Clients should not change when the model does. Michelangelo let a tag stand for a model UUID, and MLflow’s registry uses mutable aliases such as `champion`, so promoting or rolling back a model means moving one pointer."
+      },
+      {
+        "choice": "Serve Python code, not just a model file",
+        "why": "Real requests need preprocessing, business logic and often several models. Ray Serve’s authors saw specialized model servers split request handling and inference into two services; BentoML and Ray Serve let one Python class hold both and scale it as a unit."
+      },
+      {
+        "choice": "Open interfaces instead of one platform",
+        "why": "Companies used many ML libraries and deployment targets. MLflow’s launch post set out to work “with any ML library, algorithm, deployment tool or language” through REST APIs and simple file formats, which is why cloud platforms such as SageMaker AI and Azure Machine Learning now speak MLflow’s API."
+      }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "“Hidden Technical Debt in Machine Learning Systems” published at NIPS" },
+      { "year": "2016", "text": "Clipper paper from UC Berkeley’s RISELab (December)" },
+      { "year": "2017", "text": "Uber describes Michelangelo (September); TensorFlow-Serving paper (December)" },
+      { "year": "2018", "text": "Databricks releases MLflow in alpha (June)" },
+      { "year": "2019", "text": "BentoML is open-sourced" },
+      { "year": "2020", "text": "Ray Serve is released (July post); MLflow joins the Linux Foundation (June)" },
+      { "year": "2025", "text": "Ray Serve LLM in Ray 2.44 (March); MLflow 3 with GenAI tracing and evaluation (June)" },
+      { "year": "2026", "text": "Modular acquires BentoML (February); Yatai is archived (June)" }
+    ],
+    "sources": [
+      { "label": "Sculley et al.: Hidden Technical Debt in Machine Learning Systems (NIPS 2015)", "url": "https://papers.nips.cc/paper_files/paper/2015/hash/86df7dcfd896fcaf2674f757a2463eba-Abstract.html" },
+      { "label": "Crankshaw et al.: Clipper, A Low-Latency Online Prediction Serving System (arXiv, Dec 2016)", "url": "https://arxiv.org/abs/1612.03079" },
+      { "label": "Olston et al.: TensorFlow-Serving, Flexible, High-Performance ML Serving (arXiv, Dec 2017)", "url": "https://arxiv.org/abs/1712.06139" },
+      { "label": "Uber Engineering: Meet Michelangelo, Uber’s Machine Learning Platform (Sept 2017)", "url": "https://www.uber.com/blog/michelangelo-machine-learning-platform/" },
+      { "label": "Databricks blog: Introducing MLflow (June 5, 2018)", "url": "https://www.databricks.com/blog/2018/06/05/introducing-mlflow-an-open-source-machine-learning-platform.html" },
+      { "label": "Linux Foundation: The MLflow Project Joins Linux Foundation (June 2020)", "url": "https://www.linuxfoundation.org/press/press-release/the-mlflow-project-joins-linux-foundation" },
+      { "label": "TechCrunch: BentoML scores $9M funding (June 2023; open-sourced in 2019, founder from Databricks)", "url": "https://techcrunch.com/2023/06/26/bentoml-scores-9m-funding-to-expedite-ai-app-development/" },
+      { "label": "Simon Mo: Machine Learning Serving is Broken (July 20, 2020)", "url": "https://medium.com/distributed-computing-with-ray/machine-learning-serving-is-broken-f59aff2d607f", "archive": "https://web.archive.org/web/20211206215332/https://medium.com/distributed-computing-with-ray/machine-learning-serving-is-broken-f59aff2d607f" },
+      { "label": "Anyscale blog: LLM APIs in Ray Data and Ray Serve (Apr 2, 2025, Ray 2.44)", "url": "https://anyscale.com/blog/llm-apis-ray-data-serve" },
+      { "label": "MLflow: MLflow 3 release (June 11, 2025)", "url": "https://mlflow.org/releases/3" },
+      { "label": "Modular blog: BentoML joins Modular (Feb 10, 2026)", "url": "https://modular.com/blog/bentoml-joins-modular" },
+      { "label": "GitHub: bentoml/Yatai (archived June 11, 2026)", "url": "https://github.com/bentoml/Yatai" }
+    ]
+  },
+  "sources": [
+    { "label": "MLflow docs: Tracking (runs, experiments, backend and artifact stores)", "url": "https://mlflow.org/docs/latest/ml/tracking/" },
+    { "label": "MLflow docs: Model Registry (versions, aliases, models:/ URIs)", "url": "https://mlflow.org/docs/latest/ml/model-registry/" },
+    { "label": "MLflow docs: Deployment (mlflow models serve, build-docker, SageMaker, Azure ML)", "url": "https://mlflow.org/docs/latest/ml/deployment/" },
+    { "label": "BentoML docs: Packaging for deployment (bentoml build, containerize)", "url": "https://docs.bentoml.com/en/latest/get-started/packaging-for-deployment.html" },
+    { "label": "BentoML docs: Adaptive batching (max_batch_size, max_latency_ms, 503)", "url": "https://docs.bentoml.com/en/latest/get-started/adaptive-batching.html" },
+    { "label": "Ray docs: Ray Serve overview (features, comparison with other serving tools)", "url": "https://docs.ray.io/en/latest/serve/index.html" },
+    { "label": "Ray docs: Dynamic request batching (@serve.batch defaults)", "url": "https://docs.ray.io/en/latest/serve/advanced-guides/dyn-req-batch.html" },
+    { "label": "Ray docs: Ray Serve autoscaling (target_ongoing_requests, min_replicas 0, cluster autoscaler)", "url": "https://docs.ray.io/en/latest/serve/autoscaling-guide.html" },
+    { "label": "Ray docs: Serving LLMs (Ray Serve LLM, vLLM, OpenAI-compatible API)", "url": "https://docs.ray.io/en/latest/serve/llm/index.html" },
+    { "label": "AWS docs: SageMaker AI real-time inference", "url": "https://docs.aws.amazon.com/sagemaker/latest/dg/realtime-endpoints.html" },
+    { "label": "AWS docs: Automatic scaling of SageMaker AI models (including scale to zero)", "url": "https://docs.aws.amazon.com/sagemaker/latest/dg/endpoint-auto-scaling.html" },
+    { "label": "AWS docs: SageMaker Model Registry", "url": "https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry.html" },
+    { "label": "AWS docs: Managed MLflow on SageMaker AI (MLflow Apps, tracking servers, Model Registry integration)", "url": "https://docs.aws.amazon.com/sagemaker/latest/dg/mlflow.html" },
+    { "label": "Google Cloud: Gemini Enterprise Agent Platform release notes (Vertex AI renames, April 22, 2026)", "url": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/release-notes" },
+    { "label": "Microsoft Learn: What is Azure Machine Learning?", "url": "https://learn.microsoft.com/en-us/azure/machine-learning/overview-what-is-azure-machine-learning" },
+    { "label": "Microsoft Learn: Online endpoints (deployments, blue/green traffic split, mirroring, autoscale)", "url": "https://learn.microsoft.com/en-us/azure/machine-learning/concept-endpoints-online" },
+    { "label": "Microsoft Learn: MLflow and Azure Machine Learning (workspaces as MLflow tracking servers)", "url": "https://learn.microsoft.com/en-us/azure/machine-learning/concept-mlflow" }
+  ]
+}

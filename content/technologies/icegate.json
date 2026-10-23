@@ -1,0 +1,95 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "IceGate",
+  "concepts": ["observability"],
+  "uses": ["logs", "traces"],
+  "provider": "oss",
+  "vendor": "TripleCloud",
+  "license": "Apache 2.0",
+  "website": "https://icegate.tech/",
+  "repo": "https://github.com/icegatetech/icegate",
+  "status": {
+    "stage": "experimental",
+    "note": "The README labels it a prototype; v0.1.0 shipped in April 2026 and v0.2.0 was at release candidate 12 in October 2026."
+  },
+  "summary": "A Rust engine that takes OpenTelemetry data and keeps it in Apache Iceberg tables on S3, with Loki- and Tempo-compatible query APIs and Arrow Flight SQL.",
+  "intro": [
+    "IceGate keeps all of its state in an S3-compatible bucket and runs stateless processes next to it. The ingest service accepts OTLP over gRPC (port 4317) and HTTP (4318) and acknowledges a batch only after it has been written to a write-ahead log, which is itself a set of Parquet files in the bucket. Background workers then batch WAL files into larger Parquet files and commit them to four Iceberg tables, `logs`, `spans`, `events` and `metrics`, partitioned by tenant, account and day. Workers coordinate through S3 conditional writes (compare-and-swap on objects), and the default Iceberg catalog is a single `root.json` object in the bucket, so no Kafka, database or catalog service is required; Nessie (REST), AWS Glue and S3 Tables can be used instead.",
+    "The query service, built on Apache DataFusion and Arrow, reads the Iceberg tables together with the not-yet-committed WAL, so fresh data is visible at once. It serves a Loki-compatible API for LogQL (port 3100), a Tempo-compatible API with TraceQL search for traces (3200), and a read-only Arrow Flight SQL endpoint (8815) for SQL from Python, JDBC or ODBC clients. A Prometheus-compatible API is planned but every route currently returns 501, so metrics can be stored but not yet queried with PromQL. A maintain service compacts data and manifests, applies TTLs and removes orphan files, and an alert service evaluates rules. Because the tables are plain Iceberg, Trino, Spark or DuckDB can also read them. TripleCloud, which builds it, runs it under its own LLM observability product."
+  ],
+  "strengths": [
+    "Object storage is the only stateful component: the WAL, the catalog and the data all live in the bucket, so ingest and query nodes can be added or replaced freely",
+    "Existing Grafana dashboards and LogQL queries can point at it in place of Loki, and Tempo trace search works the same way",
+    "Data is standard Iceberg and Parquet, readable by any Iceberg engine without exporting it",
+    "Apache 2.0 with no paid edition"
+  ],
+  "limits": [
+    "A prototype: no 1.0 release, frequent release candidates, and APIs and storage layout may still change",
+    "No PromQL yet: the Prometheus API returns 501, so metric dashboards need LogQL or SQL instead",
+    "Every write and commit is an S3 request; in the authors’ own test, S3 API requests were most of the ingest cost",
+    "A small project from one company, with a few contributors and few outside users so far"
+  ],
+  "worksWith": [
+    { "id": "iceberg", "how": "stores logs, spans and metrics as tables in" },
+    { "id": "parquet", "how": "writes its WAL and data files as" },
+    { "id": "s3", "how": "keeps its WAL, catalog and data in" },
+    { "id": "datafusion", "how": "runs its queries on" },
+    { "id": "arrow", "how": "serves SQL results over Flight SQL as" },
+    { "id": "opentelemetry", "how": "ingests OTLP logs, traces and metrics from" },
+    { "id": "grafana", "how": "is queried as a Loki and Tempo source by" },
+    { "id": "nessie", "how": "can use as its Iceberg REST catalog" },
+    { "id": "s3-tables", "how": "can keep its Iceberg tables in" },
+    { "id": "trino", "how": "has its tables queried directly by" },
+    { "id": "rustfs", "how": "runs its local demo stack on" },
+    { "id": "kubernetes", "how": "runs, through its Helm chart, on" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "SQL over the merged WAL and Iceberg view through Arrow Flight SQL",
+    "source": [
+      "# pip install adbc-driver-flightsql adbc-driver-manager",
+      "import adbc_driver_flightsql.dbapi",
+      "",
+      "conn = adbc_driver_flightsql.dbapi.connect(",
+      "    \"grpc://localhost:8815\",",
+      "    # the tenant comes from the x-scope-orgid header, as with Loki and Tempo",
+      "    db_kwargs={\"adbc.flight.sql.rpc.call_header.x-scope-orgid\": \"demo\"},",
+      ")",
+      "with conn.cursor() as cur:",
+      "    cur.execute(\"SELECT count(*) FROM iceberg.icegate.logs\")",
+      "    print(cur.fetchall())"
+    ]
+  },
+  "history": {
+    "story": [
+      "IceGate comes from TripleCloud, a company founded by Sergei Prosvirnin and Evgenii Mineev that sells LLM and AI-agent observability. Its repository went up on GitHub in November 2025. In a June 2026 post Prosvirnin wrote that self-hosting observability means operating stateful infrastructure, and that even Loki keeps a write-ahead log on local disk, so the team asked whether the stateful part could be taken out of operations entirely, leaving one binary and S3 as the only persistent layer.",
+      "The answer was to put the write-ahead log in S3, acknowledge writes only once they are stored there, and use S3 conditional writes in place of Kafka or a coordination service. In their tests, a Kafka, Flink and OpenTelemetry pipeline cost about $700–800 a month at around 10 MB/s, against about $100 a month for IceGate’s ingest path on one small instance, storage excluded. Release candidates for 0.1.0 began in March 2026, 0.1.0 followed in April, and the 0.2.0 series was still in release candidates in October 2026."
+    ],
+    "choices": [
+      { "choice": "The WAL in S3, not on local disk", "why": "A local WAL makes every ingest node stateful and needs replication or careful recovery. Writing the WAL to the bucket and acknowledging only after that write lets any node fail without losing data." },
+      { "choice": "S3 conditional writes instead of Kafka or a database", "why": "Compare-and-swap on objects is enough to hand out work and to commit catalog updates, so the system needs no extra stateful service to run and pay for." },
+      { "choice": "Iceberg tables for telemetry", "why": "Iceberg gives atomic commits and snapshots on object storage, and its open format lets ordinary query engines read observability data without an export step." },
+      { "choice": "Loki and Tempo APIs on the read side", "why": "Teams already have Grafana dashboards, alerts and LogQL queries; speaking the same APIs lets them switch the data source without rewriting them." }
+    ],
+    "timeline": [
+      { "year": "2025", "text": "IceGate repository created on GitHub in November" },
+      { "year": "2026", "text": "v0.1.0 in April, after release candidates from March" },
+      { "year": "2026", "text": "v0.2.0 release candidates from August to October" }
+    ],
+    "sources": [
+      { "label": "Sergei Prosvirnin: Observability ingestion on S3 (TripleCloud blog, Jun 2026)", "url": "https://blog.triplecloud.tech/posts/observability-ingestion-on-s3" },
+      { "label": "TripleCloud homepage (founders, IceGate)", "url": "https://triplecloud.tech/" },
+      { "label": "GitHub: IceGate releases", "url": "https://github.com/icegatetech/icegate/releases" },
+      { "label": "GitHub: IceGate v0.1.0 tag", "url": "https://github.com/icegatetech/icegate/releases/tag/v0.1.0" }
+    ]
+  },
+  "sources": [
+    { "label": "IceGate README (architecture, ports, query API status, Flight SQL clients, prototype badge)", "url": "https://github.com/icegatetech/icegate" },
+    { "label": "IceGate website (signals, protocols, TripleCloud)", "url": "https://icegate.tech/" },
+    { "label": "IceGate docs: LLM summary (catalog backends, data model, retention, fault tolerance)", "url": "https://docs.icegate.tech/llms.txt" },
+    { "label": "IceGate docs", "url": "https://docs.icegate.tech/" },
+    { "label": "Sergei Prosvirnin: Observability ingestion on S3 (WAL in S3, conditional writes, costs)", "url": "https://blog.triplecloud.tech/posts/observability-ingestion-on-s3" },
+    { "label": "IceGate LICENSE (Apache 2.0)", "url": "https://github.com/icegatetech/icegate/blob/main/LICENSE" }
+  ],
+  "checked": "2026-10-23"
+}

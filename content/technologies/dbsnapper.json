@@ -1,0 +1,107 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "DBSnapper",
+  "concepts": ["database-tools"],
+  "provider": "vendor",
+  "vendor": "Scharfnado LLC",
+  "license": "Proprietary (free standalone agent and Starter plan; paid Pro and Enterprise plans)",
+  "website": "https://dbsnapper.com/",
+  "summary": "A command-line agent and cloud service that dumps a PostgreSQL or MySQL database, cuts it down to a related subset, masks sensitive columns with your SQL, and shares the result with developers as a snapshot they can load locally.",
+  "intro": [
+    "DBSnapper gives developers a copy of production data that is small and safe enough to work with. The agent, a single `dbsnapper` binary or Docker image, reads a YAML file of targets, each with a source database URL. `dbsnapper build` dumps the source with the database’s own tools (`pg_dump` for PostgreSQL, `mysqldump` for MySQL) into a compressed snapshot file; `dbsnapper load` drops and recreates a destination database and restores a snapshot into it. Only PostgreSQL and MySQL are supported.",
+    "Two steps sit between build and load. Subsetting copies only part of the data: you list tables to cut down with a `where` clause or a percentage of rows, tables to copy whole and tables to leave out, and the agent follows foreign keys so the rows those rows refer to come along. You can add relationships the schema doesn’t declare, or ignore ones it does. Sanitizing runs a SQL file of your own, such as `UPDATE users SET email = …`, against a restored copy and snapshots the result. That copy can be a database you name or an ephemeral one: a temporary Docker container on its own network that is removed when the job ends.",
+    "Without an account the agent runs in standalone mode with snapshots on local disk. DBSnapper Cloud, launched in January 2022, stores target definitions centrally with credentials encrypted, and writes snapshots to your own bucket on Amazon S3, Cloudflare R2, MinIO or DigitalOcean Spaces; teammates then find and download sanitized snapshots through presigned URLs, from the CLI, a VS Code extension or the API. Group-based sharing with Okta single sign-on, a Terraform provider and a GitHub Action round it out. The last release is a preview of version 3.0 from August 2025, which adds an MCP server so AI assistants can list, build, sanitize and load snapshots."
+  ],
+  "strengths": [
+    "Subsets keep referential integrity: rows that a kept row points to come along, so the copy loads and the app works",
+    "Sanitization is plain SQL you write and review, run on a copy, and can run in a throwaway container",
+    "Raw data stays in your environment and snapshots go to your own bucket; the cloud service handles sharing and access",
+    "Uses the databases’ standard dump tools, and a free standalone mode needs no account"
+  ],
+  "limits": [
+    "Only PostgreSQL and MySQL",
+    "Masking is only as good as your SQL: the docs describe no automatic detection of personal data, so a column the query misses ships unmasked",
+    "Closed source from a small company; team sharing, SSO, advanced subsetting and the Terraform provider need a paid plan",
+    "No release since the 3.0 preview of August 2025, which is still marked as a pre-release"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "snapshots and restores, with pg_dump," },
+    { "id": "mysql", "how": "snapshots and restores, with mysqldump," },
+    { "id": "s3", "how": "stores snapshots in" },
+    { "id": "r2", "how": "can store snapshots in" },
+    { "id": "minio", "how": "can store snapshots in" },
+    { "id": "docker", "how": "sanitizes in ephemeral containers on" },
+    { "id": "github-actions", "how": "installs its agent with an action in" },
+    { "id": "terraform", "how": "has a provider for" },
+    { "id": "vscode", "how": "shares snapshots through an extension for" }
+  ],
+  "snippet": {
+    "lang": "yaml",
+    "title": "A target with a subset and a sanitizing step (from the DBSnapper docs)",
+    "source": [
+      "targets:",
+      "  sakila:",
+      "    name: sakila",
+      "    snapshot:",
+      "      src_url: mysql://root:mysql@localhost:13306/sakila?tls=false",
+      "      dst_url: mysql://root:mysql@localhost:3306/sakila_snap?tls=false",
+      "    subset:",
+      "      src_url: mysql://root:mysql@localhost:13306/sakila?tls=false",
+      "      dst_url: mysql://root:mysql@localhost:3306/sakila_subset?tls=false",
+      "      subset_tables:",
+      "        - table: sakila.film",
+      "          where: \"film_id < 20\"",
+      "        - table: sakila.actor",
+      "          percent: 20",
+      "      copy_tables:",
+      "        - sakila.store",
+      "      excluded_tables:",
+      "        - sakila.staff",
+      "      added_relationships:",
+      "        - fk_table: sakila.address",
+      "          fk_columns: city_id",
+      "          ref_table: sakila.city",
+      "          ref_columns: id",
+      "    sanitize:",
+      "      dst_url: mysql://root:mysql@localhost:3306/sakila_sanitized?tls=false",
+      "      query_file: sakila-sanitize.sql"
+    ]
+  },
+  "history": {
+    "story": [
+      "DBSnapper is the work of Joe Scharf, whose company Scharfnado LLC sells it. His argument was that hand-built test fixtures are “painstaking, time-consuming, and error prone” and go brittle, and that developers should work against sanitized copies of real data instead. It began as a command-line tool, first on GitHub in early 2021, where every setup kept its own local configuration file and snapshots stayed on local disk.",
+      "In January 2022 DBSnapper Cloud added central target definitions with encrypted credentials and storage profiles that put snapshots in your own cloud bucket; the standalone agent stayed free. Version 2.0, in February 2024, added subsetting, “smaller, relationally complete” snapshots, and switched PostgreSQL extraction to the `COPY` protocol. Okta single sign-on followed in June 2024, and a 3.0 preview with an MCP server for AI assistants in August 2025."
+    ],
+    "choices": [
+      { "choice": "Use each database’s own dump and restore tools", "why": "`pg_dump` and `mysqldump` already capture schema, indexes and data correctly, so the agent orchestrates them instead of writing its own export format." },
+      { "choice": "Sanitize with your own SQL on a copy", "why": "Each schema stores sensitive data differently. Running a reviewed SQL file against a restored copy, then snapshotting that, lets teams mask exactly their columns without touching production." },
+      { "choice": "Keep the data in the customer’s environment and bucket", "why": "Handing production data to a third party was the main worry. The agent processes data where it runs, and the cloud service only coordinates targets, access and presigned links to your own storage." }
+    ],
+    "timeline": [
+      { "year": "2021", "text": "Joe Scharf publishes the first DBSnapper CLI on GitHub in January" },
+      { "year": "2022", "text": "DBSnapper Cloud launches in January; agent 1.0 is released in November" },
+      { "year": "2024", "text": "Version 2.0 adds subsetting in February; Okta SSO follows in June" },
+      { "year": "2025", "text": "2.9 adds PostgreSQL schema filtering in July; a 3.0 preview adds an MCP server in August" }
+    ],
+    "sources": [
+      { "label": "DBSnapper blog: The DBSnapper Cloud has arrived (Joe Scharf, January 2022)", "url": "https://dbsnapper.com/blog/dbsnapper-cloud-has-arrived" },
+      { "label": "DBSnapper blog: DBSnapper 2.0 with subsetting released (Joe Scharf, February 2024)", "url": "https://dbsnapper.com/blog/introducing-dbsnapper-v2" },
+      { "label": "DBSnapper blog: DBSnapper + Okta = SSO! (June 2024)", "url": "https://dbsnapper.com/blog/dbsnapper-okta-sso" },
+      { "label": "GitHub: joescharf/snapper (the original DBSnapper CLI, 2021)", "url": "https://github.com/joescharf/snapper" },
+      { "label": "GitHub: dbsnapper/dbsnapper releases (1.0.0 to 3.0.0-pr1)", "url": "https://github.com/dbsnapper/dbsnapper/releases" }
+    ]
+  },
+  "sources": [
+    { "label": "DBSnapper website (features, plans, Scharfnado LLC)", "url": "https://dbsnapper.com/" },
+    { "label": "DBSnapper docs: Welcome (PostgreSQL and MySQL, storage, integrations)", "url": "https://docs.dbsnapper.com/latest/" },
+    { "label": "DBSnapper docs: How it works (pg_dump, mysqldump, data stays in your environment)", "url": "https://docs.dbsnapper.com/latest/how-it-works/" },
+    { "label": "DBSnapper docs: Snapshot configuration (targets, subset, sanitize)", "url": "https://docs.dbsnapper.com/latest/snapshot/configuration/" },
+    { "label": "DBSnapper docs: Sanitization introduction", "url": "https://docs.dbsnapper.com/latest/sanitize/introduction/" },
+    { "label": "DBSnapper docs: Ephemeral databases", "url": "https://docs.dbsnapper.com/latest/database-engines/ephemeral-databases/" },
+    { "label": "DBSnapper docs: Installation (Docker, Homebrew, packages, standalone mode)", "url": "https://docs.dbsnapper.com/latest/installation/" },
+    { "label": "DBSnapper docs: Release notes (2.0 to 2.7)", "url": "https://docs.dbsnapper.com/latest/release-notes/" },
+    { "label": "GitHub: dbsnapper/dbsnapper releases (3.0.0-pr1, August 2025)", "url": "https://github.com/dbsnapper/dbsnapper/releases" },
+    { "label": "DBSnapper blog: The DBSnapper Cloud has arrived (January 2022)", "url": "https://dbsnapper.com/blog/dbsnapper-cloud-has-arrived" }
+  ],
+  "checked": "2026-10-23"
+}

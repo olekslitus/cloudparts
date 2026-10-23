@@ -1,0 +1,105 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Open Data Fabric",
+  "concepts": ["table-formats"],
+  "uses": ["stream-processing"],
+  "provider": "oss",
+  "vendor": "Kamu Data, Inc.",
+  "license": "Apache 2.0 (the specification and schemas)",
+  "website": "https://www.opendatafabric.org/",
+  "repo": "https://github.com/open-data-fabric/open-data-fabric",
+  "status": { "stage": "experimental", "note": "The spec is at version 0.42 and still changes through RFCs; Kamu, its reference implementation, lists the dataset layout as unstable." },
+  "summary": "An open spec for datasets that keep their full history: Parquet files plus a hash-linked chain of metadata blocks, derived data made by deterministic streaming queries, and protocols for sharing it all.",
+  "intro": [
+    "Open Data Fabric (ODF) defines a dataset as a stream of events that only grows. The data is stored as Parquet files and read into Apache Arrow. Next to it sits the metadata chain: a list of blocks, each holding the SHA3-256 hash of the previous one, that records the dataset’s identity, its sources, schema, each slice of data added (with offsets and file hashes), engine checkpoints and every transform that ran. Blocks, data files and checkpoints are all named by the hash of their content, so the hash of the last block acts as a Merkle root: anyone holding it can check a copy of the whole dataset fetched from anywhere. Mistakes are fixed by appending retractions and corrections, not by rewriting files.",
+    "Root datasets take in outside data; derivative datasets are defined only as queries over other datasets. Those queries run in engines, such as Flink, Spark or DataFusion behind a gRPC contract, inside sandboxed OCI containers with no network access, so the same inputs and engine image always give the same output and anyone can replay a pipeline to verify it. The storage layout needs nothing but reading objects by key, so a dataset can live on a local disk, in S3 or on IPFS, and simple and smart transfer protocols copy only new blocks and files. Datasets are identified by `did:odf` DIDs. Kamu is the reference implementation; the spec is maintained in the open with RFCs and a consortium of companies and universities."
+  ],
+  "strengths": [
+    "Provenance is built into the format: every block names its inputs, query, engine image and output hashes, so any derived number can be traced back to its sources",
+    "Verifiable without trusting the host: a dataset copied from anywhere can be checked against one trusted block hash, and derived datasets can be checked by replaying their transforms",
+    "Keeps full history by default, with explicit retractions and corrections, so past states stay queryable and fixes flow through downstream pipelines",
+    "Built from open pieces: Parquet, Arrow, FlatBuffers, multihash and W3C DIDs, with a storage layout that works on plain object storage or content-addressed networks"
+  ],
+  "limits": [
+    "Kamu is the only implementation the project points to, so the open format doesn’t yet give you a choice of engines and tools the way Iceberg or Delta Lake do",
+    "Pre-1.0 and evolving through RFCs; parts of the spec, such as determinism enforcement, engine versioning, dataset ownership and signing, are not implemented yet",
+    "Deterministic transforms rule out calling APIs or using libraries outside the engine, and keeping all history costs storage unless you compact or prune",
+    "Data in permanent networks such as IPFS or Arweave can’t be reliably deleted, which the spec warns matters for erasure and unencrypted data"
+  ],
+  "worksWith": [
+    { "id": "parquet", "how": "stores each slice of data as" },
+    { "id": "arrow", "how": "reads data into, and hashes it as," },
+    { "id": "grpc", "how": "talks to its engines over" },
+    { "id": "s3", "how": "lays datasets out as plain objects in" }
+  ],
+  "snippet": {
+    "lang": "text",
+    "title": "How a dataset is laid out in a file system or object store",
+    "source": [
+      "{dataset-root}/",
+      "├── blocks/",
+      "│   └── {block-hash}             # metadata blocks, each linking to the previous one",
+      "├── refs/",
+      "│   └── head                     # hash of the latest block: the Merkle root",
+      "├── data/",
+      "│   ├── {data-file-physical-hash}  # Parquet files",
+      "│   └── {linked-object-hash}       # large files linked from data columns",
+      "└── checkpoints/",
+      "    └── {checkpoint-physical-hash} # saved engine state"
+    ]
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "What the spec covers",
+      "intro": "The specification is split into groups that build on each other.",
+      "items": [
+        { "name": "Datasets", "text": "Logical structure, identity, the event data model, schemas, the metadata chain, data and checkpoint hashing, storage layout and ingestion." },
+        { "name": "Transformations", "text": "The streaming processing model and the engine contract: how a coordinator runs a sandboxed engine and records the result." },
+        { "name": "Exchange", "text": "Simple and smart transfer protocols for copying datasets, and verifiable batch queries that come with a commitment to their result." },
+        { "name": "Automation", "text": "An infrastructure-as-code resource framework and a task and flow system (RFC-018 and RFC-019, 2026)." },
+        { "name": "Auth and privacy", "text": "An authorization model for who may read and change datasets (RFC-020, 2026)." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Data shared between organisations usually travels as snapshots: an export from a database, a CSV on a portal, a copy in someone’s warehouse. Each copy loses the history between snapshots and any link to where it came from, and when someone cleans or corrects it the work stays in their copy. Sergii Mikhtoniuk and Özge Nilay Yalçın, who founded Kamu, set out to design data exchange where every dataset carries its full history and lineage and anyone can check it without trusting a central party.",
+      "After about a year of prototyping, they wrote the Open Data Fabric specification and a whitepaper in 2020, published the spec in the open, and built the `kamu` CLI as its reference implementation. The whitepaper was rejected by several data conferences and went to arXiv in November 2021. In 2021 a consortium with Dell, Intel and the University of Groningen formed around it.",
+      "The spec has grown through numbered RFCs: record offsets, logical data hashes, content addressability for storage networks like IPFS, push sources, a unified changelog schema, and in 2026 an infrastructure-as-code resource framework, a task and flow system and an authorization model. The current version is 0.42.1."
+    ],
+    "choices": [
+      { "choice": "Event streams instead of tables", "why": "Snapshots of tables lose what happened between them. Treating data as an append-only stream of events keeps full history and lets one query run forever over new data." },
+      { "choice": "A hash-linked metadata chain", "why": "Linking every block to the previous one by hash makes the metadata tamper-evident and lets a whole dataset be checked from one trusted hash, much like Git history or a blockchain." },
+      { "choice": "Engines as sandboxed containers", "why": "Writing a new engine was not the goal. Running existing engines in OCI containers with no network access, and recording the image digest, keeps transforms deterministic and replayable." },
+      { "choice": "Parquet and Arrow for the data", "why": "Parquet is a widely supported, compact columnar format that decodes quickly into Arrow, the in-memory format engines can share without conversion." }
+    ],
+    "timeline": [
+      { "year": "2020", "text": "Spec and whitepaper written; spec repository published in April" },
+      { "year": "2021", "text": "Whitepaper on arXiv in November; consortium with Dell, Intel and the University of Groningen" },
+      { "year": "2022", "text": "Kamu adds IPFS storage and joins Protocol Labs’ Compute Over Data group" },
+      { "year": "2026", "text": "RFC-018 to RFC-020: IaC resources, tasks and flows, authorization" },
+      { "year": "2026", "text": "Spec version 0.42.1" }
+    ],
+    "sources": [
+      { "label": "arXiv: Open Data Fabric, a decentralized data exchange and transformation protocol with complete reproducibility and provenance (2111.06364)", "url": "https://arxiv.org/abs/2111.06364" },
+      { "label": "Kamu blog: The original Open Data Fabric whitepaper (November 2021)", "url": "https://www.kamu.dev/blog/odf-whitepaper/" },
+      { "label": "Kamu: About us (timeline, consortium, IPFS, Compute Over Data)", "url": "https://kamu.dev/about" },
+      { "label": "ODF RFC index", "url": "https://docs.kamu.dev/odf/rfcs/index" },
+      { "label": "GitHub: open-data-fabric repository (tags up to v0.42.1)", "url": "https://github.com/open-data-fabric/open-data-fabric" }
+    ]
+  },
+  "sources": [
+    { "label": "Open Data Fabric homepage (key ideas, consortium, RFCs)", "url": "https://www.opendatafabric.org/" },
+    { "label": "ODF docs: About (data format, metadata, identity, transfer protocols, processing model)", "url": "https://docs.kamu.dev/odf/about" },
+    { "label": "ODF spec: Overview (requirements, determinism, verification, components)", "url": "https://docs.kamu.dev/odf/spec/overview" },
+    { "label": "ODF spec: Data model (Arrow in memory, Parquet on disk)", "url": "https://docs.kamu.dev/odf/spec/datasets/data-model" },
+    { "label": "ODF spec: Metadata chain (blocks, prevBlockHash, FlatBuffers, SHA3-256, multihash)", "url": "https://docs.kamu.dev/odf/spec/datasets/metadata-chain" },
+    { "label": "ODF spec: Storage layout (blocks, refs, data, checkpoints; content-addressable stores)", "url": "https://docs.kamu.dev/odf/spec/datasets/storage-layout" },
+    { "label": "ODF spec: Engine contract (OCI containers, gRPC on port 5544)", "url": "https://docs.kamu.dev/odf/spec/transformations/engine-contract" },
+    { "label": "Kamu docs: Transforming data (root and derivative datasets, no external calls)", "url": "https://docs.kamu.dev/cli/transform/index" },
+    { "label": "Kamu docs: Project status (ODF features not yet implemented)", "url": "https://docs.kamu.dev/general/project-status" },
+    { "label": "open-data-fabric LICENSE (Apache 2.0)", "url": "https://github.com/open-data-fabric/open-data-fabric/blob/master/LICENSE.txt" }
+  ],
+  "checked": "2026-10-23"
+}

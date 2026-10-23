@@ -1,0 +1,108 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "TAG (Tigris Acceleration Gateway)",
+  "concepts": ["object"],
+  "uses": ["cache"],
+  "parent": { "id": "tigris", "as": "extension" },
+  "provider": "oss",
+  "vendor": "Tigris Data",
+  "license": "Apache 2.0",
+  "website": "https://www.tigrisdata.com/docs/acceleration-gateway/",
+  "repo": "https://github.com/tigrisdata/tag",
+  "summary": "An S3-compatible caching proxy you run next to your compute, keeping hot Tigris objects on local NVMe.",
+  "intro": [
+    "TAG is a Go server that sits between S3 clients and Tigris. Clients change only their endpoint (path-style addressing, port 8080 by default). On a GET, TAG looks in its local cache and answers from there, or fetches from Tigris, stores the object and passes it on; an `X-Cache` header says `HIT` or `MISS`. The cache is OCache, Tigris’s RocksDB-based cache library, embedded in the process and kept on local NVMe. Objects of 1 MiB or more are cached in 1 MiB blocks by default, so a range read, such as a Parquet footer, fetches only the blocks it covers. Concurrent requests for the same uncached object share one upstream fetch. PUT, DELETE and copy requests go through to Tigris and invalidate the cached entries; stale entries are revalidated with conditional requests; and under a disk cap entries are evicted LRU or oldest-first. Several TAG nodes form one cache: they find each other by gossip, split keys by consistent hashing and forward requests to the owning node over gRPC.",
+    "In the default transparent mode, clients sign requests with their own Tigris keys and TAG forwards them unchanged. After a client’s first request, TAG learns derived signing keys from Tigris (stored encrypted) and checks later signatures itself, and it serves a bucket from cache to a key only after Tigris has allowed that key a GetObject or HeadObject there. TAG’s own credentials only need read access. A signing mode instead checks requests against TAG’s own credential store and re-signs them, which works with any S3-compatible backend. TAG ships as an install script, a Docker image and Kubernetes manifests (a StatefulSet with autoscaling), and exposes Prometheus metrics at `/metrics`."
+  ],
+  "strengths": [
+    "No code changes: any S3 SDK or tool points its endpoint at TAG and keeps its own credentials",
+    "One node served about 75,000 requests a second for 1 KiB objects and 10.7 GiB/s of 1 MiB objects in Tigris’s benchmark, using about 12% of the CPU",
+    "Block-aligned caching and request coalescing suit ML training, model loading and Parquet scans that reread the same files",
+    "Apache 2.0, with gossip-based clustering, Kubernetes manifests and over 30 Prometheus metrics"
+  ],
+  "limits": [
+    "Path-style addressing only; no object versioning, server-side encryption, Object Lock or browser POST uploads",
+    "The first read of each object still makes a round trip to Tigris, and objects above the size threshold or marked `no-store` or `private` aren’t cached",
+    "It is another stateful service to run, with NVMe disks, compaction to watch and its own failure modes",
+    "Transparent mode with local key checks is built for Tigris; other S3 services need signing mode and a credential store in TAG"
+  ],
+  "worksWith": [
+    { "id": "s3", "how": "speaks the API of" },
+    { "id": "ocache", "how": "embeds its cache from" },
+    { "id": "kubernetes", "how": "runs as a StatefulSet on" },
+    { "id": "prometheus", "how": "exposes cache metrics to" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Run TAG on a GPU box and point the AWS CLI at it",
+    "source": [
+      "curl -fsSL https://tag-releases.t3.storage.dev/latest/install.sh | bash",
+      "",
+      "# TAG's own key: read-only access to the cached buckets",
+      "AWS_ACCESS_KEY_ID=tid_tag AWS_SECRET_ACCESS_KEY=\"$TAG_SECRET\" \\",
+      "  tag --config /etc/tag/config.yaml &       # listens on :8080",
+      "",
+      "# clients keep their own Tigris keys; only the endpoint changes",
+      "aws configure set default.s3.addressing_style path",
+      "aws s3 cp s3://acme-datasets/shards/0001.tar . --endpoint-url http://localhost:8080   # MISS",
+      "aws s3 cp s3://acme-datasets/shards/0001.tar . --endpoint-url http://localhost:8080   # HIT, from NVMe"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "One node, cache warm",
+      "intro": "Tigris’s benchmark: warp with 64 threads against a single `i3en.24xlarge` with NVMe disks over a 100 Gbps link.",
+      "corner": "Object size",
+      "columns": ["GETs per second", "Throughput", "Time to first byte (p50)"],
+      "rows": [
+        { "label": "1 KiB", "values": ["about 75,700", "74 MiB/s", "under 1 ms"] },
+        { "label": "100 KiB", "values": ["about 33,300", "3.2 GiB/s", "about 1 ms"] },
+        { "label": "1 MiB", "values": ["about 11,000", "10.7 GiB/s", "about 1 ms"] },
+        { "label": "4 MiB", "values": ["about 2,800", "10.8 GiB/s", "about 1 ms"] }
+      ],
+      "notes": [
+        "For objects of 1 MiB and larger one node reached about 85 Gbps, close to the network card’s limit. Tigris says TAG is usually limited by NVMe for large objects and by CPU for small ones."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Tigris already moves objects into the region that reads them, but every read still crosses the network from wherever the compute runs. Training jobs reread the same dataset every epoch, and inference servers reload the same weights on every cold start. TAG puts a cache on machines next to that compute, so repeated reads come from local NVMe.",
+      "Its cache layer, OCache, has its own repository, started in July 2025: a cache service with RocksDB for small objects and plain files for large ones. TAG, built on it, appeared on GitHub in January 2026 and reached 1.0.0 on 20 January. By October 2026 it was at 1.22.3, with block-aligned caching on by default, an optional tiered mode that keeps small writes locally, and warming of Parquet footers. Goldsky’s Prism data lake uses it to serve historical blockchain reads in-region, with an average of about 9 ms per GetObject; Tigris’s CEO Ovais Tariq, reviewing that write-up, said a cache in front of object storage should be “boring shared infrastructure”."
+    ],
+    "choices": [
+      {
+        "choice": "A proxy that speaks S3",
+        "why": "Training loaders, inference servers and query engines already talk S3, so a cache at the same protocol level works with all of them by changing one endpoint."
+      },
+      {
+        "choice": "Forward the client’s own signature",
+        "why": "TAG never needs the clients’ secret keys, and Tigris stays the authority on who may read what; local checks with learned signing keys keep cache hits from waiting on Tigris."
+      },
+      {
+        "choice": "Cache large objects in fixed blocks",
+        "why": "Columnar files and model shards are often read in ranges. Caching 1 MiB blocks means a footer read doesn’t pull the whole multi-gigabyte file."
+      }
+    ],
+    "timeline": [
+      { "year": "2025", "text": "Repository for OCache, the cache TAG builds on, started in July" },
+      { "year": "2026", "text": "TAG 1.0.0 in January; 1.22 by October, with block-aligned caching on by default" }
+    ],
+    "sources": [
+      { "label": "GitHub: tigrisdata/tag releases (v1.0.0 to v1.22.3)", "url": "https://github.com/tigrisdata/tag/releases" },
+      { "label": "GitHub: tigrisdata/ocache", "url": "https://github.com/tigrisdata/ocache" },
+      { "label": "Tigris docs: TAG, Tigris Acceleration Gateway (use cases)", "url": "https://www.tigrisdata.com/docs/acceleration-gateway/" },
+      { "label": "Goldsky blog: Prism, a geo-replicated data lake serving billions of <10 ms point lookups (October 2026)", "url": "https://goldsky.com/blog/prism-geo-replicated-data-lake-tigris-vortex-slatedb" }
+    ]
+  },
+  "sources": [
+    { "label": "Tigris docs: TAG, Tigris Acceleration Gateway (caching, clustering, auth modes, limits, benchmarks)", "url": "https://www.tigrisdata.com/docs/acceleration-gateway/" },
+    { "label": "Tigris docs: TAG deployment guide (sizing, topologies, ports, monitoring)", "url": "https://www.tigrisdata.com/docs/acceleration-gateway/deployment-guide" },
+    { "label": "GitHub: tigrisdata/tag (README: block caching, coalescing, transparent proxy mode, install)", "url": "https://github.com/tigrisdata/tag" },
+    { "label": "GitHub: tigrisdata/tag, docs/architecture.md (embedded OCache, two-key storage)", "url": "https://github.com/tigrisdata/tag/blob/main/docs/architecture.md" },
+    { "label": "GitHub: tigrisdata/tag, docs/usage.md (S3 clients, path-style)", "url": "https://github.com/tigrisdata/tag/blob/main/docs/usage.md" },
+    { "label": "Goldsky blog: Prism, a geo-replicated data lake serving billions of <10 ms point lookups", "url": "https://goldsky.com/blog/prism-geo-replicated-data-lake-tigris-vortex-slatedb" }
+  ],
+  "checked": "2026-10-23"
+}

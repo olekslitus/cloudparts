@@ -1,0 +1,105 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Malloy",
+  "concepts": ["compile-to-sql"],
+  "uses": ["semantic-layer"],
+  "provider": "oss",
+  "vendor": "Malloy project (LF Projects, started at Google by Lloyd Tabb’s team)",
+  "license": "MIT",
+  "website": "https://www.malloydata.dev/",
+  "repo": "https://github.com/malloydata/malloy",
+  "summary": "A modelling and query language from Looker co-founder Lloyd Tabb that compiles to SQL: define joins and measures once in a source, then write short queries, including nested ones, that run on DuckDB, BigQuery, Snowflake, PostgreSQL and other engines.",
+  "intro": [
+    "Malloy has two layers. A `source` is a semantic model on top of a table or query: it names joins, dimensions and measures, such as an on-time rate that excludes cancelled and diverted flights. A query starts from a source and lists what to `group_by`, `aggregate`, filter with `where` and sort; results are sorted by the first aggregate unless you say otherwise. Queries can be saved in the source as `view`s and refined later, and each query can serve as the source for the next, so analyses are built from small reusable pieces. The Malloy compiler turns all of it into SQL for the connected database and runs it there.",
+    "Two things set it apart from hand-written SQL. Measures stay correct across joins: Malloy tracks which table an aggregate belongs to, so a `sum` over a joined table doesn’t double-count rows that the join fanned out. And `nest:` puts a whole sub-query inside each result row, so “carriers, with their top airports inside each carrier” comes back as one result with an array per row; on DuckDB the compiler builds this in a single SQL statement using grouping sets and `LIST`. The README lists BigQuery, Snowflake, DuckDB, MotherDuck, PostgreSQL, MySQL, Trino, Presto and Databricks. Tooling includes a VS Code extension for writing models and charting results, npm packages, the `malloy-cli` command line (`run`, `compile`, `build`, plus an MCP server), and Publisher, a server that exposes models through REST and MCP APIs."
+  ],
+  "strengths": [
+    "Business logic lives in one model, and every query reuses the same measures and joins instead of copying SQL",
+    "Aggregates stay correct across one-to-many joins without hand-written subqueries or `DISTINCT` tricks",
+    "Nested results in one query, useful for dashboards and for nested data such as arrays of records",
+    "Runs on the database you already have; `malloy-cli compile` shows the SQL it will send"
+  ],
+  "limits": [
+    "Another language to learn, with a much smaller community than SQL or dbt; BI tools and SQL clients don’t speak it, so you go through the VS Code extension, the CLI, Publisher or the npm libraries",
+    "Mostly for reading and analysing data, not for writes or DDL; `malloy-cli build` can create tables from queries",
+    "The npm packages are still versioned 0.0.x (0.0.435 in October 2026); the language itself has promised code compatibility since 4.0 in 2023",
+    "Generated SQL for nested queries is long and engine-specific, which makes it harder to read and tune than hand-written SQL"
+  ],
+  "worksWith": [
+    { "id": "duckdb", "how": "compiles queries to SQL for" },
+    { "id": "bigquery", "how": "compiles queries to SQL for" },
+    { "id": "snowflake", "how": "compiles queries to SQL for" },
+    { "id": "postgresql", "how": "compiles queries to SQL for" },
+    { "id": "trino", "how": "compiles queries to SQL for" },
+    { "id": "databricks", "how": "compiles queries to SQL for" },
+    { "id": "motherduck", "how": "compiles queries to SQL for" },
+    { "id": "vscode", "how": "has an extension for models and charts in" }
+  ],
+  "snippet": {
+    "lang": "text",
+    "title": "A source with a reusable measure, and a query that nests airports inside carriers",
+    "source": [
+      "source: flights is duckdb.table('flights.parquet') extend {",
+      "  measure:",
+      "    flight_count is count()",
+      "    on_time_rate is",
+      "      count() { where: cancelled = 'N' and diverted = 'N' and arr_delay < 15 }",
+      "      / count() { where: cancelled = 'N' and diverted = 'N' }",
+      "}",
+      "",
+      "run: flights -> {",
+      "  group_by: carrier",
+      "  aggregate: flight_count, on_time_rate",
+      "  nest: by_origin is {",
+      "    group_by: origin",
+      "    aggregate: on_time_rate",
+      "  }",
+      "}",
+      "",
+      "// npx malloy-cli run flights.malloy",
+      "// [{ \"carrier\": \"UA\", \"flight_count\": 4, \"on_time_rate\": 0.667,",
+      "//    \"by_origin\": [{ \"origin\": \"ORD\", \"on_time_rate\": 1 },",
+      "//                  { \"origin\": \"SFO\", \"on_time_rate\": 0 }] }, ...]",
+      "// npx malloy-cli compile flights.malloy prints the single DuckDB query it runs"
+    ]
+  },
+  "history": {
+    "story": [
+      "Lloyd Tabb co-founded Looker and was the lead inventor of LookML, the modelling language from which Looker generates SQL. After Looker became part of Google he kept working on the same problem there: SQL is complete, but verbose and without reusable parts, and real data is often nested rather than rectangular. With a small Google team he started Malloy, whose repository dates from August 2021; early versions compiled to SQL for BigQuery and PostgreSQL and were described as an experimental language.",
+      "The team added DuckDB, data notebooks and a command line, and wrote about the language’s design on its blog. Malloy 4.0, in October 2023, cleaned up the syntax (`extend`, `view:`, `run:`, `select:`) and dropped the word “experimental”, with a promise to keep existing code working. The project now lives under LF Projects, the Linux Foundation’s entity for hosting open-source projects, with committers listed in its contributing guide, and its newer work includes Publisher, MCP access for AI agents and tooling for writing models with LLMs."
+    ],
+    "choices": [
+      { "choice": "Compile to SQL, don’t build an engine", "why": "Data already lives in BigQuery, Postgres, Snowflake and DuckDB. Generating SQL lets Malloy run where the data is and lean on each engine’s optimizer." },
+      { "choice": "A semantic model in the language itself", "why": "LookML’s lesson: measures and joins should be defined once. Malloy makes the model and the queries one language, so a query can extend the model and leave reusable pieces behind." },
+      { "choice": "Nested results as a first-class feature", "why": "Tabb argued that data isn’t rectangular. `nest:` returns hierarchies in one query, which also matches how dashboards drill down." },
+      { "choice": "Break the syntax once, then freeze it", "why": "Malloy 4.0 made all the incompatible changes in one release, with warnings in the VS Code extension first, so later versions could promise compatibility." }
+    ],
+    "timeline": [
+      { "year": "2021", "text": "The Malloy repository starts (August)" },
+      { "year": "2022", "text": "First npm release of `@malloydata/malloy` (September)" },
+      { "year": "2023", "text": "Malloy 4.0 ends the “experimental” label (October)" },
+      { "year": "2026", "text": "Release 0.0.435 (October); the CLI now includes an MCP server" }
+    ],
+    "sources": [
+      { "label": "Santa Cruz Works (from Datanami): Looker founder helps create new data exploration language, Malloy (May 2022)", "url": "https://www.santacruzworks.org/news/looker-founder-helps-create-new-data-exploration-language-malloy" },
+      { "label": "Santa Cruz Works: Malloy, an experimental language for data, with Lloyd Tabb (lead inventor of LookML and Malloy)", "url": "https://www.santacruzworks.org/news/malloy-an-experimental-language-for-data-with-lloyd-tabb" },
+      { "label": "Malloy blog: Announcing Malloy 4.0 (Oct 2023)", "url": "https://docs.malloydata.dev/blog/2023-10-03-malloy-four/" },
+      { "label": "Malloy blog index (posts by Lloyd Tabb, Michael Toy, Carlin Eng and others)", "url": "https://docs.malloydata.dev/blog/index" },
+      { "label": "Malloy CONTRIBUTING.md (MIT licence, committers)", "url": "https://github.com/malloydata/malloy/blob/main/CONTRIBUTING.md" },
+      { "label": "npm: @malloydata/malloy (first published September 2022)", "url": "https://www.npmjs.com/package/@malloydata/malloy" },
+      { "label": "GitHub: malloydata/malloy releases", "url": "https://github.com/malloydata/malloy/releases" }
+    ]
+  },
+  "sources": [
+    { "label": "GitHub: malloydata/malloy README (semantic models, nested data, supported databases, CLI, Publisher)", "url": "https://github.com/malloydata/malloy" },
+    { "label": "Malloy website (features; Malloy a Series of LF Projects, LLC)", "url": "https://www.malloydata.dev/" },
+    { "label": "Malloy docs: Overview (compiles to SQL)", "url": "https://docs.malloydata.dev/documentation/" },
+    { "label": "Malloy docs: Aggregates (aggregate locality across joins)", "url": "https://docs.malloydata.dev/documentation/language/aggregates" },
+    { "label": "Malloy docs: Nested views", "url": "https://docs.malloydata.dev/documentation/language/nesting" },
+    { "label": "Malloy blog: Announcing Malloy 4.0 (compatibility promise)", "url": "https://docs.malloydata.dev/blog/2023-10-03-malloy-four/" },
+    { "label": "Malloy CONTRIBUTING.md (MIT licence, DCO, committers)", "url": "https://github.com/malloydata/malloy/blob/main/CONTRIBUTING.md" },
+    { "label": "npm: @malloydata/cli (run, compile, build, fmt, mcp)", "url": "https://www.npmjs.com/package/@malloydata/cli" },
+    { "label": "GitHub: malloydata/malloy releases (v0.0.435, Oct 2026)", "url": "https://github.com/malloydata/malloy/releases" }
+  ],
+  "checked": "2026-10-23"
+}

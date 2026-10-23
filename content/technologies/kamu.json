@@ -1,0 +1,128 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Kamu",
+  "concepts": ["stream-processing"],
+  "uses": ["etl", "lakehouse"],
+  "provider": "vendor",
+  "vendor": "Kamu Data, Inc.",
+  "license": "Business Source License 1.1 (source-available, not OSI open source): you may not offer it to third parties as a hosted data service or rebrand it; each version becomes Apache 2.0 about four years after release (0.271.0 on 21 October 2030)",
+  "website": "https://kamu.dev/",
+  "repo": "https://github.com/kamu-data/kamu-cli",
+  "status": { "stage": "experimental", "note": "Still before 1.0: its docs call it MVP-stage and list the on-disk layout, CLI and engine interface as unstable between releases." },
+  "summary": "A command-line tool and server that keep datasets as tamper-evident event ledgers and build derived datasets from them with streaming SQL, run by plug-in engines such as Flink and DataFusion.",
+  "intro": [
+    "Kamu is the reference implementation of Open Data Fabric (ODF), an open format and protocol for datasets that keep their whole history. You work in a workspace, a directory with a `.kamu` folder much like `.git`, and describe each dataset in a YAML manifest. A root dataset declares where its data comes from, for example a URL to poll, a file to read and a merge strategy, and `kamu pull` fetches only records it hasn’t seen, appends them as Parquet files and commits a new block to the dataset’s metadata chain, a hash-linked log of everything that happened to it. Data is never overwritten: a source that changes a past value produces explicit retractions and corrections.",
+    "A derivative dataset is a SQL query over other datasets, declared with a `SetTransform` event. Kamu doesn’t run the query itself: it starts an engine (Flink, Spark, DataFusion or, experimentally, RisingWave) in a Docker or Podman container, feeds it only the new input records, saves the engine’s state as a checkpoint and records the image digest, input ranges and output hashes in a new block. Because transforms must be deterministic, anyone with the data can rerun them with `kamu verify` and check the hashes. DataFusion is also embedded in the `kamu` binary, written in Rust, for ingestion, `kamu sql` and notebooks. Datasets are shared with `kamu push` and `kamu pull` through S3, GCS, Azure or IPFS. Kamu Node, a set of Kubernetes services, runs pipelines continuously and serves data over REST, GraphQL, Flight SQL and other protocols."
+  ],
+  "strengths": [
+    "Every dataset carries its own provenance: a hash-linked chain records the source, each transform, the engine image and the hashes of every data file, so a copy can be checked against its last block hash",
+    "Pipelines are incremental by design: engines see each input record once and resume from checkpoints, and corrections to a source flow through to every derived dataset",
+    "Uses existing engines instead of its own: Flink for windowed aggregations and joins, Spark for GIS data, DataFusion for fast map and filter steps, chosen per step",
+    "Runs on a laptop with one binary, and the same datasets can be pushed to object storage or IPFS, or run on a Kubernetes-based Kamu Node"
+  ],
+  "limits": [
+    "Source-available under the Business Source License, not open source: you can’t sell it as a hosted data service until each version turns Apache 2.0 about four years after release",
+    "Pre-1.0 and still changing: the docs warn that releases may break workspaces and advise keeping source data elsewhere so a workspace can be rebuilt",
+    "Engines run as containers and Spark and Flink take a long time to start, which the docs admit is at odds with Kamu’s start-stop way of running transforms",
+    "Strict determinism rules: transforms can’t call APIs or download files, and engine support is uneven (DataFusion is batch-only, Flink lacks nested and GIS types, RisingWave is experimental)"
+  ],
+  "worksWith": [
+    { "id": "open-data-fabric", "how": "is the reference implementation of" },
+    { "id": "flink", "how": "runs streaming SQL transforms on" },
+    { "id": "datafusion", "how": "embeds, for ingest and ad-hoc SQL," },
+    { "id": "spark", "how": "can run transforms and GIS queries on" },
+    { "id": "risingwave", "how": "can run transforms, experimentally, on" },
+    { "id": "docker", "how": "starts engine containers with" },
+    { "id": "podman", "how": "can start engine containers with" },
+    { "id": "s3", "how": "pushes and pulls datasets to and from" },
+    { "id": "kubernetes", "how": "runs Kamu Node services on" }
+  ],
+  "snippet": {
+    "lang": "yaml",
+    "title": "A derivative dataset: a running total computed by Flink from another dataset",
+    "source": [
+      "kind: DatasetSnapshot",
+      "version: 1",
+      "content:",
+      "  name: my.trading.holdings",
+      "  kind: Derivative",
+      "  metadata:",
+      "    - kind: SetTransform",
+      "      inputs:",
+      "        - datasetRef: my.trading.transactions",
+      "      transform:",
+      "        kind: Sql",
+      "        engine: flink",
+      "        query: |",
+      "          SELECT",
+      "            event_time,",
+      "            symbol,",
+      "            quantity,",
+      "            sum(quantity) over(partition by symbol order by event_time",
+      "              rows unbounded preceding) as cum_quantity",
+      "          FROM `my.trading.transactions`",
+      "",
+      "# kamu add holdings.yaml && kamu pull my.trading.holdings",
+      "# kamu verify --recursive my.trading.holdings   # replay and compare hashes"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Engines Kamu can run",
+      "intro": "Each derivative dataset names the engine for its query. ODF always works in event time, so temporal operations must be supported in the engine’s event-time mode.",
+      "corner": "",
+      "columns": ["Spark", "Flink", "DataFusion", "RisingWave"],
+      "rows": [
+        { "label": "Filter and map", "values": ["Yes", "Yes", "Yes, recommended", "Yes, recommended"] },
+        { "label": "Windowed aggregations", "values": ["No", "Yes", "No", "Yes"] },
+        { "label": "Windowed and temporal-table joins", "values": ["No", "Yes", "No", "Needs more testing"] },
+        { "label": "GIS functions", "values": ["Yes, through Apache Sedona", "No", "No", "No"] },
+        { "label": "Kamu’s note", "values": ["Also used for notebooks through Livy", "Recommended for most derivative datasets", "Batch-only; also embedded for ingest and `kamu sql`", "Experimental"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Kamu began in 2019 as experiments that mixed stream processing, event sourcing and ideas from blockchains. The problem its founders, Sergii Mikhtoniuk and Özge Nilay Yalçın, describe is what happens to data between organisations: it is passed around as snapshots and copies that lose history, can’t be traced back to their source, and can’t be checked, so analysts keep starting again from raw data.",
+      "The first versions of the `kamu` CLI, in late 2019, were written in Scala on Apache Spark. In September 2020 version 0.30.0 replaced them with a Rust rewrite, leaving only the engines as heavy containers. In parallel the founders wrote the Open Data Fabric specification and a whitepaper, finished in July 2020 and posted to arXiv in November 2021 after conferences turned it down. The founders went full time in 2021, raised a first round in 2023 and began Kamu Node, the server version, the same year.",
+      "DataFusion moved steadily into the core: experimental ingestion with it arrived in August 2023, and in January 2024 it became the default for ingestion and the SQL shell, replacing Spark. Releases are frequent; 0.271.0 shipped on 21 October 2026."
+    ],
+    "choices": [
+      { "choice": "Plug in existing engines instead of writing one", "why": "Stream processing engines take years to build. Running Flink, Spark and others behind a small gRPC contract, in containers whose image digest is recorded in each block, reuses them while keeping every transform reproducible." },
+      { "choice": "Streaming, not batch, for all derived data", "why": "Treating datasets as endless event streams means a query is written once and runs forever, each record is processed once, and late data, out-of-order data and corrections are handled by the engine instead of by reruns." },
+      { "choice": "History is never thrown away", "why": "Snapshots and change-data-capture lose past states. Keeping every event and recording errors as retractions and corrections gives stable references to a dataset at any point in time and makes provenance possible." },
+      { "choice": "A rewrite from Scala to Rust in 2020", "why": "The coordinator doesn’t need a JVM; only the engines do. After the rewrite, the changelog says, every command that didn’t involve an engine became fast, while the heavy engines stayed in their containers." }
+    ],
+    "timeline": [
+      { "year": "2019", "text": "First Scala versions of the `kamu` CLI, built on Spark" },
+      { "year": "2020", "text": "Open Data Fabric spec published; CLI rewritten in Rust (0.30.0, September)" },
+      { "year": "2021", "text": "ODF whitepaper on arXiv in November; founders go full time" },
+      { "year": "2022", "text": "IPFS added as a place to store and share datasets" },
+      { "year": "2023", "text": "First funding round; Kamu Node work starts; DataFusion ingest in August" },
+      { "year": "2024", "text": "DataFusion replaces Spark as the default for ingest and `kamu sql` in January" },
+      { "year": "2026", "text": "0.271.0 in October, following ODF spec 0.42.1" }
+    ],
+    "sources": [
+      { "label": "Kamu: About us (timeline 2019–2025, team, Scala prototype and Rust rewrite)", "url": "https://kamu.dev/about" },
+      { "label": "Kamu blog: The original Open Data Fabric whitepaper (Sergii Mikhtoniuk and Nilay Yalçın, November 2021)", "url": "https://www.kamu.dev/blog/odf-whitepaper/" },
+      { "label": "arXiv: Open Data Fabric, a decentralized data exchange and transformation protocol (2111.06364)", "url": "https://arxiv.org/abs/2111.06364" },
+      { "label": "kamu-cli CHANGELOG (0.3.0 in 2019, Rust rewrite in 0.30.0, DataFusion ingest in 0.140.0 and 0.153.0, 0.271.0)", "url": "https://github.com/kamu-data/kamu-cli/blob/master/CHANGELOG.md" }
+    ]
+  },
+  "sources": [
+    { "label": "kamu-cli README (features, engines, ODF format, sharing, deployment)", "url": "https://github.com/kamu-data/kamu-cli" },
+    { "label": "kamu-cli LICENSE.txt (Business Source License 1.1, Additional Use Grant, change date)", "url": "https://github.com/kamu-data/kamu-cli/blob/master/LICENSE.txt" },
+    { "label": "Kamu docs: Licensing terms", "url": "https://docs.kamu.dev/general/licensing" },
+    { "label": "Kamu docs: About Kamu CLI", "url": "https://docs.kamu.dev/cli/about" },
+    { "label": "Kamu docs: Quick start (workspace, DatasetSnapshot, kamu pull, kamu sql)", "url": "https://docs.kamu.dev/cli/quick-start" },
+    { "label": "Kamu docs: Transforming data (SetTransform, execution model, checkpoints)", "url": "https://docs.kamu.dev/cli/transform/index" },
+    { "label": "Kamu docs: Supported data engines", "url": "https://docs.kamu.dev/general/supported-engines" },
+    { "label": "Kamu docs: Project status (MVP stage, stability, performance note)", "url": "https://docs.kamu.dev/general/project-status" },
+    { "label": "Kamu docs: About Kamu Node (Kubernetes-native services)", "url": "https://docs.kamu.dev/node/about" },
+    { "label": "Kamu docs: API overview (REST, GraphQL, Flight SQL, MQTT, OData)", "url": "https://docs.kamu.dev/api/overview" },
+    { "label": "ODF spec: Engine contract (OCI containers, gRPC, image digests)", "url": "https://docs.kamu.dev/odf/spec/transformations/engine-contract" },
+    { "label": "GitHub: kamu-cli releases (v0.271.0, 21 October 2026)", "url": "https://github.com/kamu-data/kamu-cli/releases" }
+  ],
+  "checked": "2026-10-23"
+}

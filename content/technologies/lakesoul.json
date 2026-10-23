@@ -1,0 +1,95 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "LakeSoul",
+  "concepts": ["table-formats"],
+  "uses": ["lakehouse"],
+  "provider": "oss",
+  "vendor": "LF AI & Data Foundation",
+  "license": "Apache 2.0",
+  "website": "https://lakesoul-io.github.io/",
+  "repo": "https://github.com/lakesoul-io/LakeSoul",
+  "summary": "A lakehouse table format, first built by DMetaSoul, that keeps all metadata and commits in PostgreSQL and stores primary-key tables as hash buckets with merge-on-read upserts, aimed at CDC ingestion and frequent updates.",
+  "intro": [
+    "LakeSoul keeps its catalog in a PostgreSQL database instead of metadata files: tables, partitions, the list of data files in each version and every commit. A writer commits by running a two-stage protocol inside PostgreSQL transactions, which also detect conflicting writers and give readers a consistent snapshot. PostgreSQL triggers notify LakeSoul’s background services when something changes, so compaction and cleanup of expired data start on their own, and PostgreSQL roles and row-level security separate workspaces. The data files are Parquet or, since 4.0, Vortex (the default for new writes), on S3 or HDFS.",
+    "A table can have range partitions, laid out in directories like Hive, and a primary key. A primary-key table is split into a fixed number of hash buckets, each sorted by key. An upsert writes only the changed rows, or even only the changed columns, as new delta files, and readers merge the latest value for each key on the fly, much like an LSM tree, until compaction folds the deltas in. That makes many concurrent writers and column-level updates cheap, and lets joins on the key skip the shuffle. A Rust I/O layer, with Java, Python and C bindings, is shared by the Spark 3.5 and Flink 1.20 connectors (read and write), Presto and DuckDB (read), and Python clients for PyArrow, Pandas, Ray and Daft. Flink jobs can sync a whole MySQL database into LakeSoul with automatic table creation and schema changes, and read tables back as changelog streams. DMetaSoul created LakeSoul and donated it to the LF AI & Data Foundation, where it has been a sandbox project since May 2023; the current release is 4.0.0 (September 2026)."
+  ],
+  "strengths": [
+    "Built for updates: primary-key tables take row- and column-level upserts as small delta files, and concurrent writers to different columns don’t conflict",
+    "Metadata in PostgreSQL: commits, partition pruning and conflict checks are indexed SQL lookups; the project reports filtering a table with millions of partitions in about 50 ms",
+    "CDC built in: one Flink job syncs a whole database with new tables and DDL changes picked up automatically, exactly once, and Flink reads tables back as changelogs",
+    "Table services included: automatic compaction triggered by the metadata database, cleanup of expired and redundant data, and storage statistics"
+  ],
+  "limits": [
+    "Every engine and job needs a connection to the PostgreSQL metadata database, which you run, size and secure; it is the catalog for every table",
+    "Engines need LakeSoul’s own connectors: Spark 3.5 and Flink 1.20 read and write, Presto and DuckDB only read, and Spark 4 and Flink 2 are on the 2026 roadmap",
+    "Spark SQL has gaps on primary-key tables: no `INSERT INTO` (use `MERGE INTO`), `MERGE INTO` without conditional `MATCHED` clauses and only on primary-key equality, and no column type changes",
+    "A smaller ecosystem than Iceberg, Delta Lake or Hudi, and still at the foundation’s first, sandbox stage"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "keeps its metadata and commits in" },
+    { "id": "spark", "how": "is read and written, with upserts, by" },
+    { "id": "flink", "how": "syncs CDC streams into tables with" },
+    { "id": "presto", "how": "is queried, through Velox, by" },
+    { "id": "parquet", "how": "can store data files as" },
+    { "id": "vortex", "how": "writes new files by default as" },
+    { "id": "s3", "how": "stores table data in" },
+    { "id": "gluten", "how": "can speed up Spark reads with" },
+    { "id": "ray", "how": "is read and written in parallel by" }
+  ],
+  "snippet": {
+    "lang": "sql",
+    "title": "A primary-key table with hash buckets, and an upsert, in Spark SQL",
+    "source": [
+      "-- spark.sql.catalog.lakesoul = org.apache.spark.sql.lakesoul.catalog.LakeSoulCatalog",
+      "CREATE TABLE default.orders (id string, date string, data string) USING lakesoul",
+      "  PARTITIONED BY (date)",
+      "  LOCATION 's3://bucket/orders'",
+      "  TBLPROPERTIES ('hashPartitions' = 'id', 'hashBucketNum' = '2');",
+      "",
+      "-- primary-key tables take upserts through MERGE INTO, not INSERT INTO",
+      "MERGE INTO default.orders AS t USING order_changes AS s",
+      "  ON t.id = s.id",
+      "  WHEN MATCHED THEN UPDATE SET *",
+      "  WHEN NOT MATCHED THEN INSERT *;"
+    ]
+  },
+  "history": {
+    "story": [
+      "When LakeSoul appeared, Delta Lake and Hudi kept table metadata in files next to the data. Its first README argued that this made metadata slow to parse after a table had run for a long time, that Delta Lake could only be written from a single point, and that Hudi’s merge-on-read didn’t meet its update-performance needs for primary-key data. The DMetaSoul team built LakeSoul on Spark as “a unified streaming and batch table storage solution” with metadata in Cassandra and upserts stored as delta files.",
+      "Version 2.0 in July 2022 replaced Cassandra with PostgreSQL and used its transactions for commit conflict detection, and also added snapshot reads and rollback. Version 2.1 brought Flink and whole-database CDC sync. In May 2023 DMetaSoul donated LakeSoul to the LF AI & Data Foundation as a sandbox project, and 2.3.0 that July was the first release under the foundation, with Flink SQL and global automatic compaction.",
+      "LakeSoul 3.0 in September 2025 doubled read and write speed of its Rust I/O layer compared with 2.6, added a local cache for object storage, Spark with Gluten and Presto with Velox, an Arrow Flight SQL gateway and a PyPI package. Version 4.0 followed in September 2026, with Vortex as the default file format for new writes."
+    ],
+    "choices": [
+      { "choice": "Metadata in a database, not in files", "why": "Its first README blamed file-based metadata for slow metadata parsing on long-running tables and for single-point writes. A database handles many concurrent commits and indexed lookups; LakeSoul started on Cassandra and moved to PostgreSQL in 2.0 to get transactions for conflict detection." },
+      { "choice": "Upserts as delta files, merged when read", "why": "Writing only the changed rows or columns turns updates into appends, which the project says greatly improves write throughput and concurrency; compaction merges the deltas later." },
+      { "choice": "Hash buckets sorted by primary key", "why": "Records with the same key always land in the same sorted bucket, so a read can merge versions without a shuffle, and joins, intersects and excepts on the key need no shuffle or sort." },
+      { "choice": "Let the metadata database drive maintenance", "why": "Compaction, cleanup and statistics services listen to change notifications from PostgreSQL, so they run cluster-wide without configuring each table, which 2.3 introduced to cut the cost of keeping many tables fast." }
+    ],
+    "timeline": [
+      { "year": "2021", "text": "DMetaSoul publishes LakeSoul on Spark, with metadata in Cassandra" },
+      { "year": "2022", "text": "2.0 moves metadata to PostgreSQL (July); 2.1 adds Flink CDC sync (October)" },
+      { "year": "2023", "text": "Donated to LF AI & Data as a sandbox project (May); 2.3 adds Flink SQL and global compaction (July)" },
+      { "year": "2025", "text": "3.0 in September: faster Rust I/O, Gluten and Presto with Velox, PyPI package" },
+      { "year": "2026", "text": "4.0 in September, with Vortex as the default file format" }
+    ],
+    "sources": [
+      { "label": "GitHub: LakeSoul’s first README (December 2021: Spark, Cassandra metadata, comparison with Delta Lake, Hudi and Iceberg)", "url": "https://github.com/lakesoul-io/LakeSoul/blob/555ad0836ecba8c4f2eeef5b64bfe73baf68222b/README.md" },
+      { "label": "GitHub: LakeSoul v2.0.0 release notes (Cassandra replaced by PostgreSQL, July 2022)", "url": "https://github.com/lakesoul-io/LakeSoul/releases/tag/v2.0.0-spark-3.1.2" },
+      { "label": "LakeSoul blog: 2.3.0 release, the first as an LF AI & Data sandbox project (July 2023)", "url": "https://lakesoul-io.github.io/blog/2023/07/17/lakesoul-2.3.0-release" },
+      { "label": "GitHub: LakeSoul 3.0.0 release notes (September 2025)", "url": "https://github.com/lakesoul-io/LakeSoul/releases/tag/v3.0.0" },
+      { "label": "GitHub: LakeSoul releases (v4.0.0, 4 September 2026)", "url": "https://github.com/lakesoul-io/LakeSoul/releases" },
+      { "label": "GitHub: lakesoul-io/LakeSoul README (created by DMetaSoul, LF AI & Data sandbox since May 2023)", "url": "https://github.com/lakesoul-io/LakeSoul" }
+    ]
+  },
+  "sources": [
+    { "label": "LakeSoul docs: Introduction (PostgreSQL metadata, two-stage commit, hash partitions, Vortex default in 4.0)", "url": "https://lakesoul-io.github.io/docs/intro" },
+    { "label": "LakeSoul docs: General concepts (primary keys, hash buckets, snapshot reads, compaction, metadata services)", "url": "https://lakesoul-io.github.io/docs/Getting%20Started/concepts" },
+    { "label": "GitHub: LakeSoul Spark API docs (upsert, delta files, Spark SQL limits, hash-key joins)", "url": "https://github.com/lakesoul-io/LakeSoul/blob/main/website/docs/03-Usage%20Docs/03-spark-api-docs.md" },
+    { "label": "GitHub: LakeSoul docs, Setup LakeSoul Meta DB (PostgreSQL connection settings)", "url": "https://github.com/lakesoul-io/LakeSoul/blob/main/website/docs/03-Usage%20Docs/01-setup-meta-env.md" },
+    { "label": "GitHub: lakesoul-io/LakeSoul README (engine support matrix, CDC, roadmap 2026, LF AI & Data sandbox)", "url": "https://github.com/lakesoul-io/LakeSoul" },
+    { "label": "GitHub: LakeSoul 3.0.0 release notes (NativeIO, partition pruning in 50 ms, Gluten, Presto with Velox)", "url": "https://github.com/lakesoul-io/LakeSoul/releases/tag/v3.0.0" },
+    { "label": "LakeSoul blog: 2.3.0 release (Flink SQL, global automatic compaction)", "url": "https://lakesoul-io.github.io/blog/2023/07/17/lakesoul-2.3.0-release" },
+    { "label": "LF AI & Data: LakeSoul project page", "url": "https://lfaidata.foundation/projects/lakesoul/" }
+  ],
+  "checked": "2026-10-23"
+}

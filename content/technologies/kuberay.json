@@ -1,0 +1,108 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "KubeRay",
+  "concepts": ["actors", "orchestration"],
+  "parent": { "id": "ray", "as": "tool" },
+  "provider": "oss",
+  "vendor": "KubeRay project, a CNCF sandbox project; started in the Ray community",
+  "license": "Apache 2.0",
+  "website": "https://kuberay-project.github.io/kuberay/",
+  "repo": "https://github.com/kuberay-project/kuberay",
+  "summary": "The Kubernetes operator for Ray: it runs each Ray cluster as a head pod plus worker pods, and adds custom resources for long-running clusters, batch jobs and Ray Serve applications.",
+  "intro": [
+    "KubeRay is a Kubernetes operator written in Go that turns Ray clusters into Kubernetes objects. Each Ray node becomes a pod: one head pod and one or more groups of worker pods, which can have different shapes, for example a CPU group and a GPU group. Several Ray clusters, even on different Ray versions, can share one Kubernetes cluster. The Ray documentation calls the operator the recommended way to run Ray on Kubernetes.",
+    "It adds three custom resources. A RayCluster is a cluster you manage yourself; the operator creates and deletes its pods, restarts failed ones and, with `enableInTreeAutoscaling`, adds the Ray autoscaler as a sidecar in the head pod. That autoscaler watches the CPUs, GPUs and other resources that waiting tasks and actors ask for and changes the worker group’s `replicas`; idle workers go after 60 seconds by default. A RayJob creates a cluster, submits a job once it is ready and can delete the cluster when the job finishes. A RayService runs a Ray Serve application: changes to the Serve config are applied in place, while changes to the cluster itself start a new RayCluster, move traffic to it once it is ready, and remove the old one.",
+    "KubeRay works with Kubernetes batch schedulers such as Kueue, Volcano and Apache YuniKorn for queueing and gang scheduling, and there is a `kubectl ray` plugin (beta), an API server (alpha) and a dashboard (experimental). It was co-developed by contributors from Anyscale, Google, Microsoft, ByteDance, AWS and others. In September 2026 the CNCF accepted it as a sandbox project, and it moved from the `ray-project` GitHub organization to its own `kuberay-project` organization; v1.7.1 came out the same month."
+  ],
+  "strengths": [
+    "Ray clusters become ordinary Kubernetes objects, so GitOps, RBAC, quotas, node pools and existing monitoring apply to them",
+    "RayJob gives one-off training or batch jobs a cluster that exists only while the job runs",
+    "RayService upgrades a Ray Serve application without downtime, including changes to the Ray version or cluster shape",
+    "Scales on what Ray work is waiting for, not on CPU load, and leaves adding nodes to the Kubernetes cluster autoscaler"
+  ],
+  "limits": [
+    "You run two autoscalers: Ray’s adds pods, but if there is no room the Kubernetes cluster autoscaler must add nodes, and you configure that yourself",
+    "A RayService cluster upgrade runs old and new clusters side by side by default, so you need spare capacity, often GPUs, for both",
+    "The head pod is still a single point of failure; surviving its loss needs GCS fault tolerance with an external Redis",
+    "Two layers to debug: a problem can sit in the operator and pod specs or inside Ray’s own scheduler and object store"
+  ],
+  "worksWith": [
+    { "id": "kubernetes", "how": "runs Ray clusters as pods on" },
+    { "id": "redis", "how": "can back the head node’s state with" },
+    { "id": "prometheus", "how": "is monitored with" }
+  ],
+  "snippet": {
+    "lang": "yaml",
+    "title": "A RayJob: create a cluster, run one script, delete the cluster",
+    "source": [
+      "apiVersion: ray.io/v1",
+      "kind: RayJob",
+      "metadata:",
+      "  name: train-once",
+      "spec:",
+      "  entrypoint: python train.py",
+      "  shutdownAfterJobFinishes: true   # delete the cluster when the job ends",
+      "  rayClusterSpec:",
+      "    rayVersion: \"2.59.0\"",
+      "    headGroupSpec:",
+      "      rayStartParams: {}",
+      "      template:",
+      "        spec:",
+      "          containers:",
+      "            - name: ray-head",
+      "              image: rayproject/ray:2.59.0",
+      "    workerGroupSpecs:",
+      "      - groupName: gpu",
+      "        replicas: 2",
+      "        minReplicas: 0",
+      "        maxReplicas: 4",
+      "        rayStartParams: {}",
+      "        template:",
+      "          spec:",
+      "            containers:",
+      "              - name: ray-worker",
+      "                image: rayproject/ray:2.59.0",
+      "                resources:",
+      "                  limits:",
+      "                    nvidia.com/gpu: 1"
+    ]
+  },
+  "history": {
+    "story": [
+      "Ray first ran on Kubernetes through an operator that lived in the Ray repository. In November 2020 a separate Go operator was started in what became the `ray-project/kuberay` repository, with early code merged from a branch at Alipay. Engineers from several companies, including Anyscale, Google, Microsoft, ByteDance and AWS, developed it from there. Ray 2.0 (August 2022) named KubeRay the preferred way to deploy on Kubernetes, and Ray 2.2.0 removed the old operator.",
+      "Version 0.1.0 came out in October 2021 and 1.0.0 in November 2023. From September 2023 the user documentation moved into the Ray docs, while the repository kept only developer material. Later versions added the `kubectl ray` plugin (from v1.3.0) and an experimental dashboard (from v1.4.0).",
+      "In 2026 the maintainers applied to the CNCF for vendor-neutral governance. The sandbox application passed in September 2026, and the project moved to the new `kuberay-project` GitHub organization, with Helm charts to follow from v1.8.0. Ray itself had gone to the PyTorch Foundation a year earlier, so Ray and its Kubernetes operator now sit in two different Linux Foundation groups."
+    ],
+    "choices": [
+      { "choice": "An operator in Go, outside the Ray repository", "why": "A controller released on its own schedule, separate from Ray, fits how Kubernetes users run operators, and lets one operator manage clusters on several Ray versions in the same Kubernetes cluster." },
+      { "choice": "Ray’s autoscaler as a sidecar, not a Kubernetes autoscaler", "why": "Only Ray knows which tasks and actors are waiting and what they asked for, so the sidecar decides how many worker pods to run and leaves node provisioning to Kubernetes." },
+      { "choice": "Separate resources for clusters, jobs and services", "why": "A notebook cluster, a nightly training job and a production model server have different lifecycles: kept running, deleted when done, and upgraded without downtime." }
+    ],
+    "timeline": [
+      { "year": "2020", "text": "Go operator started in November" },
+      { "year": "2021", "text": "v0.1.0 released in October" },
+      { "year": "2022", "text": "Ray 2.0 makes KubeRay the preferred deployment; Ray 2.2.0 drops the old operator" },
+      { "year": "2023", "text": "User docs move into the Ray documentation; v1.0.0 released in November" },
+      { "year": "2026", "text": "Accepted as a CNCF sandbox project in September; moves to the kuberay-project organization" }
+    ],
+    "sources": [
+      { "label": "KubeRay commit history on GitHub (first commits, Nov 2020)", "url": "https://github.com/kuberay-project/kuberay/commits/master" },
+      { "label": "KubeRay releases on GitHub (v0.1.0 Oct 2021, v1.0.0 Nov 2023, v1.7.1 Sep 2026)", "url": "https://github.com/kuberay-project/kuberay/releases" },
+      { "label": "CNCF sandbox application: KubeRay (co-developers, reasons for CNCF; vote passed Sep 2026)", "url": "https://github.com/cncf/sandbox/issues/525" },
+      { "label": "KubeRay issue #5365: KubeRay joins CNCF (move to the kuberay-project org, Helm charts)", "url": "https://github.com/kuberay-project/kuberay/issues/5365" },
+      { "label": "KubeRay README (components, documentation moved to Ray docs in Sep 2023)", "url": "https://github.com/kuberay-project/kuberay" },
+      { "label": "Ray commit #29178: intent to remove the legacy Ray operator in Ray 2.2.0 (Oct 2022)", "url": "https://github.com/ray-project/ray/commit/ed69ff325229f162774151a9993628c6edef6602" }
+    ]
+  },
+  "sources": [
+    { "label": "KubeRay website (CRDs, ecosystem components, CNCF sandbox)", "url": "https://kuberay-project.github.io/kuberay/" },
+    { "label": "Ray docs: Ray on Kubernetes (KubeRay as the recommended way, head and worker pods)", "url": "https://docs.ray.io/en/latest/cluster/kubernetes/index.html" },
+    { "label": "Ray docs: KubeRay autoscaling (sidecar, logical resources, idle timeout, Kubernetes autoscaler)", "url": "https://docs.ray.io/en/latest/cluster/kubernetes/user-guides/configuring-autoscaling.html" },
+    { "label": "Ray docs: Deploy on Kubernetes with RayService (in-place updates, zero-downtime upgrades)", "url": "https://docs.ray.io/en/latest/cluster/kubernetes/user-guides/rayservice.html" },
+    { "label": "Ray docs: GCS fault tolerance (external Redis, supported with KubeRay)", "url": "https://docs.ray.io/en/latest/ray-core/fault_tolerance/gcs.html" },
+    { "label": "KubeRay README (RayCluster, RayJob, RayService; Kueue, Volcano, YuniKorn)", "url": "https://github.com/kuberay-project/kuberay" },
+    { "label": "KubeRay releases on GitHub", "url": "https://github.com/kuberay-project/kuberay/releases" },
+    { "label": "CNCF sandbox application: KubeRay", "url": "https://github.com/cncf/sandbox/issues/525" }
+  ],
+  "checked": "2026-10-23"
+}

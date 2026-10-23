@@ -1,0 +1,110 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "OpenTSDB",
+  "concepts": ["tsdb"],
+  "uses": ["metrics"],
+  "provider": "oss",
+  "vendor": "OpenTSDB project (started at StumbleUpon)",
+  "license": "LGPL-2.1-or-later and GPL-3.0-or-later",
+  "website": "https://opentsdb.net/",
+  "repo": "https://github.com/OpenTSDB/opentsdb",
+  "archived": {
+    "since": "2024-12-12",
+    "reason": "The last commit cut a 2.5.0 release candidate on 12 December 2024, and the last stable release, 2.4.1, dates from September 2021. Fixes for known remote-code-execution flaws in 2.4.1 exist only in that release candidate, and new security reports filed in October 2026 have had no reply.",
+    "alternatives": ["influxdb", "prometheus", "timescaledb", "questdb"]
+  },
+  "summary": "A time-series database built on HBase: stateless Java daemons that turn metric, timestamp, value and tags into compact HBase rows, one row per series per hour.",
+  "intro": [
+    "OpenTSDB is a set of Time Series Daemons (TSDs) in front of HBase. Each TSD is independent, with no master and no shared state, so you scale reads and writes by adding TSDs, and clients never talk to HBase directly. A data point is a metric name, a timestamp in seconds or milliseconds, an integer or float value, and at least one tag such as `host=web01`. You write with a telnet-style `put` line or a JSON POST to `/api/put`, and query over HTTP with an aggregator, an optional downsampler and tag filters. The README promises that OpenTSDB never deletes or downsamples stored data.",
+    "Storage is what made it scale. Metric names, tag keys and tag values are mapped to 3-byte ids in a separate `tsdb-uid` table. A row key is the metric id, the timestamp rounded down to the hour and the sorted tag ids, optionally prefixed by a salt byte (since 2.2) to spread writes across regions; each point in that hour is a column named by its offset. Version 2.3 added Google Cloud Bigtable as a backend and an experimental Cassandra shim, and 2.4 (2018) added rollups, pre-aggregates and histograms. Grafana still ships an OpenTSDB data source for versions 2.1 to 2.4, and Telegraf can write to it. The project has not had a stable release since 2.4.1 (2021) and no commits since December 2024."
+  ],
+  "strengths": [
+    "Scales writes with HBase: TSDs are stateless, and salting spreads a hot metric across regions",
+    "Keeps every raw point at full resolution, with no forced downsampling or expiry",
+    "Simple ingestion: one `put` line per point over TCP, or batches of JSON over HTTP",
+    "Supported by existing tools, including Grafana’s built-in data source and Telegraf’s output"
+  ],
+  "limits": [
+    "Unmaintained: no stable release since 2.4.1 (September 2021) and no commits since December 2024",
+    "Known remote-code-execution bugs in 2.4.1 (CVE-2023-25826, CVE-2023-36812) are fixed only in the 2.5.0 release candidate, and new reports from October 2026 are unanswered; never expose a TSD to untrusted networks",
+    "Needs a running HBase cluster (HDFS and ZooKeeper included) or Google Cloud Bigtable; the Cassandra shim is experimental and needs the ByteOrderedPartitioner",
+    "Few tags per point (8 by default) and no SQL: queries are limited to aggregators, downsamplers and tag filters"
+  ],
+  "worksWith": [
+    { "id": "hbase", "how": "stores its rows and UID table in" },
+    { "id": "grafana", "how": "is charted with a built-in data source by" },
+    { "id": "telegraf", "how": "receives metrics through an output of" },
+    { "id": "cassandra", "how": "can store data, experimentally, in" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Write a point two ways, then query a downsampled sum",
+    "source": [
+      "# Telnet-style: one point per line",
+      "echo \"put sys.cpu.user 1356998400 42.5 host=webserver01 cpu=0\" | nc localhost 4242",
+      "",
+      "# HTTP: several points per request",
+      "curl -X POST http://localhost:4242/api/put -d '[",
+      "  {\"metric\": \"sys.cpu.user\", \"timestamp\": 1356998400, \"value\": 42.5,",
+      "   \"tags\": {\"host\": \"webserver01\", \"cpu\": \"0\"}}",
+      "]'",
+      "",
+      "# Sum across all hosts and CPUs, as 1-minute averages, for the last hour",
+      "curl 'http://localhost:4242/api/query?start=1h-ago&m=sum:1m-avg:sys.cpu.user'"
+    ]
+  },
+  "history": {
+    "story": [
+      "Benoît Sigoure wrote OpenTSDB at StumbleUpon in 2010 to keep the metrics of the company’s systems, which ran to over a billion data points a day. HBase, the Bigtable-style store from the Hadoop world, already handled huge sorted tables, so OpenTSDB became a thin layer of daemons that encoded points into compact HBase rows. StumbleUpon also released tcollector, a Python framework that gathers Linux, MySQL, HBase and other metrics and sends them to a TSD.",
+      "Version 1.0 was tagged in December 2011 and 2.0 in May 2014, adding the HTTP API and annotations. Later 2.x releases added salting, Bigtable and Cassandra backends, expressions, rollups and histograms; Yahoo later took over maintenance, together with the community. After 2.4.0 in December 2018, releases slowed: 2.4.1 in September 2021, then a 2.5.0 release candidate in December 2024 with security fixes. Work on a separate 3.0 branch stopped receiving commits in 2023."
+    ],
+    "choices": [
+      {
+        "choice": "Store data in HBase instead of writing a storage engine",
+        "why": "HBase already split sorted tables into regions across many servers, so OpenTSDB only had to design row keys; it inherits HBase’s scale and its operating cost."
+      },
+      {
+        "choice": "Short numeric ids for names and tags",
+        "why": "Repeating long metric and tag strings in every row key would waste space; 3-byte ids keep row keys small and keep a series’ rows sorted together."
+      },
+      {
+        "choice": "One row per series per hour",
+        "why": "Points for the same series and hour sit in one row, so a time-range query becomes a short scan of adjacent rows."
+      }
+    ],
+    "timeline": [
+      { "year": "2010", "text": "Benoît Sigoure starts OpenTSDB at StumbleUpon" },
+      { "year": "2011", "text": "Version 1.0 is tagged in December" },
+      { "year": "2014", "text": "OpenTSDB 2.0 adds the HTTP API" },
+      { "year": "2018", "text": "2.4.0 adds rollups and histograms" },
+      { "year": "2021", "text": "2.4.1, the last stable release" },
+      { "year": "2023", "text": "Remote-code-execution flaws in 2.4.1 are published as CVEs" },
+      { "year": "2024", "text": "A 2.5.0 release candidate in December, then no further commits" }
+    ],
+    "sources": [
+      { "label": "Database of Databases: OpenTSDB (Benoît Sigoure, StumbleUpon, 2010; Yahoo maintenance)", "url": "https://dbdb.io/db/opentsdb" },
+      { "label": "OpenTSDB: Overview (TSDs, tcollector)", "url": "https://opentsdb.net/overview.html" },
+      { "label": "OpenTSDB docs: What’s new (2.1 to 2.4)", "url": "https://opentsdb.net/docs/build/html/new.html" },
+      { "label": "GitHub: OpenTSDB initial commit (Benoît Sigoure, April 2010)", "url": "https://github.com/OpenTSDB/opentsdb/commit/7b43410408b55352300a9cdeed48b830255eb412" },
+      { "label": "GitHub: OpenTSDB tags (v1.0.0 to v2.5.0RC1)", "url": "https://github.com/OpenTSDB/opentsdb/tags" },
+      { "label": "GitHub: OpenTSDB 2.5.0RC1 release notes (December 2024)", "url": "https://github.com/OpenTSDB/opentsdb/releases/tag/v2.5.0RC1" },
+      { "label": "GitHub: OpenTSDB 3.0 branch (last commit October 2023)", "url": "https://github.com/OpenTSDB/opentsdb/tree/3.0" }
+    ]
+  },
+  "sources": [
+    { "label": "OpenTSDB: Overview (TSDs, data model, backends)", "url": "https://opentsdb.net/overview.html" },
+    { "label": "OpenTSDB docs: HBase schema (row keys, UIDs, salting)", "url": "https://opentsdb.net/docs/build/html/user_guide/backends/hbase.html" },
+    { "label": "OpenTSDB docs: Cassandra (experimental shim, ByteOrderedPartitioner)", "url": "https://opentsdb.net/docs/build/html/user_guide/backends/cassandra.html" },
+    { "label": "OpenTSDB docs: Writing data (put, /api/put, tags, timestamps)", "url": "https://opentsdb.net/docs/build/html/user_guide/writing/index.html" },
+    { "label": "OpenTSDB docs: /api/query", "url": "https://opentsdb.net/docs/build/html/api_http/query/index.html" },
+    { "label": "OpenTSDB docs: What’s new (2.1 to 2.4)", "url": "https://opentsdb.net/docs/build/html/new.html" },
+    { "label": "GitHub: OpenTSDB README (never deletes or downsamples; LGPL and GPL)", "url": "https://github.com/OpenTSDB/opentsdb" },
+    { "label": "GitHub: OpenTSDB releases (2.4.1 September 2021; 2.5.0RC1 December 2024)", "url": "https://github.com/OpenTSDB/opentsdb/releases" },
+    { "label": "CVE-2023-25826: command injection in OpenTSDB up to 2.4.1", "url": "https://www.cve.org/CVERecord?id=CVE-2023-25826" },
+    { "label": "CVE-2023-36812: remote code execution through Gnuplot in OpenTSDB", "url": "https://www.cve.org/CVERecord?id=CVE-2023-36812" },
+    { "label": "GitHub issue #2314: unanswered security report (October 2026)", "url": "https://github.com/OpenTSDB/opentsdb/issues/2314" },
+    { "label": "Grafana docs: OpenTSDB data source (versions 2.1 to 2.4)", "url": "https://grafana.com/docs/grafana/latest/datasources/opentsdb/" },
+    { "label": "Telegraf: OpenTSDB output plugin", "url": "https://github.com/influxdata/telegraf/tree/master/plugins/outputs/opentsdb" }
+  ],
+  "checked": "2026-10-23"
+}

@@ -10,8 +10,8 @@
   "website": "https://www.tigrisdata.com/",
   "summary": "Globally distributed S3-compatible object storage that moves data to where it’s read, with no egress fees.",
   "intro": [
-    "Tigris answers the S3 API at one endpoint, `https://t3.storage.dev`, with the region set to `auto`. Stateless API gateways in each region take requests close to the client. Object metadata (where each object lives, user metadata, permissions) is kept in FoundationDB, a transactional key-value store, replicated between several clusters; object bytes go to block stores in the region nearest the writer. In the default Global bucket, metadata is pushed to every region and data is pulled on demand: the first read from another region makes a local copy there, and over time data settles where it is read most. Reads in the same region are strongly consistent; reads from other regions may briefly return an older version. Single-region, Dual-region and Multi-region buckets pin data instead. Buckets can also be snapshotted and forked without copying data. There are 8 regions: San Jose, Chicago, Ashburn, Amsterdam, Frankfurt, London, Singapore and Tokyo.",
-    "Standard storage costs $0.02 per GB-month, Infrequent Access $0.01 and the two archive tiers $0.004. Writes cost $0.005 per 1,000 and reads $0.0005 per 1,000, and nothing is charged per GB out, from any region. The price is the same for every location type, with no charge for replication. Infrequent Access has a 30-day minimum and a $0.01 per GB retrieval fee; the archive tiers have a 90-day minimum. Each month 5 GB, 10,000 writes and 100,000 reads are free. Tigris started on Fly.io, where `fly storage create` makes a bucket and sets the `AWS_*` secrets on an app. The service itself is closed source; its SDKs, CLI, the TigrisFS FUSE file system and the TAG caching gateway are open source."
+    "Tigris answers the S3 API at one endpoint, `https://t3.storage.dev`, with the region set to `auto`. Stateless API gateways in each region take requests close to the client. Object metadata (where each object lives, user metadata, permissions) is kept in FoundationDB, a transactional key-value store, replicated between several clusters; object bytes go to block stores in the region nearest the writer, and small objects are stored inline in FoundationDB next to their metadata. In the default Global bucket, metadata is pushed to every region and data is pulled on demand: the first read from another region makes a local copy there, and over time data settles where it is read most. Reads in the same region are strongly consistent; reads from other regions may briefly return an older version. Single-region, Dual-region and Multi-region buckets pin data instead. Buckets can also be snapshotted and forked without copying data. There are 8 regions: San Jose, Chicago, Ashburn, Amsterdam, Frankfurt, London, Singapore and Tokyo.",
+    "Standard storage costs $0.02 per GB-month, Infrequent Access $0.01 and the two archive tiers $0.004. Writes cost $0.005 per 1,000 and reads $0.0005 per 1,000, and nothing is charged per GB out, from any region. The price is the same for every location type, with no charge for replication. Infrequent Access has a 30-day minimum and a $0.01 per GB retrieval fee; the archive tiers have a 90-day minimum. Each month 5 GB, 10,000 writes and 100,000 reads are free. Tigris started on Fly.io, where `fly storage create` makes a bucket, sets the `AWS_*` secrets on an app and puts the storage on the Fly.io bill. The service itself is closed source; its SDKs, CLI, the TigrisFS FUSE file system and the TAG caching gateway are open source."
   ],
   "strengths": [
     "One endpoint and no egress fees: data written in one region is served locally in others without setting up a CDN or replication",
@@ -21,7 +21,7 @@
   ],
   "limits": [
     "Standard storage at $0.02 per GB-month costs more than R2 and nearly as much as S3 Standard, and two and a half to three times Wasabi or B2 per TB; reads and writes are billed per request",
-    "Global buckets are only eventually consistent across regions, and a GET or HEAD for a key that doesn’t exist checks other regions, which can add several hundred milliseconds",
+    "Global buckets are only eventually consistent across regions (metadata usually reaches other regions within single-digit seconds), and a GET or HEAD for a key that doesn’t exist checks other regions, which can add several hundred milliseconds",
     "The default Global bucket keeps a single copy placed by access pattern; for data that must ride out a regional outage, Tigris recommends Multi-region",
     "Eight regions, a closed-source service and a young company (paid since July 2024)",
     "Infrequent Access and archive tiers bring minimum durations (30 and 90 days) and retrieval fees"
@@ -187,18 +187,45 @@
       "notes": [
         "Tigris recommends Multi-region for most workloads that need geographic redundancy, and Dual-region only when rules require data in two specific regions."
       ]
+    },
+    {
+      "type": "cards",
+      "title": "How a Global bucket moves data",
+      "intro": "Tigris pushes metadata to every region but pulls object bytes only when a region asks for them. A write stores the bytes in the local block store and the metadata in FoundationDB, together with an entry in a replication queue kept in the same database, a design based on Apple’s QuiCK paper on iCloud’s replication. A replication service reads that queue and copies the metadata to every other region, usually within single-digit seconds. A read then looks in these places, nearest first.",
+      "items": [
+        {
+          "name": "SSD cache",
+          "tag": "fastest",
+          "text": "Recently used data and metadata kept on local SSDs in the region that serves the request."
+        },
+        {
+          "name": "FoundationDB",
+          "tag": "small objects",
+          "text": "The metadata store answers transactionally. Objects small enough are stored inline here, so a read needs no trip to block storage."
+        },
+        {
+          "name": "Local block storage",
+          "tag": "larger objects",
+          "text": "Where the bytes of larger objects land when written. In April 2025 Tigris said these block stores ran in the same region as its gateways but with a different provider."
+        },
+        {
+          "name": "Another region’s block storage",
+          "tag": "first read elsewhere",
+          "text": "A region without a copy pulls the object from the region that has it, caches it, and adds itself to the object’s list of regions, a metadata change that is then replicated like any other."
+        }
+      ]
     }
   ],
   "history": {
     "story": [
       "Ovais Tariq, Himank Chaudhary and Yevgeniy ran storage platform teams at Uber for six years, building systems such as Docstore and Herb for thousands of internal developers. They wanted to offer that kind of platform to everyone. Their first product under the Tigris name, in 2022, was an open-source (Apache 2.0) backend for real-time apps, built on FoundationDB so they could skip rebuilding consistency, fault handling and load balancing themselves.",
-      "In April 2023 Tariq met Fly.io’s team, whose pitch was running an app in many regions as easily as in one. Tigris turned that idea to storage: objects written in San Jose should be readable from Sydney at local speed, with no setup. On 14 February 2024 it opened a public beta of globally distributed, S3-compatible object storage on Fly.io, free during the beta, and started billing in July 2024.",
-      "A seed round led by Andreessen Horowitz followed in March 2024, and a $25 million Series A led by Spark Capital in October 2025, which Tigris said would pay for its own hardware in data centers. Its customers include AI companies such as fal and Krea."
+      "In April 2023 Tariq met Fly.io’s team, whose pitch was running an app in many regions as easily as in one. Tigris turned that idea to storage: objects written in San Jose should be readable from Sydney at local speed, with no setup. On 14 February 2024 it opened a public beta of globally distributed, S3-compatible object storage on Fly.io, free during the beta, and started billing in July 2024. Fly.io chose to partner rather than build its own object store; at launch Tigris used Fly.io NVMe volumes as its first-level cache and ran redundant FoundationDB clusters in its regions.",
+      "A seed round led by Andreessen Horowitz followed in March 2024, and a $25 million Series A led by Spark Capital in October 2025, which Tigris said would pay for its own hardware in data centers. Its customers include AI companies such as fal and Krea. Tigris also built ways to use a bucket without the S3 API. In December 2024 it showed buckets mounted in Kubernetes through Yandex’s csi-s3 driver, which uses the GeeseFS FUSE file system. In July 2025 it announced TigrisFS, its own fork of GeeseFS with Tigris-specific features, and in January 2026 TAG, an open-source caching proxy that keeps hot objects on local NVMe next to the compute that reads them."
     ],
     "choices": [
       {
         "choice": "Metadata in FoundationDB",
-        "why": "A distributed key-value store with strictly serializable transactions gave the team strong consistency, conditional writes and sharding without writing their own consensus and failure handling."
+        "why": "A distributed key-value store with strictly serializable transactions gave the team strong consistency, conditional writes and sharding without writing their own consensus and failure handling. The replication queue lives there too, written in the same transaction as the object’s metadata, so no separate queue such as Kafka has to be kept in step."
       },
       {
         "choice": "Data follows its readers",
@@ -228,7 +255,11 @@
       },
       {
         "year": "2025",
-        "text": "$25 million Series A led by Spark Capital; moves onto its own hardware"
+        "text": "TigrisFS announced in July; $25 million Series A led by Spark Capital; moves onto its own hardware"
+      },
+      {
+        "year": "2026",
+        "text": "TAG, an open-source caching gateway, reaches 1.0 in January"
       }
     ],
     "sources": [
@@ -256,6 +287,22 @@
       {
         "label": "Tigris blog: Tigris raises $25M (Series A, October 2025)",
         "url": "https://www.tigrisdata.com/blog/series-a/"
+      },
+      {
+        "label": "Fly.io blog: Globally distributed object storage with Tigris (public beta, February 2024)",
+        "url": "https://fly.io/blog/tigris-public-beta/"
+      },
+      {
+        "label": "Tigris blog: Using Tigris as a filesystem (csi-s3 and GeeseFS, December 2024)",
+        "url": "https://www.tigrisdata.com/blog/tigris-filesystem/"
+      },
+      {
+        "label": "Tigris blog: mount -t tigrisfs (July 2025)",
+        "url": "https://www.tigrisdata.com/blog/tigrisfs/"
+      },
+      {
+        "label": "GitHub: tigrisdata/tag releases (v1.0.0, January 2026)",
+        "url": "https://github.com/tigrisdata/tag/releases"
       }
     ]
   },
@@ -367,7 +414,19 @@
     {
       "label": "Tigris blog: We’re enabling billing for Tigris in July",
       "url": "https://www.tigrisdata.com/blog/enabling-billing-for-tigris-in-july/"
+    },
+    {
+      "label": "Fly.io blog: Globally distributed object storage with Tigris (QuiCK-style queue, NVMe cache, Fly.io billing)",
+      "url": "https://fly.io/blog/tigris-public-beta/"
+    },
+    {
+      "label": "Fly.io customer story: How Tigris Data makes object storage screaming fast, globally (FoundationDB, small objects inlined in metadata)",
+      "url": "https://fly.io/customer-stories/tigris/"
+    },
+    {
+      "label": "Tigris blog: Global by design, Tigris’s distributed object storage architecture (April 2025)",
+      "url": "https://www.tigrisdata.com/blog/global-replication/"
     }
   ],
-  "checked": "2026-10-05"
+  "checked": "2026-10-23"
 }

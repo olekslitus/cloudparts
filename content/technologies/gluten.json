@@ -1,0 +1,87 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Apache Gluten",
+  "concepts": ["query-engines"],
+  "parent": { "id": "spark", "as": "extension" },
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://gluten.apache.org/",
+  "repo": "https://github.com/apache/gluten",
+  "summary": "A Spark plugin that hands Spark’s physical plans to a native C++ engine, Velox or ClickHouse, through Substrait, so SQL and DataFrame jobs run vectorized with no code changes, and falls back to Spark for anything the engine can’t run.",
+  "intro": [
+    "Gluten loads into Spark through `spark.plugins` and its own columnar shuffle manager. Spark still parses, optimizes and schedules the query. Gluten then converts the physical plan into a Substrait plan, passes it over JNI to a native library in each executor, and gets results back as columnar batches in Arrow format through Spark’s columnar API. Two backends do the work: Meta’s Velox and ClickHouse’s engine, and the docs now also cover a newer backend called Bolt. Operators the backend can’t run fall back to ordinary Spark, with row-to-column conversions at the edges. Gluten also manages native memory together with Spark’s, reuses Spark’s shuffle service for its columnar shuffle, and shows native metrics in the Spark UI.",
+    "Intel and Kyligence started Gluten in 2022; the name is Latin for glue. It entered the Apache Incubator in December 2023 and graduated to a top-level project in February 2026. Version 1.7.0 (August 2026) publishes Velox bundles for Spark 3.3 to 4.1, built on CentOS 7 with static linking for x86-64 Linux, and adds native reading of Delta Lake deletion vectors and native Delta writes on Spark 4.0. The project reports 3.34x faster TPC-H and 3.02x faster TPC-DS than vanilla Spark at 3 TB with Velox, on its own Intel Xeon hardware."
+  ],
+  "strengths": [
+    "No code changes: add the bundle jar, the plugin, off-heap memory and the columnar shuffle manager to an existing Spark job",
+    "Large measured gains on scan-, join- and aggregate-heavy SQL: about 3x on TPC-H and TPC-DS at 3 TB in the project’s own runs, with single queries up to 23x faster",
+    "Choice of native engine: Velox, shared with Presto’s C++ workers, or ClickHouse’s engine, behind the same plugin",
+    "A broad community: the first committers came from Intel, Kyligence, Alibaba, Meituan, BIGO, Baidu, NetEase and Microsoft, and the project lists more than 15 production adopters"
+  ],
+  "limits": [
+    "Gains depend on coverage: with ANSI mode on, the whole plan falls back to Spark; non-Parquet scans (ORC only partly) and bucketed writes fall back too, and each fallback adds conversions",
+    "Some results can differ from Spark’s: the Velox backend ignores Parquet datetime rebasing, doesn’t support NaN in some cases, accepts only double-quoted JSON strings and has no regex lookaround",
+    "Binary bundles are built for one Linux and CPU baseline, and the project says performance and compatibility aren’t guaranteed elsewhere, so many users build from source",
+    "Needs off-heap memory sized for native execution; with many shuffle partitions it can still run out of memory despite spilling"
+  ],
+  "worksWith": [
+    { "id": "spark", "how": "accelerates, as a plugin," },
+    { "id": "velox", "how": "runs Spark’s physical plans on" },
+    { "id": "clickhouse", "how": "can use as its native backend the engine of" },
+    { "id": "arrow", "how": "returns columnar batches in the format of" },
+    { "id": "parquet", "how": "scans natively" },
+    { "id": "delta-lake", "how": "reads deletion vectors natively in" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Turn Gluten on for a Spark shell with the Velox bundle (from the project’s home page)",
+    "source": [
+      "spark-shell \\",
+      "  --master yarn --deploy-mode client \\",
+      "  --conf spark.plugins=org.apache.gluten.GlutenPlugin \\",
+      "  --conf spark.memory.offHeap.enabled=true \\",
+      "  --conf spark.memory.offHeap.size=20g \\",
+      "  --conf spark.shuffle.manager=org.apache.spark.shuffle.sort.ColumnarShuffleManager \\",
+      "  --jars gluten-velox-bundle-spark3.5_2.12-centos_7_x86_64-1.6.0.jar"
+    ]
+  },
+  "history": {
+    "story": [
+      "Spark runs on the JVM and processes data in its own row-based engine, while native C++ engines such as Velox and ClickHouse run vectorized code much closer to the hardware. Moving to another engine would mean rewriting Spark jobs, and Spark’s planning, scheduling and scalability were worth keeping.",
+      "Intel and Kyligence started Gluten in 2022 to “glue” Spark to native libraries: reuse Spark’s control flow and JVM code, and run only the compute-heavy data processing natively. They released it as an open-source Spark plugin, with Velox and ClickHouse backends, and shipped 1.0 in July 2023. The incubator proposal listed initial committers from Intel, Kyligence, Alibaba, Meituan, BIGO, Baidu, NetEase and Microsoft.",
+      "Gluten entered the Apache Incubator on 15 December 2023, made its first Apache release, 1.2.0, in September 2024, and graduated to a top-level project on 18 February 2026. Release 1.7.0 in August 2026 dropped Spark 3.2, added Spark 4.1 and JDK 21 and 25 builds, and added native Delta Lake deletion-vector reads."
+    ],
+    "choices": [
+      { "choice": "Keep Spark’s planner and scheduler, replace only execution", "why": "The proposal’s goal was better performance without changing existing Spark SQL jobs, so users keep the same APIs, cluster managers and tools." },
+      { "choice": "Substrait as the hand-off format", "why": "Spark’s physical plan is translated into Substrait, a plan format not tied to one engine, and each backend runs that plan. This is how one plugin drives both Velox and ClickHouse." },
+      { "choice": "Fall back to Spark for anything unsupported", "why": "Operators, expressions or formats the backend can’t run go back to vanilla Spark, so a job still completes and gets faster where coverage exists." },
+      { "choice": "Arrow columnar batches through Spark’s columnar API", "why": "Native results come back as `ColumnarBatch` objects in Arrow format, which Spark already knows how to pass between operators, and a columnar shuffle avoids converting to rows between stages." }
+    ],
+    "timeline": [
+      { "year": "2022", "text": "Intel and Kyligence start Gluten as an open-source Spark plugin" },
+      { "year": "2023", "text": "Gluten 1.0.0 in July; enters the Apache Incubator on 15 December" },
+      { "year": "2024", "text": "First Apache release, 1.2.0, in September" },
+      { "year": "2026", "text": "Graduates to a top-level Apache project on 18 February" },
+      { "year": "2026", "text": "1.7.0 in August: Spark 4.1, JDK 21 and 25, native Delta deletion vectors" }
+    ],
+    "sources": [
+      { "label": "Apache Incubator: Gluten proposal (Intel and Kyligence, 2022; name means glue; initial committers)", "url": "https://cwiki.apache.org/confluence/display/INCUBATOR/GlutenProposal" },
+      { "label": "Apache Incubator: Gluten project status (entered 2023-12-15, graduated 2026-02-18)", "url": "https://incubator.apache.org/projects/gluten.html" },
+      { "label": "Apache Gluten downloads (release dates, non-Apache 1.0.0 in July 2023)", "url": "https://gluten.apache.org/downloads/" },
+      { "label": "Apache Gluten blog: Gluten 1.2.0, the first Apache release (3 September 2024)", "url": "https://gluten.apache.org/2024/09/03/Gluten-1.2.0-release.html" },
+      { "label": "GitHub: Apache Gluten v1.7.0 release notes (26 August 2026)", "url": "https://github.com/apache/gluten/releases/tag/v1.7.0" }
+    ]
+  },
+  "sources": [
+    { "label": "Apache Gluten home page (how it plugs in, backends, TPC-H and TPC-DS results)", "url": "https://gluten.apache.org/" },
+    { "label": "GitHub: apache/gluten README (Substrait, JNI, columnar shuffle, fallback, Spark versions)", "url": "https://github.com/apache/gluten" },
+    { "label": "Apache Gluten downloads (bundles per Spark version, CentOS 7 static builds, CPU baseline)", "url": "https://gluten.apache.org/downloads/" },
+    { "label": "Gluten docs (Velox and Bolt backend guides, getting started)", "url": "https://apache.github.io/gluten/" },
+    { "label": "Gluten docs: Velox backend limitations (ANSI fallback, result differences, memory)", "url": "https://apache.github.io/gluten/backends/velox/velox-backend-limitations.html" },
+    { "label": "GitHub: Apache Gluten v1.7.0 release notes (Spark 3.2 removed, Delta deletion vectors, JDK 21 and 25)", "url": "https://github.com/apache/gluten/releases/tag/v1.7.0" },
+    { "label": "Apache Incubator: Gluten project status", "url": "https://incubator.apache.org/projects/gluten.html" },
+    { "label": "Apache Incubator: Gluten proposal", "url": "https://cwiki.apache.org/confluence/display/INCUBATOR/GlutenProposal" }
+  ],
+  "checked": "2026-10-23"
+}

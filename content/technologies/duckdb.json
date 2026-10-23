@@ -10,7 +10,7 @@
   "summary": "An in-process analytical SQL database: a library with no server that queries Parquet, CSV, Iceberg and S3 directly.",
   "intro": [
     "DuckDB runs inside your process, the way SQLite does, but it’s built for analytics: columnar storage and a vectorised engine that works on batches of values in parallel threads, spilling to disk when a query outgrows memory. It has no external dependencies and installs as a library for Python, R, Java or Node.js, or as a single command-line binary. A database is one file, or you can skip that and query files where they are: `SELECT ... FROM 's3://bucket/*.parquet'`.",
-    "Extensions add formats and storage. `httpfs` reads and writes S3 and HTTP; `iceberg` reads Iceberg tables and writes them through a REST catalog; `delta` reads and writes Delta Lake using the Delta Kernel library; `postgres` queries a live PostgreSQL database; and `ducklake` attaches DuckLake catalogs. The current release is 1.5.6, and the 1.4 line (1.4.5) is the long-term support release."
+    "Extensions add formats and storage. `httpfs` reads and writes S3 and HTTP; `iceberg` reads Iceberg tables and writes them through a REST catalog; `delta` reads and writes Delta Lake using the Delta Kernel library; `postgres` queries a live PostgreSQL database; and `ducklake` attaches DuckLake catalogs. The current release is 2.0.0, out on 21 October 2026 and itself a long-term support release; the previous LTS line, 1.4, is supported until 17 November 2026."
   ],
   "strengths": [
     "Zero setup: `pip install duckdb` and you have a fast columnar engine",
@@ -51,6 +51,52 @@
       "  TO 's3://acme-lake/big-orders' (FORMAT parquet, PARTITION_BY (country));"
     ]
   },
+  "sections": [
+    {
+      "type": "code",
+      "title": "Python functions in SQL",
+      "intro": "`con.create_function(name, function, parameters, return_type)` registers a Python function that SQL can call like a built-in. Types can be given as arguments or read from the function’s annotations; the return type is required one way or the other. The default `type=\"native\"` calls the function once per row with plain Python values, which suits libraries that know nothing about Arrow. `type=\"arrow\"` passes `pyarrow` arrays of up to 2,048 values and expects an array back, which is generally much faster. By default a NULL argument gives NULL without calling the function, and a Python exception fails the query (`null_handling=\"special\"` and `exception_handling=\"return_null\"` change that). DuckDB assumes the function is pure and may call it once and reuse the result, so pass `side_effects=True` for anything random or stateful. Registration needs NumPy installed; `con.remove_function(name)` drops a function again. Tested with DuckDB 2.0.0.",
+      "lang": "python",
+      "source": [
+        "import duckdb",
+        "import pyarrow.compute as pc",
+        "from duckdb.sqltypes import VARCHAR",
+        "",
+        "def domain(url: str) -> str:            # native: called once per row",
+        "    return url.split(\"/\")[2]",
+        "",
+        "def shout(s):                           # arrow: gets batches of up to 2,048 values",
+        "    return pc.utf8_upper(s)",
+        "",
+        "con = duckdb.connect()",
+        "con.create_function(\"domain\", domain)   # types come from the annotations",
+        "con.create_function(\"shout\", shout, [VARCHAR], VARCHAR, type=\"arrow\")",
+        "",
+        "print(con.sql(\"\"\"",
+        "    SELECT domain(url) AS site, shout(domain(url)) AS loud",
+        "    FROM (VALUES ('https://duckdb.org/docs'), (NULL)) t(url)",
+        "\"\"\").fetchall())",
+        "# [('duckdb.org', 'DUCKDB.ORG'), (None, None)]   NULL in, NULL out by default"
+      ]
+    },
+    {
+      "type": "code",
+      "title": "Hive-partitioned folders",
+      "intro": "Many lakes keep one folder per partition value, such as `orders/year=2026/month=10/`. With `hive_partitioning = true`, `read_parquet` turns those folder names into columns, and DuckDB switches it on by itself when it sees `key=value` folders. A filter on a partition column is pushed into the scan, so folders that can’t match are never opened. Values that look like dates, timestamps or integers get those types (`hive_types` sets them explicitly, `hive_types_autocast = 0` turns the guessing off). `COPY ... TO` with `PARTITION_BY` writes the same layout; it takes column names only, so compute a derived key such as the year in the query first. The partition values live in the folder names, not inside the Parquet files.",
+      "lang": "sql",
+      "source": [
+        "-- write one folder per value: s3://acme-lake/orders/year=2026/month=10/data_0.parquet",
+        "COPY (SELECT *, year(day) AS year, month(day) AS month FROM orders)",
+        "  TO 's3://acme-lake/orders' (FORMAT parquet, PARTITION_BY (year, month));",
+        "",
+        "-- read: folder names come back as columns, and the filter skips other folders",
+        "SELECT region, sum(amount) AS total",
+        "FROM read_parquet('s3://acme-lake/orders/*/*/*.parquet', hive_partitioning = true)",
+        "WHERE year = 2026 AND month = 10",
+        "GROUP BY region;"
+      ]
+    }
+  ],
   "history": {
     "story": [
       "By the late 2010s, a data scientist with a few gigabytes in R or pandas had two poor options. A database server meant installing, configuring and loading data through a slow client protocol. SQLite ran inside the program with no setup, but it was built for transactions, with a row-by-row engine over B-trees, so analytical queries ran very slowly. The dataframe tools themselves offered relational-style operators but no query optimiser.",
@@ -68,7 +114,7 @@
       { "year": "2021", "text": "DuckDB Labs spins off from CWI; the DuckDB Foundation is set up" },
       { "year": "2024", "text": "DuckDB 1.0 in June, with a stable storage format" },
       { "year": "2025", "text": "1.4.0 ships as a long-term support release; every other version will be LTS" },
-      { "year": "2026", "text": "DuckLake 1.0 in April; DuckDB Labs becomes DuckLabs in May; DuckLabs announces in August it will join AWS" }
+      { "year": "2026", "text": "DuckLake 1.0 in April; DuckDB Labs becomes DuckLabs in May; DuckLabs announces in August it will join AWS; 2.0.0 LTS in October" }
     ],
     "sources": [
       { "label": "Raasveldt and Mühleisen: DuckDB: an Embeddable Analytical Database (SIGMOD 2019)", "url": "https://mytherin.github.io/papers/2019-duckdbdemo.pdf" },
@@ -76,7 +122,8 @@
       { "label": "DuckDB blog: Announcing DuckDB 1.0.0 (Jun 2024)", "url": "https://duckdb.org/2024/06/03/announcing-duckdb-100.html" },
       { "label": "DuckDB blog: Announcing DuckDB 1.4.0 LTS (Sep 2025)", "url": "https://duckdb.org/2025/09/16/announcing-duckdb-140.html" },
       { "label": "DuckDB blog: DuckLake v1.0 reaches production-readiness (Apr 2026)", "url": "https://duckdb.org/2026/04/13/ducklake-10.html" },
-      { "label": "DuckDB blog: DuckLabs to join AWS, projects to remain open source (Aug 2026)", "url": "https://duckdb.org/2026/08/26/ducklabs-to-join-aws.html" }
+      { "label": "DuckDB blog: DuckLabs to join AWS, projects to remain open source (Aug 2026)", "url": "https://duckdb.org/2026/08/26/ducklabs-to-join-aws.html" },
+      { "label": "DuckDB: Release calendar (2.0.0 LTS, 21 October 2026)", "url": "https://duckdb.org/release_calendar" }
     ]
   },
   "sources": [
@@ -96,7 +143,9 @@
     { "label": "DuckDB docs: Lance extension", "url": "https://duckdb.org/docs/current/core_extensions/lance.html" },
     { "label": "DuckDB: Release calendar (current and LTS releases)", "url": "https://duckdb.org/release_calendar" },
     { "label": "DuckDB FAQ: DuckDB Foundation, DuckLabs and licensing", "url": "https://duckdb.org/faq" },
-    { "label": "DuckDB docs: JSON overview", "url": "https://duckdb.org/docs/stable/data/json/overview" }
+    { "label": "DuckDB docs: JSON overview", "url": "https://duckdb.org/docs/stable/data/json/overview" },
+    { "label": "DuckDB docs: Python function API (create_function, native and Arrow UDFs)", "url": "https://duckdb.org/docs/lts/clients/python/function" },
+    { "label": "DuckDB docs: Hive partitioning (reading, filter pushdown, PARTITION_BY)", "url": "https://duckdb.org/docs/lts/data/partitioning/hive_partitioning" }
   ],
-  "checked": "2026-10-05"
+  "checked": "2026-10-23"
 }

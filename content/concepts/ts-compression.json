@@ -1,0 +1,178 @@
+{
+  "$schema": "../../.schemas/concepts.schema.json",
+  "name": "Time-series compression",
+  "icon": "shrink",
+  "category": "data",
+  "order": 10,
+  "parent": "tsdb",
+  "summary": "How time-series databases shrink a 16-byte point (a 64-bit time stamp and a 64-bit float) to one or two bytes: store differences instead of time stamps, XOR each float with an earlier one, and replace repeated tags with small numbers.",
+  "howItWorks": "Time-series compression exploits three habits of the data: points arrive at a near-fixed interval, a value is usually close to the one before it, and tags such as `host` or `region` repeat on every point. Each series is compressed on its own, in time order, so neighbours really are similar. Time stamps become deltas (60, 60, 61, 59) and then deltas of deltas (0, 1, −2): a perfectly regular series stores one `0` bit per point, and Facebook’s Gorilla found that about 96% of its time stamps took a single bit. Integers and deltas are then packed into as few bits as the largest value needs (Simple-8b, frame of reference) or run-length encoded when they repeat. Floats can’t be subtracted without rounding errors, so Gorilla XORs each value’s 64 bits with the previous value’s. Equal values give all zeros and cost one bit; close values share the sign, exponent and first mantissa bits, so the XOR starts with a long run of zeros, and only the “meaningful” bits in the middle are written, with a few control bits that give their position. Later schemes waste fewer of those control bits. Chimp (VLDB 2022) noticed that the XOR of two different values rarely ends in many zeros, because decimals such as 21.3 have no short binary form, so it stops paying 6 bits to record trailing zeros and uses 3 bits for leading zeros; Chimp128 XORs with the best match among the previous 128 values. Elf (VLDB 2023) first rounds the value down in binary, “erasing” mantissa bits it can restore from the number of decimal places, so the XOR ends in many zeros. ALP (SIGMOD 2024) skips XOR for most data: since most doubles began as decimals, it multiplies a block of 1,024 values by a power of ten, stores the resulting integers bit-packed, and keeps the few values that don’t round-trip exactly as exceptions. Tags and other strings are stored once in a dictionary and referenced by small integer ids, which compress further with run-length encoding when the same id repeats. All of this is lossless; downsampling and rollups, which throw detail away, are a separate tool.",
+  "analogy": "A weather diary kept by someone in a hurry. Instead of writing “14:00, 21.3 degrees” on every line, they write the date and first reading once, then just a tick when nothing changed and “+0.1” when it did. The town’s name goes on the cover, not on every page.",
+  "useWhen": [
+    "Choosing or tuning a time-series store: knowing the encodings tells you why regular intervals, stable value precision and low-cardinality tags make data an order of magnitude smaller",
+    "Designing a schema: time stamps sorted per series, values in typed columns and repeating labels in separate tag columns compress far better than mixed rows",
+    "Writing your own storage for metrics or sensor data, where a few hundred lines of delta-of-delta and XOR encoding can cut memory by around ten times",
+    "Columnar formats and engines that store many doubles, where a float encoding such as ALP beats a general-purpose codec on speed and lets readers skip blocks"
+  ],
+  "avoidWhen": [
+    "Values that jump around with full double precision, such as GPS coordinates or random noise: XOR-based schemes save little, and the ALP paper measured Gorilla at about 66 bits per value on point-of-interest coordinates, more than the 64 raw bits",
+    "Irregular events such as logs or trades at random times, where deltas vary and the 1-bit case rarely happens; general-purpose compression of columns often does better",
+    "Data you query mostly by single points or update in place: these encodings decode a block from its start, so random access and edits mean decompressing and rewriting the block",
+    "Confusing it with downsampling: these schemes are lossless, so if you only need hourly averages, a rollup saves far more than any encoding"
+  ],
+  "example": "In spring 2015 Facebook’s monitoring system took in about 12 million data points a second across more than 2 billion series. At 16 bytes a point, keeping a day in memory would have needed some 16 TB of RAM. Gorilla, its in-memory store, compressed each series in two-hour blocks: delta-of-delta time stamps took one bit for about 96% of points, and XOR-encoded values took one bit for about 51% of points, where the value hadn’t changed. The average fell to 1.37 bytes per point, a twelvefold reduction, which made keeping 26 hours of data in memory practical.",
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "# Counts the bits Gorilla's encoding would use; Python 3, standard library only.",
+      "import struct",
+      "",
+      "def bits(x: float) -> int:                       # the 64 raw bits of a double",
+      "    return struct.unpack(\">Q\", struct.pack(\">d\", x))[0]",
+      "",
+      "def lz(x): return 64 - x.bit_length()           # leading zero bits",
+      "def tz(x): return (x & -x).bit_length() - 1     # trailing zero bits",
+      "",
+      "def timestamp_bits(ts):                         # Gorilla: delta of deltas",
+      "    total, prev_delta = 64 + 14, ts[1] - ts[0]  # first time stamp and first delta",
+      "    for a, b in zip(ts[1:], ts[2:]):",
+      "        dod, prev_delta = (b - a) - prev_delta, b - a",
+      "        total += (1 if dod == 0 else 2 + 7 if -63 <= dod <= 64",
+      "                  else 3 + 9 if -255 <= dod <= 256",
+      "                  else 4 + 12 if -2047 <= dod <= 2048 else 4 + 32)",
+      "    return total",
+      "",
+      "def value_bits(vs):                             # Gorilla: XOR with the previous value",
+      "    total, prev, window = 64, bits(vs[0]), None",
+      "    for v in vs[1:]:",
+      "        x, prev = bits(v) ^ prev, bits(v)",
+      "        if x == 0:",
+      "            total += 1                          # '0': same value",
+      "        elif window and lz(x) >= window[0] and tz(x) >= window[1]:",
+      "            total += 2 + 64 - window[0] - window[1]           # '10': reuse last window",
+      "        else:",
+      "            window = (min(lz(x), 31), tz(x))                  # '11': new window",
+      "            total += 2 + 5 + 6 + 64 - window[0] - window[1]",
+      "    return total",
+      "",
+      "for a, b in [(21.3, 21.3), (21.3, 21.4), (21.0, 22.0)]:",
+      "    x = bits(a) ^ bits(b)",
+      "    print(f\"{a} ^ {b} = {x:064b} lead {lz(x)}, trail {tz(x) if x else 64}\")",
+      "# 21.3 ^ 21.3 = 0000000000000000000000000000000000000000000000000000000000000000 lead 64, trail 64",
+      "# 21.3 ^ 21.4 = 0000000000000000001010101010101010101010101010101010101010101011 lead 18, trail 0",
+      "# 21.0 ^ 22.0 = 0000000000000011000000000000000000000000000000000000000000000000 lead 14, trail 48",
+      "",
+      "ts = [1_700_000_000 + 60 * i + (i % 10 == 3) for i in range(120)]  # every 60 s, a few 1 s late",
+      "steady = [21.3] * 40 + [21.4] * 30 + [21.5] * 30 + [21.4] * 20",
+      "jumpy = [round(21 + 0.1 * (i * 7 % 5), 1) for i in range(120)]     # changes every reading",
+      "for name, vs in [(\"steady\", steady), (\"jumpy\", jumpy)]:",
+      "    n = (timestamp_bits(ts) + value_bits(vs)) / 8",
+      "    print(f\"{name}: {len(ts) * 16} bytes raw, {n:.0f} encoded, {n / len(ts):.2f} per point\")",
+      "# steady: 1920 bytes raw, 104 encoded, 0.87 per point",
+      "# jumpy: 1920 bytes raw, 800 encoded, 6.67 per point"
+    ]
+  },
+  "related": ["tsdb", "file-formats", "metrics"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "Encodings for time stamps, integers and tags",
+      "intro": "These work on integers, so time stamps, counters and dictionary ids all go through them. Real systems chain them: deltas first, then bit packing or run-length encoding of the deltas.",
+      "corner": "Encoding",
+      "columns": ["How it works", "Works best when", "Where you find it"],
+      "rows": [
+        { "label": "Delta", "values": [
+          "Store the first value, then each value minus the one before",
+          "Values grow steadily, so the differences are small",
+          "InfluxDB TSM time stamps; Parquet `DELTA_BINARY_PACKED` for 32- and 64-bit integers"
+        ] },
+        { "label": "Delta of deltas", "values": [
+          "Store the change in the delta. Gorilla writes `0` for no change, then `10` plus 7 bits, `110` plus 9 bits, `1110` plus 12 bits, or `1111` plus 32 bits",
+          "Points arrive at a fixed interval, so most deltas of deltas are zero",
+          "Gorilla and Beringei; Prometheus XOR chunks; TimescaleDB integer and time stamp columns"
+        ] },
+        { "label": "Bit packing (Simple-8b, frame of reference)", "values": [
+          "Pack each group of integers into the fewest bits its largest member needs; frame of reference subtracts the group’s minimum first",
+          "Numbers are small but not equal, such as deltas or dictionary ids",
+          "Simple-8b in InfluxDB TSM and TimescaleDB; Parquet’s delta encoding uses a minimum delta per block and a bit width per miniblock"
+        ] },
+        { "label": "Run-length encoding", "values": [
+          "Store a value once with how many times it repeats",
+          "Long runs of one value: identical deltas, a status flag, a sorted tag column",
+          "InfluxDB TSM (time stamps whose deltas are all equal, integers that are all equal); TimescaleDB; Parquet’s RLE and bit-packing hybrid for dictionary ids and booleans"
+        ] },
+        { "label": "Dictionary", "values": [
+          "Keep each distinct string once and store a small integer id per row",
+          "A few values repeat often, such as host, region or status",
+          "Prometheus index symbol table for label names and values; TimescaleDB for columns with few distinct values; Parquet `RLE_DICTIONARY`, which falls back to plain encoding when the dictionary grows too large"
+        ] }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Float encodings measured on the same data",
+      "intro": "Bits per value for 64-bit doubles (64 means no compression), values only, from Table 4 of the ALP paper (SIGMOD 2024), which ran every scheme on the same 30 datasets: 13 time series such as city temperatures, stock prices and wind direction, and 17 other columns. Lower is better.",
+      "corner": "Scheme",
+      "columns": ["Idea", "13 time series", "All 30 datasets", "Where it’s used"],
+      "rows": [
+        { "label": "Gorilla (VLDB 2015)", "values": ["XOR with the previous value; store the meaningful bits, reusing the last window of leading and trailing zeros when it fits", "48.1", "42.2", "Gorilla and Beringei at Facebook; InfluxDB TSM floats; TimescaleDB floats"] },
+        { "label": "Chimp (VLDB 2022)", "values": ["XOR with the previous value; 3 bits for leading zeros, and trailing zeros recorded only when there are more than 6", "42.6", "37.7", "DuckDB 0.6 to 0.9"] },
+        { "label": "Chimp128 (VLDB 2022)", "values": ["Like Chimp, but XOR with whichever of the previous 128 values gives the most trailing zeros, at the cost of a 7-bit offset", "24.5", "28.7", "Research code"] },
+        { "label": "Patas (DuckDB)", "values": ["A Chimp128 variant that stores whole bytes instead of bits, giving up some compression for faster decoding", "30.9", "35.5", "DuckDB 0.6 to 0.9"] },
+        { "label": "Elf (VLDB 2023)", "values": ["Erase low mantissa bits that can be restored from the value’s decimal precision, then XOR, so most XORs end in long runs of zeros", "18.2", "23.1", "Research code"] },
+        { "label": "ALP (SIGMOD 2024)", "values": ["Per vector of 1,024 values, multiply by a power of ten, store the integers bit-packed, keep values that don’t round-trip as exceptions; for real doubles, compress only the front bits", "16.4", "21.7", "DuckDB’s encoding for `FLOAT` and `DOUBLE` since 0.10"] },
+        { "label": "Zstd, level 3 (general purpose)", "values": ["General-purpose compression of whole byte blocks, not designed for floats", "17.2", "20.6", "The general-purpose baseline in the paper"] }
+      ],
+      "notes": [
+        "Each paper measured its predecessors on its own data, and the numbers agree on the order. Chimp’s paper: Gorilla 47.79, Chimp 43.57 and Chimp128 26.44 bits per value averaged over 14 time series. Elf’s paper: compressed size 76% of the original for Gorilla, 70% for Chimp, 42% for Chimp128 and 37% for Elf on its time series datasets.",
+        "Speed differs more than size. In the ALP paper, ALP decompressed about 55 times faster than Gorilla, and Elf was about 47 times slower to compress and 215 times slower to decompress than ALP. Zstd has to decompress a whole block, 256 KB in the paper’s setup, even when a query needs one vector of it.",
+        "Gorilla’s 1.37 bytes per point (about 11 bits) on Facebook’s data includes time stamps, and about half of those values were unchanged; the numbers above are values only, on public datasets."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "The XOR trick came from scientific computing. In 2006 Ratanaworabhan, Ke and Burtscher (DCC 2006) and Lindstrom and Isenburg (IEEE TVCG) compressed scientific floating-point data by predicting each value and encoding only how its bits differed from the prediction. At Facebook, the Operational Data Store (ODS) kept monitoring data in HBase, which was tuned for writes and could not keep up with the expected read load. By spring 2015 it took in about 12 million points a second, and at 16 bytes a point an in-memory cache would have needed some 16 TB of RAM. Tuomas Pelkonen, Scott Franklin, Justin Teller and colleagues built Gorilla, an in-memory time-series database, and replaced the expensive predictor with the simplest one, the previous value: XOR the two, store the bits that differ, and encode time stamps as deltas of deltas with bucket sizes picked from production data. Their VLDB 2015 paper reported 1.37 bytes per point, twelve times smaller, and Facebook open-sourced the engine as Beringei in February 2017.",
+      "The scheme became the default for floats in time-series stores. InfluxDB’s TSM engine encodes floats with its own implementation of Gorilla, Prometheus chunks store delta-of-delta time stamps and XORed values, and TimescaleDB’s XOR-based compression for floats is built on Gorilla, alongside delta-of-delta, Simple-8b and dictionary encoding for other columns.",
+      "Researchers then looked at where Gorilla’s bits went. Panagiotis Liakos, Katia Papakonstantinopoulou and Yannis Kotidis at the Athens University of Economics and Business found that XORs of real data rarely end in many zeros, and their Chimp (VLDB 2022) cut the control bits; Chimp128 looks back 128 values for a better match. DuckDB shipped Chimp and its own byte-aligned variant Patas in version 0.6 that November. Ruiyuan Li and colleagues at Chongqing University erased low bits to create trailing zeros in Elf (VLDB 2023). Azim Afroozeh, Leonardo Kuffó and Peter Boncz at CWI noticed that most doubles started life as decimals, and their ALP (SIGMOD 2024) encodes them as integers, a vector of 1,024 at a time; DuckDB 0.10 replaced Chimp and Patas with it in February 2024."
+    ],
+    "choices": [
+      { "choice": "Compress each series on its own, in time order", "why": "Gorilla used no compression across series. Within one series, neighbouring points are close in time and value, which is the redundancy every later scheme exploits." },
+      { "choice": "Store differences, not values", "why": "Most points arrive at a fixed interval, so the delta barely changes. Encoding the delta of deltas made about 96% of Gorilla’s time stamps a single bit." },
+      { "choice": "XOR floats instead of subtracting them", "why": "Subtracting doubles introduces rounding errors, and the result can’t always be reversed exactly. XOR works on the raw bits, is always reversible, and close values share their sign, exponent and first mantissa bits, so the result starts with zeros." },
+      { "choice": "Blocks bounded in time", "why": "A stream encoding has to be decoded from the start of its block. Gorilla measured that blocks longer than two hours gave diminishing returns, while short queries would have to decode more data." },
+      { "choice": "Vectors instead of value-by-value streams", "why": "Per-value decisions mean a branch for every value, which modern CPUs mispredict. ALP decides once per 1,024 values, stores that choice once, and its loops can use SIMD instructions." }
+    ],
+    "timeline": [
+      { "year": "2006", "text": "Ratanaworabhan, Ke and Burtscher compress scientific doubles by XORing them with a prediction" },
+      { "year": "2015", "text": "Facebook’s Gorilla paper: delta-of-delta time stamps and XOR values, 1.37 bytes per point" },
+      { "year": "2017", "text": "Facebook open-sources Beringei, the storage engine based on Gorilla" },
+      { "year": "2022", "text": "Chimp and Chimp128 at VLDB; DuckDB 0.6 adds Chimp and Patas" },
+      { "year": "2023", "text": "Elf at VLDB erases mantissa bits to lengthen runs of zeros" },
+      { "year": "2024", "text": "ALP at SIGMOD; DuckDB 0.10 makes it the encoding for its float columns" }
+    ],
+    "sources": [
+      { "label": "Pelkonen et al.: Gorilla, A Fast, Scalable, In-Memory Time Series Database (VLDB 2015)", "url": "https://www.vldb.org/pvldb/vol8/p1816-teller.pdf" },
+      { "label": "Engineering at Meta: Beringei, a high-performance time series storage engine (Feb 2017)", "url": "https://engineering.fb.com/2017/02/03/core-infra/beringei-a-high-performance-time-series-storage-engine/" },
+      { "label": "Liakos, Papakonstantinopoulou and Kotidis: Chimp, Efficient Lossless Floating Point Compression for Time Series Databases (VLDB 2022)", "url": "https://www.vldb.org/pvldb/vol15/p3058-liakos.pdf" },
+      { "label": "DuckDB blog: Announcing DuckDB 0.6.0 (Chimp and Patas, Nov 2022)", "url": "https://duckdb.org/2022/11/14/announcing-duckdb-060.html" },
+      { "label": "Li et al.: Elf, Erasing-based Lossless Floating-Point Compression (VLDB 2023)", "url": "https://www.vldb.org/pvldb/vol16/p1763-li.pdf" },
+      { "label": "Afroozeh, Kuffó and Boncz: ALP, Adaptive Lossless floating-Point Compression (SIGMOD 2024), CWI author copy", "url": "https://ir.cwi.nl/pub/33334/33334.pdf" },
+      { "label": "DuckDB blog: Announcing DuckDB 0.10.0 (ALP replaces Chimp and Patas, Feb 2024)", "url": "https://duckdb.org/2024/02/13/announcing-duckdb-0100.html" }
+    ]
+  },
+  "sources": [
+    { "label": "Pelkonen et al.: Gorilla (VLDB 2015), section 4.1 on time stamp and value compression", "url": "https://www.vldb.org/pvldb/vol8/p1816-teller.pdf" },
+    { "label": "Liakos, Papakonstantinopoulou and Kotidis: Chimp (VLDB 2022), encoding rules and Table 3 in bits per value", "url": "https://www.vldb.org/pvldb/vol15/p3058-liakos.pdf" },
+    { "label": "Li et al.: Elf (VLDB 2023), eraser design and Table 3 compression ratios", "url": "https://www.vldb.org/pvldb/vol16/p1763-li.pdf" },
+    { "label": "Afroozeh, Kuffó and Boncz: ALP (SIGMOD 2024), Table 4 bits per value and speed comparison", "url": "https://ir.cwi.nl/pub/33334/33334.pdf" },
+    { "label": "DuckDB: ALP, Adaptive Lossless Floating-Point Compression (default for floating-point numbers)", "url": "https://duckdb.org/library/alp/" },
+    { "label": "Prometheus docs: Chunks disk format (XOR chunk encoding)", "url": "https://github.com/prometheus/prometheus/blob/main/tsdb/docs/format/chunks.md" },
+    { "label": "Prometheus docs: Index disk format (symbol table)", "url": "https://github.com/prometheus/prometheus/blob/main/tsdb/docs/format/index.md" },
+    { "label": "Prometheus docs: Storage (1–2 bytes per sample, two-hour blocks)", "url": "https://prometheus.io/docs/prometheus/latest/storage/" },
+    { "label": "InfluxDB v1 docs: In-memory indexing and the Time-Structured Merge Tree (compression by type)", "url": "https://docs.influxdata.com/influxdb/v1/concepts/storage_engine/" },
+    { "label": "Tiger Data docs: Compression methods (delta-of-delta, Simple-8b, XOR built on Gorilla, dictionary)", "url": "https://www.tigerdata.com/docs/learn/columnar-storage/compression-methods" },
+    { "label": "Joshua Lockerman and Ajay Kulkarni: Time-series compression algorithms, explained (Tiger Data blog, 2020)", "url": "https://www.tigerdata.com/blog/time-series-compression-algorithms-explained" },
+    { "label": "Apache Parquet docs: Encodings (dictionary, RLE and bit-packing hybrid, DELTA_BINARY_PACKED, BYTE_STREAM_SPLIT)", "url": "https://parquet.apache.org/docs/file-format/data-pages/encodings/" }
+  ]
+}

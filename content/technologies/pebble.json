@@ -1,0 +1,103 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Pebble",
+  "concepts": ["key-value", "lsm-trees"],
+  "provider": "oss",
+  "vendor": "Cockroach Labs, Inc.",
+  "license": "BSD-3-Clause",
+  "website": "https://github.com/cockroachdb/pebble",
+  "repo": "https://github.com/cockroachdb/pebble",
+  "summary": "CockroachDB’s storage engine: an embedded LSM-tree key-value library written in Go, modelled on RocksDB and built for what CockroachDB needs.",
+  "intro": [
+    "Pebble is a Go library, not a server. A Go program imports it, opens a directory and calls `Set`, `Get`, `Delete`, `DeleteRange` and iterators on byte-string keys kept in sorted order. Writes can be grouped into atomic batches, and snapshots give a consistent view for reads. There is no SQL, network protocol or replication; CockroachDB builds those on top. Each CockroachDB store runs two Pebble instances, one for temporary distributed SQL data and one for everything else, and keeps its MVCC row versions in them, told apart by hybrid logical clock timestamps.",
+    "Underneath it is a log-structured merge tree laid out like RocksDB’s. A write goes to the write-ahead log and into the memtable, an arena-backed concurrent skiplist. Full memtables are flushed to immutable sorted files (SSTs) in level 0, and background compactions merge them down through levels L1 to L6, each holding roughly ten times as much as the one above. Pebble started from RocksDB’s file formats and its internal-key encoding (user key, sequence number, kind) and adds its own changes: L0 sublevels and flush splitting so several compactions can drain L0 at once, delete-only compactions that drop whole files covered by a range deletion, block-property filters that let iterators skip irrelevant blocks, and range keys. CockroachDB can also store large values in separate blob files outside the LSM, which its docs say cuts write amplification by about 50% for about 20% more space.",
+    "It deliberately leaves out much of RocksDB: column families, transactions, backups, universal and FIFO compaction, sub-compactions, the plain and hash table formats, and a persistent cache. File-format changes are gated behind “format major versions”, which a database ratchets up one way only. The `v1` series could open databases written by RocksDB 6.2.1, the last RocksDB version CockroachDB used; `v2` and later cannot. The code is BSD-3-Clause and developed in the open by Cockroach Labs; the latest tag is v2.1.7 (August 2026), and the master branch was still getting commits in October 2026."
+  ],
+  "strengths": [
+    "Pure Go: no cgo boundary to cross on every call, and Go’s own profiler and tooling see all the way into the storage engine",
+    "Proven at scale: CockroachDB’s default engine since v20.2 (November 2020), and Geth, the main Ethereum client, has used it by default for new nodes since v1.12 (May 2023)",
+    "LSM work beyond RocksDB for CockroachDB’s load: L0 sublevels, delete-only compactions, block-property filters, range keys and value separation",
+    "Much smaller code base: about 45,000 lines plus as many lines of tests at the 2020 launch, against more than 350,000 lines of C++ in RocksDB, and checked with randomized metamorphic and crash tests"
+  ],
+  "limits": [
+    "Built for one customer: features CockroachDB doesn’t need, such as column families, transactions and backups, are absent, and the README calls it focused on “internal usage by CockroachDB”",
+    "Only partly compatible with RocksDB, and only in `v1`: the README warns it may silently corrupt a RocksDB database that uses unsupported features, and `v2` cannot open RocksDB databases at all",
+    "Format major version upgrades are permanent, and databases from `v1` or earlier must be stepped through them with older Pebble versions before newer ones will open them",
+    "A library only: there is no server, replication or query language, and it is usable only from Go"
+  ],
+  "worksWith": [
+    { "id": "cockroachdb", "how": "is the storage engine (since 20.2) of" },
+    { "id": "rocksdb", "how": "started from the file formats of" }
+  ],
+  "snippet": {
+    "lang": "go",
+    "title": "Open a database, write a key and read it back (from the README)",
+    "source": [
+      "package main",
+      "",
+      "import (",
+      "\t\"fmt\"",
+      "\t\"log\"",
+      "",
+      "\t\"github.com/cockroachdb/pebble\"",
+      ")",
+      "",
+      "func main() {",
+      "\tdb, err := pebble.Open(\"demo\", &pebble.Options{})",
+      "\tif err != nil {",
+      "\t\tlog.Fatal(err)",
+      "\t}",
+      "\tkey := []byte(\"hello\")",
+      "\tif err := db.Set(key, []byte(\"world\"), pebble.Sync); err != nil {",
+      "\t\tlog.Fatal(err)",
+      "\t}",
+      "\tvalue, closer, err := db.Get(key)",
+      "\tif err != nil {",
+      "\t\tlog.Fatal(err)",
+      "\t}",
+      "\tfmt.Printf(\"%s %s\\n\", key, value)",
+      "\tif err := closer.Close(); err != nil { // the value stays valid until closed",
+      "\t\tlog.Fatal(err)",
+      "\t}",
+      "\tif err := db.Close(); err != nil {",
+      "\t\tlog.Fatal(err)",
+      "\t}",
+      "}"
+    ]
+  },
+  "history": {
+    "story": [
+      "CockroachDB stored its data in RocksDB from the start, and Cockroach Labs called it battle-tested and fast. But RocksDB served many users and had grown to more than 350,000 lines of C++, against about 30,000 in LevelDB. Cockroach Labs hit serious bugs, such as a compaction that looped forever on one file, and investigating them meant deep C++ work for a team whose expertise was in Go. Every call crossed the cgo boundary, which Go’s profiler could not see through, so the team wrote C++ helpers to avoid crossings and sometimes duplicated Go logic. They weighed forking RocksDB and switching to Badger or BoltDB, and rejected both.",
+      "Instead they wrote Pebble, starting from an unfinished Go port of LevelDB (`golang/leveldb`) whose skeleton and file-format code they reused; the repository dates from July 2018. Pebble implemented only the subset of RocksDB that CockroachDB used, which Peter Mattis said cut the work by at least half, and kept RocksDB’s on-disk formats, so a node could switch engines with a restart. CockroachDB 20.1 (May 2020) offered it behind `--storage-engine=pebble`, and 20.2 (November 2020) made it the default. Randomized “metamorphic” tests ran the same operations under many configurations and found bugs, including a Bloom filter hash bug inherited from LevelDB.",
+      "Others picked it up: Geth, the Ethereum client, made Pebble its default database for new nodes in v1.12 in May 2023. Pebble tagged v1.0.0 in October 2023 and v2.0.0 in January 2025; the `v2` series dropped the ability to open RocksDB databases, and newer format major versions added columnar blocks. Cockroach Labs still develops it alongside CockroachDB."
+    ],
+    "choices": [
+      { "choice": "Rewrite the engine in Go instead of forking RocksDB", "why": "The team knew Go better than C++, and the cgo boundary cost both speed and visibility: Go’s profiler could not see into RocksDB, and logic had to be duplicated on both sides." },
+      { "choice": "Implement only what CockroachDB uses", "why": "CockroachDB builds distributed transactions on atomic batches and never used RocksDB’s transactions or backups, so leaving those and other unused features out cut the project by at least half." },
+      { "choice": "Keep RocksDB’s file formats", "why": "Bidirectional compatibility with RocksDB 6.2.1 let users switch engines by restarting nodes, gave a fallback path, and let tests flip randomly between the two engines to find differences." },
+      { "choice": "Gate format changes behind one-way major versions", "why": "Pebble kept changing its files after leaving RocksDB behind. A database opens at the lowest format it supports and moves up only when asked, so each CockroachDB release can pin a known range of formats; rewrites then run in the background or block until done." }
+    ],
+    "timeline": [
+      { "year": "2018", "text": "The Pebble repository is created at Cockroach Labs in July" },
+      { "year": "2020", "text": "CockroachDB 20.1 offers Pebble as an option in May; 20.2 makes it the default in November" },
+      { "year": "2023", "text": "Geth 1.12 defaults to Pebble for new nodes (May); Pebble tags v1.0.0 (October)" },
+      { "year": "2025", "text": "v2.0.0 is tagged in January; `v2` no longer opens RocksDB databases" },
+      { "year": "2026", "text": "v2.1.7 is tagged in August" }
+    ],
+    "sources": [
+      { "label": "Cockroach Labs blog: Introducing Pebble, a RocksDB-inspired key-value store written in Go (Peter Mattis, September 2020)", "url": "https://www.cockroachlabs.com/blog/pebble-rocksdb-kv-store/" },
+      { "label": "Pebble README: production readiness, RocksDB compatibility, format major versions, pedigree", "url": "https://github.com/cockroachdb/pebble" },
+      { "label": "go-ethereum v1.12.0 release notes (Pebble becomes the default backend for new databases)", "url": "https://github.com/ethereum/go-ethereum/releases/tag/v1.12.0" },
+      { "label": "cockroachdb/pebble tags on GitHub (v1.0.0, v2.0.0, v2.1.7)", "url": "https://github.com/cockroachdb/pebble/tags" }
+    ]
+  },
+  "sources": [
+    { "label": "Pebble README: features, advantages over RocksDB, RocksDB features left out, compatibility, BSD-3-Clause", "url": "https://github.com/cockroachdb/pebble" },
+    { "label": "Pebble docs: Pebble vs RocksDB, implementation differences", "url": "https://github.com/cockroachdb/pebble/blob/master/docs/rocksdb.md" },
+    { "label": "Cockroach Labs blog: Introducing Pebble, a RocksDB-inspired key-value store written in Go (Peter Mattis, September 2020)", "url": "https://www.cockroachlabs.com/blog/pebble-rocksdb-kv-store/" },
+    { "label": "CockroachDB docs: Storage layer (Pebble, LSM levels, value separation, MVCC)", "url": "https://docs.cockroachlabs.com/docs/stable/architecture/storage-layer" },
+    { "label": "go-ethereum v1.12.0 release notes (Pebble becomes the default backend for new databases)", "url": "https://github.com/ethereum/go-ethereum/releases/tag/v1.12.0" },
+    { "label": "cockroachdb/pebble tags on GitHub (v2.1.7, August 2026)", "url": "https://github.com/cockroachdb/pebble/tags" }
+  ],
+  "checked": "2026-10-23"
+}

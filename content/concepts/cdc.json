@@ -1,0 +1,202 @@
+{
+  "$schema": "../../.schemas/concepts.schema.json",
+  "name": "Change data capture",
+  "icon": "database-zap",
+  "category": "analytics",
+  "order": 10,
+  "parent": "etl",
+  "summary": "Read a database’s own transaction log and turn every committed insert, update and delete into an ordered stream of change events that other systems can follow.",
+  "howItWorks": "Every database writes each change to a log before it applies it, for crash recovery and for its own replicas. Log-based CDC reads that log as if it were one more replica. In PostgreSQL you set `wal_level = logical`, list the tables in a publication, and create a logical replication slot; an output plugin such as `pgoutput` decodes the WAL into row changes, sent when each transaction commits, in commit order. In MySQL the reader connects like a replica and reads the row-based binlog, tracking its place as a file and offset or a GTID set. MongoDB exposes change streams over its oplog, with a resume token in every event, and SQL Server runs a capture job that copies changes from its transaction log into change tables that consumers query by log sequence number (LSN). A typical change event carries the row’s primary key, the row before and after the change, the operation, the transaction id and the log position. The log holds only recent changes, not the whole table, so a new reader first takes a snapshot: either one consistent read of every table, taken at the log position where streaming will start, or chunks read by primary key while streaming continues, with markers written into the log to tell which value is newer. Then it streams, saving the position it has finished with as its offset. Two things decide how hard the rest is. Ordering: changes to one row arrive in order if the stream is partitioned by primary key, but nothing orders events across partitions or tables, and after a crash a reader may get the last few changes again, so consumers must apply them idempotently. Schema changes: MySQL’s binlog contains `ALTER TABLE` statements, so a reader can rebuild each table’s columns at any point, but PostgreSQL’s logical decoding does not decode DDL at all, and SQL Server keeps a change table’s columns fixed until you create a second capture instance.",
+  "analogy": "A bank statement instead of a balance check. Looking at the balance every hour tells you it changed, but not about the deposit and withdrawal that cancelled out, or the account that was closed. The statement lists every transaction in order, and the bank keeps statements only for so long, so you must read them before they are thrown away.",
+  "useWhen": [
+    "Keeping a search index, cache or read model in step with the database that owns the data, within seconds, without the application writing to both",
+    "Replicating tables into a warehouse or lake with deletes included and without scanning the source tables",
+    "Migrating to a new database or another cloud with little downtime: copy everything, then stream changes until you switch over",
+    "Publishing domain events from a service reliably, through an outbox table written in the same transaction as the business data"
+  ],
+  "avoidWhen": [
+    "Hourly or daily copies of small tables are enough; a cursor query on `updated_at` needs no log access, slots or replica permissions",
+    "You can’t change server settings or get replication privileges, as on some managed databases or third-party systems you don’t run",
+    "Nobody will watch the pipeline: a stalled reader makes PostgreSQL keep WAL until the disk fills, unless you cap it",
+    "Other services would consume your raw table rows as their API; every column rename then breaks them, so publish designed events through an outbox instead"
+  ],
+  "example": "A shop runs PostgreSQL with Debezium reading two tables, `orders` and `outbox`, through one replication slot into Kafka. Order changes, keyed by `order_id`, feed the search index within a couple of seconds, and a nightly merge loads them into the warehouse with deletes intact. When checkout places an order, it inserts the order row and an `OrderPlaced` row into `outbox` in the same transaction, then deletes the outbox row; the insert is already in the WAL, so the event reaches Kafka even though the table stays empty. One Friday the Kafka Connect cluster stops. The slot keeps every WAL segment written since then, and at the shop’s write rate that would fill the 200 GB disk by Sunday night. Because the team set `max_slot_wal_keep_size = 100GB`, PostgreSQL invalidates the slot on Saturday, when it holds 100 GB, and the database keeps running. The connector cannot resume from a slot that no longer exists, so on Monday they create a new slot and Debezium re-reads the tables in chunks while it streams.",
+  "providers": {
+    "aws": "AWS DMS, with “full load plus CDC” and “CDC only” tasks that read engine logs (logical replication slots on PostgreSQL, the row-based binlog on MySQL, LogMiner or the binary reader on Oracle); DynamoDB Streams for item-level changes, kept for 24 hours",
+    "gcp": "Datastream: serverless CDC and backfill from MySQL, PostgreSQL and AlloyDB, Oracle, SQL Server, MongoDB and Spanner into BigQuery or Cloud Storage",
+    "azure": "Built-in CDC in SQL Server, Azure SQL Database and Azure SQL Managed Instance (change tables filled from the transaction log); Fabric Mirroring, which replicates Azure SQL, Azure Database for PostgreSQL, Cosmos DB, Oracle, Snowflake and others into Delta tables in OneLake; Fabric eventstream CDC sources, which emit Debezium-format change events",
+    "oss": "Debezium (on Kafka Connect, as Debezium Server or embedded in a Java app); PostgreSQL’s own logical replication and `pg_recvlogical`; OLake for databases into Iceberg. Managed services built on log-based CDC: Estuary, Artie, Fivetran"
+  },
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "-- PostgreSQL started with wal_level = logical (output from PostgreSQL 15)",
+      "CREATE TABLE orders (id int PRIMARY KEY, status text);",
+      "SELECT * FROM pg_create_logical_replication_slot('cdc_demo', 'test_decoding');",
+      "",
+      "INSERT INTO orders VALUES (1, 'new');",
+      "UPDATE orders SET status = 'paid' WHERE id = 1;",
+      "DELETE FROM orders WHERE id = 1;",
+      "",
+      "-- Read the changes without consuming them",
+      "SELECT data FROM pg_logical_slot_peek_changes('cdc_demo', NULL, NULL);",
+      "-- BEGIN 725",
+      "-- table public.orders: INSERT: id[integer]:1 status[text]:'new'",
+      "-- COMMIT 725",
+      "-- BEGIN 726",
+      "-- table public.orders: UPDATE: id[integer]:1 status[text]:'paid'",
+      "-- COMMIT 726",
+      "-- BEGIN 727",
+      "-- table public.orders: DELETE: id[integer]:1    <- only the key (REPLICA IDENTITY DEFAULT)",
+      "-- COMMIT 727",
+      "",
+      "-- The slot pins WAL until its consumer confirms; watch this number",
+      "SELECT slot_name, active,",
+      "       pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) AS held_back",
+      "FROM pg_replication_slots;",
+      "",
+      "-- Consume them: the same nine rows, and a second call returns nothing",
+      "SELECT data FROM pg_logical_slot_get_changes('cdc_demo', NULL, NULL);",
+      "",
+      "-- DDL is not decoded: this ALTER produces no event of its own",
+      "ALTER TABLE orders REPLICA IDENTITY FULL;",
+      "",
+      "SELECT pg_drop_replication_slot('cdc_demo');   -- an unused slot holds WAL forever"
+    ]
+  },
+  "related": ["etl", "stream", "stream-processing", "cqrs", "eventbus"],
+  "diagram": {
+    "caption": "The app writes to the database, which appends every change to its transaction log. Two CDC readers follow the log, each from its own saved position: one updates the search index within seconds, the other loads the warehouse in larger, slower batches. The log keeps entries until the slower reader has passed them.",
+    "w": 780,
+    "h": 280,
+    "nodes": [
+      {
+        "id": "app",
+        "x": 95,
+        "y": 70,
+        "label": "App",
+        "sub": "INSERT · UPDATE · DELETE",
+        "emit": { "every": 900, "jitter": 0.4, "color": 0 },
+        "out": ["db"]
+      },
+      { "id": "db", "x": 300, "y": 70, "label": "Database", "sub": "orders · customers", "out": ["wal"], "concept": "relational" },
+      {
+        "id": "wal",
+        "x": 540,
+        "y": 70,
+        "kind": "log",
+        "cells": 7,
+        "retain": 40,
+        "label": "Transaction log",
+        "sub": "WAL · binlog",
+        "readers": [
+          { "to": "search", "every": 1100, "batch": 2, "name": "slot: search" },
+          { "to": "wh", "every": 3200, "batch": 4, "name": "slot: warehouse" }
+        ]
+      },
+      { "id": "search", "x": 420, "y": 210, "label": "Search index", "sub": "seconds behind", "mode": "sink", "concept": "search" },
+      { "id": "wh", "x": 660, "y": 210, "label": "Warehouse", "sub": "merged in batches", "mode": "sink", "concept": "warehouse" }
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Three ways to capture changes",
+      "intro": "All three end with a list of changed rows. They differ in what they can see and in what they cost the source database.",
+      "corner": "Method",
+      "columns": ["How it finds changes", "Sees deletes and every step?", "Cost on the source", "Needs"],
+      "rows": [
+        { "label": "Query-based (polling)", "values": ["Runs `SELECT … WHERE updated_at > :last_seen` on a schedule", "No. A deleted row is simply gone, and two updates between polls look like one", "A query per table per poll; polling often means more load", "A reliable timestamp or version column on every table, kept up to date by every writer"] },
+        { "label": "Trigger-based", "values": ["Triggers on each table write the old and new row into an audit or change table", "Yes, inside the same transaction as the change", "An extra write on every insert, update and delete", "Permission to create triggers and tables, and a job to read and prune the change table"] },
+        {
+          "label": "Log-based",
+          "values": ["Reads the transaction log the database already writes (WAL, binlog, oplog, transaction log)", "Yes, every committed change in commit order, with before and after values if the database logs them", "Small for reads, but the database keeps log files until the reader confirms them", "Server settings such as `wal_level = logical` or row-based binlog, and replication privileges"]
+        }
+      ],
+      "notes": ["SQL Server’s own CDC is log-based but stores its output in change tables, which consumers then poll by LSN; its separate change tracking feature records only which rows changed, not their values."]
+    },
+    {
+      "type": "cards",
+      "title": "What goes wrong in production",
+      "intro": "Most CDC incidents come from the log’s retention, not from the reader’s code.",
+      "items": [
+        {
+          "name": "WAL bloat from a stalled slot",
+          "tag": "PostgreSQL",
+          "text": "A replication slot keeps every WAL file its consumer has not confirmed, even while nothing is connected, and also stops `VACUUM` removing catalog rows it may need. A forgotten or stalled slot fills the disk. Set `max_slot_wal_keep_size` (PostgreSQL 13+) or `idle_replication_slot_timeout` (PostgreSQL 18+) so the slot is invalidated first, alert on retained WAL, and send heartbeats if the captured tables are quiet."
+        },
+        { "name": "The log moved on without you", "tag": "MySQL, MongoDB, DynamoDB", "text": "These databases don’t wait for readers: binlog files expire, the oplog is a fixed-size window, and DynamoDB Streams keeps records for 24 hours. A reader that was down longer finds its saved position gone and has to snapshot again." },
+        { "name": "Schema changes", "tag": "all", "text": "A new column, a renamed column or a changed type has to reach every consumer. PostgreSQL never decodes DDL, so readers infer changes from the rows that follow; MySQL readers keep a history of DDL statements with their binlog positions; SQL Server ignores new columns until you create a second capture instance." },
+        { "name": "Duplicates after a restart", "tag": "all", "text": "Positions are saved periodically, so after a crash the last changes may arrive again; PostgreSQL itself persists a slot’s position only at checkpoints. Apply changes as upserts keyed on the primary key, or deduplicate by log position." },
+        { "name": "Missing before values", "tag": "PostgreSQL", "text": "With the default `REPLICA IDENTITY`, update and delete events carry only the primary key as the old row, and a table without a primary key emits none. Set `REPLICA IDENTITY FULL` on tables whose consumers need the whole old row." }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "The outbox pattern",
+      "body": [
+        "A service that saves an order and then publishes `OrderPlaced` to Kafka is doing two writes that can’t share a transaction. If it crashes between them, the order exists and the event doesn’t, or the other way round. The outbox pattern makes it one write: in the same database transaction as the order, the service inserts a row into an `outbox` table with an id, an aggregate type such as `order`, the aggregate’s id, an event type and a JSON payload. CDC reads the insert from the log and publishes it.",
+        "Debezium’s outbox event router turns each outbox row into a message on a topic named after the aggregate type, such as `outbox.event.order`, keyed by the aggregate id, so all events for one order land in one partition in order. The event id goes into a header for consumers to deduplicate. Because the log already holds the insert, the service can delete the outbox row straight away and the table stays small; the router ignores those delete events. Consumers get designed events instead of raw table rows, so the service can change its tables without breaking them."
+      ]
+    }
+  ],
+  "groups": [
+    { "name": "Change data capture engines", "summary": "Open-source readers you run yourself, which turn database logs into change events.", "technologies": ["debezium"] }
+  ],
+  "history": {
+    "story": [
+      "Getting changes out of a database used to mean polling tables or adding triggers. Database vendors built log readers for their own replication first; SQL Server’s change data capture, for example, uses the same internal procedure as its transactional replication to read the transaction log. Large web companies then built general systems: LinkedIn’s Databus, described at SoCC 2012, was a source-agnostic CDC system that fed LinkedIn’s search and graph indexes from its databases.",
+      "PostgreSQL 9.4, released in December 2014, added replication slots and logical decoding, credited in the release notes mainly to Andres Freund, so any program could read row changes from the WAL. In a 2015 talk Martin Kleppmann called getting data out of databases “a surprisingly tricky problem” and pointed to the log as the way. Debezium, started at Red Hat in late 2015, shipped its first connector in March 2016: a Kafka Connect source that read the MySQL binlog.",
+      "The next years went into the hard parts. Debezium’s 2019 post on the outbox pattern showed how to publish events reliably through CDC. Netflix’s DBLog paper (2020) described taking snapshots in chunks while the log keeps streaming, which Debezium adopted as incremental snapshots in 2021. PostgreSQL added `max_slot_wal_keep_size` in version 13 (2020) and `idle_replication_slot_timeout` in version 18 (2025) so an abandoned slot can no longer fill a disk. The clouds now sell CDC as a service: AWS DMS, Google’s Datastream and Microsoft Fabric’s mirroring."
+    ],
+    "choices": [
+      { "choice": "Read the log instead of polling tables or adding triggers", "why": "Polling misses deletes and changes that happen between polls, and adds load on the source; triggers add a write to every transaction. The log already records every committed change in order, so reading it costs the source little and misses nothing." },
+      { "choice": "Start with a snapshot, then stream from a known position", "why": "Logs are trimmed, so they can’t rebuild a table from the beginning. PostgreSQL exports a snapshot when a slot is created that matches exactly where the change stream begins, so a reader can copy the tables and stream from that point with no gap." },
+      { "choice": "Snapshot in chunks while streaming continues", "why": "A single initial snapshot can take hours, must restart from scratch if interrupted, and holds back streaming. DBLog’s low and high watermarks in the log let a reader copy one primary-key range at a time, merge it with live changes, and resume after a crash." },
+      { "choice": "Make the database keep the log until the reader confirms", "why": "PostgreSQL’s replication slots guarantee a reader never misses a change, at the cost of disk space while the reader is away. Later versions added size and idle-time limits, trading that guarantee for a database that stays up." }
+    ],
+    "timeline": [
+      { "year": "2012", "text": "LinkedIn presents Databus, its change data capture system, at SoCC" },
+      { "year": "2014", "text": "PostgreSQL 9.4 adds logical decoding and replication slots, December 18" },
+      { "year": "2016", "text": "Debezium 0.1 streams MySQL binlog changes into Kafka" },
+      { "year": "2019", "text": "Debezium describes the outbox pattern for publishing events through CDC" },
+      { "year": "2020", "text": "Netflix publishes DBLog; PostgreSQL 13 adds `max_slot_wal_keep_size`" },
+      { "year": "2021", "text": "Debezium adds incremental, watermark-based snapshots" },
+      { "year": "2025", "text": "PostgreSQL 18 can invalidate idle slots with `idle_replication_slot_timeout`" }
+    ],
+    "sources": [
+      { "label": "linkedin/databus on GitHub (source-agnostic distributed CDC system)", "url": "https://github.com/linkedin/databus" },
+      { "label": "Martin Kleppmann: Getting data out of databases, a surprisingly tricky problem (November 2015; cites Databus at SoCC 2012)", "url": "https://martin.kleppmann.com/2015/11/13/change-data-capture-at-all-your-base.html" },
+      { "label": "PostgreSQL 9.4 release notes (logical decoding, replication slots, December 2014)", "url": "https://www.postgresql.org/docs/release/9.4.0/" },
+      { "label": "PostgreSQL 13 release notes (`max_slot_wal_keep_size`, September 2020)", "url": "https://www.postgresql.org/docs/release/13.0/" },
+      { "label": "PostgreSQL 18 release notes (`idle_replication_slot_timeout`, September 2025)", "url": "https://www.postgresql.org/docs/release/18.0/" },
+      { "label": "Debezium blog: Debezium 0.1 released (March 2016)", "url": "https://debezium.io/blog/2016/03/18/Debezium-0-1-Released/" },
+      { "label": "Debezium blog: Five advantages of log-based change data capture (Gunnar Morling, July 2018)", "url": "https://debezium.io/blog/2018/07/19/advantages-of-log-based-change-data-capture/" },
+      { "label": "Debezium blog: Reliable microservices data exchange with the outbox pattern (Gunnar Morling, February 2019)", "url": "https://debezium.io/blog/2019/02/19/reliable-microservices-data-exchange-with-the-outbox-pattern/" },
+      { "label": "Andreakis and Papapanagiotou: DBLog, a watermark based change-data-capture framework (arXiv, October 2020)", "url": "https://arxiv.org/abs/2010.12597" },
+      { "label": "Debezium blog: Incremental snapshots in Debezium (Jiri Pechanec, October 2021)", "url": "https://debezium.io/blog/2021/10/07/incremental-snapshots/" },
+      { "label": "Microsoft Learn: What is change data capture? (relationship with the log reader agent)", "url": "https://learn.microsoft.com/en-us/sql/relational-databases/track-changes/about-change-data-capture-sql-server" }
+    ]
+  },
+  "sources": [
+    { "label": "PostgreSQL docs: Logical decoding concepts (slots, exported snapshots, WAL and catalog retention, resends after a crash)", "url": "https://www.postgresql.org/docs/current/logicaldecoding-explanation.html" },
+    { "label": "PostgreSQL docs: Logical decoding examples (`test_decoding`, peek and get changes)", "url": "https://www.postgresql.org/docs/current/logicaldecoding-example.html" },
+    { "label": "PostgreSQL docs: Replication settings (`max_slot_wal_keep_size`, `idle_replication_slot_timeout`)", "url": "https://www.postgresql.org/docs/current/runtime-config-replication.html" },
+    { "label": "MySQL 8.4 manual: The binary log", "url": "https://dev.mysql.com/doc/refman/8.4/en/binary-log.html" },
+    { "label": "MongoDB docs: Change streams (oplog, resume tokens)", "url": "https://www.mongodb.com/docs/manual/changestreams/" },
+    { "label": "Microsoft Learn: What is change data capture? (SQL Server capture job, change tables, LSNs, DDL handling)", "url": "https://learn.microsoft.com/en-us/sql/relational-databases/track-changes/about-change-data-capture-sql-server" },
+    { "label": "Microsoft Learn: Track data changes (change data capture vs change tracking, triggers and timestamp columns)", "url": "https://learn.microsoft.com/en-us/sql/relational-databases/track-changes/track-data-changes-sql-server" },
+    { "label": "PostgreSQL wiki: Audit trigger 91plus (trigger-based change logging)", "url": "https://wiki.postgresql.org/wiki/Audit_trigger_91plus" },
+    { "label": "Debezium blog: Five advantages of log-based change data capture (Gunnar Morling, July 2018)", "url": "https://debezium.io/blog/2018/07/19/advantages-of-log-based-change-data-capture/" },
+    { "label": "Debezium docs: PostgreSQL connector (replica identity, no DDL events, topic per table)", "url": "https://debezium.io/documentation/reference/stable/connectors/postgresql.html" },
+    { "label": "Debezium docs: MySQL connector (schema history, purged binlogs)", "url": "https://debezium.io/documentation/reference/stable/connectors/mysql.html" },
+    { "label": "Debezium docs: Outbox event router", "url": "https://debezium.io/documentation/reference/stable/transformations/outbox-event-router.html" },
+    { "label": "Debezium blog: Reliable microservices data exchange with the outbox pattern (February 2019)", "url": "https://debezium.io/blog/2019/02/19/reliable-microservices-data-exchange-with-the-outbox-pattern/" },
+    { "label": "Debezium blog: Incremental snapshots in Debezium (October 2021)", "url": "https://debezium.io/blog/2021/10/07/incremental-snapshots/" },
+    { "label": "AWS DMS docs: Creating tasks for ongoing replication (CDC from transaction logs)", "url": "https://docs.aws.amazon.com/dms/latest/userguide/CHAP_Task.CDC.html" },
+    { "label": "Amazon DynamoDB docs: Change data capture for DynamoDB Streams (24-hour retention, per-item order)", "url": "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Streams.html" },
+    { "label": "Google Cloud docs: Datastream overview", "url": "https://docs.cloud.google.com/datastream/docs/overview" },
+    { "label": "Microsoft Learn: Mirroring in Microsoft Fabric", "url": "https://learn.microsoft.com/en-us/fabric/mirroring/overview" },
+    { "label": "Microsoft Learn: Add PostgreSQL Database CDC source to an eventstream (Debezium events)", "url": "https://learn.microsoft.com/en-us/fabric/real-time-intelligence/event-streams/add-source-postgresql-database-change-data-capture" }
+  ]
+}

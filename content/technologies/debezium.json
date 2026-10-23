@@ -1,0 +1,108 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Debezium",
+  "concepts": ["cdc", "etl"],
+  "provider": "oss",
+  "vendor": "Commonhaus Foundation; core team at IBM, formerly Red Hat",
+  "license": "Apache 2.0",
+  "website": "https://debezium.io/",
+  "repo": "https://github.com/debezium/debezium",
+  "summary": "Open-source change data capture: connectors that read a database’s transaction log and emit every committed insert, update and delete as an event, usually into Kafka.",
+  "intro": [
+    "Debezium reads the log a database already keeps for replication and turns each committed row change into an event. Its PostgreSQL connector streams from a logical replication slot through the built-in `pgoutput` plugin (or the `decoderbufs` plugin); its MySQL connector reads the binlog. Other connectors cover MariaDB, MongoDB, Oracle, SQL Server, Db2, Cassandra, Vitess, Spanner, Informix and more. On first start a connector takes a consistent snapshot of the existing rows, emitted as `r` (read) events, then streams from the log position it noted before the scan. Each event carries the row’s key and a value with `before`, `after`, `op` (`c`, `u`, `d` or `r`) and a `source` block with metadata such as the PostgreSQL LSN and transaction id. The connector records that log position as its offset, so after a restart it carries on where it stopped.",
+    "There are three ways to run it. Most people deploy the connectors on Apache Kafka Connect, which writes each table’s changes to its own topic, named `<topic.prefix>.<schema>.<table>` by default. Debezium Server is a standalone application configured with one `application.properties` file that sends the same events to Amazon Kinesis, Google Cloud Pub/Sub, Apache Pulsar, Redis streams, NATS, RabbitMQ, Apache Iceberg and other sinks, without Kafka. The Debezium Engine is a Java library you embed in your own application. Debezium is free under Apache 2.0. Red Hat sponsored it from its first commit in November 2015; in November 2024 the project announced it was joining the Commonhaus Foundation, and its core team moved from Red Hat to IBM in July 2025. Version 3.7 came out in September 2026."
+  ],
+  "strengths": [
+    "Captures every committed change, including deletes, from the log, without polling tables or adding triggers",
+    "One event format across many databases, with the old and new row and the log position in each event",
+    "Snapshot then stream: existing rows and later changes arrive in one ordered feed, and offsets let a restarted connector resume",
+    "Runs on Kafka Connect, as a standalone server with more than 20 sinks, or embedded as a Java library"
+  ],
+  "limits": [
+    "Some database setup is needed: PostgreSQL must run with `wal_level=logical`, and the default `decoderbufs` plugin has to be installed unless you set `plugin.name` to `pgoutput`",
+    "A PostgreSQL replication slot keeps all WAL that Debezium has not confirmed, even while Debezium is down, so a stalled connector can fill the database’s disk; quiet captured tables need heartbeats to let the slot advance",
+    "PostgreSQL logical decoding does not report DDL, so schema changes do not arrive as events, and with the default replica identity a table without a primary key emits no update or delete events",
+    "The usual deployment means running Kafka, Kafka Connect and often a schema registry; Debezium Server removes Kafka but runs one source connector per instance"
+  ],
+  "worksWith": [
+    { "id": "kafka", "how": "writes change events, via Kafka Connect, to" },
+    { "id": "postgresql", "how": "streams changes via logical decoding from" },
+    { "id": "mysql", "how": "reads the binlog of" },
+    { "id": "mongodb", "how": "streams change events from" },
+    { "id": "cassandra", "how": "captures changes from" },
+    { "id": "vitess", "how": "captures changes from" },
+    { "id": "cockroachdb", "how": "captures changes from" },
+    { "id": "kinesis", "how": "can send events, via Debezium Server, to" },
+    { "id": "google-pubsub", "how": "can send events, via Debezium Server, to" },
+    { "id": "pulsar", "how": "can send events, via Debezium Server, to" },
+    { "id": "iceberg", "how": "can write events, via Debezium Server, to" }
+  ],
+  "snippet": {
+    "lang": "json",
+    "title": "A PostgreSQL connector, registered with Kafka Connect’s REST API (POST /connectors)",
+    "source": [
+      "{",
+      "  \"name\": \"fulfillment-connector\",",
+      "  \"config\": {",
+      "    \"connector.class\": \"io.debezium.connector.postgresql.PostgresConnector\",",
+      "    \"plugin.name\": \"pgoutput\",",
+      "    \"database.hostname\": \"192.168.99.100\",",
+      "    \"database.port\": \"5432\",",
+      "    \"database.user\": \"postgres\",",
+      "    \"database.password\": \"postgres\",",
+      "    \"database.dbname\": \"postgres\",",
+      "    \"topic.prefix\": \"fulfillment\",",
+      "    \"table.include.list\": \"public.inventory\"",
+      "  }",
+      "}"
+    ]
+  },
+  "history": {
+    "story": [
+      "Kafka Connect had just been announced as a framework for moving data in and out of Kafka. Randall Hauch, at Red Hat, saw it as the base on which “practical and reusable” change data capture could be built, and Red Hat let him start an open-source project around CDC connectors. The first commit landed in November 2015, and Debezium 0.1 shipped on 18 March 2016 with one connector, for MySQL, which read the binlog and ran on Kafka Connect, plus a library for embedding connectors in an application.",
+      "In 2017 Hauch moved to Confluent and handed the lead to Gunnar Morling. Debezium 1.0 followed on 18 December 2019, when the MySQL, PostgreSQL, MongoDB and SQL Server connectors were called stable; Oracle and Cassandra were still incubating.",
+      "Red Hat was Debezium’s only sponsor until November 2024, when the team announced it would join the Commonhaus Foundation, which also hosts Hibernate and Quarkus. In April 2025 the team said it would move with Red Hat’s middleware engineers to IBM that July, and that IBM would keep contributing to the open-source project."
+    ],
+    "choices": [
+      {
+        "choice": "Read the database’s own log instead of querying tables",
+        "why": "The log already holds every committed change in order, including deletes, so a reader adds little load and misses nothing between polls."
+      },
+      {
+        "choice": "Build on Kafka Connect",
+        "why": "Connect already handled distributing connectors over workers, storing offsets and restarting failed tasks, so Debezium only had to write the database-specific readers."
+      },
+      {
+        "choice": "Snapshot first, then stream from a recorded position",
+        "why": "Databases purge old log segments, so a new consumer cannot rebuild a table from the log alone; a snapshot plus the log position taken before it gives a complete, gap-free copy."
+      }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "First commit, at Red Hat, in November" },
+      { "year": "2016", "text": "Debezium 0.1 ships a MySQL connector for Kafka Connect" },
+      { "year": "2017", "text": "Randall Hauch hands the project lead to Gunnar Morling" },
+      { "year": "2019", "text": "Debezium 1.0: MySQL, PostgreSQL, MongoDB and SQL Server connectors are stable" },
+      { "year": "2024", "text": "The project announces it is joining the Commonhaus Foundation" },
+      { "year": "2025", "text": "The Debezium team moves from Red Hat to IBM in July" },
+      { "year": "2026", "text": "Debezium 3.7 is released in September" }
+    ],
+    "sources": [
+      { "label": "Debezium blog: Debezium 0.1 released (Randall Hauch, March 2016)", "url": "https://debezium.io/blog/2016/03/18/Debezium-0-1-Released/" },
+      { "label": "Debezium blog: Debezium evolving (Randall Hauch, April 2017)", "url": "https://debezium.io/blog/2017/04/26/Debezium-evolving/" },
+      { "label": "Debezium blog: Debezium 1.0.0.Final released (first commit November 2015)", "url": "https://debezium.io/blog/2019/12/18/debezium-1-0-0-final-released/" },
+      { "label": "Debezium blog: Debezium moving to Commonhaus (November 2024)", "url": "https://debezium.io/blog/2024/11/04/debezium-moving-to-commonhaus" },
+      { "label": "Debezium blog: Debezium moves to IBM (April 2025)", "url": "https://debezium.io/blog/2025/04/17/debezium-moves-to-ibm/" },
+      { "label": "Debezium releases (3.7 latest stable)", "url": "https://debezium.io/releases/" }
+    ]
+  },
+  "sources": [
+    { "label": "Debezium docs: Architecture (Kafka Connect, Debezium Server, Debezium Engine)", "url": "https://debezium.io/documentation/reference/stable/architecture.html" },
+    { "label": "Debezium docs: PostgreSQL connector (snapshots, events, plugins, WAL disk space)", "url": "https://debezium.io/documentation/reference/stable/connectors/postgresql.html" },
+    { "label": "Debezium docs: Debezium Server (sinks, configuration)", "url": "https://debezium.io/documentation/reference/stable/operations/debezium-server.html" },
+    { "label": "Debezium releases (3.7 latest stable)", "url": "https://debezium.io/releases/" },
+    { "label": "Debezium blog: Debezium moving to Commonhaus (November 2024)", "url": "https://debezium.io/blog/2024/11/04/debezium-moving-to-commonhaus" },
+    { "label": "Debezium blog: Debezium moves to IBM (April 2025)", "url": "https://debezium.io/blog/2025/04/17/debezium-moves-to-ibm/" },
+    { "label": "GitHub: debezium/debezium (Apache 2.0)", "url": "https://github.com/debezium/debezium" }
+  ],
+  "checked": "2026-10-23"
+}

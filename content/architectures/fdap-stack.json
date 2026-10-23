@@ -1,0 +1,85 @@
+{
+  "$schema": "../../.schemas/architectures.schema.json",
+  "title": "Analytic database on the FDAP stack",
+  "order": 100,
+  "summary": "Arrow Flight, DataFusion, Arrow and Parquet as the reusable core of a database, the way InfluxDB 3 is built.",
+  "intro": "Writing an analytic database used to mean writing everything: a file format, an in-memory layout, a query planner and engine, and a network protocol with clients for every language. The FDAP stack, named by InfluxData in 2023, takes those four layers from Apache projects instead: Arrow Flight to move data over the network, DataFusion to plan and run queries, Arrow as the in-memory columnar format, and Parquet for files on object storage. The team then writes only what is specific to its domain. This page follows InfluxDB 3 Core, the best-known system built this way: time-series writes land in an Arrow buffer, are saved as Parquet in a bucket, and are queried through DataFusion and returned over Flight.",
+  "fits": "Teams building their own database or data service, usually in Rust",
+  "diagram": {
+    "caption": "Agents write points to the database, which keeps recent data as Arrow in memory and persists older data as Parquet on object storage. Client queries arrive over Flight SQL; DataFusion reads both the buffer and the Parquet files and streams Arrow record batches back.",
+    "w": 860,
+    "h": 330,
+    "zones": [{ "x": 190, "y": 25, "w": 480, "h": 292, "label": "One database process" }],
+    "nodes": [
+      {
+        "id": "agents", "x": 95, "y": 75, "label": "Agents", "sub": "line protocol over HTTP",
+        "emit": { "every": 400, "jitter": 0.3, "cycle": true }, "out": ["ingest"]
+      },
+      { "id": "ingest", "x": 290, "y": 75, "label": "InfluxDB 3", "sub": "validate · WAL every 1 s", "tech": "influxdb", "route": "fanout", "out": ["buffer", "persist"] },
+      { "id": "persist", "x": 555, "y": 75, "label": "Apache Parquet", "sub": "persist every 10 min", "tech": "parquet", "kind": "queue", "cap": 12, "gap": 330, "out": ["store"] },
+      { "id": "buffer", "x": 555, "y": 170, "label": "Apache Arrow", "sub": "queryable buffer", "tech": "arrow", "mode": "reply", "delay": 10 },
+      { "id": "store", "x": 775, "y": 170, "label": "Amazon S3", "sub": "WAL + Parquet files", "tech": "s3", "mode": "reply", "delay": 140 },
+      {
+        "id": "clients", "x": 95, "y": 270, "label": "Clients", "sub": "Grafana · pandas · BI",
+        "emit": { "every": 1200, "jitter": 0.4, "req": true, "color": 1 }, "out": ["flight"]
+      },
+      { "id": "flight", "x": 290, "y": 270, "label": "Arrow Flight SQL", "sub": "gRPC · record batches", "tech": "arrow", "out": ["engine"] },
+      { "id": "engine", "x": 555, "y": 270, "label": "Apache DataFusion", "sub": "plans SQL and InfluxQL", "tech": "datafusion", "route": "fanout", "out": ["buffer", "store"] }
+    ]
+  },
+  "steps": [
+    {
+      "title": "Writes are validated and logged",
+      "text": "Agents such as Telegraf send line protocol over HTTP. InfluxDB 3 validates each write, adds it to an in-memory buffer and, by default every second, flushes that buffer as a write-ahead log file to object storage. Once the WAL file is stored, the write is durable.",
+      "nodes": ["agents", "ingest", "store"]
+    },
+    {
+      "title": "Recent data stays in memory as Arrow",
+      "text": "Logged data moves into a queryable buffer of Arrow record batches, the same columnar layout the query engine works on, so new points can be queried immediately without being converted.",
+      "nodes": ["buffer"]
+    },
+    {
+      "title": "Older data is persisted as Parquet",
+      "text": "Every ten minutes by default the oldest data in the buffer is written as Parquet files to the bucket. Parquet is the long-term format, and because it is an open standard, Spark, DuckDB, pandas or Snowflake can read the same files without an export pipeline.",
+      "nodes": ["persist", "store"]
+    },
+    {
+      "title": "DataFusion plans one query over both",
+      "text": "A SQL or InfluxQL query becomes one DataFusion plan that scans the Arrow buffer and the Parquet files together, skipping files and row groups whose statistics can’t match. InfluxData added its InfluxQL front end, deduplication and gap-filling operators through DataFusion’s extension points.",
+      "nodes": ["engine", "buffer", "store"]
+    },
+    {
+      "title": "Results stream back over Flight",
+      "text": "The client asks for a result with Flight SQL, a database protocol on top of Arrow Flight, and receives a stream of Arrow record batches over gRPC. Nothing is turned into rows or JSON on the way, so a Python client gets an Arrow table it can hand straight to pandas. An HTTP API with JSON, CSV or Parquet output is there for clients without Flight.",
+      "nodes": ["clients", "flight", "engine"]
+    }
+  ],
+  "good": [
+    "The hard parts are shared: InfluxData’s engineers estimated a DataFusion-class query engine at tens of person-years, and building on it brought features such as SQL joins almost for free",
+    "Open formats end to end: Parquet files and Arrow results work with pandas, Spark, DuckDB and BI tools without custom exporters",
+    "Flight and Flight SQL give clients in many languages, and let existing JDBC, ODBC and Python DB-API tools connect, without a team writing drivers",
+    "All four parts are Apache projects with many contributors, so their licences and direction can’t be changed overnight by one company"
+  ],
+  "watch": [
+    "You still build the database: the WAL, catalog, compaction, retention and clustering are yours, and InfluxDB 3 Core, for example, ships without a compactor",
+    "Much of the stack is Rust; DataFusion’s extension APIs are Rust traits, and its major versions, every few months, break those APIs",
+    "Parquet is a general format. InfluxData later gave InfluxDB 3 Enterprise its own time-series file format by default for new clusters and kept Parquet for export, a sign that a specialised format can still win for one workload",
+    "Flight is gRPC, not plain HTTP, so InfluxDB 3 also keeps an HTTP query API returning JSON, CSV or Parquet for clients that can’t use it"
+  ],
+  "swaps": [
+    { "text": "Need a finished database, not parts? GreptimeDB and InfluxDB 3 Core are both built on the same pieces.", "techs": ["greptimedb", "influxdb"] },
+    { "text": "Keep Parquet on Google Cloud Storage, Azure Blob Storage or local disk instead of S3; the object-store layer is the same.", "techs": ["gcs", "azure-blob"] },
+    { "text": "Want shared tables with snapshots instead of your own file layout? delta-rs and Lance both plug into DataFusion.", "techs": ["delta-lake", "lance"] },
+    { "text": "Embedding analytics in one process rather than building a server? DuckDB plays DataFusion’s role and reads and returns Arrow too.", "techs": ["duckdb", "arrow"] }
+  ],
+  "sources": [
+    { "label": "Andrew Lamb, InfluxData: Flight, DataFusion, Arrow and Parquet, using the FDAP architecture to build InfluxDB 3.0", "url": "https://www.influxdata.com/blog/flight-datafusion-arrow-parquet-fdap-architecture-influxdb/" },
+    { "label": "Paul Dix, InfluxData: Announcing InfluxDB IOx (Rust, Arrow, Parquet, DataFusion, object storage)", "url": "https://www.influxdata.com/blog/announcing-influxdb-iox/" },
+    { "label": "InfluxData: FDAP stack explained (term coined in 2023; roles of the four parts)", "url": "https://www.influxdata.com/learn/fdap-stack-explained/" },
+    { "label": "Data Engineering Podcast, episode 414: Paul Dix on the FDAP stack (February 2024)", "url": "https://dataengineeringpodcast.com/influxdb-fdap-database-stack-episode-414" },
+    { "label": "InfluxDB 3 Core docs: Data durability (WAL every second, queryable buffer, Parquet every ten minutes)", "url": "https://docs.influxdata.com/influxdb3/core/reference/internals/durability/" },
+    { "label": "InfluxDB 3 Core docs: Query data (Flight and HTTP APIs, Arrow tables in Python, output formats)", "url": "https://docs.influxdata.com/influxdb3/core/get-started/query/" },
+    { "label": "InfluxDB 3 Enterprise docs: Storage engine (.pt files by default for new clusters, Parquet downgrade)", "url": "https://docs.influxdata.com/influxdb3/enterprise/reference/internals/storage-engine/" },
+    { "label": "Apache Arrow docs: Arrow Flight RPC (GetFlightInfo, DoGet, gRPC)", "url": "https://arrow.apache.org/docs/format/Flight.html" }
+  ]
+}
