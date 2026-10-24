@@ -1,0 +1,102 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Grafana Loki",
+  "concepts": ["logs"],
+  "uses": ["observability", "alerting"],
+  "provider": "oss",
+  "vendor": "Grafana Labs",
+  "license": "AGPLv3 (Apache 2.0 until April 2021)",
+  "website": "https://grafana.com/oss/loki/",
+  "repo": "https://github.com/grafana/loki",
+  "summary": "A log store that indexes only a few labels per stream, keeps the log lines as compressed chunks in object storage, and greps them at query time with LogQL.",
+  "intro": [
+    "Most log search engines index every word of every line. Loki indexes almost nothing: each log line belongs to a stream, a unique set of labels such as `{service_name=\"checkout\", namespace=\"prod\"}`, and only those labels go into the index. The lines themselves are compressed into chunks, and both the index and the chunks are stored in one object storage bucket, such as Amazon S3, Google Cloud Storage or Azure Blob Storage. A query first picks streams by label, then reads their chunks for the time range and filters the lines, much like `grep`. The docs sum it up: a small index and highly compressed chunks make Loki simpler to run and much cheaper.",
+    "Logs arrive over HTTP from an agent such as Grafana Alloy or from any OpenTelemetry Collector, since Loki 3.0 has a native OTLP endpoint; resource attributes such as `service.name` and `k8s.namespace.name` become labels, and other attributes are kept as structured metadata next to the line. You query with LogQL, which looks like PromQL: `{job=\"mysql\"} |= \"error\"` returns lines, and `rate(...)` over the same selector turns them into a metric you can graph or alert on through the ruler. All components (distributor, ingester, querier, query frontend and others) are in one binary, which runs as a single process or split into microservices. Grafana Labs moved Loki from Apache 2.0 to AGPLv3 in April 2021; the current line is 3.7."
+  ],
+  "strengths": [
+    "Cheap to keep a lot of logs: the index stays small and the data sits compressed in object storage, so nobody is asked to log less",
+    "Uses the same labels as Prometheus and Tempo, so Grafana can jump from a spiking metric or a slow trace to the logs of the same service and time",
+    "LogQL turns logs into metrics with `rate` and `count_over_time`, and the ruler alerts on them through Alertmanager or Grafana Alerting",
+    "Scales from one process on a laptop to a microservices deployment ingesting petabytes a day, with the same binary and storage format"
+  ],
+  "limits": [
+    "No full-text index: a search for a word reads every chunk of every selected stream in the time range, so broad queries over days of logs are slow and costly",
+    "Labels must have few values. The docs recommend 10 to 15 at most (the default limit is 15) and warn that user IDs or IP addresses as labels build a huge index and thousands of tiny chunks",
+    "Running it at scale means a dozen components with hash rings and caches to size; the middle option, simple scalable mode, is deprecated and will be removed in Loki 4.0",
+    "AGPLv3 since 2021; Promtail, its original agent, was removed in 3.7.3, so pipelines that used it must move to Alloy or an OpenTelemetry Collector"
+  ],
+  "worksWith": [
+    { "id": "grafana", "how": "is queried with LogQL from" },
+    { "id": "s3", "how": "stores its index and chunks in" },
+    { "id": "gcs", "how": "can store its index and chunks in" },
+    { "id": "azure-blob", "how": "can store its index and chunks in" },
+    { "id": "opentelemetry", "how": "accepts logs over OTLP from" },
+    { "id": "prometheus", "how": "uses the same labels and query style as" }
+  ],
+  "alternatives": ["elasticsearch", "opensearch", "clickstack", "parseable"],
+  "specs": {
+    "data-model": "Log streams named by label sets; lines in compressed chunks",
+    "query-language": "LogQL",
+    "wire-protocol": "HTTP push API and native OTLP",
+    "secondary-indexes": "Labels only; no full-text index",
+    "storage-format": "Compressed chunks and a small index in object storage",
+    "scaling": "One binary, run as a single process or split into microservices",
+    "deployment": "Self-hosted"
+  },
+  "snippet": {
+    "lang": "text",
+    "title": "LogQL: pick streams by label, filter lines, then count",
+    "source": [
+      "# Log query: lines from the mysql job that contain \"error\" but not \"timeout\"",
+      "{job=\"mysql\"} |= \"error\" != \"timeout\"",
+      "",
+      "# Parse each line as JSON and keep only slow requests",
+      "{job=\"mysql\"} |= \"error\" | json | duration > 10s",
+      "",
+      "# Metric query: errors per second, per host, over 1-minute windows",
+      "sum by (host) (rate({job=\"mysql\"} |= \"error\" != \"timeout\" | json | duration > 10s [1m]))"
+    ]
+  },
+  "history": {
+    "story": [
+      "By 2018 Grafana Labs had metrics covered by Prometheus and wanted logs to match. Kubernetes made the problem obvious: `kubectl logs` shows only recent lines, and when a pod or node is gone, so are its logs. The existing log systems were, in the team’s words, too expensive or too unstable, and people were being asked to log less. That year Grafana Labs acquired Kausal and started Loki as a new open-source project; Tom Wilkie made the first commit to its repository on April 15, 2018.",
+      "The design goals were short: “Keep it simple. Just support grep!”, “Logs should be cheap. Nobody should be asked to log less.”, and metrics, logs and traces should work together. Loki borrowed Prometheus’s labels and its relabelling rules so that a log stream carries the same metadata as the metrics from the same pod, and its architecture came from the team’s experience running Cortex, a horizontally scalable Prometheus: the code that shards streams across ingesters was mostly taken from it. Goutham Veeramachaneni announced it in December 2018 as alpha software.",
+      "Loki 1.0 followed in November 2019 and 2.0 in October 2020. In April 2021 Grafana Labs relicensed Loki, with Grafana and Tempo, from Apache 2.0 to AGPLv3. Loki 3.0, in April 2024, added native OpenTelemetry ingestion, structured metadata and experimental bloom filters to skip chunks. In 2026 Loki 3.7 removed Promtail in favour of Grafana Alloy and handed its Helm chart to the community."
+    ],
+    "choices": [
+      { "choice": "Index labels, not log contents", "why": "The team wanted logs to be cheap and searching to be as simple as grep. Indexing only a stream’s labels keeps the index small; the price is that the querier must read and filter the chunks of every matching stream, a step later spread over many queriers by the query frontend." },
+      { "choice": "The same labels as Prometheus", "why": "The agent applied the same relabelling rules as Prometheus, so logs and metrics from one pod share metadata and Grafana can switch between them on one time range without a lookup table." },
+      { "choice": "Object storage for everything", "why": "Chunks in S3 or GCS cost far less than replicated disks. Early versions kept the index in Cassandra, Bigtable or DynamoDB; later the index also moved to the bucket, so a bucket is the only storage dependency." },
+      { "choice": "One binary, many roles", "why": "The same binary runs every component or just one, picked with `-target`, so a team can start with one process and split it into microservices later without changing the data format." }
+    ],
+    "timeline": [
+      { "year": "2018", "text": "Tom Wilkie’s first commit in April; announced as alpha at the end of the year" },
+      { "year": "2019", "text": "Loki 1.0 in November" },
+      { "year": "2020", "text": "Loki 2.0 in October" },
+      { "year": "2021", "text": "Relicensed from Apache 2.0 to AGPLv3 in April" },
+      { "year": "2024", "text": "Loki 3.0 in April: native OTLP ingestion, structured metadata, bloom filters" },
+      { "year": "2026", "text": "Loki 3.7 in March; Promtail removed in 3.7.3 in favour of Grafana Alloy" }
+    ],
+    "sources": [
+      { "label": "GitHub: Tom Wilkie’s initial commit to grafana/loki (April 15, 2018)", "url": "https://github.com/grafana/loki/commit/511006e57b5250c9918f1250b10641485fd91c1a" },
+      { "label": "Grafana Labs blog: Loki, Prometheus-inspired, open source logging for cloud natives (December 2018)", "url": "https://grafana.com/blog/2018/12/12/loki-prometheus-inspired-open-source-logging-for-cloud-natives/" },
+      { "label": "Grafana Labs: Grafana Labs at 5 (Kausal acquisition and Loki in 2018)", "url": "https://grafana.com/blog/grafana-labs-at-5-how-we-got-here-and-where-were-going/" },
+      { "label": "Grafana Labs: Grafana, Loki, and Tempo will be relicensed to AGPLv3 (April 2021)", "url": "https://grafana.com/blog/2021/04/20/grafana-loki-tempo-relicensing-to-agplv3/" },
+      { "label": "Grafana Labs blog: Grafana Loki 3.0 release, all the new features (April 2024)", "url": "https://grafana.com/blog/2024/04/09/grafana-loki-3.0-release-all-the-new-features/" },
+      { "label": "Grafana Loki docs: v3.7 release notes (Promtail removed, Helm chart to the community)", "url": "https://grafana.com/docs/loki/latest/release-notes/v3-7/" },
+      { "label": "GitHub: grafana/loki releases (1.0, 2.0, 3.0 and 3.7 dates)", "url": "https://github.com/grafana/loki/releases" }
+    ]
+  },
+  "sources": [
+    { "label": "Grafana Loki docs: Overview (labels, chunks, object storage, deployment modes)", "url": "https://grafana.com/docs/loki/latest/get-started/overview/" },
+    { "label": "Grafana Loki docs: Architecture (index and chunks, components, -target, TSDB index)", "url": "https://grafana.com/docs/loki/latest/get-started/architecture/" },
+    { "label": "Grafana Loki docs: Understand labels (cardinality, 10 to 15 labels, default limit of 15)", "url": "https://grafana.com/docs/loki/latest/get-started/labels/" },
+    { "label": "Grafana Loki docs: Ingesting logs to Loki using OpenTelemetry Collector (/otlp endpoint, default labels, structured metadata)", "url": "https://grafana.com/docs/loki/latest/send-data/otel/" },
+    { "label": "Grafana Loki docs: LogQL (log queries and metric queries)", "url": "https://grafana.com/docs/loki/latest/query/" },
+    { "label": "Grafana Loki docs: Metric queries (rate, count_over_time examples)", "url": "https://grafana.com/docs/loki/latest/query/metric_queries/" },
+    { "label": "Grafana Loki docs: v3.7 release notes", "url": "https://grafana.com/docs/loki/latest/release-notes/v3-7/" },
+    { "label": "Grafana Labs: Grafana, Loki, and Tempo will be relicensed to AGPLv3 (April 2021)", "url": "https://grafana.com/blog/2021/04/20/grafana-loki-tempo-relicensing-to-agplv3/" },
+    { "label": "GitHub: grafana/loki (AGPL-3.0, releases)", "url": "https://github.com/grafana/loki" }
+  ],
+  "checked": "2026-10-24"
+}

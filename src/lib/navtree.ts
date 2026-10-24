@@ -24,12 +24,12 @@ export interface NavNode {
 export interface Where {
   section: string;
   /** What kind of page `active` is. */
-  page?: 'topic' | 'concept' | 'kind' | 'tech' | 'compare' | 'architecture' | 'benchmark';
+  page?: 'topic' | 'concept' | 'kind' | 'tech' | 'compare' | 'architecture' | 'benchmark' | 'workload';
   active?: string;
 }
 
 /** Icons the site uses outside the content: sections, kinds, comparisons, architectures, benchmarks. */
-export const SITE_ICONS = ['house', 'shapes', 'box', 'arrow-left-right', 'network', 'square-mouse-pointer', 'bookmark', 'gauge', 'folder', 'building-2', 'landmark', 'layout-grid', 'timeline'];
+export const SITE_ICONS = ['house', 'shapes', 'box', 'arrow-left-right', 'network', 'square-mouse-pointer', 'bookmark', 'gauge', 'folder', 'building-2', 'landmark', 'layout-grid', 'timeline', 'target'];
 
 export function navTree(c: Catalog, { section, page, active }: Where): NavNode[] {
   const on = (kind: Where['page'], id: string) => page === kind && active === id;
@@ -122,7 +122,14 @@ export function navTree(c: Catalog, { section, page, active }: Where): NavNode[]
     branch({ ...leaf('technologies', 'Technologies', 'technologies/', 'box', section === 'technologies' && !active), children: catalog }),
     branch({
       ...leaf('compare', 'Compare', 'compare/', 'arrow-left-right', section === 'compare' && !active),
-      children: c.comparisons.map(m => leaf(`compare:${m.id}`, m.title, `compare/${m.id}/`, 'arrow-left-right', on('compare', m.id))),
+      children: [
+        leaf('compare:technologies', 'Side by side', 'compare/technologies/', 'arrow-left-right', on('compare', 'technologies')),
+        ...c.comparisons.map(m => leaf(`compare:${m.id}`, m.title, `compare/${m.id}/`, 'arrow-left-right', on('compare', m.id))),
+      ],
+    }),
+    branch({
+      ...leaf('workloads', 'Workloads', 'workloads/', 'target', section === 'workloads' && !active),
+      children: c.workloads.map(w => leaf(`workload:${w.id}`, w.name, `workloads/${w.id}/`, w.icon, on('workload', w.id))),
     }),
     branch({
       ...leaf('architectures', 'Architectures', 'architectures/', 'network', section === 'architectures' && !active),

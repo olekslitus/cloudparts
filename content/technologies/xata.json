@@ -1,0 +1,102 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Xata",
+  "concepts": ["relational"],
+  "provider": "vendor",
+  "vendor": "Xata",
+  "license": "Apache 2.0 for the open-source core; Xata Cloud and its Xatastor storage engine are proprietary",
+  "website": "https://xata.io/",
+  "repo": "https://github.com/xataio/xata",
+  "summary": "A platform that runs unmodified Postgres on Kubernetes with copy-on-write branches at the storage layer, scale to zero, and anonymized copies of production for development.",
+  "intro": [
+    "Xata does not change Postgres. It runs vanilla Postgres on Kubernetes through the CloudNativePG operator, which handles replicas, failover, upgrades, connection pooling and point-in-time backups to object storage, and puts the new parts underneath and around it. Underneath is distributed block storage exposed to each Postgres instance over NVMe over Fabrics: a new branch is a volume that points at its parent’s blocks, so creating one takes seconds whatever the database size, and only blocks that either side later writes are copied. Each branch is then an independent Postgres instance with its own compute, in its parent’s region; branches can’t be merged back, only deleted and recreated. Around it sit a SQL gateway that routes connections, wakes hibernated branches and serves a serverless driver over HTTP and WebSockets, a branch operator, a control-plane API and a CLI. A branch hibernates after 15 minutes to 3 hours idle and wakes on the next connection. For development data, `xata clone` copies a database through `pg_dump`, or follows it continuously through logical replication, and masks personal data on the way in using rules in `.xata/clone.yaml`.",
+    "The same code is sold three ways. The open-source core, published on GitHub under Apache 2.0 in April 2026, uses OpenEBS for storage and is meant for an internal Postgres-as-a-service or for preview and test environments; its README warns against using it for a single database or a public multi-tenant service. Xata Cloud, on AWS and GCP, uses the company’s own storage engine, Xatastor, and as checked on 2026-10-24 charges from $0.012 an hour for a micro instance (1 GB RAM) to $1.536 for 32 vCPUs and 128 GB, plus $0.28 per GB-month of storage, with no per-branch fee and a 14-day trial but no free tier. Bring Your Own Cloud runs it in your AWS, Azure or GCP account for a percentage of the equivalent cloud spend."
+  ],
+  "strengths": [
+    "Branches of any size in seconds, each a full Postgres instance that shares unchanged blocks with its parent, so every pull request, test run or agent can get its own database",
+    "Plain Postgres with its usual extensions, such as PostGIS and pgvector, and tools such as `psql`, Prisma and Drizzle; nothing to port",
+    "Anonymization built into cloning, so developer branches can come from a masked copy of production instead of production itself",
+    "Open source under Apache 2.0, so the same platform can run on your own Kubernetes cluster, and idle branches scale to zero"
+  ],
+  "limits": [
+    "Branches never merge: data changes on a child stay there, and a child can’t be reset in place, only deleted and recreated from its parent",
+    "A branch made straight from production carries all its sensitive data; the masking happens only when you clone through `xata clone`",
+    "Self-hosting means running Kubernetes, CloudNativePG, OpenEBS and Keycloak, and the open-source version lacks the isolation features for adversarial multi-tenancy and the faster Xatastor engine",
+    "The hosted service has no free tier, only a 14-day trial; every running branch bills compute by the hour, and a branch’s region is fixed when it is created"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "runs unmodified, with branching beneath" },
+    { "id": "cloudnative-pg", "how": "runs each Postgres cluster with" },
+    { "id": "kubernetes", "how": "runs its control plane and databases on" }
+  ],
+  "alternatives": ["neon", "supabase", "planetscale", "postgresql"],
+  "goodFor": [
+    { "id": "versioned-data", "why": "A branch is a copy-on-write volume over its parent’s blocks, made in seconds whatever the size, and runs as its own Postgres instance." },
+    { "id": "scale-to-zero", "why": "A branch hibernates after 15 minutes to 3 hours idle, and the SQL gateway wakes it on the next connection." }
+  ],
+  "specs": {
+    "data-model": "Relational (unmodified PostgreSQL)",
+    "query-language": "PostgreSQL SQL",
+    "wire-protocol": "PostgreSQL wire protocol; a serverless driver over HTTP and WebSockets",
+    "replication": "CloudNativePG replicas and failover",
+    "storage-engine": "PostgreSQL on copy-on-write block storage over NVMe-oF (Xatastor in the cloud, OpenEBS self-hosted)",
+    "deployment": "Xata Cloud on AWS and GCP, BYOC on AWS, Azure or GCP, or open source on Kubernetes",
+    "pricing": "Per instance-hour ($0.012 micro to $1.536 for 32 vCPUs) plus $0.28 per GB-month; no per-branch fee"
+  },
+  "snippet": {
+    "lang": "bash",
+    "title": "A masked staging copy of production, and a branch of it for one pull request",
+    "source": [
+      "xata auth login",
+      "xata init                        # link this folder to a project and branch",
+      "",
+      "# write anonymization rules to .xata/clone.yaml, then keep staging in sync",
+      "xata clone config --source-url \"$PROD_URL\"",
+      "xata clone stream --source-url \"$PROD_URL\" --branch staging",
+      "",
+      "# a copy-on-write branch of the masked data, ready in seconds",
+      "xata branch create --parent-branch staging --name pr-482",
+      "xata branch wait-ready --branch pr-482",
+      "psql \"$(xata branch url --branch pr-482)\" -f migrations/0042_add_order_notes.sql",
+      "",
+      "xata branch delete --branch pr-482 --yes"
+    ]
+  },
+  "history": {
+    "story": [
+      "Monica Sarbu, who had co-founded Packetbeat (bought by Elastic in 2015) and helped build Elastic Beats, founded Xata in April 2021. Its first product was a serverless database behind one API with a spreadsheet-like interface, aimed at both low-code users and developers, with full-text search and analytics built in. Index Ventures led a $5 million seed round in 2021, and Redpoint and Index co-led a $30 million Series A.",
+      "After more than four years of running that service on shared Postgres clusters, the company rebuilt its product from scratch as a Postgres platform. The new service opened as a private beta in May 2025, with branching at the storage layer instead of inside Postgres, and the original service was renamed Xata Lite. It uses two of Xata’s open-source tools: pgroll for zero-downtime, reversible schema changes, and pgstream for replication that carries schema changes and masks data.",
+      "In April 2026 Xata published the platform’s core under Apache 2.0, pointing to AI agents that each need their own database to experiment in, and kept its multi-region deployment code and Xatastor engine private."
+    ],
+    "choices": [
+      { "choice": "Branch in the storage layer, not in Postgres", "why": "Copy-on-write block storage gives each branch its own volume without a Postgres fork, so users keep full compatibility. In the founders’ words, instead of changing Postgres they built the platform around it." },
+      { "choice": "Build on CloudNativePG", "why": "A mature Kubernetes operator already handled failover, upgrades, pooling and backups, so Xata only had to add the gateway, branch operator, control plane and scale to zero." },
+      { "choice": "Make anonymization part of cloning", "why": "Branches copy whatever their parent holds. Masking data while it streams into a staging branch means developer branches made from it don’t contain personal data." }
+    ],
+    "timeline": [
+      { "year": "2021", "text": "Monica Sarbu founds Xata in April; $5 million seed round led by Index Ventures" },
+      { "year": "2025", "text": "The rebuilt Postgres platform opens as a private beta in May; the old service becomes Xata Lite" },
+      { "year": "2026", "text": "The core is open-sourced under Apache 2.0 in April" }
+    ],
+    "sources": [
+      { "label": "Index Ventures: Xata raises $5m (Sep 2021; founded April 2021)", "url": "https://www.indexventures.com/perspectives/xata-raises-5m-to-build-the-next-generation-database-for-serverless-and-low-code-apps/" },
+      { "label": "Xata blog: Series A announcement", "url": "https://xata.io/blog/xata-series-a-announcement" },
+      { "label": "Xata blog: Xata, Postgres with data branching and PII anonymization (relaunch, Xata Lite)", "url": "https://xata.io/blog/xata-postgres-with-data-branching-and-pii-anonymization" },
+      { "label": "Xata blog: Xata is now open source (private beta since May 2025)", "url": "https://xata.io/blog/xata-is-now-open-source" },
+      { "label": "Xata blog: Introducing Xata OSS (what stays private)", "url": "https://xata.io/blog/open-source-postgres-branching-copy-on-write" },
+      { "label": "xataio/xata on GitHub (repository created April 2026)", "url": "https://github.com/xataio/xata" }
+    ]
+  },
+  "sources": [
+    { "label": "Xata: Home (vanilla Postgres, branching, hibernation, BYOC)", "url": "https://xata.io/" },
+    { "label": "xataio/xata on GitHub: README (architecture, when not to use it)", "url": "https://github.com/xataio/xata" },
+    { "label": "Xata blog: Introducing Xata OSS (CloudNativePG, OpenEBS, Xatastor, multi-tenancy)", "url": "https://xata.io/blog/open-source-postgres-branching-copy-on-write" },
+    { "label": "Xata blog: Xata is now open source (NVMe over Fabrics storage)", "url": "https://xata.io/blog/xata-is-now-open-source" },
+    { "label": "Xata docs: Branches (copy-on-write, hibernation, no merges)", "url": "https://xata.io/docs/branches" },
+    { "label": "Xata: Pricing (checked 2026-10-24)", "url": "https://xata.io/pricing" },
+    { "label": "Xata CLI: branch", "url": "https://xata.io/docs/cli/branch" },
+    { "label": "Xata CLI: clone", "url": "https://xata.io/docs/cli/clone" },
+    { "label": "Xata blog: Xata, Postgres with data branching and PII anonymization (pgroll, pgstream)", "url": "https://xata.io/blog/xata-postgres-with-data-branching-and-pii-anonymization" }
+  ],
+  "checked": "2026-10-24"
+}

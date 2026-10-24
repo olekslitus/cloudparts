@@ -17,6 +17,7 @@ import TechCard from '@/components/TechCard';
 import TechGraph from '@/components/TechGraph';
 import TechSection from '@/components/TechSection';
 import { getCatalog } from '@/lib/catalog';
+import { lucide } from '@/lib/glyphs';
 import { diagramHere, diagramLinks } from '@/lib/links';
 import { meta } from '@/lib/meta';
 import { href, PROVIDER_TYPES, RELATION_GROUPS, relationLabel, REPO_URL, STAGE_LABELS } from '@/lib/nav';
@@ -48,16 +49,16 @@ export default async function TechnologyPage({ params }: Params) {
   const featured = archs[0];
   // an archived technology lists its recommended replacements first
   const recommended = (t.archived?.alternatives ?? []).map(id => c.tech(id));
-  // siblings for a child (same relation first); otherwise other top-level technologies of the same concept and
-  // kind, narrowed to the concept's group when it sorts them by role (an embedded database next to embedded ones)
-  const group = primary.groups.find(g => g.technologies.includes(t.id));
-  const grouped = (group?.technologies ?? []).filter(id => id !== t.id).map(id => c.tech(id)).filter(x => !x.parent);
-  const peers = parent
-    ? c.childrenOf(parent.id).filter(x => x.id !== t.id).sort((a, b) => Number(a.parent!.as !== t.parent!.as) - Number(b.parent!.as !== t.parent!.as))
-    : grouped.length
-      ? grouped
-      : c.technologies.filter(x => x.concepts[0] === t.concepts[0] && x.kind === t.kind && !x.parent && x.id !== t.id);
-  const alternatives = [...recommended, ...peers.filter(x => !recommended.includes(x))];
+  const alternatives = c.alternativesOf(t.id);
+  const goodFor = t.goodFor.map(g => ({ ...g, workload: c.workload(g.id) }));
+  const mine = new Set(t.goodFor.map(g => g.id));
+  // what an alternative is good at too, as a reason to look at it
+  const sharedNote = (x: typeof t) => {
+    const both = x.goodFor.filter(g => mine.has(g.id)).map(g => c.workload(g.id).name.toLowerCase());
+    return both.length ? `Also good for ${both.slice(0, 2).join(' and ')}${both.length > 2 ? ` and ${both.length - 2} more` : ''}` : undefined;
+  };
+  const compareIds = [t.id, ...alternatives.filter(x => !x.archived).slice(0, 3).map(x => x.id)];
+  const specRows = c.specs.filter(x => t.specs[x.id]);
   const commonPath = kind ? `concepts/${primary.id}/${kind.id}/` : `concepts/${primary.id}/`;
   const commonName = (kind ?? primary).name.toLowerCase();
   const longDate = (d: string) => new Date(`${d}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
@@ -74,6 +75,8 @@ export default async function TechnologyPage({ params }: Params) {
     { id: 'overview', label: 'What it is' },
     { id: 'pick', label: 'Why teams pick it' },
     { id: 'watch', label: 'Watch out for' },
+    ...(goodFor.length ? [{ id: 'good-for', label: 'Good for' }] : []),
+    ...(specRows.length ? [{ id: 'specs', label: 'Specs' }] : []),
     ...(family.length ? [{ id: 'family', label: `The ${t.name} family` }] : []),
     ...(alternatives.length ? [{ id: 'alternatives', label: t.archived ? 'Alternatives' : parent ? `More of the ${parent.name} family` : 'Alternatives' }] : []),
     ...(linked ? [{ id: 'fits', label: 'How it fits' }] : []),
@@ -210,6 +213,45 @@ export default async function TechnologyPage({ params }: Params) {
           </ul>
         </section>
 
+        {goodFor.length > 0 && (
+          <section id="good-for" className="mt-10 scroll-mt-20">
+            <SectionLabel>Good for</SectionLabel>
+            <ul className="grid gap-2">
+              {goodFor.map(g => {
+                const Icon = lucide(g.workload.icon);
+                return (
+                  <li key={g.id}>
+                    <a href={href(`workloads/${g.id}/`)} className="group flex gap-3 rounded-xl bg-card px-4 py-3 ring-1 ring-foreground/10 transition hover:ring-foreground/25">
+                      <Icon className="mt-0.5 size-4 shrink-0 text-brand" aria-hidden />
+                      <span className="grid gap-0.5">
+                        <span className="font-medium group-hover:text-brand">{g.workload.name}</span>
+                        <span className="text-sm leading-snug text-muted-foreground"><Md text={g.why} plain /></span>
+                      </span>
+                    </a>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
+
+        {specRows.length > 0 && (
+          <section id="specs" className="mt-10 scroll-mt-20">
+            <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+              <SectionLabel className="mb-0">Specs</SectionLabel>
+              <a href={`${href('compare/technologies/')}?ids=${compareIds.join(',')}`} className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">Compare with alternatives →</a>
+            </div>
+            <dl className="divide-y overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10">
+              {specRows.map(x => (
+                <div key={x.id} className={factRow}>
+                  <dt className={factLabel} title={x.help}>{x.label}</dt>
+                  <dd className="text-[15px] leading-snug"><Md text={t.specs[x.id]} /></dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+        )}
+
         {family.length > 0 && (
           <section id="family" className="mt-12 scroll-mt-20">
             <SectionLabel>The {t.name} family</SectionLabel>
@@ -230,9 +272,12 @@ export default async function TechnologyPage({ params }: Params) {
         {alternatives.length > 0 && (
           <section id="alternatives" className="mt-12 scroll-mt-20">
             <SectionLabel>{t.archived ? 'Alternatives, recommended first' : parent ? `More of the ${parent.name} family` : 'Alternatives'}</SectionLabel>
-            <a href={href(commonPath)} className="-mt-1 mb-4 inline-block text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">What all {commonName} have in common →</a>
+            <span className="-mt-1 mb-4 flex flex-wrap gap-x-5 gap-y-1 text-sm text-muted-foreground">
+              <a href={href(commonPath)} className="underline-offset-4 hover:text-foreground hover:underline">What all {commonName} have in common →</a>
+              {compareIds.length > 1 && <a href={`${href('compare/technologies/')}?ids=${compareIds.join(',')}`} className="underline-offset-4 hover:text-foreground hover:underline">Compare side by side →</a>}
+            </span>
             <div className="grid gap-2">
-              {alternatives.map(a => <TechCard key={a.id} tech={a} family={c.childrenOf(a.id)} note={parent && a.parent ? RELATION_GROUPS[a.parent.as] : undefined} />)}
+              {alternatives.map(a => <TechCard key={a.id} tech={a} family={c.childrenOf(a.id)} note={parent && a.parent ? RELATION_GROUPS[a.parent.as] : sharedNote(a)} />)}
             </div>
           </section>
         )}

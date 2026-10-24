@@ -1,0 +1,105 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Chaos Mesh",
+  "concepts": ["chaos-engineering"],
+  "provider": "oss",
+  "vendor": "Cloud Native Computing Foundation",
+  "license": "Apache 2.0",
+  "website": "https://chaos-mesh.org/",
+  "repo": "https://github.com/chaos-mesh/chaos-mesh",
+  "summary": "A chaos engineering platform for Kubernetes: you describe a fault such as a killed pod, network latency or clock skew as a custom resource, and a privileged daemon on each node injects it and takes it away again.",
+  "intro": [
+    "Chaos Mesh runs inside a Kubernetes cluster and is driven through the Kubernetes API. Each kind of fault has its own custom resource: `PodChaos` kills pods or containers, `NetworkChaos` adds latency, loss, duplication, corruption, bandwidth limits or a partition, and others cover stress, file I/O, time, DNS, HTTP, kernel, block devices and the JVM, plus AWS, Azure and Google Cloud faults through their APIs. A resource names its targets with namespaces and label selectors, a `mode` (one random pod, all, a fixed number or a percentage) and a `duration`.",
+    "Three components do the work. The Chaos Controller Manager watches the resources, validates them through admission webhooks and schedules injection and recovery. The Chaos Daemon runs as a privileged DaemonSet on every node and enters a target pod’s namespaces to change its network devices, file system, processes and clock. The optional Chaos Dashboard is a web UI and HTTP API on top. `Schedule` resources repeat an experiment on a cron expression, and `Workflow` resources chain experiments in series or in parallel with status checks between them. A separate tool, chaosd, brings the same faults to physical machines outside Kubernetes."
+  ],
+  "strengths": [
+    "Faults are ordinary Kubernetes resources, so they can be applied with `kubectl`, kept in Git and limited with Kubernetes RBAC",
+    "Wide range of faults, from pod kills to per-container clock skew, I/O errors and HTTP response changes, without changing the application",
+    "Schedules and workflows cover recurring experiments and multi-step scenarios with health checks",
+    "Used as the Kubernetes fault engine by Azure Chaos Studio for AKS, and AWS FIS can create its resources in EKS clusters"
+  ],
+  "limits": [
+    "The Chaos Daemon is privileged on every node, so a compromised Chaos Mesh is a compromised cluster: in 2025 four CVEs (three rated 9.8) let anyone with in-cluster network access run commands through it, fixed in 2.7.3",
+    "Network faults need the `NET_SCH_NETEM` kernel module on the nodes, and if the controller loses contact with the daemon during injection, the fault can’t be recovered automatically",
+    "`pod-kill` assumes a controller such as a ReplicaSet brings the pod back, and `pod-failure` swaps in a pause image, which containers without probes may still report as Ready",
+    "Built for Kubernetes: hosts outside a cluster need chaosd, and cloud-level faults are limited to a few AWS, Azure and Google Cloud actions"
+  ],
+  "worksWith": [
+    { "id": "kubernetes", "how": "injects faults into pods and nodes of" },
+    { "id": "aks", "how": "runs AKS faults for Azure Chaos Studio on" },
+    { "id": "grafana", "how": "integrates with" }
+  ],
+  "snippet": {
+    "lang": "yaml",
+    "title": "Kill one random TiKV pod, then add 10 ms of latency to web-show for 30 seconds",
+    "source": [
+      "apiVersion: chaos-mesh.org/v1alpha1",
+      "kind: PodChaos",
+      "metadata:",
+      "  name: pod-kill-example",
+      "  namespace: chaos-mesh",
+      "spec:",
+      "  action: pod-kill",
+      "  mode: one",
+      "  selector:",
+      "    namespaces: [tidb-cluster-demo]",
+      "    labelSelectors:",
+      "      'app.kubernetes.io/component': 'tikv'",
+      "---",
+      "apiVersion: chaos-mesh.org/v1alpha1",
+      "kind: NetworkChaos",
+      "metadata:",
+      "  name: delay",
+      "spec:",
+      "  action: delay",
+      "  mode: one",
+      "  selector:",
+      "    namespaces: [default]",
+      "    labelSelectors:",
+      "      app: web-show",
+      "  delay:",
+      "    latency: '10ms'",
+      "    jitter: '0ms'",
+      "  duration: '30s'"
+    ]
+  },
+  "history": {
+    "story": [
+      "PingCAP builds TiDB, a distributed SQL database, and tested it with fault injection from early on. As those tests grew, the team wanted a platform not tied to TiDB; CTO Ed Huang said “traditional deterministic testing has fallen short of our expectations” for distributed systems on Kubernetes. PingCAP open-sourced Chaos Mesh under Apache 2.0 on December 31, 2019, and the CNCF accepted it into its Sandbox in July 2020.",
+      "Chaos Mesh 2.0, generally available in July 2021, added a native Workflow engine, the CronJob-like `Schedule` resource, HTTP and JVM faults, and chaosd for physical machines. The CNCF moved the project to Incubating on February 16, 2022, by then with adopters such as ByteDance, DataStax, Percona and RabbitMQ, and with Azure Chaos Studio using it for AKS. In 2025 JFrog reported a set of flaws in the controller’s debugging GraphQL server, fixed in 2.7.3; the project kept releasing through 2026, with 2.8.6 in October."
+    ],
+    "choices": [
+      { "choice": "One custom resource per fault type", "why": "Separate CRDs such as PodChaos, NetworkChaos and IOChaos keep each fault’s definition apart from its logic and let each have its own controller, built with controller-runtime, instead of one object that knows every fault." },
+      { "choice": "A privileged daemon per node", "why": "Changing a container’s network, cgroups, file system or clock means entering its namespaces on the node, which needs root. One DaemonSet does that for every pod on the node, so applications need no changes." },
+      { "choice": "General purpose, not TiDB-only", "why": "PingCAP wanted “a universal chaos testing platform, not just for TiDB, but also for other distributed systems”, so the faults target any Kubernetes workload." }
+    ],
+    "timeline": [
+      { "year": "2019", "text": "PingCAP open-sources Chaos Mesh on December 31" },
+      { "year": "2020", "text": "Accepted into the CNCF Sandbox in July" },
+      { "year": "2021", "text": "Chaos Mesh 2.0: Workflow, Schedule, HTTPChaos and chaosd" },
+      { "year": "2022", "text": "Moves to CNCF Incubating on February 16" },
+      { "year": "2025", "text": "2.7.3 fixes the “Chaotic Deputy” GraphQL vulnerabilities" },
+      { "year": "2026", "text": "2.8.6 released in October" }
+    ],
+    "sources": [
+      { "label": "PingCAP: Announcing Chaos Mesh as a CNCF Sandbox project (Jul 28, 2020)", "url": "https://www.pingcap.com/press-release/announcing-chaos-mesh-as-a-cncf-sandbox-project/" },
+      { "label": "Chaos Mesh blog: Chaos Mesh, your chaos engineering solution for system resiliency on Kubernetes (Cwen Yin, Jan 2020)", "url": "https://chaos-mesh.org/blog/chaos_mesh_your_chaos_engineering_solution/" },
+      { "label": "Chaos Mesh blog: Chaos Mesh 2.0, to a chaos engineering ecology (Aug 2021)", "url": "https://chaos-mesh.org/blog/chaos-mesh-2.0-to-a-chaos-engineering-ecology/" },
+      { "label": "CNCF blog: Chaos Mesh moves to the CNCF Incubator (Feb 16, 2022)", "url": "https://www.cncf.io/blog/2022/02/16/chaos-mesh-moves-to-the-cncf-incubator/" },
+      { "label": "The Hacker News: Critical Chaos Mesh GraphQL flaws (Sep 16, 2025)", "url": "https://thehackernews.com/2025/09/chaos-mesh-critical-graphql-flaws.html" },
+      { "label": "chaos-mesh/chaos-mesh releases on GitHub (v2.8.6, Oct 2026)", "url": "https://github.com/chaos-mesh/chaos-mesh/releases" }
+    ]
+  },
+  "sources": [
+    { "label": "chaos-mesh/chaos-mesh README on GitHub (fault types, components, CNCF incubating)", "url": "https://github.com/chaos-mesh/chaos-mesh" },
+    { "label": "Chaos Mesh docs: Overview and architecture", "url": "https://chaos-mesh.org/docs/" },
+    { "label": "Chaos Mesh docs: Simulate pod faults (actions, modes, notes)", "url": "https://chaos-mesh.org/docs/simulate-pod-chaos-on-kubernetes/" },
+    { "label": "Chaos Mesh docs: Simulate network faults (netem module, recovery warning)", "url": "https://chaos-mesh.org/docs/simulate-network-chaos-on-kubernetes/" },
+    { "label": "Chaos Mesh docs: Define scheduling rules", "url": "https://chaos-mesh.org/docs/define-scheduling-rules/" },
+    { "label": "CNCF blog: Chaos Mesh moves to the CNCF Incubator (Azure Chaos Studio, Grafana and Prometheus integration)", "url": "https://www.cncf.io/blog/2022/02/16/chaos-mesh-moves-to-the-cncf-incubator/" },
+    { "label": "AWS FIS User Guide: Example experiment templates (Chaos Mesh StressChaos on EKS)", "url": "https://docs.aws.amazon.com/fis/latest/userguide/experiment-template-example.html" },
+    { "label": "The Hacker News: Critical Chaos Mesh GraphQL flaws (CVE-2025-59358 to 59361, fixed in 2.7.3)", "url": "https://thehackernews.com/2025/09/chaos-mesh-critical-graphql-flaws.html" },
+    { "label": "chaos-mesh/chaos-mesh on GitHub: LICENSE (Apache 2.0)", "url": "https://github.com/chaos-mesh/chaos-mesh/blob/master/LICENSE" }
+  ],
+  "checked": "2026-10-24"
+}

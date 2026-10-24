@@ -1,0 +1,122 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Apache Pinot",
+  "concepts": ["olap"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://pinot.apache.org/",
+  "repo": "https://github.com/apache/pinot",
+  "summary": "A real-time distributed OLAP database from LinkedIn, built to answer analytics queries from end users in milliseconds at hundreds of thousands of queries per second, over data that arrived from Kafka seconds ago.",
+  "intro": [
+    "Pinot stores each table as segments: immutable columnar files, each with its own dictionaries and indexes. A realtime table reads a stream such as Kafka or Kinesis; each server writes incoming rows into an in-memory consuming segment that is queryable at once, then commits it as a finished segment and uploads it to a deep store such as S3, GCS or HDFS. An offline table is filled by batch jobs that build segments and push them to the deep store. A hybrid table pairs the two under one name. Servers host segments on local disk and run queries against them; brokers send each query to the servers holding the relevant segments and merge the results; a controller assigns segments to servers and runs the cluster through Apache Helix, which keeps cluster state in ZooKeeper. Optional minions do background work such as converting, merging and purging segments.",
+    "Speed comes from choosing indexes per column: inverted, sorted, range, Bloom filter, text, JSON, geospatial, timestamp and vector indexes, and the star-tree index, which pre-aggregates over several dimension columns so that a matching `GROUP BY` reads a handful of rows instead of millions. Pinot assumes data is immutable but supports upserts by primary key on streaming tables, as long as the stream is partitioned by that key; the map of primary keys to their latest rows lives in server heap memory. Simple scatter-gather queries run on the default single-stage engine; the multi-stage engine, production-ready since Pinot 1.0 (September 2023) and switched on per query, adds distributed joins, window functions and subqueries. Pinot is free under Apache 2.0; StarTree, founded by two of its creators, sells a managed Pinot service with extra features."
+  ],
+  "strengths": [
+    "Built for user-facing analytics: many small aggregation queries per second, each answered in milliseconds, such as LinkedIn’s “Who viewed your profile” and Uber Eats’ restaurant dashboards",
+    "Rows from Kafka or Kinesis are queryable within seconds, without a separate batch step",
+    "Indexes are configured per column, and the star-tree index keeps latency flat for known aggregation patterns as data grows",
+    "Upserts and deduplication by primary key on streaming tables, including partial upserts that change only some columns"
+  ],
+  "limits": [
+    "Not a transactional database: no ACID transactions, and the docs advise against it when you need frequent single-row changes",
+    "Upsert tables have strict rules: the stream must be partitioned by primary key, all segments of a partition must sit on one server, and the key map uses heap memory",
+    "Several JVM services to run (controller, broker, server, minion) plus ZooKeeper and a deep store",
+    "Fast queries depend on picking indexes ahead of time; star-tree indexes help only queries that match their configured dimensions and aggregations, and joins need the multi-stage engine"
+  ],
+  "worksWith": [
+    { "id": "kafka", "how": "ingests topics in real time from" },
+    { "id": "kinesis", "how": "ingests streams in real time from" },
+    { "id": "zookeeper", "how": "keeps cluster state, via Apache Helix, in" },
+    { "id": "s3", "how": "keeps committed segments (deep store) in" },
+    { "id": "gcs", "how": "can keep segments (deep store) in" },
+    { "id": "kubernetes", "how": "is deployed with a Helm chart on" },
+    { "id": "superset", "how": "is queried for live dashboards by" }
+  ],
+  "alternatives": ["druid", "clickhouse", "starrocks", "doris"],
+  "goodFor": [
+    { "id": "real-time-analytics", "why": "Rows from Kafka or Kinesis are queryable in a consuming segment at once, and per-column and star-tree indexes keep user-facing queries in milliseconds." }
+  ],
+  "specs": {
+    "data-model": "Tables of immutable columnar segments: realtime, offline or hybrid",
+    "query-language": "SQL; the multi-stage engine adds joins, window functions and subqueries",
+    "secondary-indexes": "Chosen per column: inverted, sorted, range, Bloom, text, JSON, geospatial, vector, star-tree",
+    "transactions": "None; upserts by primary key on streaming tables",
+    "scaling": "Brokers scatter queries to the servers holding segments; a controller assigns segments through Helix",
+    "storage-format": "Columnar segments with per-column dictionaries and indexes; deep store on S3, GCS or HDFS",
+    "deployment": "Self-hosted (Helm chart on Kubernetes), or managed by StarTree"
+  },
+  "snippet": {
+    "lang": "json",
+    "title": "A realtime table that reads a Kafka topic, from the Pinot quickstart",
+    "source": [
+      "{",
+      "  \"tableName\": \"transcript\",",
+      "  \"tableType\": \"REALTIME\",",
+      "  \"segmentsConfig\": {",
+      "    \"timeColumnName\": \"timestampInEpoch\",",
+      "    \"timeType\": \"MILLISECONDS\",",
+      "    \"schemaName\": \"transcript\",",
+      "    \"replicasPerPartition\": \"1\"",
+      "  },",
+      "  \"tenants\": {},",
+      "  \"tableIndexConfig\": {",
+      "    \"loadMode\": \"MMAP\",",
+      "    \"streamConfigs\": {",
+      "      \"streamType\": \"kafka\",",
+      "      \"stream.kafka.topic.name\": \"transcript-topic\",",
+      "      \"stream.kafka.decoder.class.name\": \"org.apache.pinot.plugin.inputformat.json.JSONMessageDecoder\",",
+      "      \"stream.kafka.consumer.factory.class.name\": \"org.apache.pinot.plugin.stream.kafka30.KafkaConsumerFactory\",",
+      "      \"stream.kafka.broker.list\": \"kafka:9092\",",
+      "      \"realtime.segment.flush.threshold.rows\": \"0\",",
+      "      \"realtime.segment.flush.threshold.time\": \"24h\",",
+      "      \"realtime.segment.flush.threshold.segment.size\": \"50M\",",
+      "      \"stream.kafka.consumer.prop.auto.offset.reset\": \"smallest\"",
+      "    }",
+      "  },",
+      "  \"metadata\": { \"customConfigs\": {} }",
+      "}"
+    ]
+  },
+  "history": {
+    "story": [
+      "LinkedIn shows analytics to its members and customers, such as who viewed a profile, Talent Insights and company analytics, and runs internal tools such as the XLNT A/B testing platform and ThirdEye metrics monitoring. Each of these sends many small slice-and-dice queries over billions of rows, and each needs an answer fast enough to render a page. LinkedIn built Pinot for this, ran it internally for over two years, and open-sourced it under Apache 2.0 in June 2015, by then backing more than 25 analytics products.",
+      "Pinot entered the Apache Incubator in October 2018 and published its first Apache release, 0.1.0, in March 2019. Uber adopted it for real-time dashboards, including Uber Eats’ Restaurant Manager, and Microsoft Teams piloted it on Azure. It graduated to a top-level Apache project in July 2021, the year Kishore Gopalakrishna and Xiang Fu, two of its creators at LinkedIn, launched StarTree to sell it as a managed service.",
+      "Pinot started with its own SQL-like language, PQL, and simple filter-and-aggregate queries. Pinot 1.0 in September 2023 made the multi-stage engine, with distributed joins and window functions, ready for production, and later releases kept adding upsert, time-series and vector features."
+    ],
+    "choices": [
+      { "choice": "Immutable columnar segments with per-column indexes", "why": "User-facing queries must stay fast at high concurrency, so Pinot reads as little data as possible: dictionaries, inverted, sorted and range indexes let a query touch only matching rows." },
+      { "choice": "Pre-aggregate with a star-tree index", "why": "Fully pre-computing every combination explodes storage, while scanning raw rows is too slow; the star-tree keeps partial aggregates for chosen dimensions, which puts an upper bound on the rows a matching query reads." },
+      { "choice": "Real-time and offline tables under one name", "why": "Fresh data comes from a stream and history from batch jobs; a hybrid table lets queries span both, with a time boundary deciding which side answers." },
+      { "choice": "Cluster management through Apache Helix", "why": "Helix, also from LinkedIn, already handled partition assignment, replicas and failover on top of ZooKeeper, so Pinot didn’t have to build its own." }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "LinkedIn open-sources Pinot in June after more than two years in production" },
+      { "year": "2018", "text": "Enters the Apache Incubator in October" },
+      { "year": "2019", "text": "First Apache release, 0.1.0, in March" },
+      { "year": "2021", "text": "Graduates to a top-level Apache project in July; StarTree launches" },
+      { "year": "2023", "text": "Pinot 1.0: the multi-stage engine for joins is ready for production" },
+      { "year": "2026", "text": "Pinot 1.5.0 in April; 1.6.0 release candidates in October" }
+    ],
+    "sources": [
+      { "label": "LinkedIn Engineering: Open Sourcing Pinot, Scaling the Wall of Real-Time Analytics (10 June 2015)", "url": "https://engineering.linkedin.com/pinot/open-sourcing-pinot-scaling-wall-real-time-analytics" },
+      { "label": "LinkedIn Engineering: Pinot joins the Apache Incubator (March 2019; products, adopters, 0.1.0)", "url": "https://www.linkedin.com/blog/engineering/open-source/pinot-joins-apache-incubator" },
+      { "label": "Apache Incubator: Pinot project status (entered October 2018, graduated July 2021, PQL)", "url": "https://incubator.apache.org/projects/pinot.html" },
+      { "label": "StarTree: About (founders, timeline)", "url": "https://startree.ai/about/" },
+      { "label": "Pinot docs: Multi-stage query engine (0.11 experimental, production-ready in 1.0)", "url": "https://docs.pinot.apache.org/reference/multi-stage-engine" },
+      { "label": "GitHub: apache/pinot releases (1.0.0 September 2023, 1.5.0 April 2026, 1.6.0 RCs)", "url": "https://github.com/apache/pinot/releases" }
+    ]
+  },
+  "sources": [
+    { "label": "Pinot docs: What is Pinot? (use cases, when not to use it)", "url": "https://docs.pinot.apache.org/start-here/what-is-pinot" },
+    { "label": "Pinot docs: Architecture (controller, broker, server, minion, Helix, segments, deep store)", "url": "https://docs.pinot.apache.org/architecture-and-concepts/concepts/architecture" },
+    { "label": "Pinot docs: Indexing (index families)", "url": "https://docs.pinot.apache.org/build-with-pinot/indexing" },
+    { "label": "Pinot docs: Star-tree index", "url": "https://docs.pinot.apache.org/build-with-pinot/indexing/star-tree-index" },
+    { "label": "Pinot docs: Stream ingestion with upsert (partitioning, heap metadata map)", "url": "https://docs.pinot.apache.org/build-with-pinot/ingestion/upsert-dedup/upsert" },
+    { "label": "Pinot docs: Multi-stage query engine", "url": "https://docs.pinot.apache.org/reference/multi-stage-engine" },
+    { "label": "Pinot docs: First stream ingest (realtime table config)", "url": "https://docs.pinot.apache.org/start-here/first-stream-ingest" },
+    { "label": "Pinot docs: Kubernetes (Helm)", "url": "https://docs.pinot.apache.org/start-here/install/kubernetes" },
+    { "label": "GitHub: apache/pinot (Apache 2.0)", "url": "https://github.com/apache/pinot" }
+  ],
+  "checked": "2026-10-24"
+}

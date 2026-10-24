@@ -1,0 +1,130 @@
+{
+  "$schema": "../../.schemas/concepts.schema.json",
+  "name": "Chaos engineering",
+  "icon": "bomb",
+  "category": "observe",
+  "order": 95,
+  "summary": "Break parts of your system on purpose, in a controlled experiment, to learn whether it really survives the failures it was built to survive before a real outage tests it for you.",
+  "howItWorks": "A chaos experiment is run like a science experiment. First you define the steady state: a measurable output that shows the system is healthy, such as orders per minute, error rate or latency, rather than anything about its internals. Then you state a hypothesis: this number will stay where it is while something breaks. Then you inject a fault that mimics a real event (a crashed server, a severed network connection, a slow dependency, a full disk, throttled cloud API calls, a lost Availability Zone) and look for a difference between the part of the system you broke and a control group you didn’t. If the steady state holds, you have more confidence; if it doesn’t, you found a weakness before your users did. Tools inject faults at different layers. Some call the cloud provider’s API to stop instances or force a database failover. Some run an agent on each host or Kubernetes node that stresses CPU and memory, kills processes, shifts the clock or adds latency and packet loss to a container’s network. Some sit in the network path as a proxy, and some live inside the application as an SDK or extension that delays or fails individual requests. Because the faults are real, safety comes first: start in staging, then in production on one instance or a few percent of traffic (a small blast radius), and wire in a stop condition, usually an alarm on the steady-state metric, that halts the experiment and reverts the fault. Teams often start with game days, planned sessions where people watch an experiment together, and then automate experiments to run on a schedule or in the delivery pipeline, so a regression in resilience shows up the week it ships.",
+  "analogy": "A fire drill. You set off the alarm on a quiet Tuesday morning with everyone at their desks, one floor at a time, so you find the blocked exit and the warden who doesn’t know the route then, not at night during a real fire.",
+  "useWhen": [
+    "Systems built to tolerate failure, with replicas, retries, timeouts, circuit breakers and failover, where you need evidence that those mechanisms work today and not just on the design diagram",
+    "Before a known peak such as a sale or a launch, to check autoscaling, failover and fallbacks under the failures you expect",
+    "After an incident, to reproduce the failure on purpose and confirm the fix holds",
+    "Checking the people side: an experiment also tests whether alerts fire, dashboards show the problem and the runbook is right"
+  ],
+  "avoidWhen": [
+    "You can’t see the steady state yet: without metrics and alerts you can’t tell whether an experiment hurt users, or stop it in time",
+    "Weaknesses you already know about: if the database has no replica, an experiment only confirms the outage; fix it first",
+    "Faults that can’t be undone in production, such as shutting down hosts or killing processes that don’t restart by themselves, until recovery is automatic",
+    "Surprising the owners of the system: an experiment nobody agreed to is an incident"
+  ],
+  "example": "A shop’s checkout page calls a recommendations service and is meant to show bestsellers if that call takes longer than 300 ms. The team’s hypothesis: if recommendations get 2 seconds slower, checkout completions per minute stay within 2% of normal. In staging they add 2 s of network latency to one recommendations pod with Chaos Mesh, then to all of them. Checkout slows to over 2 seconds: the 300 ms timeout lives in a config key that the new HTTP client no longer reads. They fix it, rerun the experiment, and the steady state holds. A month later the same experiment runs in production against 5% of pods, with an alarm on checkout errors as the stop condition, and then weekly on a schedule.",
+  "providers": {
+    "aws": "AWS Fault Injection Service (FIS): experiment templates with actions on EC2, ECS, EKS, RDS, Lambda, networking and more, CloudWatch alarms as stop conditions, and prebuilt scenarios such as an Availability Zone power interruption",
+    "gcp": "No managed fault injection service; Google Cloud publishes chaos engineering guidance and recipes built on the open-source Chaos Toolkit",
+    "azure": "Azure Chaos Studio: service-direct faults through Azure APIs and agent-based faults inside VMs, with Chaos Mesh for AKS; its newer Workspaces and Scenarios model is in public preview",
+    "oss": "Chaos Mesh and LitmusChaos (CNCF incubating, Apache 2.0) for Kubernetes; Chaos Toolkit; Toxiproxy (MIT) for network faults in tests; Netflix’s Chaos Monkey (Apache 2.0). Commercial: Gremlin, Harness Chaos Engineering"
+  },
+  "snippet": {
+    "lang": "yaml",
+    "source": [
+      "# Chaos Mesh: one random pod of web-show gets 10 ms of extra latency",
+      "# for 12 seconds, at minute 5 of every hour",
+      "apiVersion: chaos-mesh.org/v1alpha1",
+      "kind: Schedule",
+      "metadata:",
+      "  name: schedule-delay-example",
+      "spec:",
+      "  schedule: '5 * * * *'",
+      "  historyLimit: 2",
+      "  concurrencyPolicy: 'Forbid'",
+      "  type: 'NetworkChaos'",
+      "  networkChaos:",
+      "    action: delay",
+      "    mode: one",
+      "    selector:",
+      "      namespaces: [default]",
+      "      labelSelectors:",
+      "        app: web-show",
+      "    delay:",
+      "      latency: '10ms'",
+      "    duration: '12s'"
+    ]
+  },
+  "related": ["testing", "synthetics", "incidents", "canary"],
+  "groups": [
+    { "name": "Kubernetes chaos platforms", "summary": "Faults declared as Kubernetes custom resources and injected by agents in the cluster.", "technologies": ["chaos-mesh", "litmus"] },
+    { "name": "Managed and commercial services", "summary": "A hosted control plane that schedules experiments, enforces stop conditions and keeps the history.", "technologies": ["aws-fis", "gremlin"] },
+    { "name": "Single-purpose tools", "summary": "Do one kind of fault well: random instance loss, or network trouble in tests.", "technologies": ["chaos-monkey", "toxiproxy"] }
+  ],
+  "sections": [
+    {
+      "type": "table",
+      "title": "Where the fault is injected",
+      "intro": "Each layer can break different things, and each needs different access to your systems.",
+      "corner": "Layer",
+      "columns": ["What it can break", "Examples"],
+      "rows": [
+        { "label": "Cloud API", "values": ["Stop or terminate instances, fail over a database, pause replication, throttle API calls, cut a zone’s network", "AWS FIS, Azure Chaos Studio service-direct faults, Chaos Monkey"] },
+        { "label": "Host or node agent", "values": ["CPU, memory and disk pressure, killed processes, clock skew, latency and packet loss on a container’s network", "Chaos Mesh’s Chaos Daemon, LitmusChaos, the Gremlin agent, FIS through Systems Manager"] },
+        { "label": "Proxy in the network path", "values": ["Latency, timeouts, dropped or sliced connections between an app and one dependency", "Toxiproxy, Gremlin Failure Flags sidecar"] },
+        { "label": "Inside the application", "values": ["Errors or delays on chosen requests, users or code paths", "Gremlin Failure Flags SDKs, the FIS extension for Lambda"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Breaking things on purpose started inside large web companies. Jeff Barr traces it to work by “Master of Disaster” Jesse Robbins in the early days of Amazon.com, and Google ran its own disaster recovery testing program, DiRT. The name and the habit spread from Netflix. In December 2010, describing its move to AWS, Netflix wrote that “the best way to avoid failure is to fail constantly” and that one of the first systems its engineers built there was the Chaos Monkey, whose job was “to randomly kill instances and services within our architecture”.",
+      "In July 2011 Netflix described a Simian Army of tools built on the same idea, including Latency Monkey, which added delays between services, and Chaos Gorilla, which simulated the loss of an entire Availability Zone. It open-sourced Chaos Monkey in July 2012, by which point the tool had terminated over 65,000 instances in a year. Netflix engineers then turned the practice into a discipline: the Principles of Chaos Engineering defined it as “the discipline of experimenting on a system in order to build confidence” in its ability to withstand turbulent conditions in production, and a 2016 paper in IEEE Software by Ali Basiri, Casey Rosenthal and colleagues laid out the method.",
+      "Products followed. Gremlin, founded in 2016 by Kolton Andrus, who had built fault injection at Amazon and worked on reliability at Netflix, came out of stealth in December 2017. Kubernetes brought open-source platforms that describe faults as custom resources: LitmusChaos, started in 2017, and PingCAP’s Chaos Mesh, open-sourced at the end of 2019; both are now CNCF incubating projects. AWS made its Fault Injection Simulator generally available in March 2021, and Microsoft followed with Azure Chaos Studio."
+    ],
+    "choices": [
+      { "choice": "Experiments, not tests", "why": "A test checks a behaviour you already specified. The Principles frame chaos as an experiment that tries to disprove a hypothesis about the steady state, so it can find failure modes nobody thought to write a test for." },
+      { "choice": "Run in production, during business hours", "why": "Netflix ran Chaos Monkey on weekdays between 9 a.m. and 3 p.m. so engineers would be at work to respond, and the Principles argue that only real traffic exercises the real request paths, which no staging environment reproduces." },
+      { "choice": "Measure outputs, not internals", "why": "Throughput, error rate and latency show whether users are affected. Internal signals such as CPU can move without harm, so the hypothesis is stated in terms of what customers see." },
+      { "choice": "Keep the blast radius small and automate", "why": "Experiments cause real harm when the hypothesis is wrong, so they start with one instance or a slice of traffic and stop on an alarm. Automation then keeps checking as the system changes, since a fix made last month can be undone by this week’s deploy." }
+    ],
+    "timeline": [
+      { "year": "2010", "text": "Netflix describes Chaos Monkey as one of the first systems it built on AWS" },
+      { "year": "2011", "text": "Netflix announces the Simian Army, including Chaos Gorilla for losing a whole Availability Zone" },
+      { "year": "2012", "text": "Chaos Monkey is open-sourced in July" },
+      { "year": "2016", "text": "“Chaos Engineering” paper in IEEE Software; Gremlin is founded" },
+      { "year": "2017", "text": "LitmusChaos starts; Gremlin launches its product in December" },
+      { "year": "2019", "text": "PingCAP open-sources Chaos Mesh on December 31" },
+      { "year": "2021", "text": "AWS Fault Injection Simulator becomes generally available in March" },
+      { "year": "2022", "text": "LitmusChaos and Chaos Mesh become CNCF incubating projects" }
+    ],
+    "sources": [
+      { "label": "AWS News Blog: AWS Fault Injection Simulator, use controlled experiments to boost resilience (Jeff Barr, Mar 15, 2021)", "url": "https://aws.amazon.com/blogs/aws/aws-fault-injection-simulator-use-controlled-experiments-to-boost-resilience" },
+      { "label": "Google Cloud blog: Getting started with chaos engineering (Parag Doshi, Oct 2025; DiRT, Netflix in 2010)", "url": "https://cloud.google.com/blog/products/devops-sre/getting-started-with-chaos-engineering" },
+      { "label": "Netflix Tech Blog: 5 Lessons We’ve Learned Using AWS (John Ciancutti, Dec 2010)", "url": "http://techblog.netflix.com/2010/12/5-lessons-weve-learned-using-aws.html", "archive": "https://web.archive.org/web/20170317053413/http://techblog.netflix.com/2010/12/5-lessons-weve-learned-using-aws.html" },
+      { "label": "Netflix Tech Blog: The Netflix Simian Army (Jul 19, 2011)", "url": "http://techblog.netflix.com/2011/07/netflix-simian-army.html", "archive": "https://web.archive.org/web/20170320153733/http://techblog.netflix.com/2011/07/netflix-simian-army.html" },
+      { "label": "Netflix Tech Blog: Chaos Monkey Released Into The Wild (Cory Bennett and Ariel Tseitlin, Jul 30, 2012)", "url": "http://techblog.netflix.com/2012/07/chaos-monkey-released-into-wild.html", "archive": "https://web.archive.org/web/20170429202345/http://techblog.netflix.com:80/2012/07/chaos-monkey-released-into-wild.html?" },
+      { "label": "Principles of Chaos Engineering (last updated March 2019)", "url": "https://principlesofchaos.org/" },
+      { "label": "Basiri et al.: Chaos Engineering, IEEE Software 33(3), 2016 (arXiv:1702.05843)", "url": "https://arxiv.org/abs/1702.05843" },
+      { "label": "Gremlin: About (founded 2016, Kolton Andrus)", "url": "https://www.gremlin.com/about" },
+      { "label": "VentureBeat: Gremlin launches to help companies stress test their apps (Dec 2017)", "url": "https://venturebeat.com/business/gremlin-launches-to-help-companies-stress-test-their-apps" },
+      { "label": "CNCF blog: LitmusChaos becomes a CNCF incubating project (Jan 11, 2022; started in 2017)", "url": "https://www.cncf.io/blog/2022/01/11/litmuschaos-becomes-a-cncf-incubating-project/" },
+      { "label": "PingCAP: Announcing Chaos Mesh as a CNCF Sandbox project (Jul 28, 2020; open-sourced Dec 31, 2019)", "url": "https://www.pingcap.com/press-release/announcing-chaos-mesh-as-a-cncf-sandbox-project/" },
+      { "label": "CNCF blog: Chaos Mesh moves to the CNCF Incubator (Feb 16, 2022)", "url": "https://www.cncf.io/blog/2022/02/16/chaos-mesh-moves-to-the-cncf-incubator/" },
+      { "label": "AWS What’s New: General availability of AWS Fault Injection Simulator (Mar 16, 2021)", "url": "https://aws.amazon.com/about-aws/whats-new/2021/03/aws-announces-service-aws-fault-injection-simulator/" }
+    ]
+  },
+  "sources": [
+    { "label": "Principles of Chaos Engineering (definition, steady state, hypothesis, production, automation, blast radius)", "url": "https://principlesofchaos.org/" },
+    { "label": "AWS FIS User Guide: What is AWS Fault Injection Service? (experiment templates, actions, targets, stop conditions)", "url": "https://docs.aws.amazon.com/fis/latest/userguide/what-is.html" },
+    { "label": "AWS FIS User Guide: Actions reference", "url": "https://docs.aws.amazon.com/fis/latest/userguide/fis-actions-reference.html" },
+    { "label": "AWS What’s New: AWS FIS launches two highly requested scenarios (AZ power interruption, Nov 30, 2023)", "url": "https://aws.amazon.com/about-aws/whats-new/2023/11/aws-fault-injection-service-two-requested-scenarios/" },
+    { "label": "AWS FIS User Guide: Use the aws:lambda:function actions (FIS extension for Lambda)", "url": "https://docs.aws.amazon.com/fis/latest/userguide/use-lambda-actions.html" },
+    { "label": "Microsoft Learn: What is Azure Chaos Studio? (Workspaces in preview, service-direct and agent-based faults)", "url": "https://learn.microsoft.com/en-us/azure/chaos-studio/chaos-studio-overview" },
+    { "label": "CNCF blog: Chaos Mesh moves to the CNCF Incubator (Azure Chaos Studio uses Chaos Mesh for AKS)", "url": "https://www.cncf.io/blog/2022/02/16/chaos-mesh-moves-to-the-cncf-incubator/" },
+    { "label": "Google Cloud blog: Getting started with chaos engineering (Chaos Toolkit, recipes)", "url": "https://cloud.google.com/blog/products/devops-sre/getting-started-with-chaos-engineering" },
+    { "label": "Chaos Mesh docs: Define scheduling rules (Schedule example)", "url": "https://chaos-mesh.org/docs/define-scheduling-rules/" },
+    { "label": "Chaos Mesh docs: Simulate network faults", "url": "https://chaos-mesh.org/docs/simulate-network-chaos-on-kubernetes/" },
+    { "label": "Gremlin docs: Fault injection experiments (resource, network, state; halts and rollback)", "url": "https://www.gremlin.com/docs/fault-injection-experiments" },
+    { "label": "Gremlin docs: Failure Flags overview (sidecar and SDKs)", "url": "https://www.gremlin.com/docs/failure-flags-overview" },
+    { "label": "Toxiproxy README on GitHub", "url": "https://github.com/Shopify/toxiproxy" },
+    { "label": "Netflix Tech Blog: Chaos Monkey Released Into The Wild (business hours, opt-out)", "url": "http://techblog.netflix.com/2012/07/chaos-monkey-released-into-wild.html", "archive": "https://web.archive.org/web/20170429202345/http://techblog.netflix.com:80/2012/07/chaos-monkey-released-into-wild.html?" }
+  ]
+}

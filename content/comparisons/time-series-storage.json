@@ -1,0 +1,106 @@
+{
+  "$schema": "../../.schemas/comparisons.schema.json",
+  "title": "Time series: wide-column with TWCS, a time-series database, or a data lake?",
+  "order": 58,
+  "concepts": ["wide-column", "tsdb", "data-lake"],
+  "rows": [
+    {
+      "label": "In one line",
+      "values": [
+        "One partition per series and time bucket, rows sorted by time, old windows dropped as whole files",
+        "A database built around timestamped points: time chunks, specialised compression, retention and rollups",
+        "Columnar files in object storage, partitioned by date and read by any SQL engine"
+      ]
+    },
+    {
+      "label": "Write path",
+      "values": [
+        "Each point is a row appended to the commit log and memtable on every replica, later flushed to SSTables",
+        "Points go into the newest time chunk or an in-memory head, which is cut into blocks (two hours in Prometheus)",
+        "Points are batched by a stream or batch job and written as new files, such as Parquet, under a date folder"
+      ]
+    },
+    {
+      "label": "How old data expires",
+      "values": [
+        "A TTL per row; with TWCS, an SSTable whose rows have all expired is deleted whole, unless it might shadow older data",
+        "A retention setting drops whole blocks or chunks past an age (15 days by default in Prometheus; `add_retention_policy` in TimescaleDB)",
+        "Lifecycle rules delete files by age or move them to archive storage such as S3 Glacier; or a job drops old date partitions"
+      ]
+    },
+    {
+      "label": "Latest value per series",
+      "values": [
+        "Fast: the first row of the series’ current partition (`LIMIT 1` with `ts DESC`)",
+        "Built in: a PromQL instant query returns the newest sample of every matching series",
+        "Slow: scan the newest partitions and keep the highest timestamp per key; there is no index"
+      ]
+    },
+    {
+      "label": "Time range for one series",
+      "values": [
+        "The query it is designed for: one partition per bucket, read in clustering order",
+        "Fast: chunks outside the time range are skipped",
+        "Date partitions outside the range are skipped, but each remaining file is scanned for the series"
+      ]
+    },
+    {
+      "label": "Aggregates across all series",
+      "values": [
+        "Weak: `GROUP BY` works only on primary key columns, and filtering across partitions is a full scan; usually a separate rollup table or a Spark job",
+        "The main job: aggregation over series and time windows, plus background rollups such as TimescaleDB continuous aggregates",
+        "Good: engines read only the columns a query needs, across as much history as you keep"
+      ]
+    },
+    {
+      "label": "Ad-hoc analytics",
+      "values": [
+        "Poor: every query must follow the partition key; a new question needs a new table or an external engine such as Spark or Trino",
+        "Depends on the language: full SQL with joins in TimescaleDB, series and labels only in PromQL",
+        "Its strength: schema on read, and any engine (Athena, Trino, Spark, DuckDB) over the same files"
+      ]
+    },
+    {
+      "label": "Compression",
+      "values": [
+        "General-purpose, per SSTable: LZ4 on 16 KiB chunks by default, Zstd for a better ratio",
+        "Per-column encodings for time series (delta-of-delta, XOR, run-length): Prometheus averages 1–2 bytes per sample; TimescaleDB’s columnstore saves more than 90%",
+        "Columnar files with per-column compression; Athena reads only the columns a query names"
+      ]
+    },
+    {
+      "label": "Keeping years of history",
+      "values": [
+        "Costly: every replica keeps the data on its own disks, and the node count grows with it",
+        "Cheaper after compression and rollups; Prometheus’s local storage isn’t replicated, so long-term data goes to a remote store",
+        "Cheapest: object storage billed per GB-month, with archive tiers; queries pay per data scanned ($5 per TB in Athena)"
+      ]
+    },
+    {
+      "label": "Typical products",
+      "values": [
+        "Cassandra, ScyllaDB, Amazon Keyspaces; Bigtable expires cells by age through per-column-family garbage collection instead",
+        "TimescaleDB, InfluxDB, Prometheus, QuestDB, kdb+",
+        "S3, Azure Data Lake Storage or Cloud Storage with Parquet, queried by Athena, Trino or Spark"
+      ]
+    }
+  ],
+  "tip": "They answer different questions, and many systems use two of them. Use a wide-column store with TWCS when an application reads per series, such as a device’s latest reading or its last day, at high write rates and across regions, and you can live without ad-hoc queries. Use a time-series database when most reads are dashboards and aggregates over many series and recent time. Use a data lake for years of history and questions nobody has asked yet: it is the cheapest place to keep data, but the slowest for one series or one latest value. A common split is to stream the same events into Cassandra with a 30-day TTL for the application and into Parquet files for analysis.",
+  "sources": [
+    { "label": "Cassandra docs: Time Window Compaction Strategy", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/twcs.html" },
+    { "label": "Cassandra docs: Compaction overview (TTL, fully expired SSTables)", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/overview.html" },
+    { "label": "Cassandra docs: Storage engine (commit log, memtables, SSTables)", "url": "https://cassandra.apache.org/doc/latest/cassandra/architecture/storage-engine.html" },
+    { "label": "Cassandra docs: Data manipulation (GROUP BY on primary key columns, ALLOW FILTERING)", "url": "https://cassandra.apache.org/doc/latest/cassandra/developing/cql/dml.html" },
+    { "label": "Cassandra docs: Compression (LZ4 default, 16 KiB chunks, Zstd)", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compression.html" },
+    { "label": "Prometheus docs: Storage (in-memory head block, two-hour blocks, 15-day default retention, 1–2 bytes per sample, remote storage)", "url": "https://prometheus.io/docs/prometheus/latest/storage/" },
+    { "label": "Prometheus docs: Querying basics (instant and range vectors)", "url": "https://prometheus.io/docs/prometheus/latest/querying/basics/" },
+    { "label": "Tiger Data docs: Understand hypertables (chunks by time range; queries run only on the relevant chunks)", "url": "https://www.tigerdata.com/docs/learn/hypertables/understand-hypertables" },
+    { "label": "Tiger Data docs: add_retention_policy() (drops chunks older than an interval)", "url": "https://www.tigerdata.com/docs/reference/timescaledb/data-retention/add_retention_policy" },
+    { "label": "Tiger Data docs: Set up hypercore (columnstore compression and encodings)", "url": "https://www.tigerdata.com/docs/build/columnar-storage/setup-hypercore" },
+    { "label": "Tiger Data docs: Continuous aggregates", "url": "https://www.tigerdata.com/docs/learn/continuous-aggregates" },
+    { "label": "Bigtable docs: Garbage collection (max age and max versions per column family, applied during compaction)", "url": "https://docs.cloud.google.com/bigtable/docs/garbage-collection" },
+    { "label": "Amazon S3 User Guide: Managing the lifecycle of objects (transition and expiration actions)", "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html" },
+    { "label": "Amazon Athena User Guide: Partition your data (time-based Hive-style partitions)", "url": "https://docs.aws.amazon.com/athena/latest/ug/partitions.html" },
+    { "label": "Amazon Athena pricing ($5 per TB scanned; Parquet reads only the needed columns)", "url": "https://aws.amazon.com/athena/pricing/" }
+  ]
+}

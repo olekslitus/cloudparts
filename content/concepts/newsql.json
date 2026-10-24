@@ -1,0 +1,332 @@
+{
+  "$schema": "../../.schemas/concepts.schema.json",
+  "name": "NewSQL and distributed SQL",
+  "icon": "network",
+  "category": "data",
+  "order": 14,
+  "parent": "relational",
+  "summary": "Relational databases that spread tables across many machines and keep SQL and ACID transactions, so writes scale out without sharding by hand.",
+  "howItWorks": "Underneath the SQL, most of these systems turn every row and index entry into a key-value pair in one sorted keyspace, and cut that keyspace into ranges of contiguous keys: ranges in CockroachDB (up to 512 MiB), Regions in TiDB (256 MiB by default), tablets in YugabyteDB, splits in Spanner. Each range is copied to three or more nodes and forms its own consensus group (Raft, or Paxos in Spanner): one replica leads, and a write commits once a majority of replicas have it, so losing a node or a zone needs no manual failover. Ranges split when they grow and move when a node is busy, which is how adding machines adds write capacity. The SQL layer is usually stateless: any node accepts a connection, plans the query and sends the pieces to the ranges that hold the data. A transaction that touches several ranges commits with a two-phase protocol, and every version of every row carries a timestamp (MVCC), so reads see a consistent snapshot without blocking writers. The hard part is agreeing on time across machines. Spanner uses TrueTime, clocks backed by GPS and atomic clocks with a known error bound, and waits out that bound before acknowledging a commit. CockroachDB and YugabyteDB use hybrid logical clocks over ordinary NTP; CockroachDB restarts a read that meets a value inside the clock-uncertainty window. TiDB asks one service, the Placement Driver, for every timestamp. FoundationDB, a transactional key-value store rather than a SQL database, has a single sequencer hand out commit versions; SQL comes from layers on top, such as the Record Layer’s JDBC interface. Aurora DSQL builds hybrid logical clocks on the microsecond-accurate Amazon Time Sync Service. The price of all this is latency and retries: every write waits for a quorum, possibly in another region, conflicting transactions fail with a serialization error (SQLSTATE `40001`) that the application must retry, and an ever-increasing key, such as a timestamp or sequence, sends every insert to the same range.",
+  "analogy": "A library that has outgrown its building and moved into branches across the city. Each shelf of books is copied to three branches, and a change to the catalogue counts once two of them have written it down, so one branch burning down loses nothing. You can ask at any branch and still check out books from several shelves at once, but a loan that spans branches takes a few phone calls, and everyone has to agree on what time it is.",
+  "useWhen": [
+    "One primary can no longer take the write load, and splitting the data by hand would put joins and cross-shard transactions into application code",
+    "The database must survive losing a node, a zone or a whole region with no data loss and no manual failover",
+    "Users or regulations are spread across regions, and rows should live near their users while staying in one logical database",
+    "You need strict correctness (serializable or stricter transactions) at a scale where NoSQL stores would make you handle inconsistency yourself"
+  ],
+  "avoidWhen": [
+    "The data fits on one well-sized PostgreSQL or MySQL server with replicas: that is simpler, faster per query and fully compatible",
+    "Latency-critical writes from one place: a quorum write across zones or regions costs more round trips than a commit on a local disk",
+    "Analytics over large scans; use a warehouse or an HTAP column store such as TiDB’s TiFlash, not the row store",
+    "Applications that depend on extensions, stored procedures or exact PostgreSQL or MySQL behaviour, which these systems implement only partly"
+  ],
+  "example": "A payments company outgrows a single PostgreSQL primary and must keep running if an AWS region fails. It moves to a distributed SQL database with nodes in three US regions and declares the database able to survive a region failure. Account rows are homed in the region where each customer signed up, so most reads and writes stay local, while a small currencies table is replicated for fast reads everywhere. A transfer between two customers in different regions now commits in tens of milliseconds instead of two, because the transaction record must reach a quorum across regions. The team switches to random UUID keys after finding that time-ordered IDs sent every insert to one range, and wraps transfers in a retry loop for serialization errors. When `us-east` goes dark during a drill, the other two regions keep accepting payments.",
+  "providers": {
+    "aws": "Aurora DSQL: serverless, PostgreSQL-compatible, active-active across Availability Zones or peered Regions, with optimistic concurrency and snapshot isolation; Aurora itself shares one storage volume across zones but keeps a single writer instance",
+    "gcp": "Spanner: TrueTime and Paxos, external consistency (stricter than serializable), GoogleSQL or a PostgreSQL dialect per database",
+    "azure": "No distributed SQL engine of its own; Azure Database for PostgreSQL elastic clusters run the Citus extension to shard PostgreSQL across nodes, and CockroachDB’s managed Mission Critical tier runs on Azure",
+    "oss": "TiDB (MySQL-compatible, Apache 2.0), YugabyteDB (PostgreSQL-compatible, Apache 2.0 core), CockroachDB (PostgreSQL wire protocol, proprietary licence since 2024), FoundationDB (Apache 2.0 transactional key-value core, with SQL through the Record Layer); Vitess and Citus shard existing MySQL and PostgreSQL servers instead"
+  },
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "-- Works on CockroachDB and YugabyteDB (PostgreSQL syntax); TiDB and Spanner differ in details",
+      "CREATE TABLE accounts (",
+      "  id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),  -- random keys spread inserts across ranges",
+      "  owner   TEXT NOT NULL,",
+      "  balance DECIMAL(12,2) NOT NULL CHECK (balance >= 0)",
+      ");",
+      "",
+      "-- One transaction across two rows that may live on different nodes:",
+      "-- both changes commit through the consensus groups of their ranges, or neither does.",
+      "BEGIN;",
+      "UPDATE accounts SET balance = balance - 25 WHERE id = '8a1c…';",
+      "UPDATE accounts SET balance = balance + 25 WHERE id = 'f03e…';",
+      "COMMIT;",
+      "-- On conflict: ERROR ... (SQLSTATE 40001). Retry the whole transaction."
+    ]
+  },
+  "related": [
+    "relational",
+    "sql",
+    "key-value",
+    "coordination",
+    "wide-column",
+    "lsm-trees"
+  ],
+  "sections": [
+    {
+      "type": "table",
+      "title": "How the main systems do it",
+      "intro": "Each splits data into replicated ranges; they differ in what they speak, how they agree on time, and the guarantee you get by default.",
+      "corner": "",
+      "columns": [
+        "Speaks",
+        "Replication",
+        "Ordering transactions",
+        "Default guarantee",
+        "Licence"
+      ],
+      "rows": [
+        {
+          "label": "Spanner",
+          "values": [
+            "GoogleSQL or PostgreSQL dialect",
+            "Paxos per split",
+            "TrueTime, then wait out the clock error before acknowledging",
+            "External consistency, stricter than serializable",
+            "Google Cloud service"
+          ]
+        },
+        {
+          "label": "CockroachDB",
+          "values": [
+            "PostgreSQL wire protocol",
+            "Raft per range, up to 512 MiB",
+            "Hybrid logical clocks over NTP; reads restart inside the uncertainty window",
+            "`SERIALIZABLE`; `READ COMMITTED` optional",
+            "Proprietary, source available"
+          ]
+        },
+        {
+          "label": "TiDB",
+          "values": [
+            "MySQL protocol",
+            "Raft per Region (256 MiB) in TiKV",
+            "Central timestamp oracle in the Placement Driver",
+            "Snapshot isolation, reported as `REPEATABLE READ`",
+            "Apache 2.0"
+          ]
+        },
+        {
+          "label": "YugabyteDB",
+          "values": [
+            "PostgreSQL (YSQL reuses its query layer) and Cassandra-style YCQL",
+            "Raft per tablet",
+            "Hybrid logical clocks",
+            "Snapshot, serializable or read committed",
+            "Apache 2.0 core"
+          ]
+        },
+        {
+          "label": "FoundationDB",
+          "values": [
+            "Key-value API; SQL only through layers",
+            "Transaction logs and storage servers; failures handled by recruiting new roles",
+            "One sequencer hands out commit versions",
+            "Strict serializability",
+            "Apache 2.0"
+          ]
+        },
+        {
+          "label": "Aurora DSQL",
+          "values": [
+            "PostgreSQL-compatible (16)",
+            "Synchronous across three Availability Zones, or peered Regions",
+            "Hybrid logical clocks on Amazon Time Sync Service",
+            "Snapshot isolation, with conflicts checked at commit",
+            "AWS service"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Three things people have called NewSQL",
+      "intro": "Pavlo and Aslett’s 2016 survey sorted the systems sold under the name into three groups. Only the first is what “distributed SQL” usually means today.",
+      "items": [
+        {
+          "name": "New architectures",
+          "tag": "Spanner, CockroachDB, VoltDB",
+          "text": "Databases written from scratch for a cluster of shared-nothing nodes, each managing its own storage, with their own concurrency control, replication and distributed query execution. TiDB, YugabyteDB and Aurora DSQL came later and fit here."
+        },
+        {
+          "name": "Transparent sharding middleware",
+          "tag": "MaxScale, ScaleArc; today Vitess",
+          "text": "A layer that routes queries across ordinary single-node databases and presents them as one. Applications keep their driver and SQL dialect, but cross-shard transactions and joins are harder, and each node keeps its 1970s disk-oriented engine."
+        },
+        {
+          "name": "Database as a service on a new architecture",
+          "tag": "Amazon Aurora",
+          "text": "Managed services that rebuilt the storage underneath a familiar engine. The survey counted Aurora, whose log-structured storage improved I/O, though it doesn’t partition writes across nodes."
+        }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In the 2000s web applications outgrew single database servers. Companies such as eBay and Google wrote middleware that sharded Oracle or MySQL across many machines, but it handled single-row reads and writes well and left joins and multi-row transactions to application code. NoSQL systems such as Bigtable, Dynamo and their open-source descendants went further and dropped transactions and the relational model for eventual consistency. Some organizations, Google most notably, found that their developers then spent too much time writing code to cope with inconsistent data. Google’s answer was Spanner, described in 2012 as the first system to distribute data at global scale and still support externally consistent distributed transactions; it later grew a full SQL engine and became a public cloud service in 2017.",
+      "Matthew Aslett, an analyst at The 451 Group, coined “NewSQL” in April 2011 as shorthand for the new vendors of scalable, high-performance SQL databases, replacing the group’s earlier label ScalableSQL. He stressed that “the new thing about the NewSQL vendors is the vendor, not the SQL”, and his first list mixed clustered databases such as Clustrix, VoltDB and NimbusDB with new MySQL storage engines and hosted services. In 2016 he and Andy Pavlo defined NewSQL more narrowly, as relational databases that give NoSQL’s scalability for read-write transaction workloads while keeping ACID guarantees, and noted that several early companies had already failed or been sold.",
+      "The systems that lasted mostly followed Spanner’s design without its special hardware. CockroachDB reached 1.0 in May 2017 with hybrid clocks over NTP in place of atomic clocks, and TiDB and YugabyteDB put MySQL and PostgreSQL front ends on Raft-replicated key-value stores. YugabyteDB and CockroachDB describe themselves as distributed SQL databases, the name now more common than NewSQL. In May 2025 AWS added Aurora DSQL, a serverless PostgreSQL-compatible database that runs active-active across Regions."
+    ],
+    "choices": [
+      {
+        "choice": "A consensus group per range of keys",
+        "why": "Replicating a whole database through one primary limits writes to one machine and makes failover a manual or risky step. Giving every range its own Raft or Paxos group lets writes spread over many leaders, and a majority vote means a minority of failed replicas loses nothing."
+      },
+      {
+        "choice": "Multiversion concurrency control instead of read locks",
+        "why": "Most of these systems use MVCC, so long read-only queries see a snapshot and never block writers. The idea dates from a 1979 MIT dissertation; what changed was running it across a cluster."
+      },
+      {
+        "choice": "Order transactions by time, and pick how to know the time",
+        "why": "A decentralized commit needs a global order without asking one coordinator about everything. Spanner pays for GPS and atomic clocks and waits out a few milliseconds of uncertainty; CockroachDB accepts NTP’s wider error and restarts reads instead; TiDB keeps one timestamp service, simpler but a single point every transaction talks to."
+      },
+      {
+        "choice": "Keep the MySQL or PostgreSQL wire protocol",
+        "why": "New databases lose existing drivers, admin and reporting tools, and trained people. Speaking an existing protocol lets applications and ORMs connect unchanged, even when the engine underneath supports only part of the original’s features."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "2011",
+        "text": "Matthew Aslett of The 451 Group coins “NewSQL”"
+      },
+      {
+        "year": "2012",
+        "text": "Google’s Spanner paper describes externally consistent distributed transactions"
+      },
+      {
+        "year": "2016",
+        "text": "Pavlo and Aslett ask “What’s Really New with NewSQL?”"
+      },
+      {
+        "year": "2017",
+        "text": "Cloud Spanner opens to the public; CockroachDB 1.0 ships"
+      },
+      {
+        "year": "2025",
+        "text": "Amazon Aurora DSQL becomes generally available"
+      }
+    ],
+    "sources": [
+      {
+        "label": "Matthew Aslett, 451 Group: What we talk about when we talk about NewSQL (6 Apr 2011)",
+        "url": "https://blogs.451research.com/information_management/2011/04/06/what-we-talk-about-when-we-talk-about-newsql/",
+        "archive": "https://web.archive.org/web/20241111134857/https://blogs.451research.com/information_management/2011/04/06/what-we-talk-about-when-we-talk-about-newsql/"
+      },
+      {
+        "label": "Pavlo and Aslett: What’s Really New with NewSQL? (SIGMOD Record, June 2016)",
+        "url": "https://db.cs.cmu.edu/papers/2016/pavlo-newsql-sigmodrec2016.pdf"
+      },
+      {
+        "label": "Spanner: Google’s Globally-Distributed Database (OSDI 2012)",
+        "url": "https://research.google/pubs/spanner-googles-globally-distributed-database-2/"
+      },
+      {
+        "label": "Spanner: Becoming a SQL System (SIGMOD 2017)",
+        "url": "https://research.google/pubs/spanner-becoming-a-sql-system/"
+      },
+      {
+        "label": "Google Cloud blog: Introducing Cloud Spanner (14 Feb 2017)",
+        "url": "https://cloud.google.com/blog/products/gcp/introducing-cloud-spanner-a-global-database-service-for-mission-critical-applications"
+      },
+      {
+        "label": "Cockroach Labs blog: CockroachDB 1.0 (10 May 2017)",
+        "url": "https://www.cockroachlabs.com/blog/cockroachdb-1-0-release/"
+      },
+      {
+        "label": "Cockroach Labs blog: Living without atomic clocks",
+        "url": "https://www.cockroachlabs.com/blog/living-without-atomic-clocks/"
+      },
+      {
+        "label": "AWS What’s New: Amazon Aurora DSQL is generally available (May 2025)",
+        "url": "https://aws.amazon.com/about-aws/whats-new/2025/05/amazon-aurora-dsql-generally-available/"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "Pavlo and Aslett: What’s Really New with NewSQL? (definition, categories, concurrency control, replication)",
+      "url": "https://db.cs.cmu.edu/papers/2016/pavlo-newsql-sigmodrec2016.pdf"
+    },
+    {
+      "label": "Google Cloud: Spanner replication (Paxos, splits, write quorum)",
+      "url": "https://docs.cloud.google.com/spanner/docs/replication"
+    },
+    {
+      "label": "Google Cloud: Spanner, TrueTime and external consistency",
+      "url": "https://docs.cloud.google.com/spanner/docs/true-time-external-consistency"
+    },
+    {
+      "label": "Google Cloud: Spanner PostgreSQL interface",
+      "url": "https://docs.cloud.google.com/spanner/docs/postgresql-interface"
+    },
+    {
+      "label": "CockroachDB docs: Architecture overview (ranges, Raft, leaseholders)",
+      "url": "https://docs.cockroachlabs.com/docs/stable/architecture/overview"
+    },
+    {
+      "label": "CockroachDB docs: Replication zones (512 MiB range_max_bytes)",
+      "url": "https://docs.cockroachlabs.com/docs/stable/configure-replication-zones"
+    },
+    {
+      "label": "Cockroach Labs blog: Living without atomic clocks (TrueTime commit wait vs uncertainty restarts)",
+      "url": "https://www.cockroachlabs.com/blog/living-without-atomic-clocks/"
+    },
+    {
+      "label": "TiDB docs: TiDB architecture (TiDB server, PD, TiKV, TiFlash)",
+      "url": "https://docs.pingcap.com/tidb/stable/tidb-architecture/"
+    },
+    {
+      "label": "TiDB docs: TiDB storage (RocksDB, Raft, 256 MiB Regions, MVCC, Percolator)",
+      "url": "https://docs.pingcap.com/tidb/stable/tidb-storage/"
+    },
+    {
+      "label": "TiDB docs: TimeStamp Oracle (TSO)",
+      "url": "https://docs.pingcap.com/tidb/stable/tso/"
+    },
+    {
+      "label": "TiDB docs: Transaction isolation levels",
+      "url": "https://docs.pingcap.com/tidb/stable/transaction-isolation-levels/"
+    },
+    {
+      "label": "pingcap/tidb on GitHub (Apache 2.0)",
+      "url": "https://github.com/pingcap/tidb"
+    },
+    {
+      "label": "YugabyteDB docs: Architecture (tablets, Raft, DocDB on RocksDB)",
+      "url": "https://docs.yugabyte.com/stable/architecture/"
+    },
+    {
+      "label": "yugabyte/yugabyte-db on GitHub (distributed SQL, YSQL, hybrid logical clocks, isolation levels, licence)",
+      "url": "https://github.com/yugabyte/yugabyte-db"
+    },
+    {
+      "label": "FoundationDB docs: Architecture (sequencer, commit versions)",
+      "url": "https://apple.github.io/foundationdb/architecture.html"
+    },
+    {
+      "label": "FoundationDB docs: Consistency (strict serializability)",
+      "url": "https://apple.github.io/foundationdb/consistency.html"
+    },
+    {
+      "label": "FoundationDB Record Layer on GitHub (SQL over JDBC)",
+      "url": "https://github.com/FoundationDB/fdb-record-layer"
+    },
+    {
+      "label": "AWS: What is Amazon Aurora DSQL?",
+      "url": "https://docs.aws.amazon.com/aurora-dsql/latest/userguide/what-is-aurora-dsql.html"
+    },
+    {
+      "label": "Aurora DSQL docs: Concurrency control (OCC, SQLSTATE 40001, random primary keys)",
+      "url": "https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-concurrency-control.html"
+    },
+    {
+      "label": "AWS Database Blog: Everything you don’t need to know about Aurora DSQL, part 5: clocks (Nov 2025)",
+      "url": "https://aws.amazon.com/blogs/database/everything-you-dont-need-to-know-about-amazon-aurora-dsql-part-5-how-the-service-uses-clocks"
+    },
+    {
+      "label": "Microsoft Learn: Elastic clusters in Azure Database for PostgreSQL (managed Citus)",
+      "url": "https://learn.microsoft.com/en-us/azure/postgresql/elastic-clusters/concepts-elastic-clusters"
+    },
+    {
+      "label": "Cockroach Labs: Pricing (Cockroach Continuum on AWS, GCP and Azure)",
+      "url": "https://www.cockroachlabs.com/pricing/"
+    },
+    {
+      "label": "Amazon Aurora User Guide: Aurora DB clusters (one writer instance, shared cluster volume)",
+      "url": "https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Overview.html"
+    }
+  ]
+}

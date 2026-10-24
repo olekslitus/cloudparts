@@ -1,0 +1,146 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "TiDB",
+  "concepts": ["relational", "newsql"],
+  "provider": "oss",
+  "vendor": "PingCAP",
+  "license": "Apache 2.0; TiDB Cloud is a proprietary managed service",
+  "website": "https://www.pingcap.com/",
+  "repo": "https://github.com/pingcap/tidb",
+  "summary": "A distributed SQL database that speaks the MySQL protocol, stores rows in TiKV, a Raft-replicated key-value store, and can keep a columnar copy in TiFlash for analytics on live data.",
+  "intro": [
+    "TiDB splits a database into separate services. TiDB servers are stateless SQL nodes: they speak the MySQL protocol (on port 4000 by default), parse and plan queries, and store nothing, so you add them behind a load balancer as traffic grows. TiKV, written in Rust, stores the data as key-value pairs in one sorted keyspace, cut into Regions of up to 256 MiB by default. Each Region has three replicas by default that form a Raft group, and a write succeeds once a majority has it; on each node the data sits in RocksDB. PD (Placement Driver), a cluster of at least three nodes, keeps the map of which Region lives where, moves and splits Regions to balance load, and hands out timestamps (TSO): a physical time in milliseconds plus a logical counter.",
+    "Transactions follow Google’s Percolator model: a transaction reads at a start timestamp from PD, writes locks and new versions to every Region it touches in a two-phase commit, and becomes visible at a commit timestamp. Every key is stored with its version, newest first (MVCC). New clusters use pessimistic locking, as MySQL does, and TiDB provides snapshot isolation, which it reports as MySQL’s `REPEATABLE-READ`; `READ-COMMITTED` is also available, but `SERIALIZABLE` returns an error. For analytics you add TiFlash replicas to a table: TiFlash is a columnar store that follows TiKV as a Raft learner, asynchronously but with consistent reads, and the optimizer decides per query whether to read rows from TiKV, columns from TiFlash, or both, running large joins and aggregates across TiFlash nodes in MPP mode. TiCDC streams changes to MySQL, Kafka (as Canal-JSON, Avro or Debezium events) and object storage.",
+    "The whole database, enterprise features included, is Apache 2.0, and PingCAP sells TiDB Cloud. Its Starter plan is multi-tenant and autoscaling, with up to five free instances per organization, each with 5 GiB of row storage, 5 GiB of columnar storage and 50 million Request Units a month; Essential starts at $400 a month and Dedicated, with separately sized TiDB, TiKV and TiFlash nodes, at $1,376. Since October 2025 the cloud plans have been moving to TiDB X, a new architecture that keeps data in object storage and caches it on compute nodes; PingCAP says it will open-source TiDB X’s core by the end of 2026. In October 2026 it opened a public preview of PostgreSQL compatibility on Starter. Self-managed, the current long-term-support line is 8.5 (8.5.8, August 2026); 9.0 has only had a beta."
+  ],
+  "strengths": [
+    "MySQL-compatible: MySQL drivers, ORMs and tools connect unchanged, and TiDB follows MySQL 8.0 syntax, including foreign keys (generally available since 8.5)",
+    "Grows without manual sharding: Regions split and move on their own, and SQL, storage and analytics nodes scale independently",
+    "Analytics on live data: a TiFlash replica is one `ALTER TABLE` away, stays consistent with the row store, and the optimizer chooses it per query",
+    "Fully Apache 2.0, runs on Kubernetes through TiDB Operator, and starts locally with one `tiup playground` command"
+  ],
+  "limits": [
+    "Not all of MySQL: no stored procedures, triggers, events, user-defined functions, `SPATIAL` types, `XA` transactions, descending indexes or `SKIP LOCKED`, and `FULLTEXT` indexes are not usable on self-managed clusters",
+    "Snapshot isolation, not serializable: write skew is possible, and optimistic transactions can fail at commit where MySQL would succeed",
+    "Sequential keys such as `AUTO_INCREMENT` send every insert to the last Region, a write hotspot; the docs recommend `AUTO_RANDOM` or `SHARD_ROW_ID_BITS`, which give up ordered IDs",
+    "A transaction is capped at 100 MB by default (configurable up to 1 TB) and a row at 6 MB, a TiDB server can need two to three times a transaction’s size in memory, and a minimal production cluster runs three kinds of service, each with several nodes"
+  ],
+  "worksWith": [
+    { "id": "mysql", "how": "speaks the wire protocol of" },
+    { "id": "rocksdb", "how": "stores each TiKV node’s data in" },
+    { "id": "kafka", "how": "streams changes through TiCDC to" },
+    { "id": "debezium", "how": "can emit change events in the format of" },
+    { "id": "s3", "how": "writes change data through TiCDC to" },
+    { "id": "kubernetes", "how": "runs through TiDB Operator on" }
+  ],
+  "alternatives": ["cockroachdb", "foundationdb", "yugabytedb", "vitess", "mysql"],
+  "goodFor": [
+    { "id": "scale-out-sql", "why": "Regions of up to 256 MiB split and move between TiKV nodes on their own, and stateless SQL nodes scale behind a load balancer." },
+    { "id": "analytical-scans", "why": "TiFlash keeps a consistent columnar copy of chosen tables and runs large joins and aggregates in MPP mode, next to the row store." }
+  ],
+  "specs": {
+    "data-model": "Relational tables over one sorted key-value keyspace (TiKV)",
+    "query-language": "MySQL-compatible SQL (MySQL 8.0 syntax)",
+    "wire-protocol": "MySQL protocol (port 4000 by default)",
+    "transactions": "Any rows across Regions, Percolator-style two-phase commit; 100 MB by default",
+    "isolation": "Snapshot isolation, reported as `REPEATABLE-READ`; no serializable",
+    "consistency": "Snapshot reads at timestamps handed out by PD (TSO)",
+    "scaling": "Automatic: Regions up to 256 MiB split and rebalance; SQL, storage and TiFlash nodes scale separately",
+    "replication": "Raft per Region, three replicas by default; TiFlash replicas as Raft learners",
+    "storage-engine": "RocksDB on each TiKV node",
+    "storage-format": "Rows in TiKV; optional columnar replicas in TiFlash",
+    "written-in": "Go (SQL layer) and Rust (TiKV)",
+    "deployment": "Self-hosted with TiUP, TiDB Operator on Kubernetes, or TiDB Cloud",
+    "pricing": "TiDB Cloud: free Starter instances within limits; Essential from $400 a month, Dedicated from $1,376"
+  },
+  "snippet": {
+    "lang": "bash",
+    "title": "A local cluster, a hotspot-free table and a columnar replica",
+    "source": [
+      "curl --proto '=https' --tlsv1.2 -sSf https://tiup-mirrors.pingcap.com/install.sh | sh",
+      "tiup playground   # one each of TiDB, PD, TiKV and TiFlash, on the latest version",
+      "",
+      "mysql --host 127.0.0.1 --port 4000 -u root <<'SQL'",
+      "CREATE DATABASE shop; USE shop;",
+      "-- AUTO_RANDOM scatters new ids across Regions instead of appending to the last one",
+      "CREATE TABLE orders (",
+      "  id          BIGINT PRIMARY KEY AUTO_RANDOM,",
+      "  customer_id BIGINT NOT NULL,",
+      "  total       DECIMAL(10,2),",
+      "  placed_at   DATETIME NOT NULL",
+      ");",
+      "-- a columnar copy in TiFlash, kept in step through Raft",
+      "ALTER TABLE orders SET TIFLASH REPLICA 1;",
+      "SELECT @@transaction_isolation;   -- REPEATABLE-READ (snapshot isolation)",
+      "EXPLAIN SELECT customer_id, SUM(total) FROM orders GROUP BY customer_id;  -- may read TiFlash",
+      "SQL"
+    ]
+  },
+  "history": {
+    "story": [
+      "At Wandou Labs, a Chinese Android app store, Ed Huang wrote Codis, an open-source tool that sharded and rebalanced Redis automatically. Behind it sat a large sharded MySQL cluster, where re-sharding was painful and the application had to give up transactions and complex queries across shards. In 2015 he, Max Liu and Dylan Cui, who had worked together at Wandou Labs, founded PingCAP in Beijing to build a database that behaves like one MySQL server but spreads data and transactions across many machines, drawing on Google’s Spanner and F1 papers. A first version ran on HBase and was too slow, so they built their own storage, TiKV. TiDB’s repository opened in September 2015 and TiKV’s on the last day of that year; TiKV’s design drew on Bigtable, Spanner and Percolator and on the Raft consensus algorithm.",
+      "TiDB 1.0 shipped on 16 October 2017, already running in production at more than 30 companies in Asia, including Mobike. PingCAP donated TiKV to the CNCF in 2018, and it graduated in 2020. TiDB 4.0, in May 2020, added TiFlash, a columnar engine that made TiDB a database for transactions and analytics at once. The company later set up its headquarters in Sunnyvale, California, and built TiDB Cloud; in October 2025 it announced TiDB X, an object-storage architecture for the cloud service, and in October 2026 a PostgreSQL-compatible preview."
+    ],
+    "choices": [
+      {
+        "choice": "Speak MySQL’s protocol instead of inventing a new interface",
+        "why": "The people who needed to scale were running MySQL shards. Matching the protocol and syntax let them move applications, drivers and tools with little or no code change."
+      },
+      {
+        "choice": "Separate SQL, storage and placement into different services",
+        "why": "Stateless SQL nodes can be added or replaced freely, TiKV can be used on its own as a transactional key-value store, and one placement service can balance Regions with a cluster-wide view."
+      },
+      {
+        "choice": "A central timestamp oracle instead of synchronized clocks",
+        "why": "Percolator-style transactions need timestamps every node agrees on. Handing them out from PD avoids depending on clock accuracy, at the cost of a round trip to PD for every transaction."
+      },
+      {
+        "choice": "A columnar replica fed by Raft rather than an ETL pipeline",
+        "why": "Copying data to a warehouse adds delay and a second system. A TiFlash learner receives the same Raft log as the row replicas, so analytics read fresh, consistent data without slowing the writes."
+      }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "PingCAP founded; TiDB repository opens in September" },
+      { "year": "2017", "text": "TiDB 1.0 released on 16 October" },
+      { "year": "2018", "text": "TiKV joins the CNCF as an incubating project" },
+      { "year": "2019", "text": "3.0.8 makes pessimistic transactions the default" },
+      { "year": "2020", "text": "TiDB 4.0 adds TiFlash; TiKV graduates from the CNCF" },
+      { "year": "2024", "text": "TiDB 8.5, the current long-term-support line, ships in December" },
+      { "year": "2025", "text": "TiDB X, an object-storage architecture for TiDB Cloud, announced" },
+      { "year": "2026", "text": "PostgreSQL-compatible preview on TiDB Cloud Starter" }
+    ],
+    "sources": [
+      { "label": "PingCAP: Our history (founded in 2015)", "url": "https://www.pingcap.com/about-us/" },
+      { "label": "PingCAP press release: PingCAP launches TiDB 1.0 (Oct 2017)", "url": "https://www.pingcap.com/press-release/announcing-tidb-1-0-release/" },
+      { "label": "Kubernetes Podcast #121: TiKV, TiDB and PingCAP, with Ed Huang (Codis)", "url": "https://kubernetespodcast.com/episode/121-tikv-tidb-and-pingcap/" },
+      { "label": "tikv/tikv on GitHub: README (Bigtable, Spanner, Percolator, Raft)", "url": "https://github.com/tikv/tikv" },
+      { "label": "CNCF: TiKV project page (accepted 2018, graduated 2020)", "url": "https://www.cncf.io/projects/tikv/" },
+      { "label": "PingCAP: The evolution of TiDB (TiFlash in 4.0)", "url": "https://www.pingcap.com/ko/article/the-evolution-of-tidb-scalability-consistency-and-flexibility/" },
+      { "label": "TiDB docs: Release timeline", "url": "https://docs.pingcap.com/tidb/stable/release-timeline/" },
+      { "label": "TiDB docs: Release versioning (LTS and DMR)", "url": "https://docs.pingcap.com/tidb/stable/versioning/" },
+      { "label": "PingCAP blog: Introducing TiDB X (Oct 2025)", "url": "https://www.pingcap.com/blog/introducing-tidb-x-a-new-foundation-distributed-sql-ai-era/" },
+      { "label": "CIO Influence: TiDB expands cloud platform (PostgreSQL preview, TiDB X open-source plan, Oct 2026)", "url": "https://cioinfluence.com/cloud/tidb-expands-cloud-platform-to-support-enterprise-and-ai-applications-on-one-data-foundation/" },
+      { "label": "Wikipedia: TiDB", "url": "https://en.wikipedia.org/wiki/TiDB" }
+    ]
+  },
+  "sources": [
+    { "label": "TiDB docs: Architecture (TiDB server, PD, TiKV, TiFlash)", "url": "https://docs.pingcap.com/tidb/stable/tidb-architecture/" },
+    { "label": "TiDB docs: Storage (RocksDB, Raft, Regions of 256 MiB, MVCC, Percolator)", "url": "https://docs.pingcap.com/tidb/stable/tidb-storage/" },
+    { "label": "TiDB docs: TimeStamp Oracle (TSO)", "url": "https://docs.pingcap.com/tidb/stable/tso/" },
+    { "label": "TiDB docs: Transaction isolation levels", "url": "https://docs.pingcap.com/tidb/stable/transaction-isolation-levels/" },
+    { "label": "TiDB docs: System variables (transaction_isolation, tidb_skip_isolation_level_check)", "url": "https://docs.pingcap.com/tidb/stable/system-variables/" },
+    { "label": "TiDB docs: Transactions overview (pessimistic default, size limits)", "url": "https://docs.pingcap.com/tidb/stable/transaction-overview/" },
+    { "label": "TiDB docs: TiFlash overview (Raft learner, consistent reads)", "url": "https://docs.pingcap.com/tidb/stable/tiflash-overview/" },
+    { "label": "TiDB docs: Use TiFlash MPP mode", "url": "https://docs.pingcap.com/tidb/stable/use-tiflash-mpp-mode/" },
+    { "label": "TiDB docs: MySQL compatibility", "url": "https://docs.pingcap.com/tidb/stable/mysql-compatibility/" },
+    { "label": "TiDB docs: Foreign keys (GA in 8.5)", "url": "https://docs.pingcap.com/tidb/stable/foreign-key/" },
+    { "label": "TiDB docs: Troubleshoot hotspot issues (AUTO_RANDOM, SHARD_ROW_ID_BITS)", "url": "https://docs.pingcap.com/tidb/stable/troubleshoot-hot-spot-issues/" },
+    { "label": "TiDB docs: TiCDC overview", "url": "https://docs.pingcap.com/tidb/stable/ticdc-overview/" },
+    { "label": "TiDB docs: Quick start (TiUP playground)", "url": "https://docs.pingcap.com/tidb/stable/quick-start-with-tidb/" },
+    { "label": "TiDB Cloud docs: Select your plan (Starter, Essential, Premium, Dedicated)", "url": "https://docs.pingcap.com/tidbcloud/select-cluster-tier/" },
+    { "label": "PingCAP: Pricing (checked 2026-10-24)", "url": "https://www.pingcap.com/pricing/" },
+    { "label": "pingcap/tidb on GitHub: README (Apache 2.0, MySQL 8.0, TiDB Operator)", "url": "https://github.com/pingcap/tidb" },
+    { "label": "pingcap/tidb: releases (8.5.8, August 2026; 9.0.0-beta.1)", "url": "https://github.com/pingcap/tidb/releases" }
+  ],
+  "checked": "2026-10-24"
+}

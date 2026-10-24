@@ -1,0 +1,133 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "WASI",
+  "concepts": ["webassembly"],
+  "provider": "oss",
+  "vendor": "WASI Subgroup of the W3C WebAssembly Community Group",
+  "license": "Open standard, published under the W3C Community Contributor License Agreement",
+  "website": "https://wasi.dev/",
+  "repo": "https://github.com/WebAssembly/WASI",
+  "summary": "The WebAssembly System Interface: standard APIs for files, clocks, random numbers, sockets and HTTP that let one `.wasm` binary run outside the browser, with only the capabilities its host grants.",
+  "intro": [
+    "A WebAssembly module can’t do anything outside its own memory except call the functions its host passes in. WASI standardises those functions for hosts other than a browser, so a program compiled once runs on any runtime that implements them, on any operating system and CPU. Programs run in a capability-based sandbox: they start with no ambient authority, so there is no global file system or network to reach. The host hands in what it chooses, such as one directory (`wasmtime --dir .`) or an outgoing HTTP client.",
+    "There have been three milestone releases. Preview 1 (WASI 0.1, 2019) is a POSIX-like set of functions, modelled on CloudABI, that a core module imports from a module named `wasi_snapshot_preview1`; it is still widely used, but frozen. WASI 0.2 (January 2024) started again on top of the Component Model: interfaces are written in WIT, with strings, records and resources instead of raw pointers, and grouped into worlds such as `wasi:cli/command` for command-line programs and `wasi:http/proxy` for HTTP handlers. WASI 0.3.0 (11 June 2026) replaced 0.2’s hand-built streams and polling (`wasi:io`) with the Component Model’s native async: functions are `async func`, and data flows as `stream<T>` and `future<T>`. The HTTP world became `service`, a new `middleware` world was added, and the sockets interfaces shrank from seven to two.",
+    "Releases follow a train: a patch release every two months, 0.2.1 through 0.2.12 and then 0.3.1 (August 2026) and 0.3.2 (13 October 2026). Wasmtime 46 was the first runtime to implement the final 0.3.0, and jco runs 0.3 components in JavaScript hosts. Rust has a target for each generation: `wasm32-wasip1` emits core modules, `wasm32-wasip2` emits components, and `wasm32-wasip3` is an experimental tier 3 target."
+  ],
+  "strengths": [
+    "One binary for every operating system and CPU the runtime supports, with no recompiling",
+    "Capability-based: a program gets only the directories, sockets and HTTP clients the host grants, which suits plugins and untrusted code",
+    "WIT interfaces with rich types, so components written in Rust, Go, C or JavaScript can call each other without hand-written glue",
+    "Since 0.3, async is part of the Component Model itself, so concurrent I/O doesn’t depend on each language’s own runtime"
+  ],
+  "limits": [
+    "Still pre-1.0: interfaces are versioned (`@0.3.2`), and a mismatch between the WIT version a component was built against and the one the runtime provides fails at instantiation with a type error",
+    "Three generations in use at once: many tools and hosts still support only preview 1, which gets no new APIs or documentation",
+    "Covers a subset of an operating system: no `fork`, and interfaces such as key-value stores, messaging, SQL and GPU are still proposals in phase 1 or 2",
+    "Support varies by host: Cloudflare Workers implements only some WASI calls, and browsers run components only after jco translates them to JavaScript"
+  ],
+  "worksWith": [
+    { "id": "rust", "how": "is a compile target of" },
+    { "id": "cloudflare-workers", "how": "has experimental support in" }
+  ],
+  "snippet": {
+    "lang": "text",
+    "title": "The WASI 0.3 HTTP worlds and handler, in WIT (comments removed)",
+    "source": [
+      "package wasi:http@0.3.2;",
+      "",
+      "world service {",
+      "  include wasi:clocks/imports@0.3.2;",
+      "  include wasi:random/imports@0.3.2;",
+      "  import wasi:cli/stdout@0.3.2;",
+      "  import wasi:cli/stderr@0.3.2;",
+      "  import wasi:cli/stdin@0.3.2;",
+      "  import client;     // outgoing requests: the only network access a service gets",
+      "  export handler;    // the host calls handle() for each incoming request",
+      "}",
+      "",
+      "world middleware {",
+      "  include service;",
+      "  import handler;    // the next handler in the chain",
+      "}",
+      "",
+      "interface handler {",
+      "  use types.{request, response, error-code};",
+      "  handle: async func(request: request) -> result<response, error-code>;",
+      "}"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Three generations",
+      "intro": "What a program targets and how it reaches the outside world, as of October 2026.",
+      "corner": "",
+      "columns": ["Preview 1 (0.1)", "0.2", "0.3"],
+      "rows": [
+        { "label": "Released", "values": ["2019", "25 January 2024; 0.2.12 in June 2026", "0.3.0 on 11 June 2026; 0.3.2 on 13 October 2026"] },
+        { "label": "Binary", "values": ["Core module importing `wasi_snapshot_preview1`", "Component", "Component"] },
+        { "label": "Interface language", "values": ["witx", "WIT", "WIT"] },
+        { "label": "Style", "values": ["POSIX-like calls with file descriptors and pointers into linear memory", "Typed interfaces and resources; I/O through `wasi:io` streams and pollables", "`async func`, `stream<T>` and `future<T>` from the Component Model; `wasi:io` removed"] },
+        { "label": "HTTP world", "values": ["None", "`wasi:http/proxy`", "`wasi:http/service` and `wasi:http/middleware`"] },
+        { "label": "Rust target", "values": ["`wasm32-wasip1` (called `wasm32-wasi` before March 2024)", "`wasm32-wasip2`", "`wasm32-wasip3`, a tier 3 target whose standard library still uses 0.2 APIs"] },
+        { "label": "Status", "values": ["Frozen: no new APIs, kept for compatibility", "Stable; patch releases ended at 0.2.12", "Current preview; patch releases every two months"] }
+      ],
+      "notes": ["`wasmtime serve` runs both 0.2 and 0.3 HTTP components, so moving to 0.3 is not required to use a 0.3-capable runtime."]
+    }
+  ],
+  "history": {
+    "story": [
+      "Once WebAssembly worked in browsers, people wanted to run it on servers and devices, but there was no standard way for a module to open a file or read the clock. Early runtimes imitated the JavaScript glue that the Emscripten compiler generated, which Lin Clark of Mozilla described as “emulating an internal detail of an emulation layer of POSIX”. On 27 March 2019 Mozilla announced WASI and chartered a subgroup of the WebAssembly Community Group to standardise it, with Fastly as a partner. Three implementations existed at launch: Mozilla’s Wasmtime, Fastly’s Lucet and a browser polyfill.",
+      "Preview 1 was closely derived from CloudABI and based on POSIX, which made it biased towards C: raw pointers and implied data structures. Rather than keep extending it, the subgroup rebuilt WASI on the Component Model, and on 25 January 2024 voted to launch WASI 0.2, which Dan Gohman called “a milestone along the way, rather than a destination”. Its successor, 0.3.0, shipped on 11 June 2026 as an exception to the release train approved by a subgroup vote, after release candidates in early 2026, and moved async into the Component Model. No date has been set for WASI 1.0."
+    ],
+    "choices": [
+      {
+        "choice": "Capability-based security",
+        "why": "Following CloudABI and Capsicum, a module gets handles with permissions attached instead of opening any path it likes, so a host can grant one directory and nothing else, and narrow access further as handles are passed on."
+      },
+      {
+        "choice": "A modular set of interfaces",
+        "why": "A small device and a cloud server can’t offer the same APIs, so WASI is split into separate proposals (files, clocks, sockets, HTTP) that a platform implements only where they make sense."
+      },
+      {
+        "choice": "Rebuild on the Component Model",
+        "why": "Preview 1’s C-style pointers and implied layouts made it awkward for other languages and impossible to virtualise. WIT interfaces with rich types let any language bind to WASI, and let one component provide an interface to another."
+      },
+      {
+        "choice": "Native async in 0.3",
+        "why": "In 0.2 every interface threaded I/O through `wasi:io` pollables and explicit streams. Making `future` and `stream` part of the Component Model lets interfaces declare `async func` directly and lets the host run many calls concurrently."
+      }
+    ],
+    "timeline": [
+      { "year": "2019", "text": "Mozilla announces WASI in March; preview 1 becomes the first API" },
+      { "year": "2024", "text": "WASI 0.2, built on the Component Model, launched on 25 January; Rust renames `wasm32-wasi` to `wasm32-wasip1` in March" },
+      { "year": "2026", "text": "WASI 0.3.0 adds native async on 11 June; 0.3.2 on 13 October" }
+    ],
+    "sources": [
+      { "label": "Mozilla Hacks: Standardizing WASI, a WebAssembly system interface (Lin Clark, 27 March 2019)", "url": "https://hacks.mozilla.org/2019/03/standardizing-wasi-a-webassembly-system-interface/" },
+      { "label": "Bytecode Alliance: WASI 0.2 launched (Dan Gohman, 25 January 2024)", "url": "https://bytecodealliance.org/articles/WASI-0.2" },
+      { "label": "WASI.dev: Roadmap (release train, 0.3.0 approved as an exception, 1.0 unscheduled)", "url": "https://wasi.dev/roadmap" },
+      { "label": "WASI.dev: WASI P3 release notes (0.3.0 on 11 June 2026; release candidates)", "url": "https://wasi.dev/releases/wasi-p3" },
+      { "label": "rustc book: wasm32-wasip1 (WASIp1 developed in 2019; renamed from wasm32-wasi in March 2024)", "url": "https://doc.rust-lang.org/rustc/platform-support/wasm32-wasip1.html" }
+    ]
+  },
+  "sources": [
+    { "label": "WASI.dev: overview (capability-based sandbox, no ambient authority, milestones 0.1, 0.2, 0.3)", "url": "https://wasi.dev/" },
+    { "label": "WASI.dev: WASI P3 release notes (async changes, HTTP service and middleware worlds, sockets, Wasmtime 46, jco)", "url": "https://wasi.dev/releases/wasi-p3" },
+    { "label": "WASI.dev: Roadmap (0.2.0 in January 2024, patches 0.2.1 to 0.2.12, 0.3.x schedule)", "url": "https://wasi.dev/roadmap" },
+    { "label": "GitHub: WebAssembly/WASI (preview 1 in witx, 0.2 in WIT, 0.3 as the current preview)", "url": "https://github.com/WebAssembly/WASI" },
+    { "label": "GitHub: WebAssembly/WASI releases (v0.3.1 on 11 August 2026, v0.3.2 on 13 October 2026)", "url": "https://github.com/WebAssembly/WASI/releases" },
+    { "label": "GitHub: WebAssembly/WASI LICENSE.md (W3C Community Contributor License Agreement)", "url": "https://github.com/WebAssembly/WASI/blob/main/LICENSE.md" },
+    { "label": "GitHub: WebAssembly/WASI proposals and their phases", "url": "https://github.com/WebAssembly/WASI/blob/main/docs/Proposals.md" },
+    { "label": "GitHub: WebAssembly/WASI wasi:http worlds.wit (service and middleware worlds)", "url": "https://github.com/WebAssembly/WASI/blob/main/proposals/http/wit/worlds.wit" },
+    { "label": "GitHub: WebAssembly/WASI wasi:http types.wit (handler interface)", "url": "https://github.com/WebAssembly/WASI/blob/main/proposals/http/wit/types.wit" },
+    { "label": "Bytecode Alliance: WASI 0.2 launched (Component Model, wasi-cli and wasi-http worlds, preview 1 derived from CloudABI)", "url": "https://bytecodealliance.org/articles/WASI-0.2" },
+    { "label": "rustc book: wasm32-wasip1 (imports from wasi_snapshot_preview1; no further maintenance)", "url": "https://doc.rust-lang.org/rustc/platform-support/wasm32-wasip1.html" },
+    { "label": "rustc book: wasm32-wasip2 (outputs a component)", "url": "https://doc.rust-lang.org/rustc/platform-support/wasm32-wasip2.html" },
+    { "label": "rustc book: wasm32-wasip3 (tier 3; std still imports WASIp2 APIs during the transition)", "url": "https://doc.rust-lang.org/rustc/platform-support/wasm32-wasip3.html" },
+    { "label": "GitHub: bytecodealliance/jco (runs components in JavaScript hosts; WASI 0.3 by default)", "url": "https://github.com/bytecodealliance/jco" },
+    { "label": "Cloudflare Workers docs: WebAssembly (WASI support is experimental, only some syscalls implemented)", "url": "https://developers.cloudflare.com/workers/runtime-apis/webassembly/" },
+    { "label": "Wasmtime docs: CLI options (--dir)", "url": "https://docs.wasmtime.dev/cli-options.html" }
+  ],
+  "checked": "2026-10-24"
+}

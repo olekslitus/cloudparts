@@ -36,6 +36,26 @@
     { "id": "temporal", "how": "can store workflow state and history for" },
     { "id": "pekko", "how": "journals entity events, via a plugin, for" }
   ],
+  "alternatives": ["scylladb", "amazon-keyspaces", "astra-db", "hbase", "dynamodb"],
+  "goodFor": [
+    { "id": "heavy-writes", "why": "A write is appended to the commit log and a memtable on each replica, with no read on the write path and no leader in the way." },
+    { "id": "multi-region-writes", "why": "Replicas are set per datacenter, every node takes writes, and `LOCAL_QUORUM` keeps each request inside its own region." },
+    { "id": "time-series-ingest", "why": "Each series and day is one partition of time-sorted rows, and with a TTL and TWCS, expired SSTables are deleted whole instead of compacted." }
+  ],
+  "specs": {
+    "data-model": "Wide rows: partitions of rows sorted by clustering columns",
+    "query-language": "CQL, a SQL-like language without joins",
+    "wire-protocol": "CQL native protocol",
+    "secondary-indexes": "Storage Attached Indexes (SAI) since 5.0",
+    "transactions": "Single-partition lightweight transactions (Paxos)",
+    "consistency": "Chosen per request: `ONE`, `QUORUM`, `LOCAL_QUORUM`, `ALL`",
+    "scaling": "Token ring, 16 virtual nodes per node by default",
+    "replication": "Leaderless; replication factor per keyspace and datacenter",
+    "multi-region": "Every datacenter takes writes; conflicts resolve by timestamp, last write wins",
+    "storage-engine": "LSM: commit log, memtables, SSTables",
+    "written-in": "Java",
+    "deployment": "Self-hosted, K8ssandra on Kubernetes, Amazon Keyspaces, Azure Managed Instance, Astra DB"
+  },
   "snippet": {
     "lang": "sql",
     "title": "A table shaped for one query, written and read at LOCAL_QUORUM in cqlsh",
@@ -94,6 +114,113 @@
         { "name": "Azure Managed Instance for Apache Cassandra", "tag": "VMs in your network", "text": "Real open-source Cassandra, up to 5.0, deployed as virtual machine scale sets in your virtual network. Datacenters can join an existing ring on premises. Billed for the VMs and disks you choose, with no licence fee." },
         { "name": "Astra DB", "tag": "IBM since 2025", "text": "DataStax’s Cassandra-based cloud database with vector search. IBM announced it would buy DataStax in February 2025 and closed the deal in the second quarter of 2025; Astra DB is now sold as part of IBM watsonx." }
       ]
+    },
+    {
+      "type": "table",
+      "title": "Compaction strategies: STCS, LCS, TWCS or UCS?",
+      "intro": "Compaction merges a table’s SSTables in the background, and each table picks a strategy with its `compaction` option. The strategy decides how many SSTables a read has to check, how many times each row is rewritten, and how much spare disk the node needs.",
+      "columns": ["SizeTieredCompactionStrategy (STCS)", "LeveledCompactionStrategy (LCS)", "TimeWindowCompactionStrategy (TWCS)", "UnifiedCompactionStrategy (UCS)"],
+      "rows": [
+        { "label": "How it groups SSTables", "values": [
+          "Into buckets of similar size (within 50–150% of the bucket’s average); a bucket is merged once it holds 4 SSTables (`min_threshold`)",
+          "Flushes land in L0; from L1 down, each level is 10 times larger than the one above and holds non-overlapping SSTables of 160 MB",
+          "Into time windows (one day by default) by each SSTable’s newest timestamp. STCS runs inside the current window; when it closes, the window is merged into one SSTable and never compacted again",
+          "Into levels by density (size per share of the token range), split into shards at fixed token boundaries so compactions run in parallel. One setting, `scaling_parameters`, makes it tiered (`T4`, the default) or leveled (`L10`)"
+        ] },
+        { "label": "Read amplification", "values": [
+          "High: versions of one row can be spread over many SSTables",
+          "Low: a row is in at most one SSTable per level, plus L0",
+          "Low for recent ranges: a query reads only the windows it covers",
+          "Tunable: `L` values read like LCS, `T` values like STCS; `T8` for time series means more SSTables per read"
+        ] },
+        { "label": "Write amplification", "values": [
+          "Low: data is rewritten about once per size tier",
+          "High: data is rewritten at each level, with more disk I/O and CPU than STCS",
+          "Low: rows are compacted only inside their own window",
+          "Tunable, the mirror image of reads: tiered writes less, leveled more"
+        ] },
+        { "label": "Space overhead", "values": [
+          "Large: merging the biggest bucket needs room for the old and new SSTables at once, and tombstones in big SSTables wait for a rare big merge",
+          "About 10% of the data",
+          "Small when data has a TTL: an SSTable whose rows have all expired is dropped whole",
+          "Low, per the 5.0 release notes: compactions are split into shards (1 GiB target SSTables) that run in parallel"
+        ] },
+        { "label": "Best for", "values": [
+          "Write-intensive tables",
+          "Read-heavy tables, and rows that are updated or deleted often",
+          "Immutable, time-ordered data written with a TTL; aim for 20–30 windows, such as 3-day windows for a 90-day TTL",
+          "New tables of any kind on 5.0, including time series with TTLs (`T8`, or `T4` for faster reads)"
+        ] },
+        { "label": "Avoid when", "values": [
+          "Reads must be fast, or the same rows are updated and deleted often",
+          "Writes dominate, or the data is immutable time series",
+          "Rows are updated or deleted across windows, TTL and non-TTL data share a table, or writes carry old timestamps",
+          "Some nodes still run 4.x, which has no UCS; Amazon Keyspaces ignores compaction settings"
+        ] },
+        { "label": "Status in 5.0", "values": [
+          "Still the default when a table names no strategy (`default_compaction` in `cassandra.yaml`)",
+          "Legacy: the docs point new tables to UCS",
+          "Still documented as the strategy for time series and TTL data",
+          "New in 5.0 and recommended by the docs; the default only in `cassandra_latest.yaml`, as `T4`"
+        ] }
+      ],
+      "notes": [
+        "The 5.0 docs pull in two directions on time series: the UCS page recommends UCS for most workloads “whether read-heavy, write-heavy, mixed read-write, or time-series”, while the TWCS page still calls TWCS the recommended strategy for time series and TTL data. Switching between STCS, LCS and TWCS rewrites the data with a full compaction; UCS can change its scaling parameter in flight.",
+        "ScyllaDB’s docs list STCS, LCS, TWCS and its own Incremental Compaction Strategy (ICS); UCS is not among them."
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Modelling time series",
+      "body": [
+        "Cassandra fits time series whose questions are per series: one sensor’s readings over a time range, or its latest value. Put the series and a time bucket in the partition key, such as `(sensor_id, day)`, and the timestamp in a clustering column sorted newest first. Each partition then holds one sensor’s day in time order, and a week means reading seven partitions. The bucket keeps partitions bounded: without it a sensor’s partition grows forever, toward Cassandra’s hard limit of 2 billion cells per partition and into trouble long before it. The docs size partitions by counting cells, with about 8 bytes of overhead per cell, and suggest bucketing coarser (by month, say) when per-day partitions come out too small. Declare `CLUSTERING ORDER BY (ts DESC)` when most reads want the newest rows: reverse-order reads are slower, and the order can’t be changed once the table exists.",
+        "Expiry is where compaction matters. Give every row a TTL, or set `default_time_to_live` on the table, and use TWCS with a window that splits the TTL into 20–30 windows. Each closed window becomes one SSTable whose rows all expire at about the same time, so Cassandra deletes the file instead of compacting tombstones away. What Cassandra doesn’t do is roll data up. `GROUP BY` works only on primary key columns, and a filter across all partitions needs `ALLOW FILTERING`, which scans the whole table, so an hourly average across every sensor usually comes from a second table the application writes, or from a Spark job."
+      ]
+    },
+    {
+      "type": "code",
+      "title": "The table from the snippet, set up to expire by window",
+      "intro": "Same partition key and clustering order, plus a table-wide TTL, one-day TWCS windows and read repair turned off, so that reads of old days don’t copy their rows into today’s SSTable.",
+      "lang": "sql",
+      "source": [
+        "CREATE TABLE iot.readings_by_sensor_day (",
+        "  sensor_id   text,",
+        "  day         date,",
+        "  ts          timestamp,",
+        "  temperature double,",
+        "  PRIMARY KEY ((sensor_id, day), ts)",
+        ") WITH CLUSTERING ORDER BY (ts DESC)",
+        "  AND default_time_to_live = 2592000           -- every row expires 30 days after it is written",
+        "  AND compaction = {",
+        "    'class': 'TimeWindowCompactionStrategy',",
+        "    'compaction_window_unit': 'DAYS',",
+        "    'compaction_window_size': '1'               -- 30 one-day windows over the TTL",
+        "  }",
+        "  AND read_repair = 'NONE';                     -- the coordinator reconciles replicas but writes nothing back",
+        "",
+        "-- Cassandra 5.0 alternative:",
+        "-- compaction = {'class': 'UnifiedCompactionStrategy', 'scaling_parameters': 'T8'}",
+        "",
+        "-- latest reading for one sensor",
+        "SELECT ts, temperature FROM iot.readings_by_sensor_day",
+        "WHERE sensor_id = 's-17' AND day = '2026-10-24' LIMIT 1;",
+        "",
+        "-- one hour of one sensor’s day",
+        "SELECT ts, temperature FROM iot.readings_by_sensor_day",
+        "WHERE sensor_id = 's-17' AND day = '2026-10-24'",
+        "  AND ts >= '2026-10-24 08:00:00+0000' AND ts < '2026-10-24 09:00:00+0000';"
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "What keeps expired SSTables on disk",
+      "intro": "TWCS saves work only if every row in an SSTable expires around the same time. These are the usual reasons it doesn’t.",
+      "items": [
+        { "name": "TTL and non-TTL data in one table", "tag": "file never expires", "text": "An SSTable is dropped only when everything in it has expired, so one row without a TTL, or with a much longer one, keeps the whole file. The compaction docs warn that mixed TTLs make tombstones harder to drop. Keep data with different lifetimes in different tables." },
+        { "name": "Updates and deletes across windows", "tag": "windows never merge", "text": "TWCS never compacts two windows together, so a delete or overwrite written today can’t remove a row in last week’s SSTable; both stay until they expire. The Last Pickle recommends TWCS only for immutable rows written with a TTL." },
+        { "name": "Old rows in new windows", "tag": "read repair, hints, `USING TIMESTAMP`", "text": "A window is chosen by an SSTable’s newest timestamp. Read repair writes old rows into today’s memtable, which flushes them into today’s SSTable, and that file then lives until its oldest rows and newest rows have both expired. The Last Pickle notes that hints and repair can mix data the same way and advises turning read repair off on TWCS tables; the Cassandra docs say to avoid `USING TIMESTAMP` and to run repairs often, since repair streams data without mixing it." },
+        { "name": "Tombstones and blockers", "tag": "`gc_grace_seconds`", "text": "Expired rows become tombstones that stay for at least `gc_grace_seconds` (ten days by default), and a fully expired SSTable is kept while an older SSTable holds data it might shadow. `sstableexpiredblockers` lists the files in the way. The `unsafe_aggressive_sstable_expiration` option skips that check, at the risk of deleted data coming back." }
+      ]
     }
   ],
   "history": {
@@ -136,6 +263,18 @@
     { "label": "Cassandra docs: Storage engine (commit log, memtables, SSTables, compaction)", "url": "https://cassandra.apache.org/doc/latest/cassandra/architecture/storage-engine.html" },
     { "label": "Cassandra docs: cassandra.yaml (num_tokens default 16; materialized views experimental)", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/configuration/cass_yaml_file.html" },
     { "label": "Cassandra docs: Tombstones and gc_grace_seconds", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/tombstones.html" },
+    { "label": "Cassandra docs: Compaction overview (strategies, TTL and mixed-TTL tombstones, fully expired SSTables, sstableexpiredblockers)", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/overview.html" },
+    { "label": "Cassandra docs: Size Tiered Compaction Strategy (buckets, min_threshold 4, UCS recommended from 5.0)", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/stcs.html" },
+    { "label": "Cassandra docs: Leveled Compaction Strategy (10x levels, 160 MB SSTables, about 10% extra space)", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/lcs.html" },
+    { "label": "Cassandra docs: Time Window Compaction Strategy (windows, 20–30 windows, read repair and USING TIMESTAMP)", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/twcs.html" },
+    { "label": "Cassandra docs: Unified Compaction Strategy (scaling parameters, sharding, time-series settings)", "url": "https://cassandra.apache.org/doc/latest/cassandra/managing/operating/compaction/ucs.html" },
+    { "label": "apache/cassandra on GitHub: UnifiedCompactionStrategy.md (read and write amplification of leveled and tiered)", "url": "https://github.com/apache/cassandra/blob/cassandra-5.0/src/java/org/apache/cassandra/db/compaction/UnifiedCompactionStrategy.md" },
+    { "label": "apache/cassandra on GitHub: NEWS.txt for 5.0 (Unified Compaction Strategy added)", "url": "https://github.com/apache/cassandra/blob/cassandra-5.0/NEWS.txt" },
+    { "label": "apache/cassandra on GitHub: cassandra_latest.yaml for 5.0 (default_compaction set to UCS T4)", "url": "https://github.com/apache/cassandra/blob/cassandra-5.0/conf/cassandra_latest.yaml" },
+    { "label": "Cassandra docs: CQL data definition (default_time_to_live, read_repair, clustering order)", "url": "https://cassandra.apache.org/doc/latest/cassandra/developing/cql/ddl.html" },
+    { "label": "Cassandra docs: Refining a data model (2 billion cells per partition, bucketing, estimating partition size)", "url": "https://cassandra.apache.org/doc/latest/cassandra/developing/data-modeling/data-modeling_refining.html" },
+    { "label": "Alex Dejanovski, The Last Pickle: TWCS part 1, how does it work and when should you use it? (Dec 2016)", "url": "https://thelastpickle.com/blog/2016/12/08/TWCS-part1.html" },
+    { "label": "ScyllaDB docs: Compaction strategies (STCS, LCS, ICS, TWCS)", "url": "https://docs.scylladb.com/manual/stable/architecture/compaction/compaction-strategies.html" },
     { "label": "Cassandra docs: Data modeling introduction (query-driven modeling, no joins)", "url": "https://cassandra.apache.org/doc/latest/cassandra/developing/data-modeling/intro.html" },
     { "label": "Cassandra docs: Data manipulation (lightweight transactions use Paxos)", "url": "https://cassandra.apache.org/doc/latest/cassandra/developing/cql/dml.html" },
     { "label": "Cassandra docs: SAI quickstart", "url": "https://cassandra.apache.org/doc/latest/cassandra/getting-started/sai-quickstart.html" },

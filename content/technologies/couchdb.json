@@ -1,0 +1,181 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Apache CouchDB",
+  "concepts": [
+    "document"
+  ],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://couchdb.apache.org/",
+  "repo": "https://github.com/apache/couchdb",
+  "summary": "A JSON document database spoken to entirely over HTTP, built around replication: any two copies can sync in either direction and keep conflicting edits instead of losing them.",
+  "intro": [
+    "CouchDB stores JSON documents in databases and exposes everything, from creating a database to querying it, as a REST API over HTTP. Every document has an `_id` and a `_rev`. To update one you send back the revision you read; if someone else saved first, the write fails with an edit conflict, so there are no locks, only optimistic concurrency. Storage is append-only: documents and their B-tree indexes are written at the end of the file and committed data is never overwritten, which is why a crash can’t corrupt the database and why it needs periodic compaction. A single-document update is all-or-nothing, but there are no transactions across documents.",
+    "Replication is the feature the rest is built around. A replication task reads one database’s changes feed and copies whatever revisions the other side lacks, once or continuously, and two tasks in opposite directions keep a pair in sync. Any node can take writes. When the same document was changed on both sides, CouchDB keeps both revisions, picks the same winner deterministically on every replica, and leaves the loser for the application to merge. The same Couch Replication Protocol is spoken by PouchDB in browsers and phones, so an app can work offline against a local copy and sync later.",
+    "Queries come in two forms. Views are JavaScript map (and optional reduce) functions whose results CouchDB stores as an index and updates incrementally when it is read. Mango, added in 2.0, is a declarative JSON query (`_find`) over indexes you declare. Since 2.0 a cluster splits each database into `q` shards (2 by default) with `n` copies of each (3 by default); reads and writes wait for a quorum, two of three, though view and `_find` queries read only one copy. The current release is 3.5.3, from October 2026."
+  ],
+  "strengths": [
+    "Multi-primary replication with conflicts kept, not lost, which suits devices that go offline and sync later",
+    "Plain HTTP and JSON: curl is a client, and caches and proxies work in front of it",
+    "Append-only storage that survives crashes without a repair step",
+    "Apache 2.0 under the Apache Software Foundation, with PouchDB speaking the same sync protocol in the browser"
+  ],
+  "limits": [
+    "No transactions across documents, and the application must find and merge conflicting revisions itself",
+    "Views and Mango indexes are built when queried, so the first read after many writes can be slow",
+    "Append-only files grow with every update until compaction runs, which costs disk space and I/O",
+    "View and `_find` queries read only one copy of each shard, so in a cluster they can miss a write that a quorum has already accepted"
+  ],
+  "worksWith": [],
+  "alternatives": [
+    "mongodb",
+    "surrealdb",
+    "realm",
+    "dynamodb"
+  ],
+  "goodFor": [
+    {
+      "id": "offline-sync",
+      "why": "Any copy can take writes and sync both ways over the Couch Replication Protocol, which PouchDB speaks in browsers and phones."
+    },
+    {
+      "id": "multi-region-writes",
+      "why": "Replication is multi-primary: every copy takes writes, and conflicting edits are kept, with the same winner picked on every replica."
+    }
+  ],
+  "specs": {
+    "data-model": "JSON documents, each with an `_id` and a `_rev`",
+    "query-language": "Mango JSON queries (`_find`) and JavaScript map/reduce views",
+    "wire-protocol": "REST API over HTTP with JSON",
+    "secondary-indexes": "Map/reduce views and declared Mango indexes, updated when queried",
+    "transactions": "One document at a time; none across documents",
+    "consistency": "Quorum reads and writes (two of three); views and `_find` read one copy",
+    "scaling": "Each database split into `q` shards (2 by default) with `n` copies (3 by default)",
+    "replication": "Multi-primary from changes feeds, one-off or continuous; conflicting revisions kept",
+    "storage-engine": "Append-only B-tree files, compacted periodically"
+  },
+  "snippet": {
+    "lang": "bash",
+    "title": "Write a document, index a field and query it with Mango",
+    "source": [
+      "DB=http://admin:secret@localhost:5984/books",
+      "curl -X PUT $DB                                   # create the database",
+      "",
+      "curl -X PUT $DB/dune -H 'Content-Type: application/json' \\",
+      "  -d '{\"title\": \"Dune\", \"year\": 1965}'",
+      "# {\"ok\":true,\"id\":\"dune\",\"rev\":\"1-...\"}  send this _rev back to update it",
+      "",
+      "curl -X POST $DB/_index -H 'Content-Type: application/json' \\",
+      "  -d '{\"index\": {\"fields\": [\"year\"]}, \"name\": \"year-index\", \"type\": \"json\"}'",
+      "",
+      "curl -X POST $DB/_find -H 'Content-Type: application/json' \\",
+      "  -d '{\"selector\": {\"year\": {\"$gt\": 1960}}, \"fields\": [\"_id\", \"title\"], \"sort\": [{\"year\": \"asc\"}]}'",
+      "",
+      "# keep a copy on another server in sync, in one direction, until cancelled",
+      "curl -X POST http://admin:secret@localhost:5984/_replicate -H 'Content-Type: application/json' \\",
+      "  -d '{\"source\": \"books\", \"target\": \"http://admin:secret@backup:5984/books\", \"continuous\": true}'"
+    ]
+  },
+  "history": {
+    "story": [
+      "Damien Katz, who had worked on Lotus Notes at IBM, started CouchDB in April 2005 and funded it himself for almost two years. It was a database of JSON documents with an HTTP API and peer-to-peer replication, designed so that separate copies could be edited apart and brought back together. It entered the Apache Incubator in February 2008 and became a top-level project that November. The first stable release, 1.0, came in July 2010.",
+      "At the NoSQL meetup in San Francisco in June 2009, CouchDB was one of the databases presented alongside Cassandra, HBase and MongoDB. Katz left in early 2012 to work on Couchbase Server, a separate product. Cloudant, which ran CouchDB as a service, had built a clustered version called BigCouch on ideas from Amazon’s Dynamo paper, and contributed it to Apache in 2013.",
+      "That code became CouchDB 2.0 in September 2016, which added native clustering, the Mango query language and a new web console, Fauxton. The project has continued under Apache since, with 3.x releases."
+    ],
+    "choices": [
+      {
+        "choice": "Replication as the core feature",
+        "why": "Every database can sync with any other in either direction, incrementally, from a server cluster down to PouchDB in a browser, so an app can keep working on its own copy while offline."
+      },
+      {
+        "choice": "Keep conflicts instead of rejecting writes",
+        "why": "Disconnected copies will be edited at the same time. Storing both revisions and choosing the same winner everywhere means replicas converge without coordination, and no edit is silently lost."
+      },
+      {
+        "choice": "HTTP and JSON as the only interface",
+        "why": "Any language and any web tool could talk to it without a driver, and HTTP caching and proxies work unchanged."
+      },
+      {
+        "choice": "Append-only storage",
+        "why": "Never overwriting committed data makes crashes safe and lets readers see a consistent snapshot without locks, at the price of compaction."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "2005",
+        "text": "Damien Katz starts CouchDB"
+      },
+      {
+        "year": "2008",
+        "text": "Enters the Apache Incubator in February and graduates in November"
+      },
+      {
+        "year": "2009",
+        "text": "Presented at the first NoSQL meetup in San Francisco"
+      },
+      {
+        "year": "2010",
+        "text": "CouchDB 1.0, the first stable release"
+      },
+      {
+        "year": "2013",
+        "text": "Cloudant’s clustered BigCouch code is merged into Apache CouchDB"
+      },
+      {
+        "year": "2016",
+        "text": "CouchDB 2.0 adds clustering, Mango queries and Fauxton"
+      },
+      {
+        "year": "2026",
+        "text": "CouchDB 3.5.3 released in October"
+      }
+    ],
+    "sources": [
+      {
+        "label": "Wikipedia: Apache CouchDB (history, Damien Katz, release dates)",
+        "url": "https://en.wikipedia.org/wiki/Apache_CouchDB"
+      },
+      {
+        "label": "Apache Incubator: CouchDB project status (graduated 2008-11-19)",
+        "url": "https://incubator.apache.org/projects/couchdb.html"
+      },
+      {
+        "label": "Johan Oskarsson: NOSQL debrief (June 2009, list of presenters)",
+        "url": "https://blog.oskarsson.nu/post/22996140866/nosql-debrief",
+        "archive": "https://web.archive.org/web/20260505034558/https://blog.oskarsson.nu/post/22996140866/nosql-debrief"
+      },
+      {
+        "label": "CouchDB blog: Apache CouchDB 2.0 (September 2016)",
+        "url": "https://blog.couchdb.org/2016/09/20/2-0/"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "Apache CouchDB home page (latest release, replication protocol, PouchDB)",
+      "url": "https://couchdb.apache.org/"
+    },
+    {
+      "label": "CouchDB docs: Technical overview (MVCC, append-only B-trees, views, conflicts)",
+      "url": "https://docs.couchdb.org/en/stable/intro/overview.html"
+    },
+    {
+      "label": "CouchDB docs: Introduction to replication (changes feed, continuous, filtered, checkpoints)",
+      "url": "https://docs.couchdb.org/en/stable/replication/intro.html"
+    },
+    {
+      "label": "CouchDB docs: Shard management (q, n and quorum)",
+      "url": "https://docs.couchdb.org/en/stable/cluster/sharding.html"
+    },
+    {
+      "label": "CouchDB docs: /db/_find and /db/_index (Mango)",
+      "url": "https://docs.couchdb.org/en/stable/api/database/find.html"
+    },
+    {
+      "label": "apache/couchdb on GitHub",
+      "url": "https://github.com/apache/couchdb"
+    }
+  ],
+  "checked": "2026-10-24"
+}

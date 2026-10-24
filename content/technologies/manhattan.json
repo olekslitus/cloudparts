@@ -1,0 +1,90 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Manhattan",
+  "concepts": ["key-value"],
+  "provider": "vendor",
+  "vendor": "X Corp. (formerly Twitter)",
+  "license": "Proprietary; internal to X, not released",
+  "website": "https://blog.x.com/engineering/en_us/a/2014/manhattan-our-real-time-multi-tenant-distributed-database-for-twitter-scale",
+  "summary": "Twitter’s in-house, multi-tenant distributed key-value store, eventually consistent by default with opt-in strong consistency per dataset, which serves Tweets, users and direct messages.",
+  "intro": [
+    "Manhattan is the database Twitter built for itself and runs as an internal service: engineers ask for storage size and queries per second in a self-service portal and get a dataset on a shared cluster in seconds, without waiting for hardware or a schema. A dataset is a group of keys for one use case, like a table. Keys have two parts, a partition key that decides where a record lives and sorted local keys under it, and since many datasets share a cluster, every stored key also carries the dataset’s ID. It is described as the default store at Twitter for persistent real-time serving, holding core data such as Tweets, users and direct messages.",
+    "Stateless coordinators accept requests and route them to storage nodes; each key belongs to one shard, and a storage node holds hundreds or thousands of shards. By default the system is eventually consistent in the style of Amazon’s Dynamo: a write waits only for its local zone, other zones and datacenters receive it asynchronously, and replicas converge through continuous replica reconciliation, read repair and hinted handoff. Rate limiting at sub-second granularity and quotas stop one tenant from hurting the others. ZooKeeper holds the cluster topology but is not on the read or write path.",
+    "Datasets that need more can opt into strong consistency. Then every operation on a key goes through a per-shard replicated log in DistributedLog, Twitter’s log service, with one elected writer per log; storage nodes apply each log in order, so all replicas reach the same state. That gives atomic check-and-set, increments and strongly consistent reads per partition key, within one datacenter (tens of milliseconds at p99) or across all of them (hundreds), but no transactions across keys. Storage engines are pluggable: the original ones were an LSM engine, a B-tree engine built as a MySQL plugin over InnoDB, and a read-only format for data imported from Hadoop; from 2018 Twitter moved its main clusters to RocksDB."
+  ],
+  "strengths": [
+    "Storage as a self-service product: teams provision a dataset in seconds on shared, rate-limited clusters",
+    "Consistency chosen per dataset: always-on eventual consistency for most data, per-key strong consistency where it matters",
+    "Bulk import of multi-terabyte datasets built in Hadoop, shipped as binary diffs between versions",
+    "Ran Twitter’s core data at a scale of tens of thousands of nodes and tens of millions of requests a second"
+  ],
+  "limits": [
+    "Internal to Twitter and X: there is no release, product or documentation outside its engineering blog posts",
+    "A key-value model: no joins, and strong consistency covers one partition key at a time, not multi-key transactions",
+    "Strongly consistent global operations cost hundreds of milliseconds, and a log writer failover can pause a shard",
+    "Operating it took a dedicated team and its own automation, which X’s Realtime Storage team still provides"
+  ],
+  "worksWith": [
+    { "id": "rocksdb", "how": "stores data on each node in" },
+    { "id": "zookeeper", "how": "keeps its cluster topology in" },
+    { "id": "hadoop", "how": "serves datasets built and imported from" }
+  ],
+  "alternatives": ["cassandra", "dynamodb", "aerospike", "foundationdb"],
+  "specs": {
+    "data-model": "Keys of a partition key plus sorted local keys, grouped in datasets",
+    "transactions": "None across keys; atomic check-and-set and increments per partition key in strong mode",
+    "consistency": "Eventual by default; strong per dataset through a per-shard log",
+    "scaling": "Each key belongs to one shard; hundreds or thousands of shards per storage node",
+    "replication": "Dynamo-style: local-zone quorum, then asynchronous to other zones; DistributedLog in strong mode",
+    "multi-region": "Asynchronous between datacenters by default; strong global operations take hundreds of ms",
+    "storage-engine": "Pluggable; RocksDB on the main clusters since 2018",
+    "deployment": "Internal to X only"
+  },
+  "sections": [
+    {
+      "type": "cards",
+      "title": "Two consistency modes",
+      "intro": "The mode is set per dataset, so one application can mix them. Even strongly consistent datasets can be read in the cheaper, eventually consistent way.",
+      "items": [
+        { "name": "Eventual consistency", "tag": "the default", "text": "A write is acknowledged once a quorum in the local zone has it; other zones and datacenters get it asynchronously. Fast and available during failures, but two clients can both insert the same key, check-and-set can interleave, a partial write can linger, and a reader in another datacenter may not see a write that just happened." },
+        { "name": "Strong consistency", "tag": "per-key log", "text": "The coordinator writes each operation to the shard’s DistributedLog log and waits for storage nodes to apply it in order and answer. Updates to one partition key are atomic and seen in the same order everywhere, so uniqueness checks, counters and check-and-set work, at tens to hundreds of milliseconds per operation." }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Twitter started as a Ruby on Rails monolith backed by a single MySQL server, then moved to microservices and multiple datacenters, and used Cassandra for horizontal scale. By the early 2010s it needed storage that served millions of queries a second at low latency across several regions, and its engineers were, in their words, spending far too much time firefighting production systems and building a new cluster by hand for every feature. In 2012 the Core Storage team decided to build its own database.",
+      "Manhattan was announced in April 2014, after about two years in production. It favoured availability, with a schemaless key-value model and Dynamo-style eventual consistency at its core, and treated multi-tenancy, quality of service and self-service as first-class features. A Strong Consistency service using a consensus log followed, described in detail in 2016.",
+      "From 2017 Twitter evaluated RocksDB to replace its two in-house read-write engines, finished the integration by mid-2018 and moved the clusters holding Tweets, user profiles and direct messages over the next two years, cutting disk use by about half. In 2020 it described 20 production clusters, more than 1,000 databases and tens of millions of requests a second. After Twitter became X, the Realtime Storage team still listed Manhattan among the systems it owns in a job posting removed in August 2025."
+    ],
+    "choices": [
+      { "choice": "Availability first, strong consistency opt-in", "why": "Most of Twitter’s data fit eventual consistency, and many use cases couldn’t accept even a few seconds of unavailability while a new master was elected. So the core stays always-on, and stricter guarantees are a choice per dataset." },
+      { "choice": "Storage as a multi-tenant service", "why": "Building a cluster per feature wasted hardware and operator time. Shared clusters with quotas and sub-second rate limiting let teams start in seconds and absorbed traffic spikes, because tenants rarely peak together." },
+      { "choice": "Strong consistency per key, not distributed transactions", "why": "Internal customers mostly needed uniqueness, check-and-set and counters on single keys. Keeping each operation inside one shard’s log avoided the cost of coordinating multi-key transactions." },
+      { "choice": "Pluggable storage engines", "why": "Different workloads wanted different on-disk formats, and the engine layer later let Twitter replace two in-house engines with RocksDB without changing the rest of the system." }
+    ],
+    "timeline": [
+      { "year": "2012", "text": "Twitter decides to build Manhattan" },
+      { "year": "2014", "text": "Manhattan announced in April, after two years in production" },
+      { "year": "2016", "text": "Twitter describes Manhattan’s strong consistency service" },
+      { "year": "2017", "text": "Evaluation of RocksDB as a storage engine begins" },
+      { "year": "2018", "text": "RocksDB engine ready for production by mid-year" },
+      { "year": "2020", "text": "20 production clusters and over 1,000 databases" },
+      { "year": "2025", "text": "X’s Realtime Storage team still lists Manhattan among its systems" }
+    ],
+    "sources": [
+      { "label": "Twitter Engineering: Manhattan, our real-time, multi-tenant distributed database for Twitter scale (Apr 2014)", "url": "https://blog.x.com/engineering/en_us/a/2014/manhattan-our-real-time-multi-tenant-distributed-database-for-twitter-scale", "archive": "https://web.archive.org/web/20240424123133/https://blog.twitter.com/engineering/en_us/a/2014/manhattan-our-real-time-multi-tenant-distributed-database-for-twitter-scale" },
+      { "label": "Twitter Engineering: Strong consistency in Manhattan (Mar 2016)", "url": "https://blog.x.com/engineering/en_us/a/2016/strong-consistency-in-manhattan", "archive": "https://web.archive.org/web/20240413021805/https://blog.twitter.com/engineering/en_us/a/2016/strong-consistency-in-manhattan" },
+      { "label": "Twitter Engineering: Adopting RocksDB within Manhattan (Apr 2021)", "url": "https://blog.x.com/engineering/en_us/topics/infrastructure/2021/adopting-rocksdb-within-manhattan", "archive": "https://web.archive.org/web/20240327102234/https://blog.twitter.com/engineering/en_us/topics/infrastructure/2021/adopting-rocksdb-within-manhattan" },
+      { "label": "Yugabyte: The distributed database behind Twitter (Distributed SQL Summit talk recap, Oct 2020)", "url": "https://www.yugabyte.com/blog/recap-the-distributed-database-behind-twitter/" },
+      { "label": "Built In: X job posting, Software Engineer – Storage (Realtime Storage team; removed Aug 2025)", "url": "https://builtin.com/job/software-engineer-storage/4055474" }
+    ]
+  },
+  "sources": [
+    { "label": "Twitter Engineering: Manhattan, our real-time, multi-tenant distributed database for Twitter scale (layers, engines, services, multi-tenancy)", "url": "https://blog.x.com/engineering/en_us/a/2014/manhattan-our-real-time-multi-tenant-distributed-database-for-twitter-scale", "archive": "https://web.archive.org/web/20240424123133/https://blog.twitter.com/engineering/en_us/a/2014/manhattan-our-real-time-multi-tenant-distributed-database-for-twitter-scale" },
+    { "label": "Twitter Engineering: Strong consistency in Manhattan (coordinators, shards, datasets, DistributedLog, latencies)", "url": "https://blog.x.com/engineering/en_us/a/2016/strong-consistency-in-manhattan", "archive": "https://web.archive.org/web/20240413021805/https://blog.twitter.com/engineering/en_us/a/2016/strong-consistency-in-manhattan" },
+    { "label": "Twitter Engineering: Adopting RocksDB within Manhattan (data model, MhBtree, results)", "url": "https://blog.x.com/engineering/en_us/topics/infrastructure/2021/adopting-rocksdb-within-manhattan", "archive": "https://web.archive.org/web/20240327102234/https://blog.twitter.com/engineering/en_us/topics/infrastructure/2021/adopting-rocksdb-within-manhattan" },
+    { "label": "Yugabyte: The distributed database behind Twitter (scale figures, 2020)", "url": "https://www.yugabyte.com/blog/recap-the-distributed-database-behind-twitter/" }
+  ],
+  "checked": "2026-10-24"
+}

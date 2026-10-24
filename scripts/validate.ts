@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { z } from 'zod';
 import { findProblems } from '../src/content/integrity';
-import { architecture, benchmark, category, comparison, concept, diagram, foundation, part, resource, technology } from '../src/content/schema';
+import { architecture, benchmark, category, comparison, concept, diagram, foundation, part, resource, spec, technology, workload } from '../src/content/schema';
 
 const root = fileURLToPath(new URL('../content', import.meta.url));
 const problems: string[] = [];
@@ -45,10 +45,12 @@ const comparisons = collection('comparisons', comparison);
 const foundations = collection('foundations', foundation);
 const resources = collection('resources', resource);
 const benchmarks = collection('benchmarks', benchmark);
+const workloads = collection('workloads', workload);
+const specs = load('specs.json', spec.array()) ?? [];
 const systemMap = load('system-map.json', diagram);
 
 if (!problems.length && systemMap) {
-  problems.push(...findProblems({ parts, categories, concepts, technologies, architectures, comparisons, foundations, resources, benchmarks, systemMap }));
+  problems.push(...findProblems({ parts, categories, concepts, technologies, architectures, comparisons, foundations, resources, benchmarks, workloads, specs, systemMap }));
 }
 
 if (problems.length) {
@@ -58,5 +60,5 @@ if (problems.length) {
 }
 console.log(
   `✓ ${concepts.length} concepts, ${technologies.length} technologies, ${architectures.length} architectures, ` +
-  `${comparisons.length} comparisons, ${foundations.length} foundations, ${resources.length} resources, ${benchmarks.length} benchmarks, ${parts.length} parts, ${categories.length} categories look good`,
+  `${comparisons.length} comparisons, ${foundations.length} foundations, ${resources.length} resources, ${benchmarks.length} benchmarks, ${workloads.length} workloads, ${specs.length} specs, ${parts.length} parts, ${categories.length} categories look good`,
 );

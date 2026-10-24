@@ -1,0 +1,102 @@
+{
+  "$schema": "../../.schemas/concepts.schema.json",
+  "name": "Incremental view maintenance",
+  "icon": "refresh-cw",
+  "category": "messaging",
+  "order": 10,
+  "parent": "stream-processing",
+  "summary": "Keep the stored result of a query up to date by computing only how it changes when its input tables change, instead of running the whole query again.",
+  "howItWorks": "A materialized view stores a query’s result so reads are fast, but the result goes stale as base tables change. Recomputing it from scratch costs as much as the query itself, however small the change. Incremental view maintenance (IVM) instead turns the query into a delta query: given the rows inserted into and deleted from each input, it outputs the rows to insert into and delete from the view. Some operators need no memory at all: a filter or projection of the changes is the change of the filtered or projected result. A join needs the current contents of the other side, because new orders must meet existing customers and new customers existing orders, so the engine keeps indexed state for each input. Aggregates keep running sums and counts per group; `min` and `max` may have to look back at the remaining rows when the current extreme is deleted. To make deletes and duplicates work, rows carry a count or weight: inserting adds one, deleting subtracts one, and a row leaves the view when its count reaches zero. Systems differ in when they apply the change. Immediate maintenance updates the view inside the writing transaction, as PostgreSQL’s pg_ivm does with triggers. Deferred maintenance batches changes and refreshes later, on demand or on a schedule, like the materialized views of cloud warehouses. Streaming engines such as Feldera, RisingWave and Materialize run every view as a continuous dataflow fed by change streams, and pass each view’s changes on to other views and to sinks.",
+  "analogy": "A shop’s stock count. You could count every shelf each evening, or you could start from yesterday’s count, add today’s deliveries and subtract today’s sales. The second way takes minutes instead of hours, as long as you see every delivery note and receipt and keep the running totals per product somewhere.",
+  "useWhen": [
+    "Dashboards, leaderboards or API responses built from joins and aggregates that must reflect writes within seconds, where full recomputation is too slow or too costly",
+    "Batch jobs that rerun nightly over mostly unchanged data, where each run only needs to process the day’s changes",
+    "Read models or denormalised tables kept in step with normalised source tables, without hand-written update code",
+    "Many views stacked on each other, so a small upstream change should ripple through without recomputing every layer"
+  ],
+  "avoidWhen": [
+    "Most of the input changes between refreshes; the bookkeeping then costs more than recomputing, as pg_ivm’s docs warn for bulk loads",
+    "Writes must stay as fast as possible; immediate maintenance adds the view’s work to every write transaction",
+    "The query uses features your system can’t maintain incrementally, such as window functions, set operations or non-deterministic functions, and would silently fall back to full refreshes",
+    "Results can be an hour old and the data is small; a scheduled `REFRESH MATERIALIZED VIEW` is simpler to run and reason about"
+  ],
+  "example": "An online shop keeps `orders` (200 million rows) and `customers` (5 million rows) in PostgreSQL, and its finance page shows revenue per country. A plain materialized view takes four minutes to refresh, so the page used to lag by up to an hour. With pg_ivm, `create_immv` builds the same join and `GROUP BY country` once. When an order is inserted, the trigger joins just that order with its customer and adds its amount to one country’s running sum and count. When a customer moves from France to Spain, the delta is a deleted row and an inserted row: their past orders’ totals move from one country to the other. Each write takes a few extra milliseconds, and the page is never stale. When the shop later needs the same numbers streamed to Kafka and joined with clickstream events, it moves the view to Feldera, which keeps the same SQL current from change streams.",
+  "providers": {
+    "aws": "Amazon Redshift materialized views refresh incrementally when the query uses only supported constructs (joins, filters, GROUP BY and SUM, MIN, MAX, AVG, COUNT) and fall back to a full refresh otherwise; Auto Refresh runs them on an interval from 60 seconds to 24 hours",
+    "gcp": "BigQuery materialized views are refreshed in the background, reading only the changes since the last refresh where possible, and queries on base tables are rerouted to them; non-incremental views must opt in with `allow_non_incremental_definition`",
+    "azure": "Materialized views in Azure Data Explorer and Fabric eventhouses, limited to aggregations: a background process folds newly ingested rows into the stored result, and queries combine it with the not-yet-processed delta so answers are always fresh",
+    "oss": "pg_ivm (PostgreSQL extension, immediate maintenance); Feldera (DBSP-based engine, MIT core); RisingWave (streaming database, Apache 2.0); Materialize (built on Differential Dataflow, BSL); Snowflake dynamic tables refresh incrementally toward a target lag"
+  },
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "-- pg_ivm: a materialized view that triggers keep current inside each write transaction",
+      "SELECT pgivm.create_immv('m', 'SELECT * FROM t0');",
+      "",
+      "SELECT * FROM m;          -- 1, 2, 3",
+      "INSERT INTO t0 VALUES (4);",
+      "SELECT * FROM m;          -- 1, 2, 3, 4: no REFRESH needed",
+      "",
+      "-- compare: a plain materialized view reruns its whole query",
+      "REFRESH MATERIALIZED VIEW mv_normal;"
+    ]
+  },
+  "related": ["stream-processing", "static-read-models", "cqrs", "cdc", "warehouse", "cache"],
+  "sections": [
+    { "type": "text", "title": "DBSP: incremental computation as calculus on streams", "body": ["Classic IVM derives a delta rule for each operator by hand, which works for selections, projections and joins but gets hard for nested queries, aggregation, recursion and their combinations. DBSP (Database Stream Processor), by Mihai Budiu, Tej Chajed, Frank McSherry, Leonid Ryzhyk and Val Tannen (VLDB 2023), gives one recipe for all of them. It models everything as streams indexed by time, where time counts transactions: the database is a stream of snapshots, and the transactions are a stream of changes. Two operators link them, borrowed from digital signal processing. Differentiation (D) turns a stream of snapshots into the stream of differences between consecutive snapshots; integration (I) adds the changes up to rebuild the snapshots. They are inverses, and both are built from a single primitive: a delay by one step (z⁻¹), which is where all state lives.", "With these, the incremental version of any query Q is defined as QΔ = D ∘ Q ∘ I: integrate the changes into a database, run Q, and differentiate the output. Run literally that rebuilds the database at every step, but the definition obeys algebraic rules that make it cheap. The chain rule says (Q1 ∘ Q2)Δ = Q1Δ ∘ Q2Δ, so a whole query plan can be made incremental operator by operator. Linear operators, such as filters, projections and bag union, are their own incremental versions and need no state. A join is bilinear, so its change is Δa ⋈ Δb + a ⋈ Δb + Δa ⋈ b, which needs only the accumulated contents of each input. A feedback loop’s incremental version is the loop around the incremental body, which is how recursive queries such as transitive closure stay incremental under deletes as well as inserts.", "For this to work, data must form a commutative group, so that changes can be added and subtracted. DBSP uses Z-sets: tables in which every row has an integer weight, positive for insertions and negative for deletions, generalising both sets and bags. `DISTINCT` is the one common operator that isn’t linear, but its incremental version only has to check which rows’ weights cross zero, so it too costs time proportional to the change. Each incremental operator runs in time proportional to the size of the change, joins in proportion to the change times the state they probe, instead of the size of the database. The authors checked every theorem in the Lean proof assistant, built a Rust runtime and a SQL compiler on Apache Calcite that passes the 7 million SQL Logic Tests, and that work became Feldera. The paper compares DBSP with Differential Dataflow, whose times can form any lattice and which also handles recursion efficiently, but where users assemble incremental operators by hand, as Materialize automates for SQL; DBSP’s contribution is a syntax-directed algorithm that incrementalizes any query it can express."] },
+    {
+      "type": "table",
+      "title": "When the view is brought up to date",
+      "intro": "All of these compute changes rather than rerunning the query; they differ in when the work happens and who pays for it.",
+      "corner": "Timing",
+      "columns": ["How it works", "Freshness", "Cost lands on", "Examples"],
+      "rows": [
+        { "label": "Immediate", "values": ["Triggers or the engine update the view inside the transaction that changes a base table", "Always current, even within the writing transaction", "Every write, which gets slower and may lock the view", "pg_ivm"] },
+        { "label": "Deferred (refresh)", "values": ["Changes since the last refresh are applied on demand or on a schedule; unsupported queries fall back to a full recompute", "As old as the last refresh, or as the target lag allows", "Periodic refresh jobs in the warehouse", "Redshift auto refresh, BigQuery materialized views, Snowflake dynamic tables"] },
+        { "label": "Read-time merge", "values": ["A background process folds new rows into a stored aggregate, and queries add the not-yet-folded rows on the fly", "Always current", "Background CPU plus some work on each query", "Azure Data Explorer and Fabric materialized views"] },
+        { "label": "Streaming dataflow", "values": ["Every view is a running dataflow fed by change streams; outputs are change streams too", "Milliseconds to seconds behind the sources", "A separate always-on engine with its own state", "Feldera, RisingWave, Materialize"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Materialized views made repeated queries fast, and keeping them current without recomputation became a classic database problem. The standard approach, refined through the 1990s, derives a delta query: given the old database and a change, compute the change to the view. In 1993 Ashish Gupta, Inderpal Singh Mumick and V. S. Subrahmanian described the delete-and-rederive (DRed) algorithm for maintaining views incrementally, and in the 2000s DBToaster compiled SQL into programs that applied delta processing recursively, to the delta queries themselves.",
+      "Streaming systems brought the idea to continuously changing data. In 2013 Frank McSherry and colleagues at Microsoft Research described Differential Dataflow, which extended incremental computation to nested iteration; Materialize, where McSherry went on to work, built a product that incrementalizes SQL views on top of it. PostgreSQL developers proposed IVM for the core database at PGCon in 2013; when the patch stalled, it shipped as the pg_ivm extension in 2022, and cloud warehouses added incremental refresh to their own materialized views.",
+      "Mihai Budiu and Leonid Ryzhyk at VMware Research, with McSherry, Tej Chajed and Val Tannen, then described DBSP, a general and machine-checked theory of IVM. The paper won a Best Paper award at VLDB 2023 and its implementation became the engine of Feldera, founded that year. Streaming databases such as RisingWave and Materialize now sell always-current SQL views as their main product."
+    ],
+    "choices": [
+      { "choice": "Count derivations instead of storing sets", "why": "A deleted input row may or may not remove a view row, depending on whether another derivation still supports it. Keeping a count, or a signed weight, per row answers that without rescanning the base tables." },
+      { "choice": "Keep state for joins and aggregates", "why": "A change to one join input must be matched against the full other input, and an aggregate must be adjusted, not recomputed, so incremental engines trade memory or disk for speed." },
+      { "choice": "Fall back to full recomputation", "why": "Not every SQL feature has a cheap delta rule in every system, so products like Redshift and BigQuery choose incremental refresh only when the query allows it, or reject non-incremental definitions unless asked." }
+    ],
+    "timeline": [
+      { "year": "1993", "text": "Gupta, Mumick and Subrahmanian publish Maintaining Views Incrementally at SIGMOD" },
+      { "year": "2009", "text": "DBToaster, a SQL compiler for delta processing, at VLDB" },
+      { "year": "2013", "text": "Differential Dataflow at CIDR; IVM proposed for PostgreSQL core at PGCon" },
+      { "year": "2022", "text": "pg_ivm 1.0 released for PostgreSQL 14" },
+      { "year": "2023", "text": "DBSP wins a Best Paper award at VLDB; Feldera founded" }
+    ],
+    "sources": [
+      { "label": "Budiu, Chajed, McSherry, Ryzhyk, Tannen: DBSP, Automatic Incremental View Maintenance for Rich Query Languages (PVLDB 16, 2023; related work and references to Gupta et al. 1993 and DBToaster 2009)", "url": "https://www.vldb.org/pvldb/vol16/p1601-budiu.pdf" },
+      { "label": "McSherry, Murray, Isaacs, Isard: Differential dataflow (CIDR 2013)", "url": "https://www.cidrdb.org/cidr2013/Papers/CIDR13_Paper111.pdf" },
+      { "label": "PostgreSQL wiki: Incremental View Maintenance (PGCon 2013 proposal, 2019 patch)", "url": "https://wiki.postgresql.org/wiki/Incremental_View_Maintenance" },
+      { "label": "PostgreSQL news: pg_ivm 1.0 released (28 April 2022)", "url": "https://www.postgresql.org/about/news/pg_ivm-10-released-2443/" },
+      { "label": "Feldera blog: DBSP wins Best Research Paper, VLDB 2023", "url": "https://www.feldera.com/blog/best-research-paper-vldb-2023" },
+      { "label": "Feldera blog: Announcing Feldera, the company (26 August 2023)", "url": "https://www.feldera.com/blog/announcing-feldera-the-company" }
+    ]
+  },
+  "sources": [
+    { "label": "Budiu et al.: DBSP, Automatic Incremental View Maintenance for Rich Query Languages (PVLDB 16, 2023)", "url": "https://www.vldb.org/pvldb/vol16/p1601-budiu.pdf" },
+    { "label": "GitHub: sraoss/pg_ivm README (immediate maintenance, counting, restrictions, when IVM is not effective)", "url": "https://github.com/sraoss/pg_ivm" },
+    { "label": "PostgreSQL wiki: Incremental View Maintenance (delta rules for joins, counting algorithm, immediate vs deferred)", "url": "https://wiki.postgresql.org/wiki/Incremental_View_Maintenance" },
+    { "label": "PostgreSQL docs: REFRESH MATERIALIZED VIEW", "url": "https://www.postgresql.org/docs/current/sql-refreshmaterializedview.html" },
+    { "label": "Amazon Redshift docs: Refreshing a materialized view (incremental vs full, limitations, Auto Refresh)", "url": "https://docs.aws.amazon.com/redshift/latest/dg/materialized-view-refresh.html" },
+    { "label": "Google Cloud docs: Introduction to materialized views (incremental refresh, smart tuning, non-incremental views)", "url": "https://docs.cloud.google.com/bigquery/docs/materialized-views-intro" },
+    { "label": "Microsoft Learn: Materialized views in Kusto (materialized part plus delta)", "url": "https://learn.microsoft.com/en-us/kusto/management/materialized-views/materialized-view-overview" },
+    { "label": "Snowflake docs: Dynamic tables (target lag, incremental and full refresh)", "url": "https://docs.snowflake.com/en/user-guide/dynamic-tables-about" },
+    { "label": "Feldera docs: SQL introduction (DBSP, compiled to Rust)", "url": "https://docs.feldera.com/sql/intro/" },
+    { "label": "RisingWave docs: Introduction (only affected results recomputed, state in object storage)", "url": "https://docs.risingwave.com/get-started/intro" },
+    { "label": "Materialize docs (incrementally updates results; Community Edition limits)", "url": "https://materialize.com/docs/" },
+    { "label": "Materialize LICENSE (Business Source License 1.1)", "url": "https://github.com/MaterializeInc/materialize/blob/main/LICENSE" }
+  ]
+}

@@ -1,0 +1,116 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Dapr",
+  "concepts": ["microservices"],
+  "uses": ["pubsub", "actors", "workflow", "secrets", "rpc"],
+  "provider": "oss",
+  "vendor": "Cloud Native Computing Foundation",
+  "license": "Apache 2.0",
+  "website": "https://dapr.io/",
+  "repo": "https://github.com/dapr/dapr",
+  "summary": "A sidecar next to each service that offers pub/sub, state, service calls, workflows and actors over local HTTP or gRPC, with the broker or database behind each one swapped by a YAML file.",
+  "intro": [
+    "Dapr (Distributed Application Runtime) runs a sidecar process, `daprd`, next to every instance of your service. Your code never links a Kafka or Redis client; it calls the sidecar on `localhost`, over HTTP (port 3500 by default) or gRPC (port 50001), and the sidecar talks to the real infrastructure. The APIs are called building blocks: service invocation (call another app by its app ID, with retries and mTLS), publish and subscribe, key/value state, bindings to external systems, virtual actors, secrets, configuration, distributed locks, cryptography, scheduled jobs and durable workflows, plus newer ones for LLM calls, search and vectors. SDKs exist for Go, Java, JavaScript, .NET and Python, but they are thin wrappers: anything that can send an HTTP request can use Dapr.",
+    "What sits behind each building block is a component, declared in a YAML file. A state store of type `state.redis` can become `state.postgresql` or AWS DynamoDB by changing that file, not the code, and the same goes for pub/sub (Kafka, RabbitMQ, Redis Streams, SNS/SQS, Google Pub/Sub and others). Components carry a maturity label (alpha, beta or stable), and not every one supports every feature; actors, for example, need a state store with transactions and ETags. On a laptop, `dapr run` starts the sidecar as a process beside your app. On Kubernetes, a control plane does the work: an injector adds the `daprd` container to any pod annotated `dapr.io/enabled`, Sentry issues the certificates for mTLS, Placement tracks where each actor lives, and Scheduler stores jobs and reminders.",
+    "Microsoft started Dapr and released it in October 2019. It reached 1.0 in February 2021, joined the CNCF in November 2021 and graduated in November 2024, and it ships a minor release about every quarter; 1.19 came out on 22 October 2026. The project now describes itself first as a durable execution engine, for workflows and for AI agents that must survive crashes, with the original building blocks around it."
+  ],
+  "strengths": [
+    "Code calls one local API for state, messaging and secrets, so moving from Redis to PostgreSQL or from Kafka to a cloud queue is a component change, not a rewrite",
+    "Language-neutral: the sidecar speaks HTTP and gRPC, so services in different languages share the same features, and actors can call each other across languages",
+    "Service-to-service mTLS, retries, resiliency policies and tracing of both direct calls and pub/sub messages come with the sidecar",
+    "Workflows and actors give long-running, stateful processes without adopting a separate workflow server"
+  ],
+  "limits": [
+    "A sidecar per instance plus a control plane on Kubernetes: one more process in every request path and more to operate and upgrade",
+    "The common API hides each backend’s special features, and components differ in maturity and capabilities; many are alpha or beta, which the project recommends only for non-critical uses",
+    "Not a networking service mesh: no traffic splitting or routing for canary releases, and if you also run a mesh, the docs advise letting only one of them do mTLS and tracing",
+    "Actors need a transactional state store with ETag support, and only one state store can serve all actors"
+  ],
+  "worksWith": [
+    { "id": "kubernetes", "how": "injects its sidecar into pods on" },
+    { "id": "redis", "how": "can keep state and pub/sub in" },
+    { "id": "kafka", "how": "can publish and subscribe through" },
+    { "id": "postgresql", "how": "can store state and actors in" },
+    { "id": "dynamodb", "how": "can store state and actors in" },
+    { "id": "opentelemetry", "how": "exports traces and metrics with" },
+    { "id": "istio", "how": "can run beside" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Declare a Redis state store, then save and read a value through the sidecar",
+    "source": [
+      "cat > components/statestore.yaml <<'EOF'",
+      "apiVersion: dapr.io/v1alpha1",
+      "kind: Component",
+      "metadata:",
+      "  name: statestore",
+      "spec:",
+      "  type: state.redis        # swap for state.postgresql without touching the app",
+      "  version: v1",
+      "  metadata:",
+      "  - name: redisHost",
+      "    value: localhost:6379",
+      "  - name: redisPassword",
+      "    value: \"\"",
+      "EOF",
+      "",
+      "# Start the app with a sidecar listening on localhost:3500",
+      "dapr run --app-id orderprocessing --app-port 6001 --dapr-http-port 3500 \\",
+      "  --resources-path ./components -- python app.py",
+      "",
+      "# Any language: plain HTTP to the sidecar",
+      "curl -X POST -H \"Content-Type: application/json\" \\",
+      "  -d '[{ \"key\": \"order_1\", \"value\": \"250\" }]' \\",
+      "  http://localhost:3500/v1.0/state/statestore",
+      "curl http://localhost:3500/v1.0/state/statestore/order_1"
+    ]
+  },
+  "history": {
+    "story": [
+      "Microsoft announced the Distributed Application Runtime on 16 October 2019. The project leads wrote that developers building microservices “continually end up solving the same distributed system problems such as state management” and resilient calls, that many runtimes supported only a few languages, and that code was hard to move between cloud and edge. Their answer was a sidecar, run as a process or a container, that exposes these features over standard HTTP and gRPC, so an app needs no compile-time dependency on Dapr. The alpha had service invocation with retries, key/value state, pub/sub, bindings, virtual actors and W3C tracing.",
+      "Dapr moved to open governance in 2020 and released 1.0 on 17 February 2021, declaring the API stable and Kubernetes the main hosting environment; contributors had grown from 114 to about 700. It joined the CNCF as an incubating project in November 2021 and graduated on 12 November 2024, when 21 maintainers from eight organisations looked after it. Two of them, Mark Fussell and Yaron Schneider, had co-founded Diagrid, a company built around Dapr.",
+      "Since then the emphasis has shifted to durable execution. Dapr 1.15 (February 2025) made the workflow API stable, moved actor reminders to the new Scheduler service and added an alpha API for calling LLM providers. Version 1.18 made component changes reload without a restart, and the docs now present the workflow engine as the core, for business processes and for AI agents that must survive crashes and restarts."
+    ],
+    "choices": [
+      { "choice": "A sidecar instead of a library", "why": "Libraries have to be rewritten for each language and compiled into every service. A separate process that speaks HTTP and gRPC works with any language and keeps infrastructure code out of the app." },
+      { "choice": "Pluggable components behind fixed APIs", "why": "The same app should run on a laptop with Redis and in a cloud with that cloud’s queue or database. Choosing the backend in a YAML file keeps that choice out of the code." },
+      { "choice": "Virtual actors as a built-in block", "why": "Many services need lots of small stateful objects. Actors that are placed automatically, handle one call at a time and are collected when idle remove the need for locks in that code." },
+      { "choice": "Developer APIs, not network routing", "why": "Service meshes already handle traffic at the network level. Dapr lets code call services by name and leaves traffic splitting to a mesh." }
+    ],
+    "timeline": [
+      { "year": "2019", "text": "Microsoft announces Dapr as an open-source alpha in October" },
+      { "year": "2021", "text": "Dapr 1.0 in February; joins the CNCF as incubating in November" },
+      { "year": "2024", "text": "Graduates from the CNCF in November" },
+      { "year": "2025", "text": "Dapr 1.15 makes workflows stable and adds an LLM conversation API" },
+      { "year": "2026", "text": "Dapr 1.19 released in October" }
+    ],
+    "sources": [
+      { "label": "Microsoft Open Source blog: Announcing Dapr (Oct 2019)", "url": "https://opensource.microsoft.com/blog/2019/10/16/announcing-dapr-open-source-project-build-microservice-applications/" },
+      { "label": "Dapr blog: Announcing Dapr v1.0 (Feb 2021)", "url": "https://blog.dapr.io/posts/2021/02/17/announcing-dapr-v1.0/" },
+      { "label": "CNCF: Dapr project page (incubating Nov 2021, graduated Oct 2024)", "url": "https://www.cncf.io/projects/dapr/" },
+      { "label": "CNCF announcement: Dapr graduation (Nov 2024)", "url": "https://www.cncf.io/announcements/2024/11/12/cloud-native-computing-foundation-announces-dapr-graduation/" },
+      { "label": "Dapr blog: Dapr v1.15 is now available (Feb 2025)", "url": "https://blog.dapr.io/posts/2025/02/27/dapr-v1.15-is-now-available/" },
+      { "label": "Dapr docs: Components (hot reload since v1.18)", "url": "https://docs.dapr.io/concepts/components-concept/" },
+      { "label": "Dapr docs: home page (durable execution for workflows and AI agents)", "url": "https://docs.dapr.io/" }
+    ]
+  },
+  "sources": [
+    { "label": "Dapr docs: Building blocks", "url": "https://docs.dapr.io/concepts/building-blocks-concept/" },
+    { "label": "Dapr docs: Concepts overview", "url": "https://docs.dapr.io/concepts/" },
+    { "label": "Dapr docs: Components (types, pluggable components, hot reload)", "url": "https://docs.dapr.io/concepts/components-concept/" },
+    { "label": "Dapr docs: Dapr services (sidecar, operator, placement, scheduler, sentry, injector)", "url": "https://docs.dapr.io/concepts/dapr-services/" },
+    { "label": "Dapr docs: Sidecar (daprd, self-hosted and Kubernetes)", "url": "https://docs.dapr.io/concepts/dapr-services/sidecar/" },
+    { "label": "Dapr docs: Arguments and annotations (default ports 3500 and 50001)", "url": "https://docs.dapr.io/reference/arguments-annotations-overview/" },
+    { "label": "Dapr docs: How to save and get state", "url": "https://docs.dapr.io/developing-applications/building-blocks/state-management/howto-get-save-state/" },
+    { "label": "Dapr docs: Actors overview (placement, turn-based access, state store needs)", "url": "https://docs.dapr.io/developing-applications/building-blocks/actors/actors-overview/" },
+    { "label": "Dapr docs: Workflow overview (SDKs, state store requirements)", "url": "https://docs.dapr.io/developing-applications/building-blocks/workflow/workflow-overview/" },
+    { "label": "Dapr docs: How Dapr compares to service meshes", "url": "https://docs.dapr.io/concepts/faq/service-mesh/" },
+    { "label": "Dapr docs: Component certification lifecycle (alpha, beta, stable)", "url": "https://docs.dapr.io/operations/components/certification-lifecycle/" },
+    { "label": "Dapr docs: Supported pub/sub brokers", "url": "https://docs.dapr.io/reference/components-reference/supported-pubsub/" },
+    { "label": "Dapr docs: Supported state stores (transactions and actors)", "url": "https://docs.dapr.io/reference/components-reference/supported-state-stores/" },
+    { "label": "CNCF announcement: Dapr graduation (OpenTelemetry, Prometheus, SPIFFE integrations)", "url": "https://www.cncf.io/announcements/2024/11/12/cloud-native-computing-foundation-announces-dapr-graduation/" },
+    { "label": "GitHub: dapr/dapr releases (v1.19.0, Oct 2026)", "url": "https://github.com/dapr/dapr/releases" },
+    { "label": "GitHub: dapr/dapr LICENSE (Apache 2.0)", "url": "https://github.com/dapr/dapr/blob/master/LICENSE" }
+  ],
+  "checked": "2026-10-24"
+}

@@ -1,0 +1,159 @@
+{
+  "$schema": "../../.schemas/concepts.schema.json",
+  "name": "Sans-I/O protocols",
+  "icon": "unplug",
+  "category": "code",
+  "order": 87,
+  "summary": "Write a network protocol as a plain state machine that takes bytes, events and the current time and returns bytes and events, so the same code works with blocking sockets, any async runtime, or a test that never touches the network.",
+  "howItWorks": "A protocol library usually mixes two jobs: the rules of the protocol (which bytes form a request, what to send next, when to retry) and the I/O that moves bytes and waits for them. A sans-I/O (“without I/O”) library keeps only the first job. Its core is an object holding the connection’s state, with methods that feed it input and ask it for output. Python’s h11 is the classic example for HTTP/1.1: you create `h11.Connection(our_role=h11.CLIENT)`, call `conn.send(h11.Request(...))` and get back the bytes to write; you pass bytes you read to `conn.receive_data()`, then call `conn.next_event()` to get `Response`, `Data` or `EndOfMessage` events, or `NEED_DATA` when it needs more. h2 does the same for HTTP/2: `receive_data()` returns a list of events, and outgoing bytes collect in a buffer you drain with `data_to_send()`. The library never opens a socket, never sleeps and never reads the clock. Time is an input too: in Rust’s quinn-proto and in Firezone’s connlib, every method that needs the time takes an `Instant` argument, `poll_timeout()` says when the state machine next wants to be woken, and `handle_timeout(now)` tells it that moment has come. The caller writes a small event loop around it: drain `poll_transmit()` into the socket, wait for a packet or the next timeout, feed whichever arrives back in, and repeat. Because the core is deterministic, a test can connect two state machines by passing one’s output straight into the other, drop or reorder packets on purpose, and jump the clock forward five minutes in a microsecond.",
+  "analogy": "A chess engine. You tell it the opponent’s move and it tells you its reply; it doesn’t care whether the game is played on a wooden board, by post or on a website, and you can replay any game against it move by move. The board, the clock and the postman are someone else’s job.",
+  "useWhen": [
+    "A protocol library that should work in blocking code and under several async runtimes or frameworks (asyncio, Trio, Twisted; Tokio or another event loop)",
+    "Protocols with timers and retransmissions, such as QUIC, ICE, STUN or WireGuard handshakes, where testing real timeouts would be slow and flaky",
+    "Code you want to test deterministically, including packet loss, reordering and long round-trip times, without sockets or sleeps",
+    "Async Rust where shared mutable state would otherwise need `Arc<Mutex<_>>` or channels between tasks"
+  ],
+  "avoidWhen": [
+    "A one-off client for a simple request-response API: an ordinary HTTP client is less code",
+    "Long multi-step workflows that read naturally as `await` after `await`: written sans-I/O, each step becomes an explicit state, which is tedious",
+    "A team that can’t own the event loop: forgetting to drain output, or a state machine that never advances its `poll_timeout()`, turns into hangs and busy loops"
+  ],
+  "example": "Firezone’s clients and gateways keep WireGuard tunnels alive across NATs, which takes STUN, ICE and relays, each with its own timers. Its Rust library, connlib, writes all of that as nested state machines with `handle_input`, `poll_transmit`, `poll_timeout` and `handle_timeout`, and a single Tokio event loop does the socket work. A test that checks idle connections are closed after five minutes doesn’t wait five minutes: it passes an `Instant` five minutes later to `handle_timeout`. Firezone’s simulation harness goes further. It runs many clients, gateways and relays in one process, delivers each node’s output to the next by passing an argument, generates sequences of events such as roaming or editing a resource, and compares the result against a simplified reference model after every step.",
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "import socket",
+      "import h11",
+      "",
+      "conn = h11.Connection(our_role=h11.CLIENT)  # protocol state only: no socket inside",
+      "",
+      "# events in, bytes out",
+      "out = conn.send(h11.Request(method=\"GET\", target=\"/\",",
+      "                            headers=[(\"Host\", \"example.com\"), (\"Connection\", \"close\")]))",
+      "out += conn.send(h11.EndOfMessage())",
+      "",
+      "sock = socket.create_connection((\"example.com\", 80))  # the caller does all the I/O",
+      "sock.sendall(out)",
+      "",
+      "# bytes in, events out",
+      "while True:",
+      "    event = conn.next_event()",
+      "    if event is h11.NEED_DATA:",
+      "        conn.receive_data(sock.recv(4096))",
+      "    elif isinstance(event, h11.Response):",
+      "        print(event.status_code)  # 200",
+      "    elif isinstance(event, h11.EndOfMessage):",
+      "        break",
+      "",
+      "# the same conn object works unchanged with asyncio, Trio or a test that feeds it canned bytes"
+    ]
+  },
+  "related": ["async-execution", "event-loop", "network-protocols", "binary-parsing", "testing"],
+  "sections": [
+    {
+      "type": "code",
+      "title": "The shape in Rust",
+      "intro": "The four methods Firezone’s post describes, written here as a trait, and the event loop that drives them. Only the loop knows about Tokio; the protocol behind the trait can be tested with no runtime at all.",
+      "lang": "rust",
+      "source": [
+        "use std::net::SocketAddr;",
+        "use std::time::{Duration, Instant};",
+        "",
+        "pub struct Transmit { pub dst: SocketAddr, pub payload: Vec<u8> }",
+        "",
+        "// A protocol written sans-I/O: no sockets, no clock, no async.",
+        "pub trait Protocol {",
+        "    fn handle_input(&mut self, from: SocketAddr, packet: &[u8], now: Instant);",
+        "    fn handle_timeout(&mut self, now: Instant);",
+        "    fn poll_transmit(&mut self) -> Option<Transmit>;",
+        "    fn poll_timeout(&self) -> Option<Instant>;",
+        "}",
+        "",
+        "// The event loop owns the socket and the clock, and drives the state machine.",
+        "async fn run(mut proto: impl Protocol, socket: tokio::net::UdpSocket) -> std::io::Result<()> {",
+        "    let mut buf = vec![0u8; 1500];",
+        "    loop {",
+        "        while let Some(t) = proto.poll_transmit() {",
+        "            socket.send_to(&t.payload, t.dst).await?;",
+        "        }",
+        "        let wake = proto.poll_timeout().unwrap_or(Instant::now() + Duration::from_secs(60));",
+        "        tokio::select! {",
+        "            r = socket.recv_from(&mut buf) => {",
+        "                let (n, from) = r?;",
+        "                proto.handle_input(from, &buf[..n], Instant::now());",
+        "            }",
+        "            _ = tokio::time::sleep_until(wake.into()) => proto.handle_timeout(Instant::now()),",
+        "        }",
+        "    }",
+        "}"
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Where you’ll find it",
+      "items": [
+        { "name": "h11", "tag": "Python, HTTP/1.1", "text": "A “bring-your-own-I/O” HTTP/1.1 library with no I/O code at all, by Nathaniel J. Smith, heavily inspired by h2. httpx and several async servers build on it." },
+        { "name": "h2", "tag": "Python, HTTP/2", "text": "A complete HTTP/2 stack that “does no I/O of any kind”: it turns bytes into events and events into bytes, and works from single-threaded code to Twisted." },
+        { "name": "wsproto and aioquic", "tag": "Python", "text": "WebSocket and QUIC/HTTP/3 libraries listed on the sans-I/O page, among others for IRC, FastCGI and OAuth." },
+        { "name": "quinn-proto", "tag": "Rust, QUIC", "text": "A fully deterministic implementation of QUIC protocol logic with no networking code and no timestamps from the operating system. The `quinn` crate wraps it with Tokio." },
+        { "name": "quiche and str0m", "tag": "Rust, QUIC and WebRTC", "text": "Cloudflare’s QUIC implementation and a WebRTC library, both cited by Firezone as following the same pattern." },
+        { "name": "connlib", "tag": "Rust, WireGuard and ICE", "text": "Firezone’s connectivity library: NAT traversal, relays and WireGuard tunnels as nested state machines, tested with a deterministic simulation of whole networks." }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Sans-I/O and async/await",
+      "body": [
+        "Async code is contagious: an `async` function can only be awaited from another `async` function, so a protocol library written for asyncio can’t be used from blocking code or from Trio, and one written for Tokio forces Tokio on its users. Yet most of a protocol’s code never waits for anything; it parses and decides. Firezone wrote the same STUN client twice, once with Tokio’s `UdpSocket` and once with the standard library’s blocking one, and the two were virtually identical apart from `async`. Sans-I/O moves that shared part out, and leaves each I/O style a thin loop.",
+        "In Rust there is a second reason. A task spawned on Tokio must be `'static`, so it can’t borrow state; sharing state between tasks means `Arc<Mutex<_>>`, with lock contention, or channels, which copy messages. A sans-I/O state machine is driven through `&mut self` from one loop, so the borrow checker can verify it and buffers can be borrowed instead of copied. The price is that sequential logic has to be written as explicit states, and the loop that drives it is the caller’s responsibility."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Python had many HTTP libraries that did nearly the same job yet shared almost no code; requests and treq, meant to be almost identical, had essentially none in common. Cory Benfield, a maintainer of requests, urllib3 and the Hyper project, blamed each library’s own I/O layer. His h2, a pure-Python HTTP/2 stack whose 1.0 reached PyPI in October 2015, did no I/O at all, and Nathaniel J. Smith’s h11 (2016) did the same for HTTP/1.1. At PyCon US in May 2016 Benfield’s talk “Building Protocol Libraries the Right Way” argued for separating protocol logic from I/O.",
+      "The timing mattered: Python was moving from synchronous code to `async`/`await`, and every new framework (asyncio, Trio, Twisted, Tornado) otherwise needed its own copy of each protocol. In August 2016 Brett Cannon started a page collecting “network protocol implementations in Python, sans I/O”, which gave the pattern its name. Benfield himself wrote that he had “invented and pioneered nothing”: designing protocol implementations this way was not new, and it was close to Brandon Rhodes’s talks on hoisting I/O to the top of a program.",
+      "Rust rediscovered the pattern for its own reasons. quinn-proto keeps QUIC deterministic and leaves the event loop to `quinn`; Cloudflare’s quiche and the str0m WebRTC library work the same way. In July 2024 Thomas Eizinger of Firezone described how their connlib arrived at sans-I/O after several iterations, and in September 2026 how its determinism lets them test whole simulated networks with property-based testing and coverage-guided fuzzing."
+    ],
+    "choices": [
+      {
+        "choice": "No I/O at all, not an I/O abstraction",
+        "why": "A library that merely abstracts I/O still dictates an API that callers must fit. Operating directly on bytes and events gives the caller full freedom, so the same core serves blocking, callback and async code."
+      },
+      {
+        "choice": "Time is an argument",
+        "why": "Retransmission and keep-alive timers depend on the clock. Passing `now` in, and asking the state machine when it next wants to wake, keeps the core deterministic, so tests can skip minutes of waiting and reproduce a failure exactly."
+      },
+      {
+        "choice": "Poll for output instead of calling back",
+        "why": "Methods such as `poll_transmit` and h2’s `data_to_send` let the caller decide when and how to send, for example batching packets with `sendmmsg` or multiplexing several protocols over one socket."
+      }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "h2 1.0, an HTTP/2 stack that does no I/O, is released in October" },
+      { "year": "2016", "text": "h11 released; Cory Benfield’s PyCon talk in May; Brett Cannon’s sans-I/O page in August" },
+      { "year": "2024", "text": "Firezone’s “sans-IO: The secret to effective Rust for network services” in July" },
+      { "year": "2026", "text": "Firezone describes simulation testing of its sans-I/O data plane in September" }
+    ],
+    "sources": [
+      { "label": "PyCon US 2016: Building Protocol Libraries The Right Way (Cory Benfield, talk abstract)", "url": "https://pycon-archive.python.org/2016/schedule/presentation/1743/" },
+      { "label": "Cory Benfield on async-sig: SansIO (8 August 2016; “I have invented and pioneered nothing here”)", "url": "https://mail.python.org/pipermail/async-sig/2016-August/000113.html" },
+      { "label": "PyPI: h2 release history (1.0.0 on 15 October 2015)", "url": "https://pypi.org/project/h2/#history" },
+      { "label": "PyPI: h11 release history (first release May 2016)", "url": "https://pypi.org/project/h11/#history" },
+      { "label": "GitHub: brettcannon/sans-io (Network protocol implementations in Python, sans I/O; created August 2016)", "url": "https://github.com/brettcannon/sans-io" },
+      { "label": "Firezone blog: sans-IO, the secret to effective Rust for network services (Thomas Eizinger, 2 July 2024)", "url": "https://www.firezone.dev/blog/sans-io" },
+      { "label": "Firezone blog: Finding bugs you didn’t think to test for (Thomas Eizinger, 25 September 2026)", "url": "https://www.firezone.dev/blog/finding-bugs-you-didnt-think-to-test-for" }
+    ]
+  },
+  "sources": [
+    { "label": "Sans-I/O documentation: network protocols in Python, sans I/O (definition, goals, library list)", "url": "https://sans-io.readthedocs.io/" },
+    { "label": "h11 docs: overview (bring-your-own-I/O, no I/O code, inspired by h2)", "url": "https://h11.readthedocs.io/en/latest/" },
+    { "label": "h11 docs: Getting started (Connection, send, receive_data, next_event, NEED_DATA)", "url": "https://h11.readthedocs.io/en/latest/basic-usage.html" },
+    { "label": "h2 docs: overview (does no I/O of any kind)", "url": "https://python-hyper.org/projects/h2/en/stable/" },
+    { "label": "h2 docs: Getting started (H2Connection, receive_data returns events, data_to_send)", "url": "https://python-hyper.org/projects/h2/en/stable/basic-usage.html" },
+    { "label": "docs.rs: quinn-proto (deterministic QUIC protocol logic, no networking code or OS timestamps)", "url": "https://docs.rs/quinn-proto/latest/quinn_proto/" },
+    { "label": "Firezone blog: sans-IO, the secret to effective Rust for network services (handle_input, poll_transmit, poll_timeout, handle_timeout; quinn, quiche, str0m)", "url": "https://www.firezone.dev/blog/sans-io" },
+    { "label": "Firezone blog: Finding bugs you didn’t think to test for (reference state, simulated network, coverage-guided fuzzing)", "url": "https://www.firezone.dev/blog/finding-bugs-you-didnt-think-to-test-for" },
+    { "label": "PyCon US 2016: Building Protocol Libraries The Right Way (Cory Benfield, talk abstract)", "url": "https://pycon-archive.python.org/2016/schedule/presentation/1743/" }
+  ]
+}

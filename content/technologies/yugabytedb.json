@@ -1,0 +1,159 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "YugabyteDB",
+  "concepts": ["relational", "newsql"],
+  "provider": "oss",
+  "vendor": "Yugabyte, Inc.",
+  "license": "Apache 2.0 for the database; YugabyteDB Anywhere, the management software, is under the Polyform Free Trial License 1.0.0",
+  "website": "https://www.yugabyte.com/",
+  "repo": "https://github.com/yugabyte/yugabyte-db",
+  "summary": "A distributed SQL database that runs PostgreSQL’s own query layer on top of DocDB, a sharded, Raft-replicated storage engine built on RocksDB.",
+  "intro": [
+    "YugabyteDB has two layers. The query layer is a fork of PostgreSQL’s: YSQL accepts Postgres clients and drivers and reuses Postgres code for parsing, planning and running queries, and a second API, YCQL, descends from Cassandra’s query language. Underneath, DocDB stores the data. Each table is split into tablets, either by a hash of the first primary-key column (the default) or by ranges of the key (`ASC` or `DESC`), and tablets split again automatically as they grow. Every tablet is a Raft group: its leader handles reads and writes, and a write commits once a majority of replicas have it, so a replication factor of 3 survives one failed node, zone or region. Two services run on each node: YB-TServer holds tablets and serves queries, and YB-Master keeps the system catalog, runs DDL and balances tablets.",
+    "Transactions use multiversion concurrency control with hybrid logical clocks, so every value is stamped with a hybrid time instead of a timestamp from one central clock. A node shuts itself down if it finds a clock more than 500 ms (`--max_clock_skew_usec`) away from its peers. A distributed transaction writes provisional records to every tablet it touches and a pending entry to a transaction status tablet; flipping that entry to committed makes all the writes visible at once. YSQL supports `SERIALIZABLE`, snapshot (`REPEATABLE READ`) and `READ COMMITTED`; new clusters on v2025.2 or later deployed with Yugabyte’s tools default to Read Committed as Postgres does, while older and manually deployed clusters still behave as snapshot by default. Tablespaces can pin a table’s replicas and leaders to chosen clouds, regions and zones, read replica clusters serve local reads, and xCluster replicates asynchronously between two clusters for disaster recovery.",
+    "The database is Apache 2.0 with no closed enterprise edition: Yugabyte opened its previously commercial features in 2019 and sells YugabyteDB Anywhere, a self-managed control plane, and YugabyteDB Aeon, a managed service, from $125 per vCPU per month (Standard) and $167 (Professional) plus storage and data transfer. Versions come in yearly long-term-support (LTS) and shorter standard-term (STS) series; v2025.2 is the current LTS and v2026.1, from June 2026, the current STS. The PostgreSQL fork was rebased from version 11 to 15 in the v2025.1 series, designed to be upgraded online."
+  ],
+  "strengths": [
+    "Reuses PostgreSQL’s query layer instead of reimplementing it, so features such as stored procedures, triggers and foreign keys work as in Postgres, and Postgres drivers and ORMs connect unchanged",
+    "Writes scale out as well as reads: tablets split and rebalance across nodes, and each commits through its own Raft majority, so losing a node, zone or region needs no manual failover",
+    "Placement in SQL: tablespaces put a table’s replicas and preferred leaders in specific regions, and `SPLIT INTO` and `SPLIT AT VALUES` choose tablet layout up front",
+    "Fully Apache 2.0, including backups, encryption and read replicas, and the same database runs self-managed, on Kubernetes through Helm charts, or in Aeon"
+  ],
+  "limits": [
+    "Postgres-compatible, not Postgres: extensions that reach into Postgres storage don’t work, some `ALTER TABLE` forms such as changing a primary key or column type are restricted, and every row access is a network call to DocDB, so plans and latencies differ from single-node Postgres",
+    "Default isolation depends on version and how the cluster was deployed: before v2025.2, or on manually deployed clusters, Read Committed needs the `yb_enable_read_committed_isolation` flag and the effective default is snapshot",
+    "Clock skew matters: conflict resolution waits on the maximum skew, nodes shut down beyond 500 ms, and Yugabyte recommends chrony or ClockBound on every node",
+    "Hash sharding spreads writes but makes range scans touch every tablet, and range sharding keeps scans local but can create a hot tablet for sequential keys, so the primary key needs to be chosen per table"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "reuses the query layer of" },
+    { "id": "rocksdb", "how": "stores each tablet in a customized" },
+    { "id": "cassandra", "how": "offers YCQL, an API derived from that of" },
+    { "id": "kafka", "how": "streams change data through connectors to" },
+    { "id": "debezium", "how": "has a gRPC CDC connector built on" },
+    { "id": "kubernetes", "how": "is deployed with Helm charts on" }
+  ],
+  "alternatives": ["cockroachdb", "tidb", "citus", "postgresql", "neon"],
+  "goodFor": [
+    { "id": "scale-out-sql", "why": "Tables are cut into tablets that split and rebalance on their own, each committing through its own Raft group, behind PostgreSQL’s query layer." },
+    { "id": "multi-region-writes", "why": "Tablespaces pin a table’s replicas and leaders to chosen regions, and a replication factor of 3 across regions survives losing one." },
+    { "id": "serializable-transactions", "why": "Distributed transactions span any tablets on any nodes, and YSQL offers `SERIALIZABLE` as well as snapshot and read committed." }
+  ],
+  "specs": {
+    "data-model": "Relational tables (YSQL) and Cassandra-style tables (YCQL), stored as DocDB documents",
+    "query-language": "PostgreSQL-compatible SQL (YSQL) and a Cassandra-derived YCQL",
+    "wire-protocol": "PostgreSQL wire protocol for YSQL",
+    "transactions": "Any rows on any tablets and nodes",
+    "isolation": "Read committed on new v2025.2+ clusters; snapshot on older or manually deployed ones",
+    "consistency": "Raft majority per tablet, hybrid logical clocks (500 ms maximum skew)",
+    "scaling": "Automatic: hash- or range-sharded tablets split and rebalance",
+    "replication": "Raft per tablet, replication factor 3 typical; xCluster for asynchronous copies",
+    "multi-region": "Tablespaces pin replicas and leaders per region; read replica clusters; xCluster for disaster recovery",
+    "storage-engine": "DocDB on a customized RocksDB (LSM) per tablet",
+    "written-in": "C++ (DocDB), under a fork of PostgreSQL’s query layer",
+    "deployment": "Self-hosted, Helm charts on Kubernetes, YugabyteDB Anywhere, or YugabyteDB Aeon",
+    "pricing": "Aeon: per vCPU per month ($125 Standard, $167 Professional), plus storage and data transfer"
+  },
+  "snippet": {
+    "lang": "sql",
+    "title": "Choosing hash or range sharding, and pinning replicas to regions",
+    "source": [
+      "-- hash on customer_id spreads writes over 12 tablets; rows within a customer are sorted by time",
+      "CREATE TABLE orders (",
+      "  customer_id bigint,",
+      "  placed_at   timestamptz,",
+      "  total       numeric,",
+      "  PRIMARY KEY ((customer_id) HASH, placed_at DESC)",
+      ") SPLIT INTO 12 TABLETS;",
+      "",
+      "-- range-sharded: scans by id stay on neighbouring tablets; 3 split points make 4 tablets",
+      "CREATE TABLE invoices (id bigint, body jsonb, PRIMARY KEY (id ASC))",
+      "  SPLIT AT VALUES ((1000000), (2000000), (3000000));",
+      "",
+      "-- three replicas in three regions, leaders preferred in us-east-1",
+      "CREATE TABLESPACE us_tablespace WITH (replica_placement='{\"num_replicas\": 3, \"placement_blocks\": [",
+      "  {\"cloud\":\"aws\",\"region\":\"us-east-1\",\"zone\":\"us-east-1b\",\"min_num_replicas\":1,\"leader_preference\":1},",
+      "  {\"cloud\":\"aws\",\"region\":\"us-east-2\",\"zone\":\"us-east-2a\",\"min_num_replicas\":1,\"leader_preference\":2},",
+      "  {\"cloud\":\"aws\",\"region\":\"us-west-1\",\"zone\":\"us-west-1a\",\"min_num_replicas\":1}]}');",
+      "",
+      "CREATE TABLE us_customers (id bigint PRIMARY KEY, email text) TABLESPACE us_tablespace;"
+    ]
+  },
+  "sections": [
+    {
+      "type": "text",
+      "title": "DocDB: the storage layer",
+      "body": [
+        "DocDB is the part of YugabyteDB that owns transactions, sharding, replication and persistence. It is written in C++ and built on a heavily customized RocksDB, an LSM-tree key-value store: each tablet has its own RocksDB instance, writes land in a memtable, are flushed to sorted SST files, and are merged by compaction, which also drops versions no transaction can still read. Because Raft already keeps a write-ahead log for every tablet, DocDB turns RocksDB’s own WAL off and tracks which Raft entries have been flushed, so the Raft log can be trimmed and replayed after a crash. All RocksDB instances on a server share one block cache, which resists being flushed out by long scans, and one memory limit for memtables.",
+        "Each row is a document. Its key is the primary key, encoded so that ordering works: a 16-bit hash of the hash columns (if any), then the hash columns, then the range columns, and finally a hybrid timestamp sorted newest first. Other columns are subdocuments keyed by column ID, and nested collections in YCQL become nested maps. Since v2.20 new YSQL clusters store rows packed, one key-value pair per row, and an update to a few columns adds small per-column entries until compaction folds them back. Deletes write a single tombstone, and range queries skip SST files using the minimum and maximum key components stored with each file.",
+        "Uncommitted writes don’t go into the main store. Each tablet keeps a second RocksDB instance, IntentsDB, for provisional records, next to RegularDB for committed data. When the transaction status tablet marks a transaction committed and assigns its commit time, the provisional records are rewritten into RegularDB with that hybrid time as their MVCC version; if the coordinator stops heartbeating, they expire and the transaction is aborted. Keeping intents separate makes aborted transactions cheap to clean up and lets each store use its own flush and compaction settings."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Kannan Muthukkaruppan, Karthik Ranganathan and Mikhail Bautin had built and run Apache Cassandra and HBase at Facebook, for workloads such as Messenger. In February 2016 they started Yugabyte to build one database with the scale and resilience of those NoSQL systems and the transactions and SQL of a relational one. Its first production API, YCQL, was derived from Cassandra’s query language; a PostgreSQL-compatible one came next.",
+      "The team first wrote a Postgres-compatible layer from scratch, and after about five months threw it away and forked PostgreSQL’s query layer instead, putting it on top of their own distributed storage. Version 2.0, in September 2019, made that API, YSQL, production-ready after Jepsen testing. Two months earlier, with version 1.3, Yugabyte had moved every feature under Apache 2.0 and dropped its closed enterprise edition, against the trend of database companies tightening their licences. In 2024 it began rebasing its Postgres fork from version 11 to 15, released in the v2025.1 series, and in 2026 it added AMP, a scale-to-zero, multitenant Postgres tier aimed at AI agents."
+    ],
+    "choices": [
+      {
+        "choice": "Reuse PostgreSQL’s query layer instead of rewriting it",
+        "why": "A from-scratch layer would have to catch up with decades of Postgres features and tests one by one. Reusing the code brought features, documentation and regression tests at once, and Yugabyte called it one of its best design decisions, at the cost of extensions that touch Postgres storage."
+      },
+      {
+        "choice": "Raft per tablet, with no RocksDB write-ahead log",
+        "why": "Each tablet replicates through its own Raft log, which already records every write in order. A second log inside RocksDB would only add writes, so DocDB disables it and uses the Raft log for recovery."
+      },
+      {
+        "choice": "Hybrid logical clocks instead of a central timestamp service or atomic clocks",
+        "why": "Ordinary cloud machines have no TrueTime. A hybrid clock of physical time plus a logical counter, exchanged on every RPC, keeps timestamps increasing without a single timestamp server, in exchange for a bound on clock skew."
+      },
+      {
+        "choice": "All features open source, money from managed services",
+        "why": "The founders argued that licences like AGPL or BSL slow adoption without stopping cloud providers, and that companies pay for running the database rather than for features withheld from it."
+      }
+    ],
+    "timeline": [
+      { "year": "2016", "text": "Yugabyte founded by three former Facebook engineers" },
+      { "year": "2019", "text": "Version 1.3 moves everything to Apache 2.0 in July; 2.0 makes YSQL production-ready in September" },
+      { "year": "2020", "text": "Yugabyte explains why it rebuilt YSQL on PostgreSQL’s own query layer" },
+      { "year": "2024", "text": "Work starts on rebasing the Postgres fork from version 11 to 15" },
+      { "year": "2025", "text": "v2025.1 series ships PostgreSQL 15 compatibility; v2025.2 becomes the LTS" },
+      { "year": "2026", "text": "v2026.1 adds vector indexing and the AMP serverless tier" }
+    ],
+    "sources": [
+      { "label": "Yugabyte: About (founders, February 2016)", "url": "https://www.yugabyte.com/about/" },
+      { "label": "Yugabyte blog: Why we changed YugabyteDB licensing to 100% open source (Jul 2019)", "url": "https://www.yugabyte.com/blog/why-we-changed-yugabyte-db-licensing-to-100-open-source/" },
+      { "label": "Yugabyte blog: Announcing YugabyteDB 2.0 GA, Jepsen tested (Sep 2019)", "url": "https://www.yugabyte.com/blog/announcing-yugabyte-db-2-0-ga-jepsen-tested-high-performance-distributed-sql/" },
+      { "label": "Yugabyte blog: Why we built YugabyteDB by reusing the PostgreSQL query layer (Apr 2020)", "url": "https://www.yugabyte.com/blog/why-we-built-yugabytedb-by-reusing-the-postgresql-query-layer/" },
+      { "label": "Yugabyte blog: YugabyteDB moves beyond PostgreSQL 11 (May 2024)", "url": "https://www.yugabyte.com/blog/yugabytedb-moves-beyond-postgresql-11/" },
+      { "label": "YugabyteDB docs: What’s new in v2026.1", "url": "https://docs.yugabyte.com/stable/releases/ybdb-releases/v2026.1/" },
+      { "label": "Yugabyte: YugabyteDB AMP", "url": "https://www.yugabyte.com/amp/" },
+      { "label": "Wikipedia: YugabyteDB (founders’ Cassandra and HBase work at Facebook)", "url": "https://en.wikipedia.org/wiki/YugabyteDB" }
+    ]
+  },
+  "sources": [
+    { "label": "YugabyteDB docs: Architecture (query layer, DocDB, tablets, Raft, YB-TServer, YB-Master)", "url": "https://docs.yugabyte.com/stable/architecture/" },
+    { "label": "YugabyteDB docs: Key concepts (YSQL, YCQL, replication factor, xCluster, read replicas)", "url": "https://docs.yugabyte.com/stable/architecture/key-concepts/" },
+    { "label": "YugabyteDB docs: DocDB", "url": "https://docs.yugabyte.com/stable/architecture/docdb/" },
+    { "label": "YugabyteDB docs: DocDB data model (key encoding, subdocuments, tombstones)", "url": "https://docs.yugabyte.com/stable/architecture/docdb/data-model/" },
+    { "label": "YugabyteDB docs: DocDB performance (RocksDB customizations)", "url": "https://docs.yugabyte.com/stable/architecture/docdb/performance/" },
+    { "label": "YugabyteDB docs: Packed rows in DocDB", "url": "https://docs.yugabyte.com/stable/architecture/docdb/packed-rows/" },
+    { "label": "YugabyteDB docs: DocDB sharding (automatic tablet splitting)", "url": "https://docs.yugabyte.com/stable/architecture/docdb-sharding/" },
+    { "label": "YugabyteDB docs: Hash and range sharding", "url": "https://docs.yugabyte.com/stable/architecture/docdb-sharding/sharding/" },
+    { "label": "YugabyteDB docs: Transactions overview (hybrid logical clocks, MVCC)", "url": "https://docs.yugabyte.com/stable/architecture/transactions/transactions-overview/" },
+    { "label": "YugabyteDB docs: Distributed transactions (provisional records, IntentsDB, status tablet)", "url": "https://docs.yugabyte.com/stable/architecture/transactions/distributed-txns/" },
+    { "label": "YugabyteDB docs: Isolation levels", "url": "https://docs.yugabyte.com/stable/architecture/transactions/isolation-levels/" },
+    { "label": "YugabyteDB docs: Enhanced PostgreSQL Compatibility Mode", "url": "https://docs.yugabyte.com/stable/reference/configuration/postgresql-compatibility/" },
+    { "label": "YugabyteDB docs: SQL feature support", "url": "https://docs.yugabyte.com/stable/api/ysql/sql-feature-support/" },
+    { "label": "YugabyteDB docs: CREATE TABLE (HASH, ASC, SPLIT INTO, SPLIT AT VALUES)", "url": "https://docs.yugabyte.com/stable/api/ysql/the-sql-language/statements/ddl_create_table/" },
+    { "label": "YugabyteDB docs: Tablespaces (replica placement, leader preference)", "url": "https://docs.yugabyte.com/stable/explore/going-beyond-sql/tablespaces/" },
+    { "label": "YugabyteDB docs: System configuration (clock skew, chrony, ClockBound)", "url": "https://docs.yugabyte.com/stable/deploy/manual-deployment/system-config/" },
+    { "label": "YugabyteDB docs: Change data capture", "url": "https://docs.yugabyte.com/stable/additional-features/change-data-capture/" },
+    { "label": "YugabyteDB docs: Deploy on Kubernetes", "url": "https://docs.yugabyte.com/stable/deploy/kubernetes/" },
+    { "label": "YugabyteDB docs: Releases (LTS and STS series, dates)", "url": "https://docs.yugabyte.com/stable/releases/ybdb-releases/" },
+    { "label": "Yugabyte: Pricing (Aeon, checked 2026-10-24)", "url": "https://www.yugabyte.com/pricing/" },
+    { "label": "yugabyte/yugabyte-db on GitHub (licences, README)", "url": "https://github.com/yugabyte/yugabyte-db" }
+  ],
+  "checked": "2026-10-24"
+}

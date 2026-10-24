@@ -1,0 +1,74 @@
+{
+  "$schema": "../../.schemas/concepts.schema.json",
+  "name": "Graph lakehouses",
+  "icon": "waypoints",
+  "category": "data",
+  "order": 10,
+  "parent": "graph",
+  "summary": "Query lakehouse tables as a graph, with Cypher, Gremlin or GQL, without copying the data into a separate graph database.",
+  "howItWorks": "The data stays where it is: tables in Iceberg, Delta Lake or Hudi, registered in a catalog and already used by SQL engines and notebooks. On top you declare a graph model, which is only a mapping: this table holds `User` nodes keyed by its primary key, these columns are their properties, this foreign key or join table is a `MEMBER_OF` edge. A graph engine then takes a query such as `MATCH (u:User)-[:MEMBER_OF*1..3]->(g:Group)`, plans it as node and edge operators, reads only the columns it needs with filters pushed down to storage, skips files using the table format’s statistics, and does the traversal in its own memory. Permissions come from the catalog, so a graph query sees what the same user could read with SQL. Products differ in how much they copy. PuppyGraph runs its own distributed engine and sends only simple projection and filter SQL to the source. Neo4j’s Virtual Graph (private preview in 2026) translates Cypher into SQL that runs on Databricks or Snowflake. BigQuery Graph defines node and edge tables over existing tables and queries them with GQL. Microsoft Fabric’s graph maps OneLake tables to nodes and edges but ingests them into graph storage on save and on a refresh schedule, and TigerGraph loads lakehouse tables through Spark or Kafka Connect, so those keep a managed copy. A 2026 research engine, GraphLake, loads only the key columns that form the topology (about 3% of the data in its benchmark) and fetches properties on demand. The trade-off is the storage layout: Parquet files are built for scans, so following a few edges at a time is slower than in a database that stores each node’s neighbours together.",
+  "analogy": "Tracing routes on a transparent sheet laid over the official city map. You draw only the lines you care about, but the map underneath stays the single copy, and it is always the current edition.",
+  "useWhen": [
+    "The data already lives in lakehouse tables and the questions follow links of unknown depth: fraud rings, attack paths and nested group access, supply-chain dependencies, data lineage",
+    "Analytical traversals over large data, where a second copy and the pipeline that keeps it in sync would cost more than the queries",
+    "You want one set of permissions, retention and lineage rules: graph queries go through the same catalog as SQL",
+    "You are still finding out which relationships matter, and want to change the model by editing a mapping rather than re-ingesting"
+  ],
+  "avoidWhen": [
+    "An application needs low-latency lookups of a few hops, or writes many small changes to the graph: a graph database that stores adjacency directly does this better",
+    "The questions are aggregates over a few well-known joins; SQL on the same tables already answers them",
+    "Keys don’t line up across tables: edges are only as good as the keys, so entity resolution has to come first",
+    "A few nodes have millions of edges and every query touches them; one hop through such a node can explode in size"
+  ],
+  "example": "A security team keeps identities, group memberships and login events as Iceberg tables. They map users, groups and hosts to node types and memberships and logins to edge types, and an analyst asks in one openCypher query which users can reach a domain controller through up to three nested groups. The engine reads the same tables the SQL dashboards use, so there is no nightly copy into a graph database and the answer reflects the latest committed snapshot.",
+  "providers": {
+    "aws": "No in-place graph engine for lakehouse tables: Neptune Analytics loads CSV or Parquet from S3 into memory, which is a copy. PuppyGraph runs on AWS and reads Iceberg tables in S3 Tables",
+    "gcp": "BigQuery Graph: node and edge tables defined over existing tables or views and queried with GQL, without replicating data (needs Enterprise or Enterprise Plus)",
+    "azure": "Graph in Microsoft Fabric: a GQL graph modelled over OneLake lakehouse tables, ingested into graph storage when the model is saved and on a refresh schedule",
+    "oss": "Mostly commercial so far: PuppyGraph (free single-node Developer Edition), Neo4j Virtual Graph (private preview, over Databricks and Snowflake); research: GraphLake from TigerGraph and Purdue"
+  },
+  "related": ["lakehouse", "query-engines", "table-formats", "catalogs"],
+  "history": {
+    "story": [
+      "For years, graph analysis meant a second system. Teams kept their data in a warehouse or lake and ran ETL jobs to copy it into Neo4j, TigerGraph or Neptune, then kept the two in sync. In a February 2023 talk for the Trino community, PuppyGraph’s Weimo Liu argued that many users want a graph data lake instead: start a graph engine against Iceberg tables, run the query, turn the engine off, and keep a single copy of the data. PuppyGraph launched on that idea in March 2024.",
+      "Standards helped. SQL:2023 added SQL/PGQ for graph patterns over relational tables, and ISO published GQL in April 2024. Cloud platforms followed with graph layers over their own tables: BigQuery Graph queries existing tables with GQL, and Microsoft Fabric added graph over OneLake data, although it loads that data into its own graph storage.",
+      "By 2026 the graph database vendors had joined in. In January a Delta Lake community session demonstrated querying Delta tables as a graph with PuppyGraph; in March, TigerGraph and Purdue researchers published GraphLake, an engine that queries Iceberg tables in place and reports large speedups over PuppyGraph; and in June Neo4j described Virtual Graph, which translates Cypher into SQL on Databricks under Unity Catalog permissions. PuppyGraph notes that the term is not standardised: some vendors use it for systems that copy data, others only for querying tables in place."
+    ],
+    "choices": [
+      { "choice": "The graph is a mapping, not a copy", "why": "A second copy brings drift, an ETL pipeline and a second permission system. Declaring nodes and edges over existing tables keeps one system of record and one governance perimeter." },
+      { "choice": "Push filters and projections down, traverse in the engine", "why": "Columnar files are good at reading a few columns of many rows, not at random access, so engines read only the needed columns and do the hop-by-hop work in their own memory." },
+      { "choice": "Load the topology, fetch properties on demand", "why": "The GraphLake paper found the key columns that define nodes and edges are about 3% of the data, so loading only those gives fast startup while the rest stays in the lake." },
+      { "choice": "Translate to SQL, or run a separate engine", "why": "Neo4j’s Virtual Graph turns Cypher into SQL that runs on Databricks compute, which keeps execution and auditing inside the platform. PuppyGraph and GraphLake run their own distributed engines, which can traverse faster but add a system to operate." }
+    ],
+    "timeline": [
+      { "year": "2023", "text": "Graph queries on data lakes presented to the Trino community; SQL:2023 adds SQL/PGQ" },
+      { "year": "2024", "text": "PuppyGraph launches in March; ISO publishes GQL in April" },
+      { "year": "2026", "text": "Delta Lake graph lakehouse session (January), GraphLake paper (March), Neo4j Virtual Graph preview (June)" }
+    ],
+    "sources": [
+      { "label": "Trino on YouTube: Graph Queries on Data Lakes, Weimo Liu (Feb 2023)", "url": "https://www.youtube.com/watch?v=qDqRkuDe8xs" },
+      { "label": "PuppyGraph: PuppyGraph raises $5 million in seed funding (Nov 2024; March 2024 launch)", "url": "https://puppygraph.com/blog/puppygraph-raises-5-million-in-seed-funding-led-by-defy-vc" },
+      { "label": "Peter Eisentraut: SQL:2023 is finished, here is what’s new (Part 16, SQL/PGQ)", "url": "https://peter.eisentraut.org/blog/2023/04/04/sql-2023-is-finished-here-is-whats-new" },
+      { "label": "openCypher: ISO/IEC 39075 GQL published on 11 April 2024", "url": "https://opencypher.org/" },
+      { "label": "Luma: Unified Data, Unified Insights, Meet the Graph Lakehouse (Open Lakehouse + AI; speakers)", "url": "https://luma.com/OLAI-121" },
+      { "label": "arXiv: GraphLake, a purpose-built graph compute engine for lakehouse (Mar 2026)", "url": "https://arxiv.org/html/2603.03705v1" },
+      { "label": "Neo4j developer blog: Graph and lakehouse, friends at last (Jun 2026)", "url": "https://neo4j.com/blog/developer/graph-and-lakehouse-friends-at-last/" },
+      { "label": "PuppyGraph blog: Graph lakehouse, architecture, benefits, use cases (Aug 2026)", "url": "https://www.puppygraph.com/blog/graph-lakehouse" }
+    ]
+  },
+  "sources": [
+    { "label": "PuppyGraph blog: Graph lakehouse (definition, schema mapping, pushdown, limits; Aug 2026)", "url": "https://www.puppygraph.com/blog/graph-lakehouse" },
+    { "label": "Neo4j developer blog: Graph and lakehouse, friends at last (Virtual Graph, Cypher to SQL on Databricks; Jun 2026)", "url": "https://neo4j.com/blog/developer/graph-and-lakehouse-friends-at-last/" },
+    { "label": "arXiv: GraphLake, a purpose-built graph compute engine for lakehouse (Liu, Chen, Qin, Wu, Wang; Mar 2026)", "url": "https://arxiv.org/html/2603.03705v1" },
+    { "label": "TigerGraph: home page (native parallel graph database)", "url": "https://www.tigergraph.com/" },
+    { "label": "TigerGraph DB docs: Load from data lakehouse (Iceberg, Delta Lake, Hudi via Spark and Kafka Connect)", "url": "https://www.tigergraph.com/docs/tigergraph-server/4.3/data-loading/load-from-lakehouse" },
+    { "label": "PuppyGraph docs: introduction (queries data in place, separated compute and storage)", "url": "https://docs.puppygraph.com/" },
+    { "label": "PuppyGraph: home page (Amazon S3 Tables, Databricks, Iceberg)", "url": "https://www.puppygraph.com/" },
+    { "label": "Google Cloud: BigQuery Graph overview (GQL, no replication, Enterprise editions)", "url": "https://docs.cloud.google.com/bigquery/docs/graph-overview" },
+    { "label": "Microsoft Learn: What is graph in Microsoft Fabric?", "url": "https://learn.microsoft.com/en-us/fabric/graph/overview" },
+    { "label": "Microsoft Learn: Manage and refresh data in graph in Microsoft Fabric (ingestion on save, scheduled refresh)", "url": "https://learn.microsoft.com/en-us/fabric/graph/manage-data" },
+    { "label": "Neptune Analytics User Guide: What is Neptune Analytics? (in-memory, loads from S3)", "url": "https://docs.aws.amazon.com/neptune-analytics/latest/userguide/what-is-neptune-analytics.html" },
+    { "label": "Neptune Analytics User Guide: Bulk import into an existing graph (CSV, openCypher, N-Triples, Parquet)", "url": "https://docs.aws.amazon.com/neptune-analytics/latest/userguide/loading-data-existing-graph.html" },
+    { "label": "Delta Lake on YouTube: Unified Data, Unified Insights, Meet the Graph Lakehouse (Jan 2026)", "url": "https://www.youtube.com/watch?v=bMIVlG1fZgs" }
+  ]
+}

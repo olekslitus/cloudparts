@@ -4,7 +4,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { z } from 'zod';
-import { architecture, benchmark, category, comparison, concept, foundation, part, resource, technology } from './schema';
+import { architecture, benchmark, category, comparison, concept, foundation, part, resource, spec, technology, workload } from './schema';
 
 const root = join(process.cwd(), 'content'); // the build runs from the project root
 
@@ -35,6 +35,8 @@ export function loadContent() {
     foundations: collection('foundations', foundation),
     resources: collection('resources', resource),
     benchmarks: collection('benchmarks', benchmark),
+    workloads: collection('workloads', workload),
+    specs: parse('specs.json', spec.array()),
     systemMap: JSON.parse(readFileSync(join(root, 'system-map.json'), 'utf8')) as unknown,
   };
 }

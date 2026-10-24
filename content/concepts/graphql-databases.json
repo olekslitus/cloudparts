@@ -1,0 +1,99 @@
+{
+  "$schema": "../../.schemas/concepts.schema.json",
+  "name": "GraphQL-native databases",
+  "icon": "braces",
+  "category": "data",
+  "order": 27,
+  "summary": "Databases, or thin engines over one, that publish a GraphQL API generated from the schema, so clients query tables and relationships without a hand-written API server.",
+  "howItWorks": "Normally a GraphQL server is code: you write a schema and a resolver for each field, and the resolvers call the database. A GraphQL-native setup generates both from the database itself. Tables or types become GraphQL types, foreign keys or links become nested fields, and the engine adds filtering, sorting, pagination and mutations. Instead of resolving field by field, the good ones compile a whole request into one SQL query, which avoids the N+1 problem of one query per row. There are three shapes. Engines in front of an existing database introspect it and run as a separate server: Hasura GraphQL Engine, PostGraphile and Microsoft’s Data API builder. Extensions answer GraphQL inside the database: pg_graphql reflects a Postgres schema and exposes one SQL function, `graphql.resolve()`, which Supabase serves over HTTP. Databases whose own API includes GraphQL: Dgraph builds its storage from a deployed GraphQL schema and serves it at `/graphql`, Gel (formerly EdgeDB) has a `graphql` extension, SurrealDB generates a schema after `DEFINE CONFIG GRAPHQL AUTO`, and Firebase SQL Connect maps a GraphQL schema to Cloud SQL for PostgreSQL tables. Authorization either reuses the database’s own model, such as roles, grants and row-level security in PostGraphile and pg_graphql, or is declared in the engine, as Hasura’s per-role row and column rules over session variables from a JWT. GraphQL here is an API language; it has nothing to do with graph databases, which store nodes and edges.",
+  "analogy": "An order form printed straight from the warehouse inventory. Customers tick what they want, in the shape they want it, and when the stock list changes the form reprints itself; nobody has to design a new form.",
+  "useWhen": [
+    "CRUD-heavy apps, admin panels and internal tools where the API mostly mirrors the tables",
+    "Front-end teams want typed, nested reads across relationships in one request, with generated client code",
+    "Realtime screens: live queries or subscriptions on top of the same schema",
+    "Access rules can be written per row, in database policies or as role rules in the engine"
+  ],
+  "avoidWhen": [
+    "The API should hide the data model, or most of the work is business logic: a hand-written GraphQL or REST service keeps the contract independent of the tables",
+    "A public API for untrusted clients, unless you add depth and cost limits or allow-lists: generated schemas let callers write expensive queries",
+    "Heavy analytics over large tables; use a warehouse or a semantic layer",
+    "You don’t want to depend on a small vendor: several products in this space have been sold, shut down or deprioritised since 2024"
+  ],
+  "example": "A support team’s admin tool runs on Postgres. Hasura tracks the `customers`, `orders` and `order_items` tables, and a select permission lets the `support` role read only orders from its own region, using a region claim in the agent’s JWT. The React front end asks for a customer with their last ten orders and line items in one GraphQL query, which Hasura turns into a single SQL statement with the region filter built in.",
+  "providers": {
+    "aws": "AWS AppSync: a managed GraphQL service whose resolvers read DynamoDB, Aurora and RDS, OpenSearch, Lambda or HTTP sources; it can generate a schema from DynamoDB tables, but other sources need resolvers",
+    "gcp": "Firebase SQL Connect (formerly Data Connect): a GraphQL schema mapped to Cloud SQL for PostgreSQL, with predefined operations and generated client SDKs",
+    "azure": "Data API builder: an open-source (MIT) engine that serves REST and GraphQL over SQL Server and Azure SQL, Cosmos DB, PostgreSQL and MySQL from one JSON configuration file",
+    "oss": "Hasura GraphQL Engine v2 (Apache 2.0); PostGraphile (MIT); pg_graphql (Apache 2.0, built into Supabase); Dgraph (Apache 2.0, owned by Istari Digital since October 2025); Gel’s graphql extension (Apache 2.0; the company shut down in December 2025); SurrealDB’s built-in GraphQL. Fauna’s GraphQL API ended in February 2024 and its service in May 2025"
+  },
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "-- pg_graphql: GraphQL resolved inside Postgres by one SQL function",
+      "create extension pg_graphql;",
+      "create table book(id int primary key, title text);",
+      "insert into book(id, title) values (1, 'book 1');",
+      "",
+      "select graphql.resolve($$",
+      "query {",
+      "  bookCollection {",
+      "    edges { node { id } }",
+      "  }",
+      "}",
+      "$$);",
+      "-- {\"data\": {\"bookCollection\": {\"edges\": [{\"node\": {\"id\": 1}}]}}, \"errors\": []}"
+    ]
+  },
+  "related": ["web-api", "baas", "orm", "relational", "graph"],
+  "history": {
+    "story": [
+      "Facebook published GraphQL in 2015 as a protocol, not a database: every field is backed by a function, and storage is up to you. Writing those functions for every table was repetitive, so tools appeared that generated the schema from Postgres. PostGraphile’s repository dates from April 2016, and Hasura launched its GraphQL Engine in July 2018, offering “instant realtime GraphQL APIs on a Postgres database” out of a feature first built for its Kubernetes platform.",
+      "Databases then built GraphQL in. Dgraph serves a GraphQL API generated from a deployed schema, and Fauna offered a GraphQL API next to its own query language. In December 2021 Supabase released pg_graphql, which resolves GraphQL inside Postgres; it chose an extension over Graphile or Hasura because its free-tier machines had 1 GB of memory and no room for another process. Cloud vendors added their own: AWS AppSync, Microsoft’s Data API builder and Firebase Data Connect, since renamed SQL Connect.",
+      "The independent vendors had a rough few years. Fauna ended its GraphQL API on 29 February 2024 and switched off its service on 30 May 2025. Hasura moved its focus from GraphQL to PromptQL in June 2025 while keeping its engines maintained. Hypermode sold Dgraph to Istari Digital in October 2025, and Gel Data shut down in December 2025, leaving Gel as open source with no company behind it. PostGraphile kept going and released version 5, built on its Grafast planner, in 2026."
+    ],
+    "choices": [
+      { "choice": "Generate the API from the schema", "why": "Tables, keys and functions already describe the data, so generating types and resolvers from them removes most hand-written API code and keeps the API in step with migrations." },
+      { "choice": "One SQL query per GraphQL request", "why": "Resolving each field separately sends many small queries. Compiling the whole request, with permissions, into one statement lets the database plan it once; pg_graphql returns the result as JSON from that one statement." },
+      { "choice": "Reuse the database’s security or declare it in the engine", "why": "PostGraphile and pg_graphql rely on Postgres roles, grants and row-level security, so the same rules protect SQL and GraphQL. Hasura declares per-role rules in its own metadata and writes them into the SQL it generates." },
+      { "choice": "Run inside the database", "why": "pg_graphql avoids a separate server process, which mattered on Supabase’s small free-tier machines and removes a network hop." }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "Facebook publishes GraphQL" },
+      { "year": "2016", "text": "PostGraphile’s repository starts in April" },
+      { "year": "2018", "text": "Hasura GraphQL Engine launches for Postgres" },
+      { "year": "2021", "text": "Supabase releases pg_graphql in December" },
+      { "year": "2024", "text": "Fauna ends its GraphQL API on 29 February" },
+      { "year": "2025", "text": "Fauna shuts down; Hasura shifts to PromptQL; Dgraph sold; Gel Data closes" },
+      { "year": "2026", "text": "PostGraphile 5 released" }
+    ],
+    "sources": [
+      { "label": "GraphQL blog: GraphQL, a data query language (Lee Byron, Sep 2015)", "url": "https://graphql.org/blog/2015-09-14-graphql/" },
+      { "label": "GitHub: graphile/crystal (PostGraphile monorepo, created April 2016, MIT)", "url": "https://github.com/graphile/crystal" },
+      { "label": "Hasura blog: Introducing the Hasura GraphQL Engine (10 Jul 2018)", "url": "https://hasura.io/blog/introducing-the-hasura-graphql-engine-8ea761efaa83" },
+      { "label": "Supabase blog: pg_graphql, a GraphQL extension for PostgreSQL (3 Dec 2021)", "url": "https://supabase.com/blog/pg-graphql" },
+      { "label": "Fauna Forums: Where is GraphQL docs? (staff reply: GraphQL API end of life on 29 Feb 2024)", "url": "https://forums.fauna.com/t/where-is-graphql-docs/3773", "archive": "https://web.archive.org/web/20240303113300/https://forums.fauna.com/t/where-is-graphql-docs/3773" },
+      { "label": "Fauna docs: Fauna service end-of-life FAQ (service ending 30 May 2025)", "url": "https://docs.fauna.com/fauna/current/eol-faq/", "archive": "https://web.archive.org/web/20250530172928/https://docs.fauna.com/fauna/current/eol-faq/" },
+      { "label": "Hasura blog: From GraphQL to PromptQL, a new chapter begins (2 Jun 2025)", "url": "https://hasura.io/blog/from-graphql-to-promptql-a-new-chapter-begins" },
+      { "label": "Istari Digital: Istari Digital acquires Dgraph (23 Oct 2025)", "url": "https://www.istaridigital.com/resources/istari-acquires-dgraph" },
+      { "label": "Gel blog: Gel joins Vercel (2 Dec 2025)", "url": "https://www.geldata.com/blog/gel-joins-vercel" },
+      { "label": "PostGraphile: home page (V5 announcement, Grafast)", "url": "https://postgraphile.org/" }
+    ]
+  },
+  "sources": [
+    { "label": "Hasura v2 docs: permissions (one SQL query per request)", "url": "https://hasura.io/docs/2.0/auth/authorization/permissions/" },
+    { "label": "GitHub: hasura/graphql-engine architecture notes on live queries", "url": "https://github.com/hasura/graphql-engine/blob/master/architecture/live-queries.md" },
+    { "label": "GitHub: graphile/crystal PostGraphile README (introspection, database permissions, smart tags, Grafast)", "url": "https://github.com/graphile/crystal/blob/main/postgraphile/postgraphile/README.md" },
+    { "label": "pg_graphql docs: introduction (schema reflected from SQL, one function)", "url": "https://supabase.github.io/pg_graphql/" },
+    { "label": "GitHub: supabase/pg_graphql docs, SQL interface (`graphql.resolve` example)", "url": "https://github.com/supabase/pg_graphql/blob/master/docs/sql_interface.md" },
+    { "label": "Supabase docs: GraphQL API (pg_graphql, /graphql/v1, row-level security)", "url": "https://supabase.com/docs/guides/graphql" },
+    { "label": "Dgraph docs: GraphQL (API and backend from a GraphQL schema, subscriptions)", "url": "https://docs.dgraph.io/graphql/" },
+    { "label": "Dgraph docs: GraphQL and DQL (`/graphql` endpoint)", "url": "https://docs.dgraph.io/graphql/graphql-dql/" },
+    { "label": "Gel docs: GraphQL (`using extension graphql`)", "url": "https://docs.geldata.com/reference/using/graphql" },
+    { "label": "SurrealDB docs: GraphQL (`DEFINE CONFIG GRAPHQL AUTO`)", "url": "https://surrealdb.com/docs/surrealdb/querying/graphql" },
+    { "label": "Firebase docs: SQL Connect (formerly Data Connect)", "url": "https://firebase.google.com/docs/data-connect" },
+    { "label": "Microsoft Learn: What is Data API builder?", "url": "https://learn.microsoft.com/en-us/azure/data-api-builder/overview" },
+    { "label": "AWS AppSync docs: Data sources", "url": "https://docs.aws.amazon.com/appsync/latest/devguide/data-source-components.html" },
+    { "label": "GitHub: dgraph-io/dgraph (Apache 2.0)", "url": "https://github.com/dgraph-io/dgraph" },
+    { "label": "GitHub: supabase/pg_graphql (Apache 2.0)", "url": "https://github.com/supabase/pg_graphql" }
+  ]
+}

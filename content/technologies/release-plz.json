@@ -1,0 +1,109 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "release-plz",
+  "concepts": ["release-automation"],
+  "provider": "oss",
+  "vendor": "Marco Ieni and contributors",
+  "license": "MIT or Apache 2.0",
+  "website": "https://release-plz.dev/",
+  "repo": "https://github.com/release-plz/release-plz",
+  "summary": "A release tool for Rust that runs in CI: it keeps a release pull request with the next versions and changelogs of your crates up to date, and when you merge it, publishes the new versions to crates.io, tags them and creates GitHub, GitLab or Gitea releases.",
+  "intro": [
+    "release-plz works from two commands, usually run as two jobs on every push to `main`. `release-plz release-pr` downloads the last published version of each package from the cargo registry, compares it with the local code to find the commits that changed the package or its dependencies, bumps the version in `Cargo.toml`, updates `CHANGELOG.md`, and opens a pull request with the result, or replaces the one already open. `release-plz release` then publishes every package whose local version isn’t on the registry yet: it creates a git tag named `<package>-v<version>`, runs `cargo publish`, and creates a release on the forge. Merging the release pull request is therefore the decision to release.",
+    "The next version comes from the commit messages, using the next_version crate. Conventional Commits raise the version the usual way, with a Rust twist for `0.x` crates: there a `feat` bumps the patch and a breaking change bumps the minor, because Cargo treats `0.x` to `0.(x+1)` as incompatible. Commits that aren’t conventional still produce a release, with a patch bump and an entry under “Other” in the changelog. If cargo-semver-checks is installed, release-plz also runs it on each library, reports “API breaking changes” in the pull request, and bumps the major version (or the minor, under 1.0) when it finds any.",
+    "It needs no configuration file: package names, versions, registries and dependencies come from `Cargo.toml`, and an optional `release-plz.toml` changes defaults per package. Changelogs are generated with git-cliff used as a library, in Keep a Changelog format by default. It supports workspaces, publishes to crates.io or any other cargo registry, and runs as a GitHub Action, a GitLab CI component or a plain CLI. On GitHub it can publish to crates.io with trusted publishing (OIDC) instead of a stored token."
+  ],
+  "strengths": [
+    "Built for Cargo: reads everything from `Cargo.toml` and the registry, so a workspace needs no manifest or config files to start",
+    "Works whether or not the project tags releases or writes conventional commits, because it compares against what is published on the registry",
+    "The only release tool that runs cargo-semver-checks, so an accidental API break shows up in the release pull request before it ships",
+    "A person still chooses when to release, by merging the pull request, and can edit the proposed changelog first"
+  ],
+  "limits": [
+    "Rust only: polyglot repositories need release-please, Changesets or another tool for their other packages",
+    "No hooks: custom steps around the release go in separate CI jobs, driven by the action’s outputs",
+    "With GitHub’s default `GITHUB_TOKEN`, the release pull request does not trigger your other workflows, so CI checks on it need a personal access token or a GitHub App token",
+    "Brand-new crates can’t use crates.io trusted publishing: their first version has to be published by hand or with a token"
+  ],
+  "worksWith": [
+    { "id": "cargo-semver-checks", "how": "checks for API breaking changes with" },
+    { "id": "rust", "how": "releases packages written in" },
+    { "id": "github-actions", "how": "runs as an action in" },
+    { "id": "gitlab", "how": "opens merge requests and releases on" },
+    { "id": "gitea", "how": "opens pull requests and releases on" },
+    { "id": "git", "how": "reads history and pushes tags with" }
+  ],
+  "snippet": {
+    "lang": "yaml",
+    "title": ".github/workflows/release-plz.yml: the release job (the release-pr job is the same with `command: release-pr`)",
+    "source": [
+      "name: Release-plz",
+      "on:",
+      "  push:",
+      "    branches: [main]",
+      "jobs:",
+      "  release-plz-release:",
+      "    runs-on: ubuntu-latest",
+      "    permissions:",
+      "      contents: write",
+      "      pull-requests: read",
+      "      id-token: write          # crates.io trusted publishing",
+      "    steps:",
+      "      - uses: actions/checkout@v6",
+      "        with:",
+      "          fetch-depth: 0",
+      "          persist-credentials: false",
+      "      - uses: dtolnay/rust-toolchain@stable",
+      "      - uses: release-plz/action@v0.5",
+      "        with:",
+      "          command: release    # publish what isn't on crates.io yet",
+      "        env:",
+      "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}"
+    ]
+  },
+  "history": {
+    "story": [
+      "Releasing a Rust crate by hand means editing the version in `Cargo.toml`, bumping it in every crate that depends on it, writing the changelog, publishing in dependency order and tagging. Existing Rust tools such as cargo-release, cargo-workspaces and cargo-smart-release automated parts of this from a developer’s terminal. Marco Ieni started release-plz in December 2021, in a repository under his own GitHub account, to do it in CI through a release pull request, as Google’s release-please does for other languages. He published it to crates.io on February 1, 2022.",
+      "He kept two differences from release-please on purpose. Many Rust projects publish to crates.io without ever creating git tags, so release-plz takes the last released version from the registry when no tag exists. And it opens a release pull request for any change to a package, including dependency updates in `Cargo.lock`, instead of requiring Conventional Commits. Its other distinguishing feature is cargo-semver-checks: the release pull request says whether the library’s public API changed incompatibly, and if so proposes a major release.",
+      "The repository later moved to a release-plz GitHub organization. The project now has a documentation site, a GitHub Action, a GitLab CI component and Gitea support, and is sponsored by Encore. It releases very often: 0.3.0 came out in April 2023 and was followed by more than 170 patch releases, and 0.4.0 was released on October 23, 2026."
+    ],
+    "choices": [
+      { "choice": "Read state from the cargo registry, not only git tags", "why": "Release-please treats a package as released only when its tag exists, but many Rust projects just run `cargo publish`. Comparing with the registry makes release-plz work with either habit." },
+      { "choice": "Don’t require Conventional Commits", "why": "Every change to a package, including a dependency bump, can matter to its users, so release-plz proposes a release anyway and falls back to a patch bump when commit messages carry no type." },
+      { "choice": "Run cargo-semver-checks before proposing a version", "why": "A breaking API change released as a patch breaks users’ builds on their next `cargo update`. Checking first lets the maintainer revert the change, or merge a release pull request that already bumps the major version." },
+      { "choice": "Focus on CI rather than the terminal", "why": "The other Rust release tools are command-line tools. A pull request gives reviewers a place to see and edit the next versions and changelog before anything is published." }
+    ],
+    "timeline": [
+      { "year": "2021", "text": "Marco Ieni creates the repository (December 19)" },
+      { "year": "2022", "text": "First published to crates.io (February 1)" },
+      { "year": "2023", "text": "0.3.0 (April 16); Marco Ieni presents it at RustLab 23" },
+      { "year": "2024", "text": "Rustacean Station episode with its creator (April 12)" },
+      { "year": "2026", "text": "0.4.0 released (October 23) after 0.3.174" }
+    ],
+    "sources": [
+      { "label": "crates.io: release-plz (first published Feb 1, 2022; version dates; MIT OR Apache-2.0)", "url": "https://crates.io/crates/release-plz" },
+      { "label": "release-plz docs: Why yet another release tool (registry versions, no conventional commits needed, other Rust tools)", "url": "https://release-plz.dev/docs/why" },
+      { "label": "GitHub: MarcoIeni/release-plz, which now redirects to release-plz/release-plz (repository created Dec 19, 2021)", "url": "https://github.com/MarcoIeni/release-plz" },
+      { "label": "Rustacean Station: release-plz with Marco Ieni, creator of release-plz (Apr 12, 2024)", "url": "https://rustacean-station.org/episode/marco-ieni/" },
+      { "label": "release-plz on GitHub: README (RustLab 23 talk, sponsors, license)", "url": "https://github.com/release-plz/release-plz" },
+      { "label": "release-plz on GitHub: releases (v0.4.0, Oct 23, 2026)", "url": "https://github.com/release-plz/release-plz/releases" }
+    ]
+  },
+  "sources": [
+    { "label": "release-plz docs: Introduction (release PR flow, features, supported forges)", "url": "https://release-plz.dev/docs" },
+    { "label": "release-plz docs: Why yet another release tool (comparison with release-please and Rust tools)", "url": "https://release-plz.dev/docs/why" },
+    { "label": "release-plz docs: CLI usage (commands)", "url": "https://release-plz.dev/docs/usage" },
+    { "label": "release-plz docs: update (registry comparison, version bump, semver check)", "url": "https://release-plz.dev/docs/usage/update" },
+    { "label": "release-plz docs: release-pr (PR updates, Gitea)", "url": "https://release-plz.dev/docs/usage/release-pr" },
+    { "label": "release-plz docs: release (tags, cargo publish, forge releases)", "url": "https://release-plz.dev/docs/usage/release" },
+    { "label": "release-plz docs: Semver check (cargo-semver-checks, major bump)", "url": "https://release-plz.dev/docs/semver-check" },
+    { "label": "release-plz docs: Changelog (git-cliff as a library)", "url": "https://release-plz.dev/docs/changelog" },
+    { "label": "release-plz docs: FAQ (next_version crate, “Other” section, publish = false)", "url": "https://release-plz.dev/docs/faq" },
+    { "label": "next_version crate docs: version bump rules, 0.x and non-conventional commits", "url": "https://docs.rs/next_version/latest/next_version/" },
+    { "label": "release-plz docs: GitHub Action quickstart (workflow, trusted publishing, new crates)", "url": "https://release-plz.dev/docs/github/quickstart" },
+    { "label": "release-plz docs: GitHub token (default token doesn’t trigger workflows)", "url": "https://release-plz.dev/docs/github/token" },
+    { "label": "release-plz docs: GitLab CI (component)", "url": "https://release-plz.dev/docs/gitlab" },
+    { "label": "crates.io: release-plz (latest version, license)", "url": "https://crates.io/crates/release-plz" }
+  ],
+  "checked": "2026-10-24"
+}

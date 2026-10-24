@@ -1,0 +1,104 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Renode",
+  "concepts": ["emulators"],
+  "uses": ["testing"],
+  "provider": "oss",
+  "vendor": "Antmicro",
+  "license": "MIT (its CPU translation library, tlib, is derived from QEMU and is LGPL 2.1)",
+  "website": "https://antmicro.com/platforms/renode/",
+  "repo": "https://github.com/renode/renode",
+  "summary": "Antmicro’s simulator for embedded hardware: it runs unmodified firmware on virtual boards, CPUs, peripherals and the wired or wireless links between them, so firmware can be tested in CI without devices.",
+  "intro": [
+    "Renode is a hardware emulator, not a cloud API emulator: what it fakes is the board your firmware runs on. A platform is described in a text file (`.repl`) that places a CPU, memory and peripheral models such as UARTs, timers, GPIO, I2C sensors and radios at their bus addresses. You load the same ELF file you would flash, start the machine, and the firmware boots: Zephyr, Contiki, U-Boot or Linux, on Arm Cortex-M, -R and -A, RISC-V, x86, SPARC, POWER, Xtensa or MSP430X. Instructions are translated by tlib, a library derived from QEMU’s code, and the peripherals are models in Renode’s .NET codebase. Antmicro lists more than 1,200 supported boards and 800 peripheral models.",
+    "It is built for more than one device. Several machines can run in one emulation, joined by simulated wired or wireless links, and a virtual clock keeps them in step: time advances in quanta, and between quanta the nodes exchange data, so a mesh of Bluetooth LE or Thread devices behaves the same on every run. You drive it from the Monitor, an interactive console, or from `.resc` scripts, and you can attach GDB to any CPU. For tests, Renode ships a Robot Framework keyword library: `renode-test` starts a headless instance, runs `.robot` files that load firmware, wait for lines on a UART or press virtual buttons, and writes reports for CI. A GitHub Action, Docker images and portable packages make it easy to run on CI runners.",
+    "Renode is MIT-licensed and needs .NET 6 or newer; portable packages for Linux, macOS and Windows bundle the runtime. It can also co-simulate hardware still under design, by connecting HDL models in Verilator, Questa or VCS, or SystemC models, to the emulated system. Antmicro develops it and sells modelling work and support around it. The latest release is 1.17.0, from September 2026."
+  ],
+  "strengths": [
+    "Runs the same binaries you flash to the device, so tests exercise real drivers and the real OS rather than a host-compiled build",
+    "Multi-node systems on one virtual clock: networked and wireless devices can be tested together, with the same timing on every run",
+    "Made for CI: `renode-test` with Robot Framework, a GitHub Action, Docker images and snapshots of failed tests",
+    "Models are text and C#: a new board is often a `.repl` file that reuses existing CPUs and peripherals"
+  ],
+  "limits": [
+    "A functional simulator, not a cycle-accurate one: it shows what the firmware does, not exact timing or power use",
+    "Peripheral support varies by chip; the docs warn that your board may need its description or models extended, which Antmicro sells as a service",
+    "Needs the .NET runtime, and the Python-based test tooling needs Cygwin on Windows",
+    "It emulates hardware, not cloud services: it won’t stand in for AWS or Azure APIs the way cloud emulators do"
+  ],
+  "worksWith": [
+    { "id": "qemu", "how": "derives its CPU translator from" },
+    { "id": "github-actions", "how": "runs Robot test suites in CI on" },
+    { "id": "gitlab", "how": "runs firmware tests in the CI of" },
+    { "id": "docker", "how": "ships prebuilt images for" }
+  ],
+  "snippet": {
+    "lang": "text",
+    "title": "zephyr_shell.robot: boot Zephyr on a virtual nRF52840 and talk to its shell",
+    "source": [
+      "*** Settings ***",
+      "Suite Setup     Setup",
+      "Suite Teardown  Teardown",
+      "Test Teardown   Test Teardown",
+      "Resource        ${RENODEKEYWORDS}",
+      "",
+      "*** Test Cases ***",
+      "Zephyr Shell Should Answer On UART",
+      "    Execute Command           mach create",
+      "    Execute Command           machine LoadPlatformDescription @platforms/cpus/nrf52840.repl",
+      "    Execute Command           sysbus LoadELF @https://dl.antmicro.com/projects/renode/renode-nrf52840-zephyr_shell_module.elf-gf8d05cf-s_1310072-c00fbffd6b65c6238877c4fe52e8228c2a38bf1f",
+      "    Create Terminal Tester    sysbus.uart0",
+      "    Start Emulation",
+      "    Wait For Prompt On Uart   uart:~$",
+      "    Write Line To Uart        demo ping",
+      "    Wait For Line On Uart     pong",
+      "",
+      "# $ renode-test zephyr_shell.robot     (writes log.html, report.html, robot_output.xml)"
+    ]
+  },
+  "history": {
+    "story": [
+      "Antmicro, an embedded-systems company, kept seeing the same problems in IoT projects: development setups that were hard to reproduce across a team, “lack of repeatability, obscurity of the execution environment”, and debugging that got much harder once several cores or devices were involved. It built Renode as an internal tool to design and test such systems, emulating whole SoCs so unmodified binaries could run on virtual devices instead of flashed boards.",
+      "On 17 August 2017 Antmicro released Renode as open source, presenting it as a framework for building, debugging and testing software for multi-node device systems. It was already used with the Zephyr Project for a CI environment that tested Zephyr’s networking stack, and integrated with Robot Framework, Jenkins and GitLab CI. Renode 1.1 added Windows in November 2017, alongside Linux and macOS packages.",
+      "Support kept growing. Renode 1.14 in September 2023 brought ARMv8-A and Cortex-R52 support plus co-simulation with HDL simulators such as Verilator and Questa. Antmicro also runs continuously updated dashboards that test Zephyr and U-Boot on its supported boards in Renode, and worked with Silicon Labs on 2.4 GHz radio simulation for Bluetooth LE, Zigbee, Thread and Matter meshes. Version 1.17.0 shipped in September 2026."
+    ],
+    "choices": [
+      { "choice": "Emulate whole SoCs and boards, not just CPUs", "why": "Firmware talks to timers, UARTs, sensors and radios. Without models of them, the same binary that ships on the device can’t run, and tests would need special builds." },
+      { "choice": "Several machines on one deterministic virtual clock", "why": "Bugs in IoT systems often appear only when devices talk to each other. Synchronising nodes in time quanta makes multi-node runs repeatable, which real radios on a desk are not." },
+      { "choice": "Robot Framework as the test interface", "why": "Hardware tests mostly read like “wait for this line, press this button, expect that reply”. A keyword-driven framework lets those tests run unattended in CI and produce readable reports." },
+      { "choice": "Reuse QEMU’s translation code for CPUs", "why": "Instruction translation for many architectures already existed in QEMU’s code. tlib is based on it, so Renode’s own work goes into peripherals, timing across nodes and testing." }
+    ],
+    "timeline": [
+      { "year": "2017", "text": "Released as open source by Antmicro in August; Windows support in 1.1 in November" },
+      { "year": "2023", "text": "Renode 1.14 adds ARMv8-A, Cortex-R52 and HDL co-simulation" },
+      { "year": "2025", "text": "Renode 1.16.0 in August" },
+      { "year": "2026", "text": "Renode 1.17.0 in September" }
+    ],
+    "sources": [
+      { "label": "Antmicro press release: Renode, an open source framework for scalable development of complex IoT systems (Aug 2017)", "url": "https://antmicro.com/blog/2017/08/renode-press-release" },
+      { "label": "Antmicro blog: Renode 1.1 released (Nov 2017)", "url": "https://antmicro.com/blog/2017/11/renode-1-1" },
+      { "label": "Antmicro blog: Renode 1.14 with ARMv8 support and improved co-simulation (Sep 2023)", "url": "https://antmicro.com/blog/2023/09/renode-1-14-release" },
+      { "label": "Antmicro: Renode platform page (dashboards, Silicon Labs wireless, co-simulation)", "url": "https://antmicro.com/platforms/renode/" },
+      { "label": "GitHub: Renode v1.16.0 release (Aug 2025)", "url": "https://github.com/renode/renode/releases/tag/v1.16.0" },
+      { "label": "GitHub: Renode v1.17.0 release (Sep 2026)", "url": "https://github.com/renode/renode/releases/tag/v1.17.0" }
+    ]
+  },
+  "sources": [
+    { "label": "Renode on GitHub: README (architectures, MIT licence, .NET 6, packages, Docker)", "url": "https://github.com/renode/renode" },
+    { "label": "Antmicro: Renode platform page (boards, peripherals, co-simulation, support)", "url": "https://antmicro.com/platforms/renode/" },
+    { "label": "Renode docs: Using Renode (Monitor, .resc scripts)", "url": "https://renode.readthedocs.io/en/latest/introduction/using.html" },
+    { "label": "Renode docs: Describing platforms (.repl files)", "url": "https://renode.readthedocs.io/en/latest/basic/describing_platforms.html" },
+    { "label": "Renode docs: Time framework (virtual time, quanta, synchronisation)", "url": "https://renode.readthedocs.io/en/latest/advanced/time_framework.html" },
+    { "label": "Renode docs: Testing with Renode (Robot Framework, renode-test, CI mode)", "url": "https://renode.readthedocs.io/en/latest/introduction/testing.html" },
+    { "label": "Renode docs: Supported boards (models may need extending)", "url": "https://renode.readthedocs.io/en/latest/introduction/supported-boards.html" },
+    { "label": "Renode on GitHub: nRF52840 platform tests (Zephyr shell over UART)", "url": "https://github.com/renode/renode/blob/master/tests/platforms/NRF52840.robot" },
+    { "label": "Renode on GitHub: nrf52840.resc demo script", "url": "https://github.com/renode/renode/blob/master/scripts/single-node/nrf52840.resc" },
+    { "label": "Renode on GitHub: stm32f4_discovery.resc (runs Contiki)", "url": "https://github.com/renode/renode/blob/master/scripts/single-node/stm32f4_discovery.resc" },
+    { "label": "Antmicro tlib: LICENSE (based on libqemu, LGPL)", "url": "https://github.com/antmicro/tlib/blob/master/LICENSE" },
+    { "label": "Antmicro blog: RISC-V co-design with Renode and TBM (functional, not cycle-accurate)", "url": "https://antmicro.com/blog/2023/07/risc-v-co-design-using-trace-based-simulation-with-renode-and-tbm/" },
+    { "label": "GitHub: antmicro/renode-test-action", "url": "https://github.com/antmicro/renode-test-action" },
+    { "label": "Renode on GitHub: LICENSE (MIT)", "url": "https://github.com/renode/renode/blob/master/LICENSE" },
+    { "label": "GitHub: Renode v1.17.0 release (Sep 2026)", "url": "https://github.com/renode/renode/releases/tag/v1.17.0" }
+  ],
+  "checked": "2026-10-24"
+}

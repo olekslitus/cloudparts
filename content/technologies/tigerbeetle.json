@@ -1,0 +1,94 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "TigerBeetle",
+  "concepts": ["nosql"],
+  "provider": "oss",
+  "vendor": "TigerBeetle, Inc.",
+  "license": "Apache 2.0",
+  "website": "https://tigerbeetle.com/",
+  "repo": "https://github.com/tigerbeetle/tigerbeetle",
+  "summary": "A replicated database with one fixed schema, double-entry accounts and transfers, built in Zig to record money movements at high rates with strict serializability.",
+  "intro": [
+    "TigerBeetle doesn’t store arbitrary tables. It has two kinds of record: accounts, grouped into ledgers such as a currency, and transfers, each of which debits one account and credits another on the same ledger by an amount. Accounts keep running totals of posted and pending debits and credits, from which the application computes balances, and can be told never to let debits exceed credits. Both records are immutable once created, fixed at 128 bytes, and carry a `code` for the reason and three indexed `user_data` fields for the application’s own IDs. Transfers can be linked so a group succeeds or fails together, as in a currency exchange, and two-phase transfers reserve an amount as pending first, then post all or part of it, void it, or let it time out.",
+    "It is built for the write-heavy, contended side of transaction processing, where a few accounts, such as a bank’s settlement account, take part in most transfers and row locks in a general-purpose database queue up. Requests always arrive in batches of up to 8,190 events, which a single leader applies one after another on one core, with no locks; the cost of replication is paid once per batch. Memory is allocated once at startup, I/O goes through Linux `io_uring`, and data lives in a forest of LSM trees. The vendor’s guidance is to keep a general-purpose database such as PostgreSQL for the slower-changing data, and put the money movements in TigerBeetle.",
+    "A cluster replicates with Viewstamped Replication and can be spread across three clouds, two replicas in each, so it survives losing a whole provider. Every piece of data is checksummed and hash-chained, so a replica detects a corrupted sector and repairs it from the others. The code is tested by the VOPR, a deterministic simulator that runs the real cluster under network, disk and process faults. A Jepsen analysis in 2025 found it met its strict serializability claim from 0.16.26 onward, after fixes to several crashes and two safety bugs."
+  ],
+  "strengths": [
+    "Debits and credits are the database’s own primitives, so balances can’t drift and every change is an immutable transfer",
+    "High throughput on hot accounts: batches of up to 8,190 transfers applied without row locks",
+    "Strict serializability with automatic failover, checked by Jepsen and by continuous simulation testing",
+    "Built to survive disk corruption and the loss of a whole cloud provider"
+  ],
+  "limits": [
+    "Only accounts and transfers: everything else, such as customer details, needs a second database",
+    "Records are immutable, so corrections are new transfers, and changing a ledger’s scale means creating a new ledger",
+    "Throughput comes from one leader on one core; more replicas add safety, not speed",
+    "Requests are retried forever by default, which Jepsen flagged as making errors hard to tell apart from slowness"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "handles money movements alongside" },
+    { "id": "zig", "how": "is written in" }
+  ],
+  "alternatives": ["postgresql", "foundationdb", "cockroachdb"],
+  "goodFor": [
+    { "id": "serializable-transactions", "why": "Linked transfers succeed or fail together, and the cluster is strictly serializable, as Jepsen confirmed from 0.16.26 onward." },
+    { "id": "heavy-writes", "why": "Transfers arrive in batches of up to 8,190, applied on one core without row locks, so hot accounts don’t queue on locks." }
+  ],
+  "specs": {
+    "data-model": "Fixed schema: accounts and transfers, 128 bytes each, immutable",
+    "secondary-indexes": "Three indexed `user_data` fields per record",
+    "transactions": "Batches of up to 8,190 events; linked events succeed or fail together",
+    "consistency": "Strict serializable",
+    "scaling": "One leader on one core; more replicas add safety, not speed",
+    "replication": "Viewstamped Replication with automatic failover",
+    "multi-region": "Can span three clouds with two replicas in each",
+    "storage-engine": "A forest of LSM trees, checksummed and hash-chained",
+    "written-in": "Zig"
+  },
+  "snippet": {
+    "lang": "text",
+    "title": "The TigerBeetle REPL: two accounts on ledger 700 and a transfer between them",
+    "source": [
+      "create_accounts id=1 code=10 ledger=700, id=2 code=10 ledger=700;",
+      "create_transfers id=1 debit_account_id=1 credit_account_id=2 amount=10 ledger=700 code=10;",
+      "lookup_accounts id=1, id=2;",
+      "# account 1: debits_posted=10   account 2: credits_posted=10"
+    ]
+  },
+  "history": {
+    "story": [
+      "In 2020 Joran Dirk Greef, consulting for Coil, studied the safety and performance of Mojaloop, an open-source payments switch, with Adrian Hope-Bailie and Donovan Changfoot. They found many ad hoc ledgers built on general-purpose databases that topped out around 2,000 transactions a second. TigerBeetle began in July 2020 as a drop-in open-source database to power such a switch; Coil released it under Apache 2.0, and the first prototype reached about 200,000 transactions a second.",
+      "The team wrote it in Zig, then a young language, for control over memory allocation and tight latency bounds, and built it around Viewstamped Replication and deterministic simulation testing from the start. Coil spun TigerBeetle out as a company, which raised a $6.4 million seed round led by Amplify Partners in January 2023.",
+      "Jepsen tested versions 0.16.11 to 0.16.30 in 2025 and found it met its strict serializability claim once its bugs were fixed. In March 2026 the team reported processing a trillion transactions in a test cluster that kept its lower LSM levels in object storage."
+    ],
+    "choices": [
+      { "choice": "Debit-credit as the schema", "why": "Double-entry bookkeeping is centuries old and fits every money movement. Making it the only data model lets the database enforce balance rules and pack each transfer into 128 bytes." },
+      { "choice": "Batches on one core instead of row locks", "why": "Payment workloads hammer a few hot accounts, where locking serialises everything anyway. Applying large batches in order on one thread removes lock contention and pays for replication once per batch." },
+      { "choice": "Viewstamped Replication", "why": "Greef argues VSR, published before Paxos and revised before Raft, elects the next primary in a fixed round-robin order and copes better than Raft when the most up-to-date replica has a faulty disk." },
+      { "choice": "Static allocation and deterministic simulation", "why": "Allocating all memory at startup rules out out-of-memory errors and fragmentation, and a deterministic codebase can be replayed exactly in the VOPR simulator, which injects faults at many times real speed." }
+    ],
+    "timeline": [
+      { "year": "2020", "text": "TigerBeetle starts in July at Coil, for the Mojaloop payments switch" },
+      { "year": "2023", "text": "Spun out of Coil; $6.4 million seed led by Amplify Partners" },
+      { "year": "2025", "text": "Jepsen analysis of 0.16.11 to 0.16.30" },
+      { "year": "2026", "text": "A trillion transactions processed in a scale test" }
+    ],
+    "sources": [
+      { "label": "TigerBeetle blog: TigerBeetle raises $6.4M (Jan 2023; Coil, Mojaloop, Zig, spin-out)", "url": "https://tigerbeetle.com/blog/2023-01-30-series-seed-announcement" },
+      { "label": "Joran Dirk Greef, InfoQ: Redesigning OLTP for a new order of magnitude (QCon SF, published Mar 2024)", "url": "https://www.infoq.com/presentations/redesign-oltp/" },
+      { "label": "Jepsen: TigerBeetle 0.16.11 (Jun 2025)", "url": "https://jepsen.io/analyses/tigerbeetle-0.16.11" },
+      { "label": "TigerBeetle blog: A trillion transactions (Mar 2026)", "url": "https://tigerbeetle.com/blog/2026-03-19-a-trillion-transactions" }
+    ]
+  },
+  "sources": [
+    { "label": "TigerBeetle docs: OLTP (OLGP databases, hot accounts, no row locks)", "url": "https://docs.tigerbeetle.com/concepts/oltp/" },
+    { "label": "TigerBeetle docs: Performance (batches of 8,190, single core, io_uring, static allocation, 128-byte transfers)", "url": "https://docs.tigerbeetle.com/concepts/performance/" },
+    { "label": "TigerBeetle docs: Safety (Viewstamped Replication, six replicas across three clouds, checksums, VOPR)", "url": "https://docs.tigerbeetle.com/concepts/safety/" },
+    { "label": "TigerBeetle docs: Data modeling (ledgers, codes, user_data, immutability, linked events)", "url": "https://docs.tigerbeetle.com/coding/data-modeling/" },
+    { "label": "TigerBeetle docs: Two-phase transfers (pending, post, void, timeout)", "url": "https://docs.tigerbeetle.com/coding/two-phase-transfers/" },
+    { "label": "TigerBeetle docs: Account reference (balance fields, debits_must_not_exceed_credits)", "url": "https://docs.tigerbeetle.com/reference/account/" },
+    { "label": "tigerbeetle/tigerbeetle README (quickstart REPL)", "url": "https://github.com/tigerbeetle/tigerbeetle" },
+    { "label": "Jepsen: TigerBeetle 0.16.11 (findings and fixes)", "url": "https://jepsen.io/analyses/tigerbeetle-0.16.11" }
+  ],
+  "checked": "2026-10-24"
+}

@@ -4,7 +4,7 @@
 import { loadContent } from '@/content/load';
 import { findProblems } from '@/content/integrity';
 import {
-  diagram, RELATIONS, type Architecture, type Benchmark, type Category, type Part, type Comparison, type Concept, type Diagram, type Foundation, type Kind, type Resource, type Technology,
+  diagram, RELATIONS, type Architecture, type Benchmark, type Category, type Part, type Comparison, type Concept, type Diagram, type Foundation, type Kind, type Resource, type Spec, type Technology, type Workload,
 } from '@/content/schema';
 
 export interface CatalogConcept extends Concept {
@@ -53,6 +53,11 @@ export interface CatalogResource extends Resource {
 export interface CatalogBenchmark extends Benchmark {
   id: string;
 }
+export interface CatalogWorkload extends Workload {
+  id: string;
+  /** Technologies that list it in "goodFor", in catalog order, with their reason. */
+  techs: { tech: CatalogTech; why: string }[];
+}
 export interface CatalogPart extends Part {
   /** Its topics, in order. */
   categories: Category[];
@@ -89,11 +94,24 @@ export interface Catalog {
   resources: CatalogResource[];
   /** By name. */
   benchmarks: CatalogBenchmark[];
+  /** By name. */
+  workloads: CatalogWorkload[];
+  /** Rows of the compare tool, in display order. */
+  specs: Spec[];
   edges: Edge[];
   systemMap: Diagram;
   concept: (id: string) => CatalogConcept;
   tech: (id: string) => CatalogTech;
   kind: (id: string) => CatalogKind;
+  workload: (id: string) => CatalogWorkload;
+  /** Workloads that concern this concept. */
+  workloadsFor: (conceptId: string) => CatalogWorkload[];
+  /**
+   * What to look at instead, best first: replacements for an archived technology, the ones it names in "alternatives",
+   * the ones that name it, then its siblings (a child's family, or its concept's group, kind or list), the ones that share
+   * the most "goodFor" workloads first.
+   */
+  alternativesOf: (techId: string) => CatalogTech[];
   /** The concepts directly under this one, in order. */
   subconcepts: (id: string) => CatalogConcept[];
   /** The concepts this one sits under, outermost first. */
@@ -133,7 +151,7 @@ const uniq = <T>(xs: T[]) => [...new Set(xs)];
 function load(): Catalog {
   const {
     parts: partEntries, categories: cats, concepts: conceptEntries, technologies: techEntries, architectures: archEntries,
-    comparisons: cmpEntries, foundations: fdnEntries, resources: resEntries, benchmarks: benchEntries, systemMap: systemMapJson,
+    comparisons: cmpEntries, foundations: fdnEntries, resources: resEntries, benchmarks: benchEntries, workloads: wlEntries, specs, systemMap: systemMapJson,
   } = loadContent();
   const partList = [...partEntries].sort((a, b) => a.order - b.order);
   const partRank = new Map(partList.map((p, i) => [p.id, i]));
@@ -142,7 +160,7 @@ function load(): Catalog {
   const systemMap = diagram.parse(systemMapJson);
 
   const problems = findProblems({
-    parts: partList, categories, concepts: conceptEntries, technologies: techEntries, architectures: archEntries, comparisons: cmpEntries, foundations: fdnEntries, resources: resEntries, benchmarks: benchEntries, systemMap,
+    parts: partList, categories, concepts: conceptEntries, technologies: techEntries, architectures: archEntries, comparisons: cmpEntries, foundations: fdnEntries, resources: resEntries, benchmarks: benchEntries, workloads: wlEntries, specs, systemMap,
   });
   if (problems.length) {
     throw new Error(`Content has ${problems.length} problem(s):\n  - ${problems.join('\n  - ')}`);
@@ -218,6 +236,37 @@ function load(): Catalog {
     .map(b => ({ ...b.data, id: b.id }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
+  const workloads: CatalogWorkload[] = wlEntries
+    .map(w => ({
+      ...w.data,
+      id: w.id,
+      techs: technologies.flatMap(t => t.goodFor.filter(g => g.id === w.id).map(g => ({ tech: t, why: g.why }))),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const workloadMap = new Map(workloads.map(w => [w.id, w]));
+
+  const alternativesOf = (id: string): CatalogTech[] => {
+    const t = techMap.get(id)!;
+    const primary = conceptMap.get(t.concepts[0])!;
+    const group = primary.groups.find(g => g.technologies.includes(t.id));
+    const grouped = (group?.technologies ?? []).filter(x => x !== t.id).map(x => techMap.get(x)!).filter(x => !x.parent);
+    const parent = t.parent && techMap.get(t.parent.id);
+    // siblings for a child (same relation first); otherwise other top-level technologies of the same concept and
+    // kind, narrowed to the concept's group when it sorts them by role (an embedded database next to embedded ones)
+    const peers = parent
+      ? technologies.filter(x => x.parent?.id === parent.id && x.id !== t.id).sort((a, b) => Number(a.parent!.as !== t.parent!.as) - Number(b.parent!.as !== t.parent!.as))
+      : (grouped.length ? grouped : technologies.filter(x => x.concepts[0] === t.concepts[0] && x.kind === t.kind && !x.parent && x.id !== t.id));
+    const mine = new Set(t.goodFor.map(g => g.id));
+    const shared = (x: CatalogTech) => x.goodFor.filter(g => mine.has(g.id)).length;
+    const ranked = parent || !mine.size ? peers : [...peers].sort((a, b) => shared(b) - shared(a));
+    const named = [
+      ...(t.archived?.alternatives ?? []),
+      ...t.alternatives,
+      ...(parent ? [] : technologies.filter(x => x.alternatives.includes(t.id) && !x.archived).map(x => x.id)),
+    ].map(x => techMap.get(x)!);
+    return uniq([...named, ...ranked]).filter(x => x.id !== t.id);
+  };
+
   const edges = technologies.flatMap(t => t.worksWith.map(w => ({ from: t.id, to: w.id, how: w.how })));
   const catMap = new Map(categories.map(c => [c.id, c]));
   const partMap = new Map(parts.map(p => [p.id, p]));
@@ -252,11 +301,16 @@ function load(): Catalog {
     foundations,
     resources,
     benchmarks,
+    workloads,
+    specs,
     edges,
     systemMap,
     concept: id => conceptMap.get(id)!,
     tech: id => techMap.get(id)!,
     kind: id => kindMap.get(id)!,
+    workload: id => workloadMap.get(id)!,
+    workloadsFor: id => workloads.filter(w => w.concepts.includes(id)),
+    alternativesOf,
     subconcepts: id => concepts.filter(p => p.parent === id),
     ancestors: id => {
       const up: CatalogConcept[] = [];

@@ -1,0 +1,101 @@
+{
+  "$schema": "../../.schemas/architectures.schema.json",
+  "title": "Self-hosted observability on the LGTM stack",
+  "order": 110,
+  "summary": "Loki for logs, Grafana for dashboards, Tempo for traces and Mimir for metrics, fed by one OpenTelemetry pipeline and storing everything in object storage.",
+  "intro": "Grafana Labs calls its four open-source projects the LGTM stack, after the code-review shorthand “looks good to me”: Loki for logs, Grafana to look at them, Tempo for traces and Mimir for metrics. The three backends share one design: a stateless distributor takes writes, recent data is kept close at hand for queries, and everything older is written as files to an object storage bucket, which is the only place data is kept for the long term. Services are instrumented once with OpenTelemetry, and a collector, either the OpenTelemetry Collector or Grafana Alloy, sends each signal to its store. Grafana then queries each store in its own language, PromQL, LogQL and TraceQL, and links them through shared labels and trace IDs. It suits teams that want metrics, logs and traces in one place but would rather run the backends themselves and pay mainly for object storage.",
+  "fits": "A platform team running observability for tens to hundreds of services, usually on Kubernetes",
+  "diagram": {
+    "caption": "Services emit logs, metrics and spans (three colours) to a collector, which routes each signal to Loki, Mimir or Tempo; all three write their data to object storage. Engineers’ dashboards and searches go through Grafana, which sends LogQL, PromQL or TraceQL to the matching store, and the answers come back from recent data and from the bucket.",
+    "w": 900,
+    "h": 330,
+    "zones": [
+      { "x": 14, "y": 14, "w": 330, "h": 150, "label": "Collect" },
+      { "x": 360, "y": 14, "w": 526, "h": 300, "label": "Store: each backend writes to object storage" }
+    ],
+    "nodes": [
+      {
+        "id": "apps", "x": 90, "y": 95, "label": "Services", "sub": "OpenTelemetry SDKs",
+        "emit": { "every": 330, "jitter": 0.35, "types": ["log", "metric", "trace"], "colorByType": { "log": 0, "metric": 1, "trace": 2 } },
+        "out": ["collector"]
+      },
+      {
+        "id": "collector", "x": 255, "y": 95, "label": "Collector", "sub": "Alloy or OTel Collector", "tech": "opentelemetry",
+        "route": "type", "rules": { "log": ["loki"], "metric": ["mimir"], "trace": ["tempo"] },
+        "out": ["loki", "mimir", "tempo"]
+      },
+      { "id": "loki", "x": 500, "y": 70, "label": "Grafana Loki", "sub": "labels indexed · chunks", "tech": "loki", "out": ["bucket"] },
+      { "id": "mimir", "x": 500, "y": 160, "label": "Grafana Mimir", "sub": "Kafka · 2-hour TSDB blocks", "tech": "mimir", "out": ["bucket"] },
+      { "id": "tempo", "x": 500, "y": 250, "label": "Grafana Tempo", "sub": "Kafka · Parquet blocks", "tech": "tempo", "out": ["bucket"] },
+      { "id": "bucket", "x": 760, "y": 160, "label": "Amazon S3", "sub": "chunks · blocks · indexes", "tech": "s3", "mode": "reply", "delay": 160 },
+      {
+        "id": "people", "x": 90, "y": 250, "label": "Engineers", "sub": "dashboards · alerts · search",
+        "emit": { "every": 1300, "jitter": 0.4, "req": true, "types": ["log", "metric", "trace"], "colorByType": { "log": 0, "metric": 1, "trace": 2 } },
+        "out": ["grafana"]
+      },
+      {
+        "id": "grafana", "x": 255, "y": 250, "label": "Grafana", "sub": "LogQL · PromQL · TraceQL", "tech": "grafana",
+        "route": "type", "rules": { "log": ["loki"], "metric": ["mimir"], "trace": ["tempo"] },
+        "out": ["loki", "mimir", "tempo"]
+      }
+    ]
+  },
+  "steps": [
+    {
+      "title": "Instrument once, collect in one place",
+      "text": "Services use OpenTelemetry SDKs and send OTLP to a collector: the OpenTelemetry Collector, or Grafana Alloy, Grafana Labs’ distribution of it with built-in Prometheus pipelines that also scrapes `/metrics` endpoints. The collector sends each signal to its backend: logs to Loki’s `/otlp` endpoint, metrics to Mimir’s `/otlp` endpoint or by Prometheus remote write, and spans to Tempo over OTLP.",
+      "nodes": ["apps", "collector"]
+    },
+    {
+      "title": "Loki indexes labels and stores log lines as chunks",
+      "text": "A few resource attributes, such as `service.name` and `k8s.namespace.name`, become Loki labels; other attributes are kept as structured metadata. The distributor hashes each stream to ingesters, which compress lines into chunks and flush them, with a small TSDB index of the labels, to the bucket. Searching a word means picking streams by label and scanning their chunks.",
+      "nodes": ["loki", "bucket"]
+    },
+    {
+      "title": "Mimir writes through Kafka and keeps Prometheus blocks",
+      "text": "In Mimir 3’s ingest storage architecture, distributors validate samples and shard series across Kafka partitions; a write is acknowledged once Kafka has replicated it. Each ingester consumes one partition into a per-tenant Prometheus TSDB, cuts a block every two hours and uploads it. The compactor merges and deduplicates blocks, and store-gateways serve them to queries.",
+      "nodes": ["mimir", "bucket"]
+    },
+    {
+      "title": "Tempo turns spans into Parquet blocks",
+      "text": "In Tempo 3’s microservices mode, distributors write spans, sharded by trace ID, to Kafka. Block-builders consume them into Apache Parquet blocks in the bucket, and live-stores serve the most recent spans. An optional metrics-generator derives rate, error and duration metrics and a service graph from the spans and remote-writes them to Mimir, so every traced service gets request-rate, error and latency metrics.",
+      "nodes": ["tempo", "bucket", "mimir"]
+    },
+    {
+      "title": "Grafana queries each store and links them",
+      "text": "Grafana has built-in Loki, Tempo and Prometheus data sources; Mimir is added as a Prometheus data source. A panel sends PromQL to Mimir, LogQL to Loki or TraceQL to Tempo, and each backend splits the query in its query frontend and reads recent data plus files from the bucket. Because all three use the same labels, Grafana can move from a latency spike to the traces and logs of the same service and time. Alert rules run in Grafana Alerting or in the Mimir and Loki rulers.",
+      "nodes": ["people", "grafana", "loki", "mimir", "tempo", "bucket"]
+    }
+  ],
+  "good": [
+    "Object storage holds all data at rest, so long retention costs bucket prices rather than replicated SSDs, and none of the three needs a separate database",
+    "One OpenTelemetry pipeline feeds all three stores, and shared labels such as `service.name` make jumping between metrics, traces and logs work without lookup tables",
+    "Each signal scales on its own: log volume, active series and span rate grow at different speeds, and each backend’s write and read paths scale separately",
+    "All four are open source (Grafana, Loki, Tempo and Mimir under AGPLv3) and are also sold as Grafana Cloud, so a team can move between self-hosted and hosted without changing queries or dashboards"
+  ],
+  "watch": [
+    "Three distributed databases to run, each with its own components, hash rings and caches; Mimir 3 and Tempo 3 also want a Kafka-compatible cluster for production, so this is a platform team’s job, not a side task",
+    "Labels are the index in both Loki and Mimir: a label with unbounded values (user ID, request ID, pod name in some setups) multiplies streams and series and the memory and cost behind them",
+    "Loki has no full-text index, so a broad search over days of logs scans a lot of chunks; teams used to Elasticsearch need to narrow by label first",
+    "AGPLv3 obliges anyone who modifies these projects and offers them over a network to publish the changes, and some companies forbid AGPL software outright",
+    "Correlation only works if the labels really match: the same service name and environment on logs, metrics and spans, and trace IDs written into log lines"
+  ],
+  "swaps": [
+    { "text": "One Kubernetes cluster and a few weeks of metrics? A single Prometheus server is simpler than Mimir; add Mimir when you need long retention, high availability or many clusters in one view.", "techs": ["prometheus", "mimir"] },
+    { "text": "Rather run one database than three? ClickStack keeps logs, metrics and traces in ClickHouse and queries them with SQL.", "techs": ["clickstack", "clickhouse"] },
+    { "text": "Need full-text search over logs, such as security investigations across every field? Elasticsearch or OpenSearch index every word, at a higher storage cost.", "techs": ["elasticsearch", "opensearch"] },
+    { "text": "On premises or another cloud? Point all three at MinIO, Google Cloud Storage or Azure Blob Storage instead of S3.", "techs": ["minio", "gcs", "azure-blob"] },
+    { "text": "Don’t want to run any of it? A hosted platform such as Datadog or Better Stack takes the same OpenTelemetry data.", "techs": ["datadog", "better-stack"] }
+  ],
+  "sources": [
+    { "label": "Grafana Labs blog: Open source at Grafana Labs in 2022 (the LGTM stack, “looks good to me”)", "url": "https://grafana.com/blog/2022/12/28/grafana-labs-open-source-projects-2022/" },
+    { "label": "Grafana Alloy docs: Introduction (OpenTelemetry Collector distribution with Prometheus pipelines; metrics, logs, traces, profiles)", "url": "https://grafana.com/docs/alloy/latest/introduction/" },
+    { "label": "Grafana Loki docs: Ingesting logs to Loki using OpenTelemetry Collector (/otlp, default labels, structured metadata)", "url": "https://grafana.com/docs/loki/latest/send-data/otel/" },
+    { "label": "Grafana Loki docs: Architecture (distributor, ingester, index and chunks in one object store)", "url": "https://grafana.com/docs/loki/latest/get-started/architecture/" },
+    { "label": "Grafana Mimir docs: Ingest storage architecture (Kafka partitions, ingesters, compactor)", "url": "https://grafana.com/docs/mimir/latest/get-started/about-grafana-mimir-architecture/about-ingest-storage-architecture/" },
+    { "label": "Grafana Mimir docs: Configure the OpenTelemetry Collector to write metrics into Mimir (native OTLP)", "url": "https://grafana.com/docs/mimir/latest/configure/configure-otel-collector/" },
+    { "label": "Grafana Tempo docs: Architecture (distributor, Kafka, block-builder, live-store, metrics-generator, Parquet)", "url": "https://grafana.com/docs/tempo/latest/introduction/architecture/" },
+    { "label": "Grafana docs: Data sources (built-in Prometheus, Loki and Tempo)", "url": "https://grafana.com/docs/grafana/latest/datasources/" },
+    { "label": "GitHub: grafana/docker-otel-lgtm (Collector, Prometheus, Tempo, Loki, Pyroscope and Grafana in one image, for development)", "url": "https://github.com/grafana/docker-otel-lgtm" }
+  ]
+}

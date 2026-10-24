@@ -1,0 +1,88 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "pg_ivm",
+  "concepts": ["ivm"],
+  "provider": "oss",
+  "vendor": "IVM Development Group (SRA OSS)",
+  "license": "PostgreSQL License",
+  "website": "https://github.com/sraoss/pg_ivm",
+  "repo": "https://github.com/sraoss/pg_ivm",
+  "summary": "A PostgreSQL extension that keeps materialized views up to date inside the same transaction that changes their base tables, by computing and applying only the changed rows instead of rerunning the query.",
+  "intro": [
+    "Plain PostgreSQL materialized views go stale: `REFRESH MATERIALIZED VIEW` reruns the whole query and replaces the contents. pg_ivm adds incrementally maintainable materialized views (IMMVs). You create one with `pgivm.create_immv('name', 'SELECT …')`; the extension creates a table, fills it, records the query and puts `AFTER` triggers on every base table. When a statement inserts, updates or deletes base rows, the triggers read the changed rows from transition tables, compute how the view’s result changes, and apply that to the IMMV before the transaction commits. This is immediate maintenance: a query after the change, in the same transaction, already sees the new view contents.",
+    "The algorithm counts. Each row of the view keeps a hidden `__ivm_count__` with the number of ways it was derived, so a delete only removes a view row when its count reaches zero, which is how `DISTINCT` and joins stay correct. Aggregates keep helper columns too: `avg` is maintained from a hidden sum and count. A view can use inner and outer joins (outer joins only on simple equality), `DISTINCT`, `count`, `sum`, `avg`, `min` and `max`, simple subqueries in `FROM`, `EXISTS` subqueries and simple CTEs. It can’t use window functions, `HAVING`, `ORDER BY`, `LIMIT`, `UNION` and other set operations, recursive CTEs, user-defined aggregates, or views, partitioned or foreign tables as base tables. An index on the IMMV is essential, since each change has to find the view rows it affects; pg_ivm creates a unique index automatically when it can derive a key. Version 1.17 (October 2026) supports PostgreSQL 13 to 19."
+  ],
+  "strengths": [
+    "Views are always current within the writing transaction, with no refresh job or separate streaming system",
+    "Updating one base row costs milliseconds instead of the seconds or minutes of a full `REFRESH MATERIALIZED VIEW` on a large join",
+    "Pure SQL inside PostgreSQL: IMMVs are ordinary tables that can be indexed and queried",
+    "Packaged in the PostgreSQL yum repository, and supports PostgreSQL 13 through 19"
+  ],
+  "limits": [
+    "Every write to a base table pays for maintaining its views, and concurrent writers to different base tables of one view are serialised by a lock on the view",
+    "A restricted SQL subset: no window functions, `HAVING`, `ORDER BY`/`LIMIT`, set operations, recursive CTEs or aggregates other than count, sum, avg, min and max",
+    "Bulk loads or changes to a large share of a table can cost more than a full refresh; the docs suggest turning maintenance off with `refresh_immv(…, false)` and refreshing afterwards",
+    "IMMVs on a logical-replication subscriber don’t update when the publisher changes base tables, and their metadata needs a separate dump script for `pg_dump` and `pg_upgrade`"
+  ],
+  "worksWith": [
+    { "id": "postgresql", "how": "adds always-fresh materialized views to" }
+  ],
+  "alternatives": ["feldera", "risingwave", "readyset"],
+  "specs": {
+    "query-language": "SQL subset: joins, `DISTINCT`, count, sum, avg, min, max, simple subqueries and CTEs",
+    "consistency": "Views updated inside the transaction that changes their base tables",
+    "deployment": "PostgreSQL extension (PostgreSQL 13 to 19)"
+  },
+  "snippet": {
+    "lang": "sql",
+    "title": "An incrementally maintained aggregate over a join (pgbench tables, from the pg_ivm README)",
+    "source": [
+      "CREATE EXTENSION pg_ivm;   -- and add pg_ivm to shared_preload_libraries",
+      "",
+      "SELECT pgivm.create_immv('immv_agg',",
+      "  'SELECT bid, count(*), sum(abalance), avg(abalance)",
+      "   FROM pgbench_accounts JOIN pgbench_branches USING (bid)",
+      "   GROUP BY bid');",
+      "-- NOTICE:  created index \"immv_agg_index\" on immv \"immv_agg\"",
+      "",
+      "-- the AFTER triggers update bid 42's row in the same transaction",
+      "UPDATE pgbench_accounts SET abalance = abalance + 1000",
+      "WHERE aid = 4112345 AND bid = 42;",
+      "",
+      "SELECT bid, count, sum, avg FROM immv_agg WHERE bid = 42;"
+    ]
+  },
+  "history": {
+    "story": [
+      "Incremental view maintenance was proposed for PostgreSQL itself at the PGCon 2013 developer meeting, and the first patch for core was submitted in 2019, using `AFTER` triggers with transition tables (available since PostgreSQL 10) and the counting algorithm. It was not committed. Since the code was public, users asked whether they could use IVM on the PostgreSQL versions they already ran.",
+      "So the IVM Development Group at SRA OSS, whose contributors include Yugo Nagata, Takuma Hoshiai and Tatsuo Ishii, packaged the work as an extension. pg_ivm 1.0 came out in 2022 for PostgreSQL 14, with selection, projection, joins and `DISTINCT`; aggregates followed in 1.1, subqueries in 1.2, CTEs in 1.5, `EXISTS` in 1.6 and outer joins in 1.13 (October 2025). A 2023 release fixed CVE-2023-22847, where IMMVs could expose rows hidden by row-level security. In 2026 releases added support for restoring IMMVs after `pg_dump` and `pg_upgrade`, and for PostgreSQL 19."
+    ],
+    "choices": [
+      { "choice": "Immediate maintenance in AFTER triggers", "why": "Updating the view in the same transaction as the base table keeps it always consistent with the data, with no change log or background job to build; the price is slower writes." },
+      { "choice": "The counting algorithm with hidden columns", "why": "Storing how many times each view row was derived, and the sums behind each average, lets deletes and updates be applied correctly without rescanning base tables." },
+      { "choice": "An extension instead of waiting for core", "why": "The core patch was large and slow to review; an extension let people use IVM on existing PostgreSQL versions while the core proposal continued." }
+    ],
+    "timeline": [
+      { "year": "2013", "text": "IVM proposed for PostgreSQL core at the PGCon developer meeting" },
+      { "year": "2019", "text": "First IVM patch for PostgreSQL core submitted" },
+      { "year": "2022", "text": "pg_ivm 1.0 for PostgreSQL 14; aggregates in 1.1" },
+      { "year": "2023", "text": "Security fix for row-level security (CVE-2023-22847); EXISTS subqueries" },
+      { "year": "2025", "text": "Outer join support in 1.13 (October)" },
+      { "year": "2026", "text": "Restore after pg_dump and pg_upgrade; PostgreSQL 19 support; 1.17 in October" }
+    ],
+    "sources": [
+      { "label": "PostgreSQL wiki: Incremental View Maintenance (PGCon 2013, first patch in 2019, transition tables, counting algorithm)", "url": "https://wiki.postgresql.org/wiki/Incremental_View_Maintenance" },
+      { "label": "PostgreSQL news: pg_ivm 1.0 released (IVM Development Group, 28 April 2022)", "url": "https://www.postgresql.org/about/news/pg_ivm-10-released-2443/" },
+      { "label": "GitHub: sraoss/pg_ivm releases (1.0 to 1.17; CVE-2023-22847 fix in 1.5.1)", "url": "https://github.com/sraoss/pg_ivm/releases" },
+      { "label": "GitHub: sraoss/pg_ivm README (developers, original authors)", "url": "https://github.com/sraoss/pg_ivm" }
+    ]
+  },
+  "sources": [
+    { "label": "GitHub: sraoss/pg_ivm README (IMMVs, triggers, supported views, restrictions, concurrency, pg_dump)", "url": "https://github.com/sraoss/pg_ivm" },
+    { "label": "GitHub: sraoss/pg_ivm LICENSE (PostgreSQL License)", "url": "https://github.com/sraoss/pg_ivm/blob/main/LICENSE" },
+    { "label": "GitHub: sraoss/pg_ivm releases (1.17, October 2026)", "url": "https://github.com/sraoss/pg_ivm/releases" },
+    { "label": "PostgreSQL docs: REFRESH MATERIALIZED VIEW (completely replaces the contents)", "url": "https://www.postgresql.org/docs/current/sql-refreshmaterializedview.html" },
+    { "label": "PostgreSQL wiki: Incremental View Maintenance", "url": "https://wiki.postgresql.org/wiki/Incremental_View_Maintenance" }
+  ],
+  "checked": "2026-10-24"
+}

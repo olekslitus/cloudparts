@@ -1,0 +1,105 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Grafana Tempo",
+  "concepts": ["traces"],
+  "uses": ["observability"],
+  "provider": "oss",
+  "vendor": "Grafana Labs",
+  "license": "AGPLv3 (Apache 2.0 until April 2021)",
+  "website": "https://grafana.com/oss/tempo/",
+  "repo": "https://github.com/grafana/tempo",
+  "summary": "A tracing backend that keeps every span as Parquet files in object storage, with no database to run, and finds traces by trace ID or with TraceQL.",
+  "intro": [
+    "Tempo stores traces and nothing else, and it stores them in a bucket. Spans arrive in OpenTelemetry (OTLP), Jaeger or Zipkin format, OTLP being the recommended one. A distributor checks them against per-tenant limits, the spans of each trace are grouped, and finished blocks are written to Amazon S3, Google Cloud Storage or Azure Blob Storage as Apache Parquet, a columnar format, so a query reads only the attributes it needs. Recent spans that are not yet in a block are served from memory. Because nothing but object storage is needed, Tempo can keep all traces instead of a small sample.",
+    "You can fetch a trace by its ID, which is how Grafana jumps to it from a log line or a metric exemplar, or search with TraceQL: `{ resource.service.name=\"frontend\" } >> { status = error }` finds traces in which a span of the frontend has a failing descendant. An optional metrics-generator turns spans into rate, error and duration metrics and service graphs and remote-writes them to Prometheus or Mimir. Tempo 3.0, released in May 2026, replaced the ingesters: in microservices mode the distributor now writes to a Kafka-compatible log, block-builders turn it into Parquet blocks, and live-stores answer queries for recent data. A single-process mode needs no Kafka."
+  ],
+  "strengths": [
+    "Only object storage to run and pay for, which makes keeping 100% of traces affordable compared with an Elasticsearch or Cassandra cluster",
+    "Accepts OTLP, Jaeger and Zipkin, so existing instrumentation can point at it without changes",
+    "TraceQL can search span attributes and the shape of a trace (parent, child, descendant), and TraceQL metrics, generally available in 3.0, compute rates and percentiles straight from spans",
+    "Fits the rest of the Grafana stack: trace IDs link to Loki logs, exemplars link from Mimir or Prometheus metrics, and the metrics-generator builds service graphs"
+  ],
+  "limits": [
+    "There is no index of span contents: searches scan Parquet columns over the time range, so wide searches over long ranges are slower than an ID lookup",
+    "The recommended production setup now needs a Kafka-compatible system between distributors and block-builders, one more stateful service to run",
+    "3.0 removed the ingester, the compactor, the `v2` block encoding and the OpenCensus receiver, so upgrading from 2.x is a migration, not a drop-in",
+    "AGPLv3 since April 2021; its docs warn that fetching extremely large traces, whose spans must all be collected into one result, can cause problems"
+  ],
+  "worksWith": [
+    { "id": "grafana", "how": "is queried with TraceQL from" },
+    { "id": "s3", "how": "stores Parquet trace blocks in" },
+    { "id": "gcs", "how": "can store Parquet trace blocks in" },
+    { "id": "azure-blob", "how": "can store Parquet trace blocks in" },
+    { "id": "kafka", "how": "buffers incoming spans in" },
+    { "id": "opentelemetry", "how": "receives spans over OTLP from" },
+    { "id": "prometheus", "how": "remote-writes span metrics to" }
+  ],
+  "alternatives": ["clickstack", "datadog", "icegate"],
+  "specs": {
+    "data-model": "Traces of spans with attributes",
+    "query-language": "TraceQL, and lookup by trace ID",
+    "wire-protocol": "OTLP (recommended), Jaeger and Zipkin",
+    "secondary-indexes": "No index of span contents; searches scan Parquet columns",
+    "storage-format": "Apache Parquet blocks in object storage",
+    "scaling": "Microservices: distributors write to a Kafka-compatible log, block-builders make blocks",
+    "deployment": "Self-hosted, single process or microservices"
+  },
+  "snippet": {
+    "lang": "text",
+    "title": "TraceQL: select spans in braces, then pipe",
+    "source": [
+      "# Traces where a frontend span has a failing descendant span",
+      "{ resource.service.name=\"frontend\" } >> { status = error }",
+      "",
+      "# Successful HTTP calls (&& must match within one span)",
+      "{ span.http.status_code >= 200 && span.http.status_code < 300 }",
+      "",
+      "# Traces that took longer than 5 seconds end to end",
+      "{ trace:duration > 5s }",
+      "",
+      "# Services with more than one error span in the same trace",
+      "{ status = error } | by(resource.service.name) | count() > 1"
+    ]
+  },
+  "history": {
+    "story": [
+      "In 2020 Grafana Labs traced its own services with a heavily sampled system, and finding the one trace you needed was hard. Keeping every trace meant running a large Elasticsearch or Cassandra cluster to index them. Joe Elliott’s team asked a different question: “Why pay to index your traces AND your logs AND your metrics?” Logs and metric exemplars already carry trace IDs, so a trace could be found there and then fetched by ID from cheap storage.",
+      "Elliott made the first commit in January 2020, and Grafana Labs announced Tempo in October 2020 as a trace-ID lookup store “whose only dependency is object storage”. Tempo 1.0 shipped in June 2021, after the April 2021 move from Apache 2.0 to AGPLv3. Version 1.4 added the metrics-generator, which derives rate, error and duration metrics from spans.",
+      "Search grew from there. Tempo 2.0, in January 2023, made Parquet the default block format and introduced TraceQL, a query language for spans that the Parquet columns made fast enough to run. Tempo 3.0, in May 2026, split the read and write paths around a Kafka-compatible log, as Mimir had done in 3.0 the year before."
+    ],
+    "choices": [
+      { "choice": "No index, only object storage", "why": "Indexing traces was the expensive part of existing backends. Storing blocks in S3 or GCS and looking traces up by ID let Tempo keep every trace at low cost, with logs and exemplars doing the discovery." },
+      { "choice": "Parquet instead of a custom block format", "why": "Search over a custom format meant reading whole traces. Parquet’s columns let a query read only the attributes it filters on; Grafana Labs reported about 10 times faster search, and TraceQL depends on it." },
+      { "choice": "Accept every common tracing protocol", "why": "Teams already had Jaeger and Zipkin instrumentation. Tempo accepted those formats along with OTLP so nobody had to re-instrument to try it." },
+      { "choice": "Kafka between ingestion and storage (3.0)", "why": "Tempo 3.0 separates the write path from the read path. With Kafka holding incoming spans durably, Tempo can run at a replication factor of 1, and block-builders and live-stores scale independently." }
+    ],
+    "timeline": [
+      { "year": "2020", "text": "First commit in January; announced in October" },
+      { "year": "2021", "text": "Relicensed to AGPLv3 in April; Tempo 1.0 in June" },
+      { "year": "2022", "text": "Tempo 1.4 adds the metrics-generator" },
+      { "year": "2023", "text": "Tempo 2.0 in January: TraceQL, Parquet blocks by default" },
+      { "year": "2026", "text": "Tempo 3.0 in May replaces ingesters with Kafka, block-builders and live-stores; 3.1 in September" }
+    ],
+    "sources": [
+      { "label": "GitHub: Joe Elliott’s first commit to grafana/tempo (January 2020)", "url": "https://github.com/grafana/tempo/commit/3bb1ed427691e173d0ea1ae9548189f0f88d5f3d" },
+      { "label": "Grafana Labs blog: Announcing Grafana Tempo, a massively scalable distributed tracing system (October 2020)", "url": "https://grafana.com/blog/2020/10/27/announcing-grafana-tempo-a-massively-scalable-distributed-tracing-system/" },
+      { "label": "Grafana Labs: Grafana, Loki, and Tempo will be relicensed to AGPLv3 (April 2021)", "url": "https://grafana.com/blog/2021/04/20/grafana-loki-tempo-relicensing-to-agplv3/" },
+      { "label": "Grafana Tempo docs: Version 1.4 release notes (metrics-generator)", "url": "https://grafana.com/docs/tempo/latest/release-notes/version-1/v1-4/" },
+      { "label": "Grafana Tempo docs: Version 2.0 release notes (TraceQL, Parquet as default)", "url": "https://grafana.com/docs/tempo/latest/release-notes/version-2/v2-0/" },
+      { "label": "Grafana Labs blog: Open source at Grafana Labs in 2022 (Parquet, 10x search)", "url": "https://grafana.com/blog/2022/12/28/grafana-labs-open-source-projects-2022/" },
+      { "label": "Grafana Tempo docs: Version 3.0 release notes", "url": "https://grafana.com/docs/tempo/latest/release-notes/v3-0/" },
+      { "label": "GitHub: grafana/tempo releases (1.0, 2.0, 3.0, 3.1 dates)", "url": "https://github.com/grafana/tempo/releases" }
+    ]
+  },
+  "sources": [
+    { "label": "Grafana Tempo docs: Architecture (distributor, Kafka, block-builder, live-store, Parquet, protocols)", "url": "https://grafana.com/docs/tempo/latest/introduction/architecture/" },
+    { "label": "Grafana Tempo docs: Introduction (trace retrieval, large traces)", "url": "https://grafana.com/docs/tempo/latest/introduction/" },
+    { "label": "Grafana Tempo docs: TraceQL", "url": "https://grafana.com/docs/tempo/latest/traceql/" },
+    { "label": "Grafana Tempo docs: Construct a TraceQL query (examples, structural operators)", "url": "https://grafana.com/docs/tempo/latest/traceql/construct-traceql-queries/" },
+    { "label": "Grafana Tempo docs: Version 3.0 release notes (breaking changes, TraceQL metrics GA)", "url": "https://grafana.com/docs/tempo/latest/release-notes/v3-0/" },
+    { "label": "Grafana Labs blog: Announcing Grafana Tempo (October 2020)", "url": "https://grafana.com/blog/2020/10/27/announcing-grafana-tempo-a-massively-scalable-distributed-tracing-system/" },
+    { "label": "Grafana Labs: Grafana, Loki, and Tempo will be relicensed to AGPLv3 (April 2021)", "url": "https://grafana.com/blog/2021/04/20/grafana-loki-tempo-relicensing-to-agplv3/" },
+    { "label": "GitHub: grafana/tempo (AGPL-3.0, releases)", "url": "https://github.com/grafana/tempo" }
+  ],
+  "checked": "2026-10-24"
+}

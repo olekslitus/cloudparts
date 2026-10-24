@@ -1,0 +1,102 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Apache BookKeeper",
+  "concepts": ["stream"],
+  "provider": "oss",
+  "vendor": "Apache Software Foundation",
+  "license": "Apache 2.0",
+  "website": "https://bookkeeper.apache.org/",
+  "repo": "https://github.com/apache/bookkeeper",
+  "summary": "A replicated log storage service from Yahoo!: clients append entries to ledgers that are striped and copied across storage servers called bookies, with metadata in ZooKeeper. Apache Pulsar keeps its messages in it.",
+  "intro": [
+    "The unit of storage is a ledger, an append-only sequence of entries with a single writer. When a client creates a ledger it picks three numbers: the ensemble size E (how many bookies hold the ledger), the write quorum Qw (how many bookies each entry is sent to) and the ack quorum Qa (how many must confirm before the write counts), with E ≥ Qw ≥ Qa. Entries are striped across the ensemble, so each bookie holds fragments of many ledgers rather than whole ones, and the cluster tolerates Qa − 1 failures without losing data. If a bookie fails mid-write, the client swaps in another one and starts a new fragment, recording the change in the metadata store with a compare-and-swap. Each entry also carries the last entry the writer had confirmed, which readers use to follow the log.",
+    "A ledger’s metadata, its ensembles and its state (open, in recovery or closed), lives in ZooKeeper. If a writer dies, a reader opens the ledger in recovery mode: it fences the bookies so the old writer can no longer append, works out the last confirmed entry, re-replicates what is needed and closes the ledger, so exactly one writer ever wins. On each bookie, writes go first to a journal on a fast disk for durability and are then batched into entry log files, with an index of where each entry sits; garbage collection and compaction reclaim space from deleted ledgers. Applications build longer logs as ordered lists of ledgers: Pulsar’s managed ledger does this for every topic, and BookKeeper’s own DistributedLog API offers a log stream without handling ledgers directly. Release 4.18.1 came out in September 2026."
+  ],
+  "strengths": [
+    "Low-latency, durable writes: a separate journal disk takes the sequential writes while entry logs handle reads",
+    "Replication and quorum sizes are set per ledger, and striping spreads load across all bookies",
+    "Fencing gives a clear single-writer guarantee, which makes it a sound base for write-ahead logs and replicated state",
+    "Storage scales by adding bookies, independently of the brokers or services that write to it"
+  ],
+  "limits": [
+    "A building block, not a message broker: most people use it only underneath Pulsar or another system",
+    "Another cluster to run, plus ZooKeeper for metadata; disks for journals and entry logs need separate sizing",
+    "Ledgers can’t be appended to after they close, so applications must manage chains of ledgers and their deletion"
+  ],
+  "worksWith": [
+    { "id": "zookeeper", "how": "keeps ledger metadata and bookie lists in" },
+    { "id": "pulsar", "how": "stores every topic’s messages for" }
+  ],
+  "alternatives": ["kafka", "pulsar"],
+  "specs": {
+    "data-model": "Ledgers: append-only sequences of entries, one writer each",
+    "ordering": "Per ledger, in append order",
+    "consistency": "Single writer per ledger, enforced by fencing on recovery",
+    "retention": "Until a ledger is deleted; garbage collection and compaction reclaim space",
+    "scaling": "Add bookies; each ledger’s entries are striped across its ensemble",
+    "replication": "Per ledger: ensemble size, write quorum and ack quorum",
+    "storage-engine": "Journal on a fast disk, then entry log files with an index",
+    "deployment": "Self-hosted, with ZooKeeper for metadata"
+  },
+  "snippet": {
+    "lang": "java",
+    "title": "Create a ledger with ensemble 3, write quorum 3, ack quorum 2, append, and reopen it with fencing",
+    "source": [
+      "WriteHandle wh = bk.newCreateLedgerOp()",
+      "    .withDigestType(DigestType.CRC32)",
+      "    .withPassword(password)",
+      "    .withEnsembleSize(3)",
+      "    .withWriteQuorumSize(3)",
+      "    .withAckQuorumSize(2)",
+      "    .execute()",
+      "    .get();",
+      "",
+      "CompletableFuture<Long> addFuture = wh.append(\"Some entry data\".getBytes());",
+      "",
+      "// opening in recovery mode fences the ledger: the old writer can't append any more",
+      "ReadHandle rh = bk.newOpenLedgerOp()",
+      "    .withLedgerId(ledgerId)",
+      "    .withPassword(password)",
+      "    .withRecovery(true)",
+      "    .execute()",
+      "    .get();"
+    ]
+  },
+  "history": {
+    "story": [
+      "BookKeeper was developed at Yahoo! as a distributed write-ahead log: a way to log streams of records reliably across many servers, keeping its metadata in ZooKeeper, another Yahoo! project. In January 2009 it was contributed to Apache as part of ZooKeeper, described as a system where servers are bookies, logs are ledgers and each record is a ledger entry. In 2011 Benjamin Reed moved the code, together with the Hedwig publish-subscribe system built on it, into its own subproject, and BookKeeper became a top-level Apache project in November 2014.",
+      "Yahoo! built its Pulsar messaging service on BookKeeper, using separate disks for the journal and for general storage, and open-sourced Pulsar in September 2016, which made BookKeeper the storage layer of a widely used messaging system. DistributedLog, a replicated log service that entered the Apache Incubator in 2016, became part of BookKeeper in 2017 and now ships as its log stream API. BookKeeper still releases regularly, with 4.17 and 4.18 lines maintained in 2026."
+    ],
+    "choices": [
+      { "choice": "One writer per ledger, enforced by fencing", "why": "Logs are only consistent if two writers can never interleave entries. Fencing lets a reader take over a dead writer’s ledger and seal it without asking the writer." },
+      { "choice": "Separate ensemble, write and ack quorums", "why": "Applications trade latency against durability differently; striping over a larger ensemble spreads load, and acknowledging after Qa bookies keeps tail latency down when one bookie is slow." },
+      { "choice": "Journal plus interleaved entry logs", "why": "Writing every entry to a dedicated journal first gives durable, sequential writes, while entries from many ledgers are batched into shared entry logs so reads don’t compete with the journal." }
+    ],
+    "timeline": [
+      { "year": "2009", "text": "BookKeeper contributed to Apache ZooKeeper in January" },
+      { "year": "2011", "text": "Code moved into its own BookKeeper subproject, with Hedwig" },
+      { "year": "2014", "text": "Top-level Apache project in November" },
+      { "year": "2016", "text": "Yahoo! open-sources Pulsar, built on BookKeeper, in September" },
+      { "year": "2017", "text": "DistributedLog joins BookKeeper from the Apache Incubator" },
+      { "year": "2026", "text": "4.18.0 in June and 4.18.1 in September" }
+    ],
+    "sources": [
+      { "label": "Apache JIRA: ZOOKEEPER-276, Bookkeeper contribution (January 2009)", "url": "https://issues.apache.org/jira/browse/ZOOKEEPER-276" },
+      { "label": "Apache JIRA: ZOOKEEPER-1038, Move bookkeeper and hedwig code in subversion (Benjamin Reed, March 2011)", "url": "https://issues.apache.org/jira/browse/ZOOKEEPER-1038" },
+      { "label": "Apache projects directory: BookKeeper PMC (established November 2014)", "url": "https://projects.apache.org/committee.html?bookkeeper" },
+      { "label": "Apache Incubator: DistributedLog project status (entered 2016, graduated July 2017)", "url": "https://incubator.apache.org/projects/distributedlog.html" },
+      { "label": "Yahoo Engineering: Open-sourcing Pulsar, pub-sub messaging at scale (7 Sep 2016; BookKeeper developed at Yahoo, journal on its own disk)", "url": "https://yahooeng.tumblr.com/post/150078336821/open-sourcing-pulsar-pub-sub-messaging-at-scale", "archive": "https://web.archive.org/web/20170404030030/https://yahooeng.tumblr.com/post/150078336821/open-sourcing-pulsar-pub-sub-messaging-at-scale" },
+      { "label": "Pulsar docs: Architecture overview (brokers, BookKeeper, managed ledgers)", "url": "https://pulsar.apache.org/docs/next/concepts-architecture-overview/" },
+      { "label": "GitHub: apache/bookkeeper releases (4.17.4, 4.18.0, 4.18.1 in 2026)", "url": "https://github.com/apache/bookkeeper/releases" }
+    ]
+  },
+  "sources": [
+    { "label": "BookKeeper docs: Concepts and architecture (entries, ledgers, bookies, journals, entry logs, ZooKeeper, DistributedLog)", "url": "https://bookkeeper.apache.org/docs/getting-started/concepts" },
+    { "label": "BookKeeper docs: Protocol (E, Qw, Qa, last add confirmed, fencing and recovery, ensemble changes)", "url": "https://bookkeeper.apache.org/docs/development/protocol" },
+    { "label": "BookKeeper docs: Ledger API (create, append, open with recovery)", "url": "https://bookkeeper.apache.org/docs/api/ledger-api" },
+    { "label": "Yahoo Engineering: Open-sourcing Pulsar (separate journal and storage disks on bookies)", "url": "https://yahooeng.tumblr.com/post/150078336821/open-sourcing-pulsar-pub-sub-messaging-at-scale", "archive": "https://web.archive.org/web/20170404030030/https://yahooeng.tumblr.com/post/150078336821/open-sourcing-pulsar-pub-sub-messaging-at-scale" },
+    { "label": "Pulsar docs: Architecture overview (managed ledgers on BookKeeper)", "url": "https://pulsar.apache.org/docs/next/concepts-architecture-overview/" },
+    { "label": "GitHub: apache/bookkeeper (Apache 2.0)", "url": "https://github.com/apache/bookkeeper" }
+  ],
+  "checked": "2026-10-24"
+}

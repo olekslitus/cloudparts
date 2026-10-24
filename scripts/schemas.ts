@@ -2,7 +2,7 @@
 // "$schema" line, so editors give autocomplete and inline errors. Run by `bun run dev` and `bun run check`.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { z } from 'zod';
-import { architecture, benchmark, category, comparison, concept, foundation, part, resource, technology } from '../src/content/schema';
+import { architecture, benchmark, category, comparison, concept, foundation, part, resource, spec, technology, workload } from '../src/content/schema';
 
 const collections: Record<string, z.ZodType> = {
   parts: part.array(),
@@ -14,6 +14,8 @@ const collections: Record<string, z.ZodType> = {
   foundations: foundation,
   resources: resource,
   benchmarks: benchmark,
+  workloads: workload,
+  specs: spec.array(),
 };
 
 const dir = new URL('../.schemas/', import.meta.url);

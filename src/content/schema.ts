@@ -382,12 +382,47 @@ export const technology = z.strictObject({
     }))
     .default([])
     .describe('Technologies this one uses or plugs into. The other page shows the link too, so list each pair once.'),
+  alternatives: z
+    .array(id)
+    .default([])
+    .describe('The closest alternatives, closest first. They come before the automatic list on the page and can be from other concepts, e.g. CockroachDB and TiDB for FoundationDB.'),
+  goodFor: z
+    .array(z.strictObject({
+      id: id.describe('A workload id from content/workloads/.'),
+      why: text.max(160, 'Keep it to one short sentence').describe('What makes it good at this, e.g. "Writes go to an LSM tree on every replica, with no leader in the way."'),
+    }))
+    .default([])
+    .describe('Workloads it is known to handle well, backed by the sources. Its page, the workload page and the compare tool list them.'),
+  specs: z
+    .record(id, text.max(120, 'Keep spec values short: they fill a table cell'))
+    .default({})
+    .describe('Short facts for the side-by-side compare tool, keyed by spec id from content/specs.json, e.g. { "consistency": "Strict serializable" }.'),
   snippet: z.strictObject({ lang: z.enum(LANGS), title: text.optional(), source }).optional(),
   play: play.optional(),
   sections: z.array(section).default([]).describe('Optional deep-dive sections shown below the overview.'),
   history,
   sources,
   checked,
+});
+
+/* --------------------------------------------------------------- workloads */
+
+export const workload = z.strictObject({
+  $schema: z.string().optional(),
+  name: text.describe('What a system has to be good at, e.g. "Heavy write throughput".'),
+  icon,
+  summary: text.describe('One line shown in lists and under the title.'),
+  body: z.array(text).min(1).max(3).describe('What the workload asks of a system, and how to tell whether one really handles it.'),
+  concepts: z.array(id).min(1).describe('Concepts whose products are compared on it. The workload is listed on their pages.'),
+  sources,
+});
+
+/** One row of the compare tool: technologies fill it in under "specs". */
+export const spec = z.strictObject({
+  id,
+  label: text.describe('Row label, e.g. "Consistency".'),
+  group: text.describe('Heading the row sits under, e.g. "Transactions and consistency".'),
+  help: text.describe('One line on what the value means, shown on hover.'),
 });
 
 /* ------------------------------------------------------------- foundations */
@@ -496,3 +531,5 @@ export type Architecture = z.output<typeof architecture>;
 export type Foundation = z.output<typeof foundation>;
 export type Resource = z.output<typeof resource>;
 export type Benchmark = z.output<typeof benchmark>;
+export type Workload = z.output<typeof workload>;
+export type Spec = z.output<typeof spec>;

@@ -7,7 +7,7 @@ import { SITE_ICONS } from '@/lib/navtree';
 
 export default function IconSprite() {
   const c = getCatalog();
-  const names = [...new Set([...c.parts.map(p => p.icon), ...c.categories.map(x => x.icon), ...c.concepts.map(p => p.icon), ...SITE_ICONS])];
+  const names = [...new Set([...c.parts.map(p => p.icon), ...c.categories.map(x => x.icon), ...c.concepts.map(p => p.icon), ...c.workloads.map(w => w.icon), ...SITE_ICONS])];
   return (
     <svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style={{ position: 'absolute', width: 0, height: 0, overflow: 'hidden' }}>
       {names.map(name => {

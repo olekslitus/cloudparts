@@ -1,0 +1,97 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Omnigres",
+  "concepts": ["relational"],
+  "parent": { "id": "postgresql", "as": "extension" },
+  "provider": "oss",
+  "vendor": "Omnigres Corp. (now Inferal Inc.)",
+  "license": "Apache 2.0",
+  "website": "https://omnigres.com/",
+  "repo": "https://github.com/omnigres/omnigres",
+  "status": {
+    "stage": "dormant",
+    "note": "No commits to the main branch since February 2026, and Omnigres Corp. now continues as Inferal Inc., which builds data infrastructure for AI agents."
+  },
+  "summary": "A set of more than 30 Postgres extensions that turn one Postgres instance into an application server: it answers HTTP, runs Python, loads code from files and sends email, all inside the database’s transactions.",
+  "intro": [
+    "Omnigres is Postgres plus a collection of extensions, all named `omni_*`, that move the application tier into the database. The centre is `omni_httpd`: when Postgres starts, a master background worker opens the listening socket and starts HTTP workers, one per CPU core by default. Each worker is a Postgres background worker with two threads: one does network I/O with the h2o web server library and never calls into Postgres, the other runs the matching route handler as a query. A handler is an ordinary SQL (or Python) function that takes an `omni_httpd.http_request` and returns an `omni_httpd.http_outcome`, and routes are rows in a router table that pair a URL pattern with a handler, so changing the routing is an `INSERT`. With HTTP/2 a busy worker can pass a request to another; with HTTP/1 the request waits.",
+    "Around that sit extensions for most of what an application stack needs: `omni_web` for cookies, query strings and URIs, `omni_python` to write functions in Python (marked with a `@pg` decorator, including a Flask adapter), `omni_schema` to apply SQL migrations and reload functions, views and policies from files mounted through `omni_vfs`, `omni_httpc` as an HTTP client, `omni_auth`, `omni_email`, `omni_ledger`, `omni_kube` and `omni_aws` among others. The quickest way to try it is the `ghcr.io/omnigres/omnigres-17` container image, which starts Postgres 17 with the HTTP extensions on port 8081; the extensions can also be built into an existing Postgres. Development has slowed sharply: the last extension release was `omni_httpc` 0.1.11 in November 2025, the last commit to the main branch came in February 2026, and pull requests opened since then are unmerged."
+  ],
+  "strengths": [
+    "One process to run: HTTP, background jobs, caching and the data live in one Postgres instance, so there are fewer services to deploy and no network hop between the code and its data",
+    "Handlers run in the same transaction as the data they read and write, so a request either fully applies or not at all",
+    "Adopt it one extension at a time, in a stock Postgres, with SQL, Python, Perl, Tcl or Rust functions loaded straight from files",
+    "Apache 2.0, with a ready container image to try it in minutes"
+  ],
+  "limits": [
+    "Dormant: no commits to the main branch since February 2026, and the company behind it has moved on to other products",
+    "Application load and database load share one machine; long-running or CPU-heavy handlers compete with queries for the same workers and connections",
+    "Some extensions never left “pending release” (`omni_audit`, `omni_cluster`), and in-database Python reaches the database through `plpy`, with DB API and SQLAlchemy support only planned"
+  ],
+  "worksWith": [
+    { "id": "python", "how": "runs database functions written in" },
+    { "id": "docker", "how": "ships as a ready Postgres image for" }
+  ],
+  "alternatives": ["postgresql", "supabase"],
+  "specs": {
+    "data-model": "Relational (PostgreSQL); HTTP routes are rows in a router table",
+    "query-language": "PostgreSQL SQL; handlers in SQL or Python",
+    "wire-protocol": "PostgreSQL wire protocol, plus HTTP served by `omni_httpd`",
+    "deployment": "Container image with Postgres 17, or extensions built into an existing Postgres"
+  },
+  "snippet": {
+    "lang": "sql",
+    "title": "An HTTP endpoint that is just a SQL function and a row in a router table",
+    "source": [
+      "-- docker run -p 5432:5432 -p 8081:8081 ghcr.io/omnigres/omnigres-17:latest",
+      "create function my_handler(request omni_httpd.http_request)",
+      "  returns omni_httpd.http_outcome",
+      "  return omni_httpd.http_response(body => request.headers::text);",
+      "",
+      "create table my_router (like omni_httpd.urlpattern_router);",
+      "",
+      "insert into my_router (match, handler)",
+      "values (omni_httpd.urlpattern('/headers'), 'my_handler'::regproc);",
+      "",
+      "-- curl localhost:8081/headers  now returns the request headers"
+    ]
+  },
+  "history": {
+    "story": [
+      "A typical data-heavy application needs a database, services in several languages, an orchestrator, a cache like Redis and a queue like Kafka or RabbitMQ; Omnigres’ co-founder Vignesh Ravichandran called it a “tech zoo”. Writing a new database or language to replace it would take a decade, but Postgres already had most of the pieces, just hard to develop with, debug and deploy.",
+      "Yurii Rashkovskii started Omnigres as an open-source project, with the repository opened in December 2022, and spent about a year building it. In mid-2023 Ravichandran, who had spent four and a half years on Cloudflare’s internal Postgres platform team, joined him, and they incorporated the company that autumn with investors behind it. Rashkovskii presented it at Postgres Conference in April 2024 as “a constellation of extensions” for “building faster applications faster”.",
+      "Releases continued through 2025, adding Postgres 18 support in September. Activity then stopped: the main branch has had no commits since February 2026, and the Omnigres website now says that Omnigres Corp. continues its mission as Inferal Inc., Rashkovskii’s company building data infrastructure for AI agents."
+    ],
+    "choices": [
+      { "choice": "Extensions, not a new database", "why": "Building on Postgres reused decades of storage, transactions and tooling. Users can add a single extension to a stock Postgres instead of switching databases." },
+      { "choice": "An HTTP server inside Postgres background workers", "why": "Running handlers inside Postgres removes the network hop and lets a request share the database’s transaction. Network I/O stays on a separate thread that never touches Postgres, because Postgres backends are single-threaded." },
+      { "choice": "Routes and code as data", "why": "Routers are tables and handlers are functions, and `omni_schema` reloads functions from files, so deploying a change is a load from the filesystem or an `INSERT`, not a new build of a separate service." }
+    ],
+    "timeline": [
+      { "year": "2022", "text": "Yurii Rashkovskii opens the Omnigres repository in December" },
+      { "year": "2023", "text": "Vignesh Ravichandran joins; the company is incorporated in the autumn" },
+      { "year": "2024", "text": "Presented at Postgres Conference as “a constellation of extensions”" },
+      { "year": "2025", "text": "Postgres 18 support in September; last extension release in November" },
+      { "year": "2026", "text": "Last commit to main in February; Omnigres Corp. continues as Inferal Inc." }
+    ],
+    "sources": [
+      { "label": "Jamstack Radio ep. 141: Postgres as a platform, with Vignesh Ravichandran of Omnigres (Jan 2024)", "url": "https://www.heavybit.com/library/podcasts/jamstack-radio/ep-141-postgres-as-a-platform-with-vignesh-ravichandran-of-omnigres" },
+      { "label": "Postgres Conference 2024: Omnigres, Postgres can do WHAT?", "url": "https://postgresconf.org/conferences/2024/program/proposals/omnigres-postgres-can-do-what" },
+      { "label": "omnigres/omnigres on GitHub: commit history", "url": "https://github.com/omnigres/omnigres/commits/master/" },
+      { "label": "Omnigres: Home (“Omnigres Corp. continues its mission as Inferal Inc.”)", "url": "https://omnigres.com/" },
+      { "label": "Inferal: Home", "url": "https://inferal.com/" }
+    ]
+  },
+  "sources": [
+    { "label": "omnigres/omnigres on GitHub: README (extensions, container image, Apache 2.0)", "url": "https://github.com/omnigres/omnigres" },
+    { "label": "omnigres/omnigres on GitHub: commit history", "url": "https://github.com/omnigres/omnigres/commits/master/" },
+    { "label": "Omnigres docs: Introduction", "url": "https://docs.omnigres.org/" },
+    { "label": "Omnigres docs: Quick start", "url": "https://docs.omnigres.org/quick_start/" },
+    { "label": "Omnigres docs: omni_httpd architecture", "url": "https://docs.omnigres.org/omni_httpd/architecture/" },
+    { "label": "Omnigres docs: omni_httpd routing", "url": "https://docs.omnigres.org/omni_httpd/routing/" },
+    { "label": "Omnigres docs: omni_python", "url": "https://docs.omnigres.org/omni_python/intro/" },
+    { "label": "Omnigres docs: omni_schema reference", "url": "https://docs.omnigres.org/omni_schema/reference/" },
+    { "label": "Omnigres: Home (all-in-one database, Inferal)", "url": "https://omnigres.com/" }
+  ],
+  "checked": "2026-10-24"
+}

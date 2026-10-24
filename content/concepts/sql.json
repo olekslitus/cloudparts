@@ -1,0 +1,341 @@
+{
+  "$schema": "../../.schemas/concepts.schema.json",
+  "name": "SQL",
+  "icon": "code-xml",
+  "category": "data",
+  "order": 12,
+  "parent": "relational",
+  "summary": "The declarative language that relational databases, warehouses and query engines share: you describe the rows you want, and the database works out how to get them.",
+  "howItWorks": "SQL is one language for several jobs. Data definition creates and changes tables, views and indexes (`CREATE TABLE`, `ALTER TABLE`); data manipulation adds and changes rows (`INSERT`, `UPDATE`, `DELETE`); queries read them (`SELECT`); and other statements grant permissions and group work into transactions (`GRANT`, `BEGIN`, `COMMIT`). A query says what the result should contain, not how to compute it. The database parses the text, an optimizer turns it into a plan (which indexes to use, which join order, whether to sort or hash), and the executor runs that plan, so the same query can get faster when someone adds an index, without being rewritten. Clauses are written in one order but bound in another: `FROM` and joins first, then `WHERE`, `GROUP BY`, `HAVING`, then the `SELECT` list, then `ORDER BY` and the row limit, which is why an alias defined in `SELECT` can be used in `ORDER BY` but not in `WHERE`. Missing values are `NULL`, and any comparison with `NULL` is neither true nor false but unknown, so `WHERE price <> 10` skips rows whose price is `NULL`. Tables and results may contain duplicate rows unless you ask for `DISTINCT`. The language is an ISO standard, ISO/IEC 9075, last revised as SQL:2023 and split into parts such as Foundation, Persistent Stored Modules and Property Graph Queries. The standard defines a mandatory Core and many optional features, and every product implements its own subset plus extensions; PostgreSQL meets at least 170 of the 177 Core features, and its documentation notes that no current database claims full Core conformance. Those differences are the dialects: the same idea is written `FETCH FIRST 10 ROWS ONLY` in the standard, `LIMIT 10` in PostgreSQL, MySQL and SQLite, and `TOP (10)` in SQL Server.",
+  "analogy": "Ordering in a restaurant. You say what you want to eat, not which pan to use or what order to chop things in; the kitchen (the optimizer) decides that, and may do it differently on a busy night. Every country’s menus use the same basic dishes, but each restaurant adds its own and names a few things differently.",
+  "useWhen": [
+    "Reading, joining, filtering and aggregating data in any relational database, warehouse, lakehouse or query engine",
+    "Keeping several changes all-or-nothing in one transaction, with constraints the database enforces for every client",
+    "Ad-hoc questions about data whose shape is known, by people who aren’t the application’s authors: analysts, support, finance",
+    "Sharing one skill and one set of tools (drivers, ORMs, BI tools, migration tools) across many databases"
+  ],
+  "avoidWhen": [
+    "Deep traversals of highly connected data, such as friends of friends at unknown depth: recursive queries work, but a graph query language or SQL/PGQ, where the engine supports it, says it more directly",
+    "Long procedural logic with loops and calls to other services; stored procedures in PL/pgSQL, T-SQL or PL/SQL tie that logic to one vendor’s dialect",
+    "Assuming SQL is portable: anything beyond basic `SELECT`, `INSERT`, `UPDATE` and `DELETE` (limits, upserts, date functions, JSON, string concatenation) needs checking or rewriting when you change databases",
+    "Building queries by pasting user input into the SQL text; pass values as parameters instead, so they can’t change the query"
+  ],
+  "example": "A shop moves its reporting from MySQL to PostgreSQL. Most queries run unchanged, but three break. One concatenates names with `CONCAT(first, ' ', last)`, which PostgreSQL also has, but another uses backticks around a column called `order`, which PostgreSQL reads as an error; it needs `\"order\"` instead. A third used `||`, which MySQL by default treats as logical `OR`, so the old report had been printing `0` where names should be; in PostgreSQL the same query suddenly shows the names. The team runs the remaining queries through both databases in CI and writes new ones with the standard `FETCH FIRST n ROWS ONLY`, which both accept.",
+  "providers": {
+    "aws": "Each engine’s own dialect: PostgreSQL and MySQL on RDS and Aurora, PostgreSQL-compatible SQL in Aurora DSQL, Redshift SQL (based on PostgreSQL, with many PostgreSQL features left out), and Athena, whose SQL follows Trino’s",
+    "gcp": "GoogleSQL, an ANSI-compliant dialect shared by BigQuery and Spanner; Spanner databases can choose a PostgreSQL dialect instead; Cloud SQL and AlloyDB speak PostgreSQL, MySQL or SQL Server",
+    "azure": "Transact-SQL (T-SQL) across SQL Server, Azure SQL Database, Synapse and Fabric; PostgreSQL and MySQL dialects in Azure Database for PostgreSQL and MySQL",
+    "oss": "Every open-source relational database has its dialect: PostgreSQL (with PL/pgSQL), MySQL and MariaDB, SQLite, DuckDB; SQLGlot (MIT) parses SQL and translates it between more than 30 dialects"
+  },
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "-- Standard SQL: a common table expression, a join, grouping and a row limit",
+      "WITH recent AS (",
+      "  SELECT customer_id, total",
+      "  FROM orders",
+      "  WHERE created_at >= CURRENT_DATE - INTERVAL '30' DAY",
+      ")",
+      "SELECT c.name, COUNT(*) AS orders, SUM(r.total) AS revenue",
+      "FROM recent r",
+      "JOIN customers c ON c.id = r.customer_id",
+      "GROUP BY c.name",
+      "HAVING SUM(r.total) > 1000          -- filters groups, after GROUP BY",
+      "ORDER BY revenue DESC               -- can use the alias from SELECT",
+      "FETCH FIRST 10 ROWS ONLY;           -- LIMIT 10 in PostgreSQL, MySQL, SQLite; TOP (10) in SQL Server",
+      "",
+      "-- NULL is unknown, not a value: this misses customers without a country",
+      "SELECT count(*) FROM customers WHERE country <> 'DE';",
+      "SELECT count(*) FROM customers WHERE country <> 'DE' OR country IS NULL;"
+    ]
+  },
+  "related": [
+    "relational",
+    "compile-to-sql",
+    "query-engines",
+    "orm",
+    "warehouse",
+    "newsql",
+    "indexes"
+  ],
+  "sections": [
+    {
+      "type": "table",
+      "title": "One idea, five spellings",
+      "intro": "A few everyday differences between the standard and four common dialects. Each product documents its own behaviour; settings can change some of it.",
+      "corner": "",
+      "columns": [
+        "Standard SQL",
+        "PostgreSQL",
+        "MySQL",
+        "SQL Server",
+        "SQLite"
+      ],
+      "rows": [
+        {
+          "label": "First 10 rows",
+          "values": [
+            "`FETCH FIRST 10 ROWS ONLY` (since SQL:2008)",
+            "`LIMIT 10`, or the standard form",
+            "`LIMIT 10`",
+            "`TOP (10)`, or `OFFSET 0 ROWS FETCH NEXT 10 ROWS ONLY` after `ORDER BY`",
+            "`LIMIT 10`"
+          ]
+        },
+        {
+          "label": "Join two strings",
+          "values": [
+            "`a || b`",
+            "`a || b`",
+            "`CONCAT(a, b)`; `||` means `OR` unless `PIPES_AS_CONCAT` is set",
+            "`a + b`",
+            "`a || b`"
+          ]
+        },
+        {
+          "label": "Quote a name like `order`",
+          "values": [
+            "`\"order\"`",
+            "`\"order\"`",
+            "`` `order` ``; `\"order\"` only with `ANSI_QUOTES`",
+            "`[order]`, or `\"order\"` with `QUOTED_IDENTIFIER ON` (the default for most connections)",
+            "`\"order\"`, but an unknown double-quoted name silently becomes a string"
+          ]
+        },
+        {
+          "label": "Column types",
+          "values": [
+            "Enforced",
+            "Enforced",
+            "Enforced in strict mode, which is on by default; without it, bad values are adjusted with a warning",
+            "Enforced",
+            "Advisory: a text value can go into an `INTEGER` column, unless the table is `STRICT`"
+          ]
+        },
+        {
+          "label": "Procedural code",
+          "values": [
+            "SQL/PSM (Part 4)",
+            "PL/pgSQL and other loadable languages",
+            "Stored procedures and functions in the server",
+            "T-SQL itself, with `IF…ELSE`, `WHILE` and `TRY…CATCH`",
+            "No `CREATE PROCEDURE`: procedural code lives in the host program, sometimes helped by triggers"
+          ]
+        }
+      ],
+      "notes": [
+        "Oracle’s procedural extension is PL/SQL. The PostgreSQL documentation notes that applications written for Oracle often used the generated `rownum` column instead of a limit clause."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "What the standard added over time",
+      "intro": "The 1974 paper described queries over tables. Later revisions grew it into a standard of hundreds of pages, mostly as optional features.",
+      "items": [
+        {
+          "name": "Keys, integrity and subqueries in FROM",
+          "tag": "SQL-92",
+          "text": "Early SQL had no primary keys or referential integrity, couldn’t use a subquery where a table name goes, and couldn’t name the columns of a result. Chamberlin notes that the 1992 standard fixed all of these."
+        },
+        {
+          "name": "Outer joins, recursion, triggers, OLAP functions",
+          "tag": "1992–2008",
+          "text": "Over the years the standard added outer joins, table expressions, recursive queries, triggers, user-defined types and functions, and analytic (OLAP) functions. New versions appeared in 1996, 1999, 2003, 2006 and 2008, and SQL:2008 added the standard `FETCH FIRST` row limit."
+        },
+        {
+          "name": "JSON",
+          "tag": "SQL:2016 and SQL:2023",
+          "text": "SQL:2016 handled JSON stored in ordinary string columns, through functions such as `JSON_VALUE` and `JSON_QUERY`. SQL:2023 adds a native `JSON` type and a simplified dot-and-bracket syntax for reaching into documents."
+        },
+        {
+          "name": "Property graph queries",
+          "tag": "SQL:2023, Part 16",
+          "text": "SQL/PGQ lets you declare a graph over existing tables and match paths in it inside a query. As of PostgreSQL’s current documentation, PostgreSQL implements none of Part 16."
+        }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In 1972 Donald Chamberlin and Raymond Boyce, at IBM, heard Ted Codd present the relational model and spent the next year designing a language for it. Their first attempt, Square, used a mathematical subscript notation that was hard to type. When they joined the System R project at IBM’s San Jose Research Laboratory in 1973 they started again with Sequel, which used English keywords so that people who were not database specialists could “walk up and use it”. They described it in 1974 in “SEQUEL: A Structured English Query Language”. About a month after presenting a paper on it, Boyce died suddenly at 26. System R kept developing the language, ran it at three IBM customer sites, and because of a trademark issue the name was shortened to SQL.",
+      "Commercial implementations, Oracle and IBM’s DB2 among them, appeared in the late 1970s and early 1980s. In 1986 ANSI adopted “Database Language SQL” as a standard, and ISO followed. NIST built a conformance test suite against which many products were validated between 1988 and 1996, and the 1992 revision fixed many of the original gaps, such as missing primary keys. Vendors kept implementing different subsets and adding their own features, which is where today’s dialects come from.",
+      "SQL outlived the challenges to it. NoSQL systems of the 2000s dropped it, and several later added SQL dialects back; NewSQL systems kept it while spreading data across machines. The standard keeps growing through optional features: SQL:2023 added a JSON type and property graph queries. Chamberlin later wrote that it ended up used far more by specialists writing repetitive transactions than by the untrained users he and Boyce had in mind."
+    ],
+    "choices": [
+      {
+        "choice": "Describe the result, not the steps",
+        "why": "Sequel queries say what information is wanted and leave the plan to an optimizing compiler. That made queries readable and let the database pick a better plan as data and indexes changed, which System R’s cost-based optimizer did."
+      },
+      {
+        "choice": "English keywords instead of mathematical notation",
+        "why": "Codd’s relational calculus and the team’s own Square used symbols and subscripts. Chamberlin and Boyce wanted queries that read “almost as though they were English prose” to non-programmers such as planners."
+      },
+      {
+        "choice": "One language for queries, updates and schema",
+        "why": "Data definition had traditionally been a separate job done by administrators during maintenance windows. Putting `CREATE` and friends in the same language let authorized users change schemas and install applications while the system ran."
+      },
+      {
+        "choice": "Nulls, three-valued logic and duplicate rows",
+        "why": "Codd’s rules required a way to mark missing data, and SQL let each column allow or forbid it. Duplicates were allowed because removing them meant sorting, which was expensive in 1974, so `DISTINCT` became something you ask for."
+      }
+    ],
+    "timeline": [
+      {
+        "year": "1974",
+        "text": "Chamberlin and Boyce publish SEQUEL, designed for IBM’s System R"
+      },
+      {
+        "year": "1986",
+        "text": "ANSI adopts the SQL standard; ISO follows in 1987"
+      },
+      {
+        "year": "1992",
+        "text": "SQL-92 adds keys, referential integrity and subqueries in `FROM`"
+      },
+      {
+        "year": "2008",
+        "text": "SQL:2008 standardizes `FETCH FIRST n ROWS ONLY`"
+      },
+      {
+        "year": "2016",
+        "text": "SQL:2016 adds JSON functions over strings"
+      },
+      {
+        "year": "2023",
+        "text": "SQL:2023 adds a JSON type and Part 16, property graph queries"
+      }
+    ],
+    "sources": [
+      {
+        "label": "Chamberlin and Boyce: SEQUEL, A Structured English Query Language (1974)",
+        "url": "https://s3.us.cloud-object-storage.appdomain.cloud/res-files/2705-sequel-1974.pdf"
+      },
+      {
+        "label": "Donald Chamberlin: Early History of SQL (IEEE Annals of the History of Computing, Oct–Dec 2012)",
+        "url": "https://disciplinas.uvv.br/assets/disciplinas/bd1/early_history_of_sql.pdf"
+      },
+      {
+        "label": "NIST FIPS PUB 127-1: Database Language SQL (cites ANSI X3.135-1986 and ISO 9075-1987)",
+        "url": "https://nvlpubs.nist.gov/nistpubs/Legacy/FIPS/fipspub127-1.pdf"
+      },
+      {
+        "label": "IBM: Patricia Selinger and the cost-based optimizer",
+        "url": "https://www.ibm.com/history/patricia-selinger"
+      },
+      {
+        "label": "Pavlo and Aslett: What’s Really New with NewSQL? (SIGMOD Record, 2016)",
+        "url": "https://db.cs.cmu.edu/papers/2016/pavlo-newsql-sigmodrec2016.pdf"
+      },
+      {
+        "label": "Peter Eisentraut: SQL:2023 is finished, here is what’s new (Apr 2023)",
+        "url": "https://peter.eisentraut.org/blog/2023/04/04/sql-2023-is-finished-here-is-whats-new"
+      }
+    ]
+  },
+  "sources": [
+    {
+      "label": "PostgreSQL docs: SQL conformance (SQL:2023 parts, 170 of 177 Core features)",
+      "url": "https://www.postgresql.org/docs/current/features.html"
+    },
+    {
+      "label": "PostgreSQL docs: SELECT, compatibility (LIMIT vs SQL:2008 FETCH FIRST, Oracle rownum)",
+      "url": "https://www.postgresql.org/docs/current/sql-select.html"
+    },
+    {
+      "label": "PostgreSQL docs: Overview of PL/pgSQL",
+      "url": "https://www.postgresql.org/docs/current/plpgsql-overview.html"
+    },
+    {
+      "label": "Microsoft Learn: SELECT (Transact-SQL), logical processing order",
+      "url": "https://learn.microsoft.com/en-us/sql/t-sql/queries/select-transact-sql"
+    },
+    {
+      "label": "Microsoft Learn: TOP (Transact-SQL)",
+      "url": "https://learn.microsoft.com/en-us/sql/t-sql/queries/top-transact-sql"
+    },
+    {
+      "label": "Microsoft Learn: + (String concatenation) (Transact-SQL)",
+      "url": "https://learn.microsoft.com/en-us/sql/t-sql/language-elements/string-concatenation-transact-sql"
+    },
+    {
+      "label": "Microsoft Learn: Database identifiers (brackets, QUOTED_IDENTIFIER)",
+      "url": "https://learn.microsoft.com/en-us/sql/relational-databases/databases/database-identifiers"
+    },
+    {
+      "label": "Microsoft Learn: Transact-SQL reference",
+      "url": "https://learn.microsoft.com/en-us/sql/t-sql/language-reference"
+    },
+    {
+      "label": "Microsoft Learn: Control-of-flow (Transact-SQL)",
+      "url": "https://learn.microsoft.com/en-us/sql/t-sql/language-elements/control-of-flow"
+    },
+    {
+      "label": "MySQL 8.4 Reference Manual: MySQL standards compliance",
+      "url": "https://dev.mysql.com/doc/refman/8.4/en/compatibility.html"
+    },
+    {
+      "label": "MySQL 8.4 Reference Manual: Server SQL modes (PIPES_AS_CONCAT, ANSI_QUOTES, strict mode)",
+      "url": "https://dev.mysql.com/doc/refman/8.4/en/sql-mode.html"
+    },
+    {
+      "label": "MySQL 8.4 Reference Manual: Using stored routines",
+      "url": "https://dev.mysql.com/doc/refman/8.4/en/stored-routines.html"
+    },
+    {
+      "label": "SQLite: Quirks, caveats and gotchas (flexible typing, double-quoted strings)",
+      "url": "https://www.sqlite.org/quirks.html"
+    },
+    {
+      "label": "SQLite: SELECT (LIMIT and OFFSET)",
+      "url": "https://www.sqlite.org/lang_select.html"
+    },
+    {
+      "label": "SQLite Forum: no CREATE PROCEDURE; procedural code is handled by the host program (Oct 2020)",
+      "url": "https://sqlite.org/forum/forumpost/a1b9ccc564"
+    },
+    {
+      "label": "Oracle Database PL/SQL Language Reference: Overview",
+      "url": "https://docs.oracle.com/en/database/oracle/oracle-database/23/lnpls/overview.html"
+    },
+    {
+      "label": "Peter Eisentraut: SQL:2023 is finished, here is what’s new (optional features, JSON, SQL/PGQ)",
+      "url": "https://peter.eisentraut.org/blog/2023/04/04/sql-2023-is-finished-here-is-whats-new"
+    },
+    {
+      "label": "BigQuery docs: Introduction to GoogleSQL",
+      "url": "https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/introduction"
+    },
+    {
+      "label": "Spanner docs: GoogleSQL in Spanner",
+      "url": "https://docs.cloud.google.com/spanner/docs/reference/standard-sql/overview"
+    },
+    {
+      "label": "Spanner docs: PostgreSQL interface",
+      "url": "https://docs.cloud.google.com/spanner/docs/postgresql-interface"
+    },
+    {
+      "label": "Amazon Redshift docs: Amazon Redshift and PostgreSQL",
+      "url": "https://docs.aws.amazon.com/redshift/latest/dg/c_redshift-and-postgres-sql.html"
+    },
+    {
+      "label": "AWS: What is Amazon Aurora DSQL? (PostgreSQL-compatible)",
+      "url": "https://docs.aws.amazon.com/aurora-dsql/latest/userguide/what-is-aurora-dsql.html"
+    },
+    {
+      "label": "tobymao/sqlglot on GitHub (parser and transpiler for 30+ dialects)",
+      "url": "https://github.com/tobymao/sqlglot"
+    },
+    {
+      "label": "Donald Chamberlin: Early History of SQL (IEEE Annals, 2012)",
+      "url": "https://disciplinas.uvv.br/assets/disciplinas/bd1/early_history_of_sql.pdf"
+    },
+    {
+      "label": "Amazon Athena docs: Athena engine version 3 (Trino SQL and functions)",
+      "url": "https://docs.aws.amazon.com/athena/latest/ug/engine-versions-reference-0003.html"
+    },
+    {
+      "label": "Google Cloud: Cloud SQL overview (MySQL, PostgreSQL, SQL Server)",
+      "url": "https://cloud.google.com/sql/docs/introduction"
+    }
+  ]
+}

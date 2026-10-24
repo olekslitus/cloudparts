@@ -1,0 +1,111 @@
+{
+  "$schema": "../../.schemas/concepts.schema.json",
+  "name": "ML frameworks",
+  "icon": "sigma",
+  "category": "ai",
+  "order": 45,
+  "summary": "Libraries for training and running neural networks: arrays on GPUs and TPUs, automatic gradients, and a compiler that turns Python model code into fast kernels.",
+  "howItWorks": "Every framework rests on three pieces. The first is an array type, called a tensor, that lives on a CPU, GPU or TPU, with hundreds of operations (matrix multiply, convolution, softmax) implemented as kernels for each kind of hardware. The second is automatic differentiation. Training means computing a loss, then the gradient of the loss with respect to every weight, then nudging each weight against its gradient; nobody writes those derivatives by hand. Reverse-mode autodiff, or backpropagation, records the operations of the forward pass and replays them backwards to get all gradients in one pass. The third is a way to make Python fast enough. Python itself is slow, so frameworks capture the operations as a graph and run it in C++, CUDA or a compiler. They differ in when they capture it. PyTorch runs eagerly: each line executes as Python reaches it, and autograd records the graph as you go, “recreated from scratch at every iteration”, which allows any Python control flow. Since PyTorch 2.0 (March 2023), `torch.compile` can capture and compile that code for speed. TensorFlow 2 is also eager by default, and `tf.function` traces a function into a graph that runs without Python and can be saved and served. JAX traces pure functions and compiles them with XLA, and treats differentiation, compilation and batching as transformations you can combine. On top of the core sit layers, optimizers, data loaders, checkpointing and ways to split a model over many accelerators.",
+  "analogy": "A spreadsheet that remembers every formula. Change a cell and it recalculates the total (the forward pass), and because it knows each formula, it can also tell you how much the total would move if you nudged any input (the gradient). A framework is that spreadsheet for billions of cells, with a calculator chip for each column.",
+  "useWhen": [
+    "You train or fine-tune your own models, from a small classifier to a large transformer",
+    "You do research on new architectures or training methods and need to change the model code itself",
+    "You need custom numerical code on GPUs or TPUs that uses gradients, such as physics simulation or optimization, which is common with JAX",
+    "You run an open-weight model inside your own Python code rather than through a serving runtime"
+  ],
+  "avoidWhen": [
+    "You call a hosted model API such as Claude or Gemini: the provider runs the framework, and your code sends text over HTTP",
+    "You only need to serve an open-weight LLM: a runtime such as llama.cpp, Ollama or vLLM loads the weights and serves an API with no training code",
+    "The data is a small table and a classic model will do: gradient-boosted trees or linear regression are often quicker to train and easier to explain than a neural network"
+  ],
+  "example": "A team fine-tunes a 300-million-parameter image classifier on 50,000 labelled product photos. In PyTorch, the training loop loads a batch of 256 images onto a GPU, runs the model forward, computes cross-entropy loss, calls `loss.backward()` to fill in every weight’s gradient, and lets an AdamW optimizer update the weights; wrapping the model in `torch.compile` fuses operations and shortens each step. The same job in JAX would write the loss as a pure function, take `jax.grad` of it, compile the update with `jax.jit`, and update the weights with an Optax optimizer. Either way the result is a checkpoint of weights that a serving system loads later.",
+  "providers": {
+    "aws": "AWS Deep Learning Containers: prebuilt images with PyTorch or TensorFlow (and vLLM, SGLang and Ray) for training and inference on EC2, EKS and Amazon SageMaker AI",
+    "gcp": "Cloud TPU VMs, with guides for running JAX and PyTorch on TPUs; Google trains Gemini with JAX and Pathways",
+    "azure": "Azure Machine Learning curated environments: Docker images with the Python packages for common machine-learning frameworks, ready to use in training jobs",
+    "oss": "PyTorch (PyTorch Foundation, Linux Foundation), JAX with Flax and Optax (Google), TensorFlow (Google), and Keras 3, which runs on JAX, TensorFlow or PyTorch"
+  },
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "# PyTorch: eager. Autograd records operations as they run.",
+      "import torch",
+      "w = torch.randn(3, requires_grad=True)",
+      "loss = ((x @ w - y) ** 2).mean()",
+      "loss.backward()                    # gradient is now in w.grad",
+      "",
+      "# JAX: functional. grad turns a function into its gradient function.",
+      "import jax, jax.numpy as jnp",
+      "def loss_fn(w, x, y):",
+      "    return jnp.mean((x @ w - y) ** 2)",
+      "g = jax.jit(jax.grad(loss_fn))(w, x, y)   # traced once, compiled with XLA"
+    ]
+  },
+  "related": ["mlops", "llms", "local-inference", "model-hubs", "jepa"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "When the graph is captured",
+      "intro": "All three record the operations so they can compute gradients and run fast; they differ in when they turn Python into a graph.",
+      "columns": ["PyTorch", "TensorFlow 2", "JAX"],
+      "rows": [
+        { "label": "Default mode", "values": ["Eager: each operation runs when Python reaches it", "Eager: operations run one by one and return to Python", "Eager for single operations; real work goes through `jax.jit`"] },
+        { "label": "Gradients", "values": ["Autograd records a graph during the forward pass; `loss.backward()` walks it", "`tf.GradientTape` records operations inside its block", "`jax.grad(f)` returns a new function that computes the gradient"] },
+        { "label": "Getting a compiled graph", "values": ["`torch.compile` (since 2.0): TorchDynamo captures, TorchInductor generates kernels, using Triton on GPUs", "`tf.function` traces into a graph; AutoGraph converts `if` and loops into graph ops", "`jax.jit` traces a pure function into a jaxpr and compiles it with XLA"] },
+        { "label": "What the code must obey", "values": ["Almost nothing; uncompiled code is ordinary Python", "Python side effects run only while tracing", "Pure functions, immutable arrays, explicit random keys, static shapes"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Before frameworks, every new network meant hand-deriving gradients and writing GPU code. Theano, in development from 2008, let researchers write mathematical expressions in Python that it differentiated and compiled for CPUs and GPUs. The whole expression was built first and run later. Google’s TensorFlow, open-sourced under Apache 2.0 in November 2015, took the same approach to a dataflow graph that could run on phones or across hundreds of machines.",
+      "PyTorch, incubated at Meta (then Facebook) and released in 2016, went the other way: operations run immediately in ordinary Python, and autograd records the graph as they do. Its 2019 paper argued that this imperative style makes debugging easy and that ease of use and speed need not be traded off. Google Brain’s JAX, open-sourced in 2018, took a third path: keep NumPy-style Python, but trace pure functions and compile them with XLA, treating gradients and compilation as composable transformations.",
+      "The styles have since met in the middle. TensorFlow 2 made eager execution the default and kept graphs behind `tf.function`. PyTorch moved to the Linux Foundation’s new PyTorch Foundation in September 2022, and PyTorch 2.0 added `torch.compile` in 2023. Keras 3 now runs the same model code on JAX, TensorFlow or PyTorch."
+    ],
+    "choices": [
+      {
+        "choice": "Automatic differentiation instead of hand-written gradients",
+        "why": "A model with millions or billions of weights needs a gradient for each one at every step. Recording the operations of the forward pass in order and walking that list backwards gives all of them, for any model the framework can express."
+      },
+      {
+        "choice": "Run eagerly, record as you go",
+        "why": "PyTorch chose to make every part of the library ordinary Python so that debuggers, print statements and loops just work. Rebuilding the graph on every iteration is what lets the model’s structure change from one step to the next."
+      },
+      {
+        "choice": "Capture a graph and compile it",
+        "why": "Python adds overhead to every small operation, and a compiler can fuse many operations into one kernel. TensorFlow’s guide reports a function running about five times faster as a graph than eagerly, which is why even eager frameworks now offer `tf.function`, `torch.compile` and `jax.jit`."
+      }
+    ],
+    "timeline": [
+      { "year": "2008", "text": "Theano development begins at the University of Montreal" },
+      { "year": "2015", "text": "Google open-sources TensorFlow under Apache 2.0 in November" },
+      { "year": "2016", "text": "PyTorch is released" },
+      { "year": "2018", "text": "JAX is described at SysML and open-sourced by Google Brain" },
+      { "year": "2022", "text": "PyTorch moves to the PyTorch Foundation at the Linux Foundation (September 12)" },
+      { "year": "2023", "text": "PyTorch 2.0 adds `torch.compile` (March)" }
+    ],
+    "sources": [
+      { "label": "arXiv: Theano Development Team, Theano: A Python framework for fast computation of mathematical expressions (2016; in development since 2008)", "url": "https://arxiv.org/abs/1605.02688" },
+      { "label": "arXiv: Abadi et al., TensorFlow: Large-Scale Machine Learning on Heterogeneous Distributed Systems (open-sourced November 2015)", "url": "https://arxiv.org/abs/1603.04467" },
+      { "label": "arXiv: Paszke et al., PyTorch: An Imperative Style, High-Performance Deep Learning Library (2019)", "url": "https://arxiv.org/abs/1912.01703" },
+      { "label": "Linux Foundation: Meta transitions PyTorch to the Linux Foundation (September 12, 2022; released in 2016)", "url": "https://www.linuxfoundation.org/press/press-release/meta-transitions-pytorch-to-the-linux-foundation" },
+      { "label": "Frostig, Johnson and Leary: Compiling machine learning programs via high-level tracing (SysML 2018)", "url": "https://mlsys.org/Conferences/2019/doc/2018/146.pdf" },
+      { "label": "PyTorch: PyTorch 2.x (torch.compile, TorchDynamo, TorchInductor)", "url": "https://pytorch.org/get-started/pytorch-2-x/" },
+      { "label": "Keras: Introducing Keras 3.0 (JAX, TensorFlow, PyTorch backends)", "url": "https://keras.io/keras_3/" }
+    ]
+  },
+  "sources": [
+    { "label": "PyTorch docs: Autograd mechanics (graph recorded during execution, recreated every iteration)", "url": "https://docs.pytorch.org/docs/2.14/notes/autograd.html" },
+    { "label": "PyTorch: PyTorch 2.x (torch.compile, TorchDynamo, TorchInductor with Triton, backward compatible)", "url": "https://pytorch.org/get-started/pytorch-2-x/" },
+    { "label": "TensorFlow guide: Introduction to graphs and tf.function (eager vs graph, AutoGraph, tracing, speedup)", "url": "https://www.tensorflow.org/guide/intro_to_graphs" },
+    { "label": "TensorFlow guide: Introduction to gradients and automatic differentiation (tf.GradientTape, reverse mode)", "url": "https://www.tensorflow.org/guide/autodiff" },
+    { "label": "JAX docs: Key concepts (transformations, tracing, jaxprs, XLA)", "url": "https://docs.jax.dev/en/latest/key-concepts.html" },
+    { "label": "JAX docs: Common gotchas (pure functions, immutable arrays, static shapes)", "url": "https://docs.jax.dev/en/latest/notebooks/Common_Gotchas_in_JAX.html" },
+    { "label": "Keras: Introducing Keras 3.0 (backends)", "url": "https://keras.io/keras_3/" },
+    { "label": "AWS Deep Learning Containers (frameworks and deployment targets)", "url": "https://aws.github.io/deep-learning-containers/" },
+    { "label": "Google Cloud docs: Introduction to Cloud TPU (JAX and PyTorch on TPU VMs)", "url": "https://docs.cloud.google.com/tpu/docs/intro-to-tpu" },
+    { "label": "Microsoft Learn: About Azure Machine Learning environments (curated environments)", "url": "https://learn.microsoft.com/en-us/azure/machine-learning/concept-environments" },
+    { "label": "arXiv: Gemini: A Family of Highly Capable Multimodal Models (JAX and Pathways)", "url": "https://arxiv.org/abs/2312.11805" },
+    { "label": "Linux Foundation: Meta transitions PyTorch to the Linux Foundation (PyTorch Foundation)", "url": "https://www.linuxfoundation.org/press/press-release/meta-transitions-pytorch-to-the-linux-foundation" }
+  ]
+}

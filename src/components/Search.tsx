@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils';
 type Logo = NonNullable<NavData['groups'][number]['technologies'][number]['logo']>;
 interface Entry {
   key: string;
-  type: 'Topic' | 'Concept' | 'Kind' | 'Technology' | 'Architecture' | 'Comparison' | 'Company' | 'Foundation';
+  type: 'Topic' | 'Concept' | 'Kind' | 'Technology' | 'Architecture' | 'Comparison' | 'Workload' | 'Company' | 'Foundation';
   name: string;
   /** Shown under the name. */
   sub: string;
@@ -27,7 +27,7 @@ interface Entry {
 }
 
 // A small lead for the broader page: a topic or concept before the products and kinds under it.
-const TYPE_BONUS: Record<Entry['type'], number> = { Topic: 6, Concept: 6, Technology: 3, Kind: 1, Architecture: 0, Comparison: 0, Company: 2, Foundation: 2 };
+const TYPE_BONUS: Record<Entry['type'], number> = { Topic: 6, Concept: 6, Technology: 3, Kind: 1, Architecture: 0, Comparison: 0, Workload: 1, Company: 2, Foundation: 2 };
 const STOP = new Set(['a', 'an', 'and', 'or', 'of', 'for', 'the', 'on', 'in', 'to', 'vs']);
 // "Apache Kafka" is "Kafka" to most people, "AWS Lambda" is "Lambda".
 const VENDOR = /^(apache|amazon|aws|google cloud|google|azure|microsoft|cloudflare|hashicorp|alibaba cloud|eclipse|oracle|red hat) /;
@@ -88,6 +88,10 @@ function entries(nav: NavData): Entry[] {
       key: `maker:${f.id}`, type: f.company ? 'Company' : 'Foundation', name: f.name, sub: f.summary, path: f.path,
       icon: f.company ? 'building-2' : 'landmark', aliases: `${f.id} ${f.company ? 'company vendor platform' : 'foundation'}`, text: `${f.summary} ${f.terms}`,
     })),
+    ...nav.workloads.map((w): Entry => ({
+      key: `workload:${w.id}`, type: 'Workload', name: w.name, sub: w.summary, path: `workloads/${w.id}/`, icon: w.icon,
+      aliases: `${w.id} workload good for`, text: w.summary,
+    })),
     ...nav.comparisons.map((m): Entry => ({
       key: `compare:${m.id}`, type: 'Comparison', name: m.title, sub: '', path: `compare/${m.id}/`, icon: 'arrow-left-right',
       aliases: `${m.id} compare vs versus`, text: '',
@@ -100,12 +104,23 @@ function search(all: Entry[], query: string): Entry[] {
   // "kafka vs redpanda" looks for Kafka and Redpanda; "vs" alone still finds the comparisons
   const typed = words(query);
   const q = typed.some(w => !STOP.has(w)) ? typed.filter(w => !STOP.has(w)) : typed;
-  return all
+  const found = all
     .map(e => ({ e, s: score(e, q) }))
     .filter(x => x.s > 0)
     .sort((a, b) => b.s - a.s || a.e.name.length - b.e.name.length)
     .slice(0, 40)
     .map(x => x.e);
+  // "kafka vs redpanda": the best technology for each side, offered side by side first
+  const sides = query.toLowerCase().split(/\s+(?:vs\.?|versus)\s+/).map(words).filter(w => w.length);
+  if (sides.length < 2) return found;
+  const techs = all.filter(e => e.type === 'Technology');
+  const picks = sides.map(w => techs.map(e => ({ e, s: score(e, w) })).filter(x => x.s >= 40).sort((a, b) => b.s - a.s)[0]?.e).filter(Boolean) as Entry[];
+  const ids = [...new Set(picks.map(e => e.key.slice('tech:'.length)))].slice(0, 4);
+  if (ids.length < 2) return found;
+  return [{
+    key: `side-by-side:${ids.join(',')}`, type: 'Comparison', name: `Compare ${picks.map(e => e.name).join(' and ')}`, sub: 'Side by side: specs, workloads and trade-offs',
+    path: `compare/technologies/?ids=${ids.join(',')}`, icon: 'arrow-left-right', aliases: '', text: '',
+  }, ...found];
 }
 
 function Glyph({ e }: { e: Entry }) {

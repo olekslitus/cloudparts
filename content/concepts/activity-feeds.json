@@ -1,0 +1,93 @@
+{
+  "$schema": "../../.schemas/concepts.schema.json",
+  "name": "Activity feeds",
+  "icon": "rss",
+  "category": "design",
+  "order": 60,
+  "parent": "cqrs",
+  "summary": "Timelines that show each user the latest activity from everyone they follow, built either by copying each post into followers’ feeds when it is written (fan-out on write) or by merging the followed accounts’ posts when the feed is read (fan-out on read).",
+  "howItWorks": "A feed is a list of recent activities, such as “Ana posted a photo”, from the accounts a user follows, newest first. There are two ways to build it. Fan-out on read (pull) stores each activity once, in its author’s own list, and assembles a feed when it is opened: look up whom the reader follows, fetch each one’s recent activities and merge them. Writes are cheap, but every read does work proportional to the number of accounts followed. Fan-out on write (push) does the work at posting time: a background job looks up the author’s followers and appends the activity’s ID to a precomputed feed for each of them, usually a capped, sorted list in Redis or a partition in Cassandra. Reading a feed is then a single range read, which suits the usual pattern of far more reads than posts, but one post by an account with millions of followers means millions of writes and minutes of delay. Feeds usually hold only IDs, and the reader fetches the activities themselves, called hydration, so an edit or deletion doesn’t have to touch every copy. Large systems mix the two: push for ordinary accounts, pull for the few with huge audiences, whose recent posts are merged in at read time. A 2010 Yahoo! paper showed that the cheapest choice can be made for each pair of producer and consumer, from how often the producer posts and how often the consumer reads.",
+  "analogy": "A newspaper delivered to every subscriber’s door is fan-out on write: printing and delivery are expensive, but reading is instant. Going to the newsstands yourself each morning and picking up one page from each paper you like is fan-out on read: nothing is wasted on readers who stay home, but every reading costs a trip.",
+  "useWhen": [
+    "Social timelines, “people you follow” feeds and activity streams in apps and products",
+    "Notification lists that collect events from many sources for each user",
+    "Read-heavy workloads where feeds are opened far more often than activities are created"
+  ],
+  "avoidWhen": [
+    "A single global or per-topic list that everyone reads the same way; a sorted table or a cache is enough",
+    "Small apps, where a query over “posts by followed users, newest first” with an index is fast enough and needs no extra infrastructure",
+    "Feeds that must be exactly up to date and ordered for every reader; fan-out is eventually consistent"
+  ],
+  "example": "A photo app pushes each new post’s ID into the Redis feed lists of the poster’s followers, keeping the newest 800 entries per user, through a queue of background jobs. Opening the app reads one list and fetches the posts it names. For the few accounts with millions of followers, the app skips the push and instead merges their latest posts into each feed when it is read, so a celebrity’s post doesn’t queue millions of writes.",
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "import redis",
+      "r = redis.Redis()",
+      "FEED_LEN = 800",
+      "",
+      "def publish(author_id, activity_id, ts, follower_ids):",
+      "    r.zadd(f\"user:{author_id}\", {activity_id: ts})          # the author's own list",
+      "    pipe = r.pipeline()",
+      "    for f in follower_ids:                                     # fan-out on write",
+      "        pipe.zadd(f\"feed:{f}\", {activity_id: ts})",
+      "        pipe.zremrangebyrank(f\"feed:{f}\", 0, -FEED_LEN - 1)  # keep the newest 800",
+      "    pipe.execute()",
+      "",
+      "def read_feed(user_id, celebrities_followed, n=50):",
+      "    ids = r.zrevrange(f\"feed:{user_id}\", 0, n - 1, withscores=True)",
+      "    for c in celebrities_followed:                             # fan-out on read for huge accounts",
+      "        ids += r.zrevrange(f\"user:{c}\", 0, n - 1, withscores=True)",
+      "    return [i for i, _ in sorted(ids, key=lambda x: -x[1])[:n]]   # then hydrate the IDs"
+    ]
+  },
+  "related": ["cqrs", "static-read-models", "cache", "key-value", "wide-column", "queue", "pubsub"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "Fan-out on write or on read?",
+      "columns": ["Fan-out on write (push)", "Fan-out on read (pull)"],
+      "rows": [
+        { "label": "Work happens", "values": ["When an activity is posted, once per follower", "When a feed is opened, once per followed account"] },
+        { "label": "Reading a feed", "values": ["One range read of a precomputed list", "Fetch and merge many authors’ lists"] },
+        { "label": "Storage", "values": ["A copy of each ID in every follower’s feed", "Each activity stored once"] },
+        { "label": "Weak spot", "values": ["Accounts with huge audiences: many writes and delayed delivery", "Users who follow many accounts: slow, expensive reads"] },
+        { "label": "Wasted work", "values": ["Feeds of inactive users that are never read", "Repeated merging for users who refresh often"] }
+      ],
+      "notes": ["Most large feeds are hybrids: push by default, pull for high-volume producers, and sometimes smaller or no precomputed feeds for inactive users."]
+    }
+  ],
+  "history": {
+    "story": [
+      "Feeds became a core feature of the social web in the late 2000s, and they were notoriously hard to scale: an event fans out to every follower, and both follower counts and posting rates vary enormously between accounts. In 2010 researchers at Yahoo! and Princeton described the choice as a view materialization problem. Their paper, “Feeding Frenzy”, showed that the best plan materializes each consumer’s feed only partly: events from rarely posting producers are pushed in advance, those from very active producers are pulled at query time, and the decision can be made separately for each producer and consumer pair.",
+      "Twitter described its own version in a talk by Raffi Krikorian, published in April 2013. Each home timeline was a list of up to 800 tweet IDs in a Redis cluster, replicated three times; posting a tweet looked up the author’s followers and inserted the ID into each of their timelines, so the site served about 300,000 timeline reads a second against a few thousand writes. Fan-out for accounts with tens of millions of followers could take minutes, so Twitter moved toward merging the biggest accounts’ tweets at read time.",
+      "Libraries packaged the pattern for everyone else. Fashiolista’s Feedly, later renamed Stream Framework, implemented fan-out on write in Python over Redis or Cassandra with Celery workers from 2012, and its authors went on to sell feeds as a hosted API."
+    ],
+    "choices": [
+      { "choice": "Precompute feeds on write", "why": "Feeds are read far more often than activities are posted, so moving the work to write time makes the frequent operation cheap and predictable." },
+      { "choice": "Store IDs, not copies of the activity", "why": "An ID is a few bytes, so millions of feed entries stay small enough for memory, and edits or deletions change one record instead of every copy." },
+      { "choice": "Hybrid push and pull", "why": "A few producers have enormous audiences or post constantly. Pulling their activities at read time caps the cost of a single post, while everyone else stays on cheap precomputed feeds." }
+    ],
+    "timeline": [
+      { "year": "2010", "text": "Yahoo! Research’s “Feeding Frenzy” paper analyses push versus pull per producer and consumer" },
+      { "year": "2012", "text": "Feedly, later Stream Framework, is published for Fashiolista’s feeds" },
+      { "year": "2013", "text": "Raffi Krikorian’s talk on Twitter’s Redis timelines and fan-out is published" },
+      { "year": "2014", "text": "Feedly is renamed Stream Framework" }
+    ],
+    "sources": [
+      { "label": "Silberstein, Terrace, Cooper and Ramakrishnan: Feeding Frenzy, selectively materializing users’ event feeds (SIGMOD 2010)", "url": "https://sns.cs.princeton.edu/assets/papers/2010-sigmod-silberstein.pdf", "archive": "https://web.archive.org/web/20240722225910/https://sns.cs.princeton.edu/assets/papers/2010-sigmod-silberstein.pdf" },
+      { "label": "Raffi Krikorian, InfoQ: Timelines at scale (published Apr 2013)", "url": "https://www.infoq.com/presentations/Twitter-Timeline-Scalability" },
+      { "label": "High Scalability: The architecture Twitter uses to deal with 150M active users (Jul 2013, summary of the talk)", "url": "https://highscalability.com/the-architecture-twitter-uses-to-deal-with-150m-active-users/" },
+      { "label": "Stream Framework docs: introduction (previously Feedly, built for Fashiolista)", "url": "https://stream-framework.readthedocs.io/en/latest/" },
+      { "label": "PyPI: feedly release history (from August 2012)", "url": "https://pypi.org/project/feedly/#history" }
+    ]
+  },
+  "sources": [
+    { "label": "Silberstein et al.: Feeding Frenzy (SIGMOD 2010)", "url": "https://sns.cs.princeton.edu/assets/papers/2010-sigmod-silberstein.pdf", "archive": "https://web.archive.org/web/20240722225910/https://sns.cs.princeton.edu/assets/papers/2010-sigmod-silberstein.pdf" },
+    { "label": "High Scalability: The architecture Twitter uses to deal with 150M active users (800-entry Redis timelines, tweet IDs, fan-out delays, read-time merge)", "url": "https://highscalability.com/the-architecture-twitter-uses-to-deal-with-150m-active-users/" },
+    { "label": "Stream Framework docs: Design (push to active users, feeds as sorted containers)", "url": "https://stream-framework.readthedocs.io/en/latest/design.html" },
+    { "label": "Stream Framework docs: Background tasks with Celery (fan-out chunks and priorities)", "url": "https://stream-framework.readthedocs.io/en/latest/background_tasks.html" },
+    { "label": "Redis docs: ZADD", "url": "https://redis.io/docs/latest/commands/zadd/" },
+    { "label": "Redis docs: ZREMRANGEBYRANK", "url": "https://redis.io/docs/latest/commands/zremrangebyrank/" }
+  ]
+}

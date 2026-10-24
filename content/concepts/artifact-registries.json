@@ -1,0 +1,133 @@
+{
+  "$schema": "../../.schemas/concepts.schema.json",
+  "name": "Artifact registries",
+  "icon": "warehouse",
+  "category": "delivery",
+  "order": 45,
+  "summary": "Private servers that hold a team’s packages and container images, cache what it pulls from public registries, and decide which versions get promoted, kept or deleted.",
+  "howItWorks": "An artifact registry, also called a repository manager, speaks the wire protocols of package managers and container tools, so `npm install`, `pip install`, `mvn` or `docker pull` talk to it as if it were npmjs.com, PyPI, Maven Central or Docker Hub. Most products offer three kinds of repository, under different names. A local or hosted repository stores what you publish yourself: internal libraries, release builds, your own images. A remote or proxy repository stands in front of a public registry: on the first request it fetches the package from upstream, stores a copy and serves it, and later requests come from that copy. Artifactory, for example, fetches remote artifacts only “on demand”, and rechecks changing metadata such as `maven-metadata.xml` or a Docker manifest after a cache period, two hours by default for most formats. A virtual or group repository puts several of these behind one URL and searches them in a fixed order, so a build needs only one registry address. Around those three sit the policies that make it more than a cache. Promotion moves or copies a build from a staging repository to a release repository once it passes tests or scans, so production only pulls from the release side. Retention and cleanup rules delete old snapshots and untagged images by count, age or last download, and a garbage collector then frees the blobs no longer referenced; stores like Artifactory keep each file once, named by its checksum, so the same JAR in ten repositories takes the space of one. Container registries follow the OCI Distribution Specification, which standardizes how images and other artifacts are pushed and pulled.",
+  "analogy": "A company’s central stockroom. It shelves parts the company makes itself, keeps a copy of anything ordered from outside the first time someone asks for it, and hands everyone the same catalogue with the in-house shelf checked first. Stock that passed inspection moves to the outgoing shelf, and old stock is cleared out on a schedule.",
+  "useWhen": [
+    "Builds pull the same dependencies and base images hundreds of times a day: a proxy cache keeps them fast, keeps working when the public registry is down, and avoids pull limits such as Docker Hub’s 100 anonymous pulls per 6 hours per IP address",
+    "You publish internal libraries or images that must not go to a public registry",
+    "Production should only run artifacts that passed tests, scans or a licence check: promotion from staging to release repositories makes that a rule",
+    "Several ecosystems (Maven, npm, PyPI, Docker, Helm) need one place for access control, audit logs and storage quotas"
+  ],
+  "avoidWhen": [
+    "A small team with a few public dependencies and no private packages: the public registries and your forge’s built-in package registry are enough",
+    "Running one yourself without anyone to patch it: a registry sits on the path of every build, so its outages and vulnerabilities become yours; a managed registry may be the better choice",
+    "Configuring a private index next to the public one, such as pip’s `--extra-index-url`: clients then pick the higher version from either, which is how dependency confusion works; send clients to one virtual repository that checks private repositories first"
+  ],
+  "example": "A team of 40 runs 300 CI builds a day. Every build pulls `node:22` from Docker Hub and installs about 900 npm packages, and on busy days CI fails with Docker Hub rate-limit errors. They set up a registry with a remote repository for Docker Hub, a remote repository for npmjs.com, a local repository for their own `@acme/*` packages, and a virtual npm repository that checks the local one first. CI now points `.npmrc` and its image names at the registry. The first build of the day fetches each package from upstream once; the rest are served from the cache. Release builds publish to a staging repository, a scan job promotes those without critical CVEs to the release repository that production pulls from, and a cleanup rule deletes snapshot builds older than 30 days.",
+  "providers": {
+    "aws": "AWS CodeArtifact for packages (upstream repositories and one external connection to a public registry per repository); Amazon ECR for container images, with pull through cache rules",
+    "gcp": "Artifact Registry: standard, remote and virtual repositories for Docker, Maven, npm, Python, Go, Apt, Yum and more, with cleanup policies",
+    "azure": "Azure Artifacts feeds with upstream sources for packages; Azure Container Registry with artifact cache rules for images",
+    "oss": "Harbor and Project Quay for container images; Nexus Repository Community Edition and Artifact Keeper for many formats; Forgejo includes a package registry. Commercial: JFrog Artifactory, Nexus Repository Pro, Red Hat Quay"
+  },
+  "snippet": {
+    "lang": "text",
+    "source": [
+      "# pip.conf: send pip to ONE index, the registry’s virtual repository,",
+      "# which checks the private repository first and the PyPI proxy second",
+      "[global]",
+      "index-url = https://registry.example.com/pypi/python/simple/",
+      "",
+      "# Not this: with extra-index-url pip asks both indexes and installs",
+      "# whichever has the higher version, so a public package with an",
+      "# internal name and version 9000.0.0 wins (dependency confusion)",
+      "# extra-index-url = https://pypi.internal.example.com/simple/"
+    ]
+  },
+  "related": ["package-managers", "containers", "build-tools", "cicd", "release-automation", "cve"],
+  "diagram": {
+    "caption": "Builds ask one virtual repository for everything. Internal packages come from the local repository; public ones go to the remote repository, which answers most requests from its cache and only goes to the public registry on a miss.",
+    "w": 800,
+    "h": 260,
+    "nodes": [
+      { "id": "ci", "x": 90, "y": 130, "label": "CI builds", "sub": "npm, pip, docker", "emit": { "every": 520, "jitter": 0.35, "req": true, "types": ["public", "public", "public", "internal"], "colorByType": { "public": 0, "internal": 1 } }, "out": ["virtual"] },
+      { "id": "virtual", "x": 290, "y": 130, "label": "Virtual repo", "sub": "one URL, fixed order", "route": "type", "rules": { "internal": ["local"], "public": ["remote"] } },
+      { "id": "local", "x": 500, "y": 55, "label": "Local repo", "sub": "@acme/* packages", "mode": "reply" },
+      { "id": "remote", "x": 500, "y": 195, "label": "Remote repo", "sub": "proxy cache", "mode": "cache", "p": 0.85, "out": ["upstream"] },
+      { "id": "upstream", "x": 710, "y": 195, "label": "Public registry", "sub": "npmjs, PyPI, Docker Hub", "mode": "reply", "delay": 700, "concept": "package-managers" }
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Same three repositories, different names",
+      "intro": "Every product separates what you publish from what it proxies; the universal ones also merge them behind one URL.",
+      "corner": "Product",
+      "columns": ["Your own artifacts", "Cache of a public registry", "One URL over several"],
+      "rows": [
+        { "label": "JFrog Artifactory", "values": ["Local repository", "Remote repository", "Virtual repository: local first, then remote caches, then remotes"] },
+        { "label": "Nexus Repository", "values": ["Hosted repository", "Proxy repository", "Group repository, searched in member order"] },
+        { "label": "Artifact Keeper", "values": ["Local repository", "Remote repository (24-hour default cache TTL)", "Virtual repository, members by priority number"] },
+        { "label": "Google Artifact Registry", "values": ["Standard repository", "Remote repository", "Virtual repository"] },
+        { "label": "Harbor", "values": ["Project", "Proxy cache project (no pushes)", "None"] },
+        { "label": "Red Hat Quay", "values": ["Organization repository", "Proxy cache organization", "None"] }
+      ],
+      "notes": ["Azure Artifacts folds all three into one feed: packages published to it, packages saved from upstream sources, then the upstream sources in their listed order."]
+    }
+  ],
+  "groups": [
+    { "name": "Universal repository managers", "summary": "Many package formats and container images in one server, with local, remote and virtual repositories.", "technologies": ["artifactory", "nexus-repository", "artifact-keeper"] },
+    { "name": "Container registries", "summary": "Images and other OCI artifacts only, with scanning, signing, replication and proxy caching.", "technologies": ["harbor", "quay"] }
+  ],
+  "history": {
+    "story": [
+      "Maven made downloading dependencies from a central repository routine, and with it came a new failure: the build broke whenever the public server was slow or down. Tamás Cservenák started Proximity in December 2005 to proxy Maven artifacts past a very slow ADSL line. Yoav Landman, a consultant moving client projects from Ant to Maven 2, started Artifactory in 2006, “frustrated by the absence of good options to manage dependencies and hosting artifacts in house”; a multi-day Codehaus outage was “the final straw”. Its adoption led him to found JFrog. In 2007 Sonatype asked Cservenák to build Nexus, which absorbed Proximity’s code. Both settled on the same model: proxy what is public, host what is yours, and group them behind one address.",
+      "Containers brought a second kind of registry. Quay launched in late 2013 as the first private hosted Docker registry, and CoreOS bought it in 2014. VMware started Harbor internally in 2014 and open-sourced it in 2016, the same year Nexus 3.0 added hosting a private Docker registry next to Maven, npm and NuGet. The OCI Distribution Specification 1.0, released in May 2021, turned Docker’s registry API into a common standard, so one registry can hold images, Helm charts and other artifacts.",
+      "Two events in the early 2020s made the proxy part hard to skip. Docker Hub began limiting pulls, today 100 per 6 hours for each anonymous IP address. And in February 2021 Alex Birsan showed “dependency confusion”: by publishing packages to npm, PyPI and RubyGems under internal names found in companies’ code, he got his code run inside more than 35 organizations, because tools such as pip with `--extra-index-url` take the higher version from either index. A virtual repository that checks private repositories first, with clients pointed only at it, became the standard defence; Google’s Artifact Registry documents ranking private repositories above remote ones for that reason."
+    ],
+    "choices": [
+      { "choice": "Cache on demand instead of mirroring", "why": "Copying all of Maven Central or npm would cost far more storage than any team uses. Remote repositories fetch an artifact the first time someone asks for it and keep it, so the cache holds exactly what builds need and still serves it when upstream is down." },
+      { "choice": "One virtual URL with a fixed search order", "why": "Package managers given several sources may query them in parallel and take whichever answers or has the higher version. A server-side order (local first, then caches, then upstreams) makes resolution deterministic and stops a public package from shadowing a private one." },
+      { "choice": "Store files by checksum", "why": "The same artifact appears in many repositories and is copied on every promotion. Storing each file once, named by its checksum, with the database mapping paths to checksums, makes copies and moves cheap database operations and deduplicates storage." },
+      { "choice": "Retention as rules, then garbage collection", "why": "CI publishes a new snapshot or image tag on every commit, and nobody deletes them by hand. Rules that keep the newest N versions or those pulled recently mark the rest for deletion, and a separate garbage collection frees the blobs no remaining version references." }
+    ],
+    "timeline": [
+      { "year": "2005", "text": "Tamás Cservenák starts Proximity, a Maven proxy (December)" },
+      { "year": "2006", "text": "Yoav Landman starts Artifactory" },
+      { "year": "2007", "text": "Sonatype starts Nexus, which absorbs Proximity" },
+      { "year": "2013", "text": "Quay launches as a private hosted Docker registry" },
+      { "year": "2016", "text": "Harbor is open-sourced; Nexus 3.0 adds a private Docker registry (April)" },
+      { "year": "2020", "text": "Harbor graduates in the CNCF (June)" },
+      { "year": "2021", "text": "Dependency confusion is published (February); OCI Distribution Spec 1.0 (May)" },
+      { "year": "2026", "text": "Artifact Keeper, an MIT-licensed registry for 45+ formats, is released" }
+    ],
+    "sources": [
+      { "label": "Apache Maven: Repository management (Proximity, Nexus)", "url": "https://svn.apache.org/repos/infra/websites/production/maventest/content/repository-management.html" },
+      { "label": "Eclipse blogs: Creating a build you can trust (Yoav Landman on starting Artifactory)", "url": "https://blogs.eclipse.org/post/anonymous/creating-build-you-can-trust" },
+      { "label": "Red Hat blog: Red Hat introduces open source Project Quay container registry (Quay launched late 2013)", "url": "https://www.redhat.com/en/blog/red-hat-introduces-open-source-project-quay-container-registry" },
+      { "label": "CNCF: Harbor graduation announcement (started at VMware 2014, open-sourced 2016)", "url": "https://www.cncf.io/announcements/2020/06/23/cloud-native-computing-foundation-announces-harbor-graduation/" },
+      { "label": "Sonatype blog: Sonatype releases Nexus Repository 3.0 (April 13, 2016)", "url": "https://www.sonatype.com/blog/sonatype-releases-nexus-repository-3.0" },
+      { "label": "opencontainers/distribution-spec on GitHub: releases (v1.0.0 on May 5, 2021)", "url": "https://github.com/opencontainers/distribution-spec/releases" },
+      { "label": "Alex Birsan: Dependency Confusion (Feb 9, 2021)", "url": "https://medium.com/@alex.birsan/dependency-confusion-4a5d60fec610", "archive": "https://web.archive.org/web/20260927081137/https://medium.com/@alex.birsan/dependency-confusion-4a5d60fec610" },
+      { "label": "Docker Docs: Docker Hub pull usage and limits", "url": "https://docs.docker.com/docker-hub/usage/pulls/" },
+      { "label": "Google Cloud docs: Artifact Registry repository overview (virtual repositories and dependency confusion)", "url": "https://docs.cloud.google.com/artifact-registry/docs/repositories" },
+      { "label": "Artifact Keeper on GitHub (MIT, 45+ formats)", "url": "https://github.com/artifact-keeper/artifact-keeper" }
+    ]
+  },
+  "sources": [
+    { "label": "JFrog docs: Repository management (local, remote, virtual, federated)", "url": "https://docs.jfrog.com/artifactory/docs/repository-management" },
+    { "label": "JFrog docs: Remote repositories (on-demand caching, metadata retrieval cache period)", "url": "https://docs.jfrog.com/artifactory/docs/remote-repositories" },
+    { "label": "JFrog docs: Virtual repositories (resolution order)", "url": "https://docs.jfrog.com/artifactory/docs/virtual-repositories" },
+    { "label": "JFrog docs: Checksum-based storage", "url": "https://docs.jfrog.com/installation/docs/checksum-based-storage" },
+    { "label": "Sonatype docs: Repository types (proxy, hosted, group)", "url": "https://help.sonatype.com/en/repository-types.html" },
+    { "label": "Artifact Keeper docs: Remote and virtual repositories", "url": "https://artifactkeeper.com/docs/advanced/remote-virtual/" },
+    { "label": "Artifact Keeper docs: Staging and promotion", "url": "https://artifactkeeper.com/docs/advanced/staging-promotion/" },
+    { "label": "Artifact Keeper docs: Lifecycle policies", "url": "https://artifactkeeper.com/docs/advanced/lifecycle/" },
+    { "label": "Harbor docs: Configure proxy cache", "url": "https://goharbor.io/docs/main/administration/configure-proxy-cache/" },
+    { "label": "Harbor docs: Create tag retention rules", "url": "https://goharbor.io/docs/main/working-with-projects/working-with-images/create-tag-retention-rules/" },
+    { "label": "Red Hat Quay docs: Quay as a proxy cache for upstream registries", "url": "https://docs.redhat.com/en/documentation/red_hat_quay/3.15/html/use_red_hat_quay/quay-as-cache-proxy" },
+    { "label": "Google Cloud docs: Artifact Registry repository overview (standard, remote, virtual; cleanup policies)", "url": "https://docs.cloud.google.com/artifact-registry/docs/repositories" },
+    { "label": "AWS docs: Working with upstream repositories in CodeArtifact", "url": "https://docs.aws.amazon.com/codeartifact/latest/ug/repos-upstream.html" },
+    { "label": "AWS docs: Amazon ECR pull through cache", "url": "https://docs.aws.amazon.com/AmazonECR/latest/userguide/pull-through-cache.html" },
+    { "label": "Microsoft Learn: Artifact cache in Azure Container Registry", "url": "https://learn.microsoft.com/en-us/azure/container-registry/artifact-cache-overview" },
+    { "label": "Microsoft Learn: Azure Artifacts upstream sources (search order)", "url": "https://learn.microsoft.com/en-us/azure/devops/artifacts/concepts/upstream-sources" },
+    { "label": "Docker Docs: Docker Hub pull usage and limits", "url": "https://docs.docker.com/docker-hub/usage/pulls/" },
+    { "label": "Alex Birsan: Dependency Confusion (pip --extra-index-url picks the higher version)", "url": "https://medium.com/@alex.birsan/dependency-confusion-4a5d60fec610", "archive": "https://web.archive.org/web/20260927081137/https://medium.com/@alex.birsan/dependency-confusion-4a5d60fec610" },
+    { "label": "OCI Distribution Specification", "url": "https://github.com/opencontainers/distribution-spec" }
+  ]
+}

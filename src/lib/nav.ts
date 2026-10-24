@@ -28,6 +28,7 @@ export interface NavData {
   }[];
   architectures: (NavItem & { terms: string })[];
   comparisons: { id: string; title: string }[];
+  workloads: { id: string; name: string; summary: string; icon: string }[];
   /** Foundations and companies, whose pages list the technologies they make. */
   makers: { id: string; name: string; summary: string; path: string; company: boolean; terms: string }[];
 }
@@ -133,6 +134,7 @@ export function navData(c: Catalog, logo: (id: string) => NavData['groups'][numb
       terms: a.techs.map(t => c.tech(t).name).join(' '),
     })),
     comparisons: c.comparisons.map(m => ({ id: m.id, title: m.title })),
+    workloads: c.workloads.map(w => ({ id: w.id, name: w.name, summary: plain(w.summary), icon: w.icon })),
     makers: c.foundations.map(f => ({
       id: f.id, name: f.name, summary: plain(f.summary), path: f.path, company: f.type === 'company',
       terms: f.projects.map(t => t.name).join(' '),

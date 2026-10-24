@@ -1,0 +1,107 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Firezone",
+  "concepts": ["remote-access"],
+  "uses": ["sans-io"],
+  "provider": "vendor",
+  "vendor": "Firezone, Inc.",
+  "license": "Apache 2.0 for the clients, Gateway and Relay; Elastic License 2.0 for the Elixir admin portal and control plane",
+  "website": "https://www.firezone.dev/",
+  "repo": "https://github.com/firezone/firezone",
+  "summary": "Zero-trust access over WireGuard: a hosted control plane decides who may reach each private host, subnet or DNS name, and Gateways you run inside the network connect out to approved clients.",
+  "intro": [
+    "Firezone has three parts. You run Gateways, small Rust binaries with no persistent storage, inside each private network (a Site), as Docker containers or systemd services. Users install the Firezone Client on Windows, macOS, Linux, iOS or Android, or run a headless client on servers, which can sign in with a service-account token. Firezone runs the rest as SaaS: the admin portal, the control plane API and the policy engine, written in Elixir and Phoenix and hosted on Azure, plus STUN/TURN relays in several regions. You define Resources (an IP, a CIDR range, or a DNS name such as `*.corp.example.com`) and Policies that say which identity-provider group may reach which Resource. Access is denied unless a Policy allows it.",
+    "Traffic doesn’t pass through a central VPN server. The client contains a small DNS resolver: when an app looks up a protected name, it gets a placeholder address, and the first packet to it triggers a request to the policy engine. If a Policy allows it, the control plane hands WireGuard keys to the client and to a nearby Gateway, and the two punch through NAT to talk directly, falling back to a relay that can’t decrypt the traffic. Gateways and clients only open outbound connections, so no inbound firewall ports are needed, and session keys rotate every two minutes. Since August 2026 the connection checks also travel inside WireGuard, so an observer sees nothing on the wire but WireGuard packets.",
+    "The code is on GitHub: the data plane is Apache 2.0 and the portal is under the Elastic License 2.0. Self-hosting is allowed but production self-hosting is not supported, and published clients are only guaranteed to work with the managed service. Plans in October 2026: Starter is free for up to 6 users, Team is $5 per user a month, Business is $8 per user a month and adds directory sync with Google, Entra ID and Okta, device posture checks and log sinks, and Enterprise is custom. A REST API, a Terraform provider and a CLI arrived in 2026."
+  ],
+  "strengths": [
+    "Users get access to specific hosts, subnets or DNS names rather than a whole network, decided per Resource by group-based Policies",
+    "Direct, end-to-end encrypted WireGuard connections between client and Gateway, with relays only as a fallback, so there is no central VPN concentrator to size",
+    "No inbound ports: Gateways dial out, and stateful cloud firewalls (security groups, NSGs, GCP rules) need no changes",
+    "Gateways are stateless and configured by one token; running several per Site gives high availability, and capacity grows by adding more"
+  ],
+  "limits": [
+    "The control plane is Firezone’s SaaS: production self-hosting isn’t supported, so sign-in and policy changes depend on Firezone’s service",
+    "Not entirely open source: the portal and control plane are under the Elastic License 2.0, not an OSI licence",
+    "Directory sync, device posture checks and log sinks need the Business plan or higher, and Business caps an account at 1,000 users and 200 Sites",
+    "It works at layer 3, deciding which addresses a device can reach; it doesn’t record sessions or hand out per-session credentials the way identity-aware proxies such as Boundary do"
+  ],
+  "worksWith": [
+    { "id": "docker", "how": "runs its Gateways as containers with" },
+    { "id": "terraform", "how": "is configured as code with" }
+  ],
+  "snippet": {
+    "lang": "yaml",
+    "title": "docker-compose.yml: a Firezone Gateway inside a private network",
+    "source": [
+      "services:",
+      "  firezone-gateway:",
+      "    image: \"ghcr.io/firezone/gateway:1\"",
+      "    environment:",
+      "      # The single-owner token shown when you deploy a Gateway in the admin portal",
+      "      FIREZONE_TOKEN: <token>",
+      "      RUST_LOG: info",
+      "    volumes:",
+      "      - /var/lib/firezone:/var/lib/firezone   # flow log spool and generated ID",
+      "    cap_add:",
+      "      - NET_ADMIN",
+      "    init: true",
+      "    sysctls:",
+      "      - net.ipv4.ip_forward=1",
+      "      - net.ipv4.conf.all.src_valid_mark=1",
+      "      - net.ipv6.conf.all.disable_ipv6=0",
+      "      - net.ipv6.conf.all.forwarding=1",
+      "      - net.ipv6.conf.default.forwarding=1",
+      "    devices:",
+      "      - /dev/net/tun:/dev/net/tun",
+      "# Outbound only: HTTPS 443 to the control plane, UDP to relays and clients. No inbound ports."
+    ]
+  },
+  "history": {
+    "story": [
+      "Jamil Bou Kheir, a former Cisco engineer, wanted an easy way to deploy and manage a WireGuard VPN. WireGuard supplies the tunnel but leaves key distribution, user management and routing tables to you, which he called “tedious and error-prone”. He left his job and built Firezone in Elixir and Phoenix: a self-hosted WireGuard VPN server with a web UI. It launched on Hacker News in 2021, was backed by Y Combinator, and by mid-2023 had more than 3,000 known running instances.",
+      "In July 2023 he announced Firezone 1.0, “an entirely new product with a brand new architecture”. A perimeter VPN trusts everyone once they are inside, so one stolen credential can expose the whole network. Firezone 1.0 instead brokers access to each resource: the protected side sits behind its firewall, keeps an outbound control channel to Firezone, and connects out to a client only after a policy allows it. The control plane became a hosted service with native clients for every platform.",
+      "Firezone 0.7, renamed Firezone Legacy, stopped getting updates after 31 January 2024, and 1.0 became generally available on 1 April 2024 with a $5-per-user Team plan. In 2026 the company shipped a redesigned portal, a REST API, a Terraform provider, a CLI and a Business plan, and removed ICE from the data path so that only WireGuard packets appear on the wire."
+    ],
+    "choices": [
+      { "choice": "Build on WireGuard", "why": "WireGuard is a small, fast, well-reviewed tunnel protocol in every major OS. What it lacks is key distribution, user management and routing, which is exactly what Firezone adds." },
+      { "choice": "Broker access per resource instead of running a VPN server", "why": "A perimeter VPN grants the whole network after one login. Letting a policy engine approve each resource, and having the protected side connect outward, removes both broad access and open inbound ports." },
+      { "choice": "A hosted control plane, open data plane", "why": "Running the portal as a service let a small team ship native clients, high availability and fast policy updates; the Rust clients, Gateway and relay stay Apache 2.0 so the parts that touch your traffic can be inspected." },
+      { "choice": "Keep control-plane and data-plane state apart", "why": "Packet processing should never wait on a control message, and existing connections should survive a control-plane outage." }
+    ],
+    "timeline": [
+      { "year": "2020", "text": "Repository created; Firezone starts as a self-hosted WireGuard VPN server" },
+      { "year": "2021", "text": "Launches on Hacker News; later backed by Y Combinator" },
+      { "year": "2023", "text": "Firezone 1.0 announced in July as a zero-trust access platform with a hosted control plane" },
+      { "year": "2024", "text": "Firezone Legacy (0.7) end of life in January; 1.0 generally available in April" },
+      { "year": "2026", "text": "REST API, Terraform provider, CLI and Business plan; ICE removed so only WireGuard is on the wire" }
+    ],
+    "sources": [
+      { "label": "Firezone blog: Firezone 1.0 (Jamil Bou Kheir, Jul 2023)", "url": "https://www.firezone.dev/blog/firezone-1-0" },
+      { "label": "Firezone blog: January 2024 update (Legacy end of life)", "url": "https://www.firezone.dev/blog/jan-2024-update" },
+      { "label": "Firezone blog: April 2024 update, GA", "url": "https://www.firezone.dev/blog/apr-2024-update" },
+      { "label": "Firezone blog: Nothing on the wire but WireGuard (Aug 2026)", "url": "https://www.firezone.dev/blog/nothing-on-the-wire-but-wireguard" },
+      { "label": "Firezone blog: Manage Firezone as code with Terraform (Sep 2026)", "url": "https://www.firezone.dev/blog/terraform-provider" },
+      { "label": "Firezone blog: Introducing Firezone Business (Oct 2026)", "url": "https://www.firezone.dev/blog/introducing-firezone-business" },
+      { "label": "GitHub API: firezone/firezone repository (created April 2020)", "url": "https://api.github.com/repos/firezone/firezone" }
+    ]
+  },
+  "sources": [
+    { "label": "Firezone on GitHub: README (components, licences, self-hosting)", "url": "https://github.com/firezone/firezone" },
+    { "label": "Firezone docs: Architecture overview", "url": "https://www.firezone.dev/kb/architecture" },
+    { "label": "Firezone docs: Core components (portal, control plane, policy engine, relays, Gateways)", "url": "https://www.firezone.dev/kb/architecture/core-components" },
+    { "label": "Firezone docs: Critical sequences (DNS resolver, ICE, key rotation)", "url": "https://www.firezone.dev/kb/architecture/critical-sequences" },
+    { "label": "Firezone docs: Tech stack (Elixir control plane on Azure, Rust data plane)", "url": "https://www.firezone.dev/kb/architecture/tech-stack" },
+    { "label": "Firezone docs: Deploy Gateways (at least three per Site)", "url": "https://www.firezone.dev/kb/deploy/gateways" },
+    { "label": "Firezone docs: Linux headless Client (service-account tokens)", "url": "https://www.firezone.dev/kb/client-apps/linux-headless-client" },
+    { "label": "Firezone docs: Deploy a Gateway with Docker (Compose reference)", "url": "https://www.firezone.dev/kb/deploy/docker" },
+    { "label": "Firezone docs: Ports and protocols (outbound only)", "url": "https://www.firezone.dev/kb/reference/ports" },
+    { "label": "Firezone blog: Introducing Firezone Business (plans and prices, Oct 2026)", "url": "https://www.firezone.dev/blog/introducing-firezone-business" },
+    { "label": "Firezone blog: Nothing on the wire but WireGuard (Aug 2026)", "url": "https://www.firezone.dev/blog/nothing-on-the-wire-but-wireguard" },
+    { "label": "Firezone blog: REST API generally available (Aug 2026)", "url": "https://www.firezone.dev/blog/rest-api-ga" },
+    { "label": "Firezone blog: Introducing the Firezone CLI (Sep 2026)", "url": "https://www.firezone.dev/blog/firezone-cli" },
+    { "label": "Firezone blog: Manage Firezone as code with Terraform (Sep 2026)", "url": "https://www.firezone.dev/blog/terraform-provider" },
+    { "label": "Firezone on GitHub: Apache 2.0 LICENSE", "url": "https://github.com/firezone/firezone/blob/main/LICENSE" }
+  ],
+  "checked": "2026-10-24"
+}

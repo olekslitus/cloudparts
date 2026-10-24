@@ -1,0 +1,138 @@
+{
+  "$schema": "../../.schemas/concepts.schema.json",
+  "name": "WebAssembly",
+  "icon": "binary",
+  "category": "code",
+  "order": 85,
+  "parent": "programming-languages",
+  "summary": "A portable binary format for a sandboxed virtual machine: compile C, C++, Rust, Go or Kotlin once, then run the same `.wasm` file in a browser, on a server, at the edge or as a plugin inside another program.",
+  "howItWorks": "WebAssembly (Wasm) is a binary instruction format for a stack-based virtual machine. A compiler such as Clang, `rustc` or Go’s emits a `.wasm` module instead of machine code for one CPU. The module declares functions, a linear memory (one resizable array of bytes that holds the program’s heap and data), tables, and the imports it needs from its host. The host, a browser engine such as V8 or a standalone runtime such as Wasmtime, validates the module, compiles it to machine code for the local CPU, and runs it. The sandbox comes from the format itself: every load and store is bounds-checked against the module’s own linear memory, control flow is structured so code can only jump to valid targets, and the call stack lives outside linear memory, where a buffer overflow can’t reach the return addresses. A module can’t open a file, a socket or the DOM on its own; it can only call the functions its host passes in as imports. In a browser those imports are JavaScript functions. Outside the browser, WASI (the WebAssembly System Interface) standardises them: files, clocks, random numbers, sockets and HTTP, each granted only when the host chooses. A core module’s functions only take and return numbers (`i32`, `i64`, `f32`, `f64`), so anything richer, such as a string, is passed as a pointer and a length into linear memory by convention. The Component Model wraps core modules in components whose interfaces are written in WIT, with strings, lists, records and resources, and a canonical ABI that copies values between components that never share memory. That lets a component written in Rust call one written in Go or JavaScript, and it is what WASI 0.2 and 0.3 are built on.",
+  "analogy": "A shipping container for code. Any factory (compiler) can pack goods into the standard box, any port (browser, server, edge network) has cranes that fit it, and customs (the host) decides what the box may touch when it is opened. Nothing inside can reach out of the box except through the doors the port opens.",
+  "useWhen": [
+    "Running existing C, C++ or Rust code in a browser: a codec, a PDF or image library, a game engine, a database such as SQLite",
+    "Hot paths in a web app where JavaScript is too slow or too unpredictable, such as image processing or physics",
+    "Running untrusted or third-party code inside your own process: plugins and filters in a proxy such as Envoy, user code in a SaaS product",
+    "Edge and serverless functions that must start in milliseconds and run on many CPU types, as on Cloudflare Workers",
+    "One build that runs on Linux, macOS and Windows, x86-64 and ARM, without recompiling"
+  ],
+  "avoidWhen": [
+    "A whole server application that needs threads, the full operating system, or many system calls: WASI covers a subset, and a container runs the native binary as is",
+    "Code whose speed matters more than portability: measured on the SPEC CPU benchmarks, Wasm in browsers ran 45% to 55% slower than native code on average",
+    "UI code that mostly calls the DOM: every call goes through JavaScript glue, so a Wasm front end only pays off when it does real work between calls",
+    "Bundle size is tight: a Wasm module that carries its language’s runtime and standard library is often larger than the equivalent JavaScript"
+  ],
+  "example": "A photo-sharing site wants to resize and re-encode images in the browser before upload, so phones send megabytes instead of tens of megabytes. Its image library is written in C. The team compiles it to a `.wasm` module, loads it with `WebAssembly.instantiateStreaming()`, copies each photo’s bytes into the module’s linear memory and calls `resize()`. The same `.wasm` file then runs in their Cloudflare Workers function, which builds thumbnails for photos uploaded from old clients. For user-written filters, the team later moves to a component with a WIT interface (`apply: func(image: list<u8>) -> list<u8>`), so customers can write filters in Rust, Go or JavaScript and the server runs each one in its own sandbox, with no file or network access granted.",
+  "snippet": {
+    "lang": "bash",
+    "source": [
+      "# src/main.rs",
+      "#   fn main() {",
+      "#       std::fs::write(\"hello.txt\", \"hi from wasm\\n\").unwrap();",
+      "#   }",
+      "",
+      "rustup target add wasm32-wasip2",
+      "cargo build --release --target wasm32-wasip2",
+      "#   writes target/wasm32-wasip2/release/hello.wasm: a WASI 0.2 component, not a Linux or macOS binary",
+      "",
+      "wasmtime target/wasm32-wasip2/release/hello.wasm",
+      "#   panics: the sandbox starts with no directories, so there is nowhere to write",
+      "",
+      "wasmtime --dir . target/wasm32-wasip2/release/hello.wasm   # grant the current directory",
+      "cat hello.txt   # hi from wasm",
+      "",
+      "# the same .wasm file runs unchanged on Linux, macOS or Windows, x86-64 or ARM"
+    ]
+  },
+  "related": ["runtime-vms", "ffi", "serverless", "containers", "desktop-apps"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "Core modules and components",
+      "intro": "Two layers of the standard. Browsers run core modules; components and WASI 0.2 and later run in standalone runtimes, or in the browser after a tool such as jco turns them into JavaScript plus core modules.",
+      "corner": "",
+      "columns": ["Core module", "Component"],
+      "rows": [
+        { "label": "Defined by", "values": ["The WebAssembly core specification: 1.0 (W3C Recommendation, 2019), 2.0, and 3.0 (September 2025)", "The Component Model proposal and WIT, the interface language WASI 0.2 and 0.3 are written in"] },
+        { "label": "Values at the boundary", "values": ["Numbers only: `i32`, `i64`, `f32`, `f64`, plus references; strings travel as a pointer and length", "Strings, lists, records, variants, resources; since WASI 0.3 also `future` and `stream`"] },
+        { "label": "Memory", "values": ["Linear memory, which can be exported and shared with the host", "May not export a memory; values are copied between components by the canonical ABI"] },
+        { "label": "System access", "values": ["Whatever the host passes in as imports: JavaScript functions in a browser, or WASI preview 1’s POSIX-like calls (`wasi_snapshot_preview1`)", "WASI interfaces such as `wasi:cli`, `wasi:filesystem`, `wasi:sockets` and `wasi:http`, granted by the host"] },
+        { "label": "Rust target", "values": ["`wasm32-unknown-unknown` for browsers, `wasm32-wasip1` for WASI preview 1", "`wasm32-wasip2`"] },
+        { "label": "Runs in", "values": ["All major browsers, Node.js, Cloudflare Workers, Envoy, Wasmtime and other runtimes", "Wasmtime, and JavaScript hosts through jco"] }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Wasm next to JavaScript, containers and runtime VMs",
+      "body": [
+        "In the browser Wasm doesn’t replace JavaScript; it sits beside it. The module can’t touch the DOM or call `fetch` itself, so JavaScript loads it, passes in the functions it may call, and copies data in and out of its linear memory. Toolchains such as `wasm-bindgen` for Rust generate that glue. Rust frameworks such as Leptos compile a whole front end to Wasm and keep the JavaScript to a thin layer.",
+        "On servers Wasm overlaps with containers but isolates differently. A container is a native process on a shared kernel, with the full system call interface filtered by namespaces and seccomp. A Wasm module is not native code at all: it gets a validated instruction set, its own bounds-checked memory, and only the imports the host grants, so many modules can share one process safely. That is why edge platforms such as Cloudflare Workers and proxies such as Envoy run customer and plugin code as Wasm. The cost is reach: no threads in most hosts, no `fork`, and only the system interfaces WASI defines.",
+        "Compared with the JVM or .NET, Wasm is lower level. It has no class loader, no standard library and, before Wasm 3.0, no garbage collector, so each language brings its own runtime inside the module. Wasm 3.0’s garbage collection lets languages such as Java, Kotlin, Dart, OCaml and Scala use the engine’s collector instead of shipping one."
+      ]
+    }
+  ],
+  "groups": [
+    { "name": "System interfaces", "summary": "Standard APIs that let Wasm run outside the browser.", "technologies": ["wasi"] },
+    { "name": "Frameworks that compile to Wasm", "summary": "Write the app in another language and ship it to the browser as a `.wasm` module.", "technologies": ["leptos"] }
+  ],
+  "history": {
+    "story": [
+      "Browsers could only run JavaScript, so running C or C++ on the web meant compiling it to JavaScript. In 2013 Mozilla shipped asm.js in Firefox 22: a highly optimisable subset of JavaScript that the Emscripten compiler could turn C++ into, running at about half the speed of native code. It was still JavaScript text that had to be downloaded and parsed. On 17 June 2015 Luke Wagner announced WebAssembly, which he called “the next evolutionary step of asm.js”: a portable, size- and load-time-efficient binary format, designed in a W3C Community Group by engineers from Mozilla, Chromium, Edge and WebKit. Firefox 52 shipped it in March 2017.",
+      "On 5 December 2019 the W3C made the WebAssembly core specification a Recommendation, calling it the fourth language of the web after HTML, CSS and JavaScript. By then people wanted to run Wasm outside the browser too. In March 2019 Mozilla, with Fastly, announced WASI to give it a portable, capability-based system interface, and in 2024 WASI 0.2 rebased that interface on the Component Model so that modules written in different languages could call each other with rich types.",
+      "The core format kept growing. Version 2.0 added vector (SIMD) instructions, bulk memory operations and multiple return values. Wasm 3.0, released on 17 September 2025, added garbage collection, 64-bit memories, multiple memories, exception handling and tail calls, which let garbage-collected languages such as Java, Kotlin and Dart target Wasm without shipping their own collector."
+    ],
+    "choices": [
+      {
+        "choice": "A binary format, not a JavaScript subset",
+        "why": "asm.js code still had to be downloaded as text and parsed. A compact binary format is smaller and faster to decode and compile, while a polyfill could translate it to asm.js for browsers that didn’t support it yet."
+      },
+      {
+        "choice": "Sandboxed by construction",
+        "why": "Wasm had to be as safe to run as JavaScript from any website. Bounds-checked linear memory, structured control flow and a call stack the program can’t address mean a bug in the module can corrupt its own memory but not the host’s."
+      },
+      {
+        "choice": "Everything outside the sandbox is an import",
+        "why": "The same module had to run in browsers, servers and devices with very different APIs. Leaving all I/O to imports keeps the core small and lets each host decide exactly what a module may do, which WASI later turned into capability-based security."
+      },
+      {
+        "choice": "Components that share no memory",
+        "why": "Core modules can only exchange numbers, so passing a string between Rust and Go code depended on conventions the type system couldn’t check. The Component Model defines typed interfaces in WIT and copies values between components, so languages with different memory models can call each other safely."
+      }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "WebAssembly announced on 17 June as the successor to asm.js" },
+      { "year": "2013", "text": "Firefox 22 ships asm.js, a fast subset of JavaScript that C++ compiles to" },
+      { "year": "2017", "text": "Firefox 52 ships WebAssembly in March" },
+      { "year": "2019", "text": "WASI announced in March; WebAssembly 1.0 becomes a W3C Recommendation on 5 December" },
+      { "year": "2024", "text": "WASI 0.2, built on the Component Model, launched on 25 January" },
+      { "year": "2025", "text": "Wasm 3.0 adds garbage collection, 64-bit memory and exceptions on 17 September" },
+      { "year": "2026", "text": "WASI 0.3 adds native async on 11 June" }
+    ],
+    "sources": [
+      { "label": "Mozilla blog: asm.js, it’s really fast, backwards compatible, and now in the release version of Firefox (June 2013)", "url": "https://blog.mozilla.org/mbest/2013/06/25/asm-js-its-really-fast-backwards-compatible-and-now-in-the-release-version-of-firefox/" },
+      { "label": "Luke Wagner: WebAssembly (announcement, 17 June 2015)", "url": "https://blog.mozilla.org/luke/2015/06/17/webassembly/" },
+      { "label": "Mozilla Hacks: Firefox 52, introducing WebAssembly, CSS Grid and the Grid Inspector (March 2017)", "url": "https://hacks.mozilla.org/2017/03/firefox-52-introducing-web-assembly-css-grid-and-the-grid-inspector/" },
+      { "label": "W3C press release: World Wide Web Consortium (W3C) brings a new language to the Web as WebAssembly becomes a W3C Recommendation (5 December 2019)", "url": "https://www.w3.org/press-releases/2019/wasm/" },
+      { "label": "Mozilla Hacks: Standardizing WASI, a WebAssembly system interface (Lin Clark, 27 March 2019)", "url": "https://hacks.mozilla.org/2019/03/standardizing-wasi-a-webassembly-system-interface/" },
+      { "label": "Bytecode Alliance: WASI 0.2 launched (Dan Gohman, 25 January 2024)", "url": "https://bytecodealliance.org/articles/WASI-0.2" },
+      { "label": "WebAssembly.org: Wasm 3.0 completed (17 September 2025)", "url": "https://webassembly.org/news/2025-09-17-wasm-3.0/" },
+      { "label": "WASI.dev: WASI P3 release notes (0.3.0 on 11 June 2026)", "url": "https://wasi.dev/releases/wasi-p3" }
+    ]
+  },
+  "sources": [
+    { "label": "WebAssembly.org: home page (binary instruction format for a stack-based virtual machine; goals; non-web embeddings)", "url": "https://webassembly.org/" },
+    { "label": "WebAssembly.org: Security (sandbox, bounds-checked linear memory, structured control flow, protected call stack)", "url": "https://webassembly.org/docs/security/" },
+    { "label": "Component Model docs: Why the Component Model? (numbers-only core functions, WIT, no shared memory, canonical ABI)", "url": "https://component-model.bytecodealliance.org/design/why-component-model.html" },
+    { "label": "Component Model docs: Introduction (WASI 0.2 as a stable set of WIT definitions)", "url": "https://component-model.bytecodealliance.org/" },
+    { "label": "WASI.dev: WASI overview (capability-based sandbox, versions 0.1, 0.2 and 0.3)", "url": "https://wasi.dev/" },
+    { "label": "WASI.dev: WASI P3 release notes (future and stream; Wasmtime 46)", "url": "https://wasi.dev/releases/wasi-p3" },
+    { "label": "WebAssembly.org: Wasm 3.0 completed (GC, memory64, exceptions; languages using GC)", "url": "https://webassembly.org/news/2025-09-17-wasm-3.0/" },
+    { "label": "rustc book: wasm32-wasip1 (imports from wasi_snapshot_preview1)", "url": "https://doc.rust-lang.org/rustc/platform-support/wasm32-wasip1.html" },
+    { "label": "rustc book: wasm32-wasip2 (outputs a component)", "url": "https://doc.rust-lang.org/rustc/platform-support/wasm32-wasip2.html" },
+    { "label": "GitHub: wasm-bindgen/wasm-bindgen (high-level interactions between Wasm modules and JavaScript)", "url": "https://github.com/wasm-bindgen/wasm-bindgen" },
+    { "label": "Wasmtime docs: CLI options (wasmtime run, --dir)", "url": "https://docs.wasmtime.dev/cli-options.html" },
+    { "label": "GitHub: bytecodealliance/jco (transpiles components to JavaScript and core Wasm)", "url": "https://github.com/bytecodealliance/jco" },
+    { "label": "Cloudflare Workers docs: WebAssembly (Rust, Go, C; WASI experimental; single thread; size and start-up)", "url": "https://developers.cloudflare.com/workers/runtime-apis/webassembly/" },
+    { "label": "Envoy docs: Wasm runtimes (V8, WAMR, Wasmtime)", "url": "https://www.envoyproxy.io/docs/envoy/latest/configuration/other_features/wasm" },
+    { "label": "Jangda et al.: Not So Fast, Analyzing the Performance of WebAssembly vs. Native Code (USENIX ATC 2019)", "url": "https://www.usenix.org/conference/atc19/presentation/jangda" }
+  ]
+}

@@ -1,0 +1,103 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Oxia",
+  "concepts": ["coordination"],
+  "provider": "oss",
+  "vendor": "The Oxia Authors (started at StreamNative); a CNCF Sandbox project",
+  "license": "Apache 2.0",
+  "website": "https://oxia-db.github.io/",
+  "repo": "https://github.com/oxia-db/oxia",
+  "status": {
+    "stage": "incubating",
+    "note": "A CNCF Sandbox project since 6 October 2025; releases are still numbered 0.x (0.16.11 in October 2026, 0.18 in release candidates).",
+    "since": "2025-10-06"
+  },
+  "summary": "A sharded metadata store and coordination service in Go, with ZooKeeper’s programming model (sessions, ephemeral keys, notifications, compare-and-swap) but capacity and throughput that grow by adding nodes; the recommended metadata store for new Apache Pulsar clusters.",
+  "intro": [
+    "Oxia offers what ZooKeeper, etcd and Chubby offer, linearizable keys, sessions with ephemeral records that disappear when a client goes away, notifications of changes, versioned compare-and-swap writes and range scans, but it splits each namespace into shards. Each shard has its own leader, followers, write-ahead log and state stored in Pebble, an LSM key-value engine, and the client library hashes keys to shards, so different shards are written in parallel by different leaders. A partition key pins related keys to one shard. Because state lives in an LSM tree rather than in memory with periodic full snapshots, a cluster can hold hundreds of gigabytes of metadata, compared with the few gigabytes where ZooKeeper and etcd hit their limits.",
+    "Replication is deliberately not Raft. Within a shard the leader streams entries to followers and acknowledges a write once a quorum has persisted it; a separate coordinator, off the data path, assigns leaders, fences stale ones by advancing each shard’s term, and drives recovery after failures, the approach Apache BookKeeper uses. The coordinator keeps its small checkpoint in a Kubernetes ConfigMap, or in a built-in Raft group outside Kubernetes. Guarantees are per key and per shard: there is no linearizability or transaction across shards. Atomic sequence keys assign monotonic offsets as part of a `Put`, which StreamNative’s Kafka-compatible Ursa engine uses to number messages. Clients exist for Go, Java, Python, Node.js and Rust, and a Helm chart deploys it on Kubernetes."
+  ],
+  "strengths": [
+    "Scales out: capacity and write throughput grow with the number of shards and nodes instead of being capped by one leader and the size of one node",
+    "Keeps ZooKeeper-style coordination primitives (sessions, ephemerals, notifications, conditional writes) that generic sharded key-value stores lack",
+    "No full-dataset snapshots, so large metadata sets don’t stall I/O",
+    "Protocol checked with a TLA+ model and Maelstrom (Jepsen-style) tests"
+  ],
+  "limits": [
+    "No transactions or ordering across shards; related keys must share a partition key to be updated atomically",
+    "Young and pre-1.0, with nearly all maintainers at one company, StreamNative",
+    "Its listed adopters are Pulsar and StreamNative’s own Ursa; outside that ecosystem, tools and know-how are far scarcer than for ZooKeeper or etcd",
+    "Not a drop-in replacement: applications use Oxia’s own client APIs rather than the ZooKeeper or etcd protocols"
+  ],
+  "worksWith": [
+    { "id": "pulsar", "how": "is the recommended metadata store for" },
+    { "id": "pebble", "how": "stores each shard’s state in" },
+    { "id": "kubernetes", "how": "checkpoints its coordinator state in" }
+  ],
+  "alternatives": ["zookeeper", "etcd", "consul"],
+  "specs": {
+    "data-model": "Keys in sharded namespaces, with sessions, ephemeral records and sequence keys",
+    "query-language": "Client APIs for Go, Java, Python, Node.js and Rust",
+    "transactions": "None across shards; versioned compare-and-swap per key",
+    "consistency": "Linearizable per key and per shard",
+    "scaling": "Hash-sharded namespaces, a leader per shard",
+    "replication": "Leader streams to followers, quorum ack; a coordinator assigns leaders and fences terms (not Raft)",
+    "storage-engine": "Pebble (LSM) per shard, with a write-ahead log",
+    "written-in": "Go",
+    "deployment": "Helm chart on Kubernetes, or outside Kubernetes with a built-in Raft coordinator"
+  },
+  "snippet": {
+    "lang": "go",
+    "title": "Go client: conditional writes and an ephemeral record tied to the client’s session",
+    "source": [
+      "client, err := oxia.NewSyncClient(\"localhost:6648\")",
+      "",
+      "// create only if the key doesn't exist yet",
+      "insertedKey1, res1, err := client.Put(context.Background(), \"my-key\", []byte(\"value-1\"), oxia.ExpectedRecordNotExists())",
+      "",
+      "// compare-and-swap on the version we just wrote",
+      "insertedKey2, res2, err := client.Put(context.Background(), \"my-key\", []byte(\"value-2\"), oxia.ExpectedVersionId(res1.VersionId))",
+      "",
+      "// deleted automatically when this client closes or its session expires",
+      "insertedKey, res, err := client.Put(context.Background(), \"my-key\", []byte(\"my-value\"), oxia.Ephemeral())"
+    ]
+  },
+  "history": {
+    "story": [
+      "Apache Pulsar kept all its metadata and coordination in ZooKeeper. Like etcd and Consul, ZooKeeper is one replicated state machine: every node holds the whole dataset, every write goes through one leader, and periodic snapshots rewrite everything, which slows writes once the data passes about a gigabyte. Pulsar could reach about a million topics only with careful tuning, and had to keep consumer positions in BookKeeper ledgers because ZooKeeper couldn’t take the write rate. Matteo Merli, a co-creator of Pulsar and CTO of StreamNative, began Oxia in December 2021 and announced it as open source in April 2023, aiming at clusters with hundreds of millions of topics.",
+      "Pulsar added Oxia as a metadata store option and now recommends it for new production clusters, with live migration from ZooKeeper. StreamNative also built Ursa, its Kafka-compatible engine on object storage, on Oxia. Oxia was accepted into the CNCF Sandbox on 6 October 2025."
+    ],
+    "choices": [
+      { "choice": "Shard the keyspace", "why": "A single replicated log caps throughput at one leader and capacity at one machine; shards with independent leaders let both grow with the cluster." },
+      { "choice": "Separate log replication from recovery, not Raft", "why": "Keeping the data path simple and fast, and putting elections and fencing in a coordinator, makes each part easier to optimise and to verify, as BookKeeper had shown." },
+      { "choice": "LSM storage instead of in-memory state with snapshots", "why": "Pebble reads from consistent snapshots without dumping the whole dataset, so metadata can grow far beyond RAM." },
+      { "choice": "Lean on Kubernetes", "why": "The coordinator’s tiny, rarely updated checkpoint fits in a ConfigMap, so Oxia needs no separate consensus service when running on Kubernetes." }
+    ],
+    "timeline": [
+      { "year": "2021", "text": "Matteo Merli makes the first commit in December" },
+      { "year": "2023", "text": "StreamNative announces Oxia as open source (April); 0.1.0 released" },
+      { "year": "2025", "text": "Accepted into the CNCF Sandbox on 6 October" },
+      { "year": "2026", "text": "0.16.11 in October; 0.18 release candidates" }
+    ],
+    "sources": [
+      { "label": "StreamNative blog: Introducing Oxia, scalable metadata and coordination (Matteo Merli, 27 Apr 2023)", "url": "https://streamnative.io/blog/introducing-oxia-scalable-metadata-and-coordination" },
+      { "label": "GitHub: oxia-db/oxia initial import (Matteo Merli, 21 December 2021)", "url": "https://github.com/oxia-db/oxia/commit/ad5ecd35ab7fe10c206cb667a4deb6bbee75c821" },
+      { "label": "Oxia docs: What is Oxia? (the problem with single-leader stores, Pulsar cursors in BookKeeper)", "url": "https://oxia-db.github.io/docs/what-is-oxia" },
+      { "label": "Pulsar docs: Configure the metadata store (Oxia recommended for new clusters)", "url": "https://pulsar.apache.org/docs/administration-metadata-store/" },
+      { "label": "CNCF landscape: Oxia (Sandbox, accepted 6 October 2025)", "url": "https://github.com/cncf/landscape/blob/master/landscape.yml" },
+      { "label": "GitHub: oxia-db/oxia releases (0.1.0 April 2023, 0.16.11 October 2026)", "url": "https://github.com/oxia-db/oxia/releases" }
+    ]
+  },
+  "sources": [
+    { "label": "Oxia docs: What is Oxia? (programming model, shards, Pebble, coordinator, sequences)", "url": "https://oxia-db.github.io/docs/what-is-oxia" },
+    { "label": "Oxia docs: Design goals (hash sharding, ~2 GB limit of etcd and ZooKeeper, no Paxos or Raft)", "url": "https://oxia-db.github.io/docs/architecture/design-goals" },
+    { "label": "Oxia docs: Physical architecture (coordinator, data nodes, ConfigMap)", "url": "https://oxia-db.github.io/docs/architecture/physical-architecture" },
+    { "label": "Oxia docs: Consistency model (per-key linearizability, no cross-shard transactions)", "url": "https://oxia-db.github.io/docs/features/consistency-model" },
+    { "label": "Oxia docs: Ephemeral records", "url": "https://oxia-db.github.io/docs/features/ephemerals" },
+    { "label": "Oxia docs: Go client", "url": "https://oxia-db.github.io/docs/clients/go" },
+    { "label": "GitHub: oxia-db/oxia ADOPTERS.md (Apache Pulsar, StreamNative Ursa)", "url": "https://github.com/oxia-db/oxia/blob/main/ADOPTERS.md" },
+    { "label": "GitHub: oxia-db/oxia MAINTAINERS.md (all maintainers at StreamNative)", "url": "https://github.com/oxia-db/oxia/blob/main/MAINTAINERS.md" },
+    { "label": "GitHub: oxia-db/oxia (Apache 2.0)", "url": "https://github.com/oxia-db/oxia" }
+  ],
+  "checked": "2026-10-24"
+}

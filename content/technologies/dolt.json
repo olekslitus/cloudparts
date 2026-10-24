@@ -1,0 +1,112 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Dolt",
+  "concepts": ["relational"],
+  "uses": ["version-control"],
+  "provider": "oss",
+  "vendor": "DoltHub, Inc.",
+  "license": "Apache 2.0",
+  "website": "https://www.dolthub.com/",
+  "repo": "https://github.com/dolthub/dolt",
+  "summary": "A MySQL-compatible SQL database with Git’s model built in: every table can be branched, diffed, merged, pushed and pulled, and every commit keeps the whole database as it was.",
+  "intro": [
+    "Dolt is a SQL database you run as a server (`dolt sql-server`, on port 3306) and connect to with ordinary MySQL clients and drivers, or use from a command line that copies Git’s: `dolt add`, `dolt commit`, `dolt branch`, `dolt merge`, `dolt push`. Inside SQL the same operations are stored procedures such as `CALL dolt_commit()` and `CALL dolt_merge()`, and history is read through system tables: `dolt_log` lists commits, `dolt_diff_<table>` shows how each row changed between commits, `dolt_history_<table>` shows a row at every commit, and `SELECT … AS OF 'main~1'` queries a table as it was at a branch, commit or timestamp. Merges work cell by cell; when both sides changed the same cell, the row lands in `dolt_conflicts_<table>` with `base_`, `our_` and `their_` columns to resolve in SQL. A commit is a snapshot of the whole database, separate from SQL transactions, so you choose when to record one.",
+    "Underneath, every table, secondary index and schema is a prolly tree (“probabilistic B-tree”), a structure first built for Noms. Rows are sorted by primary key and cut into chunks of about 4 KB at boundaries chosen by a hash of their contents, so the tree’s shape depends only on the data, not on the order of edits. Each chunk is stored once under its content hash, which lets a new commit share every unchanged chunk with the old one, and a diff skips any subtree whose hash matches, so it costs time in proportion to the changes, not the table. Dolt 2.0, released in May 2026, turned on automatic garbage collection and a compressed archive format by default, and DoltHub reports it about 8% faster than MySQL on sysbench. Doltgres, a Postgres-compatible server on the same engine and storage, reached 1.0 in August 2026. DoltHub, Inc. also runs DoltHub (a hosting site for Dolt databases, like GitHub for code), DoltLab (the same, self-hosted) and Hosted Dolt (managed servers)."
+  ],
+  "strengths": [
+    "Branches, diffs and merges of live data in SQL, so changes to reference data, configuration or an agent’s edits can be reviewed and merged like a pull request, or rolled back with `dolt_reset`",
+    "Every commit stays queryable: `AS OF` and `dolt_history_<table>` answer “what did this row look like last Tuesday, and who changed it?” without audit tables",
+    "Structural sharing keeps history cheap, and a diff costs time in proportion to what changed, not to the size of the table",
+    "Speaks the MySQL protocol, with Doltgres for Postgres clients; it can also run as a replica of an existing MySQL primary to add history without migrating"
+  ],
+  "limits": [
+    "Meant to run on one primary server: there is no multi-primary write path, so going beyond one machine means sharding in the application",
+    "Replication is primary-to-standby: remote-based replicas are for reads only, and with direct replication an unplanned failover may lose data; users, grants and `DROP DATABASE` are not replicated",
+    "Compatible, not the real thing: MySQL 9.0’s default authentication needs extra setup, and Doltgres 1.0 has limited extensions (no PostGIS yet), no row-level security and is about 2.7 times slower than Postgres by DoltHub’s own figures",
+    "Keeping every version still costs disk: garbage collection reclaims only chunks that no commit refers to, so tables rewritten often keep growing with their history"
+  ],
+  "worksWith": [
+    { "id": "mysql", "how": "speaks the wire protocol of" },
+    { "id": "git", "how": "copies the commands and commit model of" },
+    { "id": "postgresql", "how": "serves Postgres clients through Doltgres" }
+  ],
+  "alternatives": ["mysql", "neon", "xata", "postgresql"],
+  "goodFor": [
+    { "id": "versioned-data", "why": "Commits, branches and cell-by-cell merges are SQL procedures, diffs and history are system tables, and `AS OF` reads any past commit." }
+  ],
+  "specs": {
+    "data-model": "Relational tables kept as prolly trees, versioned by commit",
+    "query-language": "MySQL-compatible SQL, plus `dolt_*` procedures and system tables",
+    "wire-protocol": "MySQL protocol; PostgreSQL protocol through Doltgres",
+    "secondary-indexes": "Secondary indexes, each its own prolly tree",
+    "transactions": "SQL transactions, separate from Dolt commits",
+    "scaling": "One primary server; going further means sharding in the application",
+    "replication": "Primary to standby: remote-based read replicas, or direct-to-standby",
+    "storage-engine": "Prolly trees of content-addressed chunks of about 4 KB",
+    "deployment": "Self-hosted `dolt sql-server`, Hosted Dolt, or DoltLab"
+  },
+  "snippet": {
+    "lang": "sql",
+    "title": "Branch, change, diff and merge a table, all in SQL",
+    "source": [
+      "CALL dolt_checkout('-b', 'price-update');",
+      "UPDATE products SET price = price * 1.05 WHERE category = 'pumps';",
+      "CALL dolt_commit('-am', 'Raise pump prices 5%');",
+      "",
+      "-- what changed, row by row, between main and the branch",
+      "SELECT from_price, to_price, to_sku, diff_type",
+      "FROM dolt_diff('main', 'price-update', 'products');",
+      "",
+      "-- review done: merge it",
+      "CALL dolt_checkout('main');",
+      "CALL dolt_merge('price-update');",
+      "",
+      "-- the table as it was one commit ago, and every past value of one row",
+      "SELECT * FROM products AS OF 'main~1' WHERE sku = 'PUMP-ROD-7';",
+      "SELECT commit_hash, committer, commit_date, price",
+      "FROM dolt_history_products WHERE sku = 'PUMP-ROD-7';"
+    ]
+  },
+  "history": {
+    "story": [
+      "Sharing a dataset usually meant mailing CSV files or dumps: nobody could see what had changed between two copies, merge two people’s edits, or go back to last week’s version. Code had solved this with Git. In 2015 Attic Labs began Noms, a content-addressed, versioned database, and invented the prolly tree for it. Salesforce bought Attic Labs in January 2018 and Noms development stopped.",
+      "Liquidata, the company that became DoltHub and is led by Tim Sehn, was incorporated in February 2018, and its founders started full time that August, looking for a way to share data with the emphasis on version control. In October 2018 one of them, Brian, put a Git-style command line on top of Noms, called it Dolt in November as a nod to Git, and launched it in August 2019, with DoltHub, a site for hosting and sharing Dolt databases, following in September. The company renamed itself DoltHub in 2020.",
+      "From 2021 Dolt set out to be a production OLTP database rather than a data-sharing tool. The storage format inherited from Noms was the bottleneck, so the team wrote a new one between 2021 and March 2023 and declared Dolt 1.0 production-ready in May 2023. Doltgres, the Postgres version, followed as an alpha in November 2023 and reached 1.0 in August 2026, and Dolt 2.0 in May 2026 claimed to be faster than MySQL on sysbench."
+    ],
+    "choices": [
+      { "choice": "Copy Git’s commands and model exactly", "why": "Developers already know `branch`, `commit`, `merge`, `push` and `pull`. Putting Git’s command line on Noms was the moment the founders saw a product, and they named it Dolt in Git’s honour." },
+      { "choice": "Prolly trees for all data", "why": "A B-tree’s shape depends on the order of inserts, so two identical tables could be stored differently. Chunking by content hash makes equal data produce equal chunks, which gives deduplication across versions and diffs that skip unchanged subtrees." },
+      { "choice": "MySQL compatibility first", "why": "Being a drop-in replacement meant existing clients, ORMs and tools worked from day one, and Dolt could run as a replica of a MySQL primary. Postgres support came later as a separate product, Doltgres, built on the same engine." },
+      { "choice": "Rewrite the storage format for OLTP", "why": "The Noms format was too slow for transactional workloads. The new format, built from 2021 to 2023, forced a one-time migration of old databases but made Dolt an order of magnitude faster." }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "First commit to Noms, which introduces the prolly tree" },
+      { "year": "2018", "text": "Liquidata founded; a Git command line on Noms becomes Dolt" },
+      { "year": "2019", "text": "Dolt launches in August, DoltHub in September" },
+      { "year": "2020", "text": "Liquidata renames itself DoltHub" },
+      { "year": "2022", "text": "DoltLab and Hosted Dolt launch; first version of the new storage format" },
+      { "year": "2023", "text": "Dolt 1.0 in May; Doltgres alpha in November" },
+      { "year": "2026", "text": "Dolt 2.0 in May; Doltgres 1.0 in August" }
+    ],
+    "sources": [
+      { "label": "DoltHub blog: The Dolt timeline (Jul 2024)", "url": "https://www.dolthub.com/blog/2024-07-25-dolt-timeline/" },
+      { "label": "DoltHub blog: Dolt 1.0 (May 2023)", "url": "https://www.dolthub.com/blog/2023-05-05-dolt-1-dot-0/" },
+      { "label": "DoltHub blog: Dolt 2.0 (May 2026)", "url": "https://www.dolthub.com/blog/2026-05-11-dolt-2-dot-0/" },
+      { "label": "DoltHub blog: Doltgres 1.0 (Aug 2026)", "url": "https://www.dolthub.com/blog/2026-08-06-doltgres-1-0/" },
+      { "label": "DoltHub blog: The history of DoltHub (Dec 2021)", "url": "https://www.dolthub.com/blog/2021-12-16-history-of-dolthub/" }
+    ]
+  },
+  "sources": [
+    { "label": "dolthub/dolt on GitHub: README (Apache 2.0, MySQL compatibility, Doltgres)", "url": "https://github.com/dolthub/dolt" },
+    { "label": "Dolt docs: What is Dolt? (Hosted Dolt, DoltLab, versioned MySQL replica)", "url": "https://www.dolthub.com/docs/introduction/what-is-dolt" },
+    { "label": "Dolt docs: Prolly trees", "url": "https://www.dolthub.com/docs/architecture/storage-engine/prolly-tree" },
+    { "label": "Dolt docs: Dolt system tables (diff, history, conflicts)", "url": "https://www.dolthub.com/docs/sql-reference/version-control/dolt-system-tables" },
+    { "label": "Dolt docs: Querying history (AS OF)", "url": "https://www.dolthub.com/docs/sql-reference/version-control/querying-history" },
+    { "label": "Dolt docs: Replication (remote-based and direct-to-standby)", "url": "https://www.dolthub.com/docs/sql-reference/server/replication" },
+    { "label": "DoltHub blog: Why not Dolt? (single primary, storage, performance; Jul 2024)", "url": "https://www.dolthub.com/blog/2024-07-03-why-no-dolt/" },
+    { "label": "DoltHub blog: Dolt 2.0 (automatic GC, archives, sysbench vs MySQL; May 2026)", "url": "https://www.dolthub.com/blog/2026-05-11-dolt-2-dot-0/" },
+    { "label": "DoltHub blog: Doltgres 1.0 (compatibility, performance, roadmap; Aug 2026)", "url": "https://www.dolthub.com/blog/2026-08-06-doltgres-1-0/" },
+    { "label": "dolthub/doltgresql on GitHub: README (limitations)", "url": "https://github.com/dolthub/doltgresql" }
+  ],
+  "checked": "2026-10-24"
+}

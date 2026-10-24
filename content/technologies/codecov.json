@@ -1,0 +1,96 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Codecov",
+  "concepts": ["cicd"],
+  "uses": ["testing"],
+  "provider": "vendor",
+  "vendor": "Harness Inc.",
+  "license": "Proprietary service; the backend source is FSL-1.1-Apache-2.0 (BUSL 1.1 when opened in 2023), the CLI Apache 2.0 and the GitHub Action MIT",
+  "website": "https://about.codecov.io/",
+  "repo": "https://github.com/codecov/umbrella",
+  "summary": "A hosted code coverage service: CI jobs upload the coverage reports their tests produce, and Codecov merges them per commit and reports on each pull request how well the changed lines are tested, with a status check that can block the merge.",
+  "intro": [
+    "Codecov doesn’t run tests or measure coverage itself. Your test tools do that and write a report, such as Cobertura or JaCoCo XML, LCOV, Go’s coverage profile or a Coveralls JSON file; Codecov ingests `.xml`, `.json` and `.txt` formats. A CI step then uploads the report with the Codecov CLI, usually through the `codecov/codecov-action` GitHub Action or the equivalent for other CI systems, authenticated with a repository upload token, an organization-wide token or, on GitHub Actions, OIDC. Several jobs can upload for the same commit, for example unit and integration tests or one per platform; Codecov never overwrites a report but merges them, and holds back pull request comments until all expected uploads have arrived.",
+    "With the GitHub app installed (or a bot user on GitLab and Bitbucket), each pull request gets a comment with the coverage of the diff and of the whole project, and two commit statuses. `codecov/patch` measures only the lines the pull request changed; `codecov/project` measures the whole codebase against the base commit. Both are configured in `codecov.yml`: `target: auto` compares with the base, a number such as `80%` sets a floor, `threshold` allows a small drop, and `informational: true` reports without failing. Flags tag uploads by test suite, and carryforward flags reuse a suite’s last coverage when a commit didn’t run it, for monorepos that test only what changed.",
+    "The service is free for open-source projects. Private repositories get one free user and 250 uploads a month; Team (up to 10 users) and Pro ($12 per user a month) raise the limits, and Pro adds project coverage status, flags and flaky-test detection. Sentry bought Codecov in 2022 and published its backend as source-available code in 2023; on June 2, 2026 Harness acquired it from Sentry, keeping the brand and free access for open-source projects. The backend lives in the `codecov/umbrella` repository, under the Functional Source License, with a Docker Compose example for small self-hosted installs."
+  ],
+  "strengths": [
+    "Language-agnostic: anything that writes a standard coverage report can upload it, and reports from many jobs merge into one view per commit",
+    "Patch coverage puts the question on the pull request, “are the lines you changed tested?”, which is more actionable than a single project percentage",
+    "Free for open-source projects, which is why its badge and pull request comments are common on public repositories",
+    "Status checks with targets, thresholds and an informational mode let a team decide how strict coverage should be, per path or test suite"
+  ],
+  "limits": [
+    "Coverage leaves your CI: reports are processed on Codecov’s servers, and on GitHub the Codecov app must be installed on your organization",
+    "The upload step runs inside CI with access to its secrets, which is what the 2021 Bash Uploader compromise exploited; pin and verify the uploader",
+    "Ownership has changed twice in four years (Sentry in 2022, Harness in 2026), and the self-hosted version is a proof-of-concept setup with a 50-seat licence",
+    "Coverage shows which lines ran, not whether the tests check anything; a high percentage can still miss bugs"
+  ],
+  "worksWith": [
+    { "id": "github-actions", "how": "receives coverage uploads from" },
+    { "id": "github", "how": "posts pull request comments and checks to" },
+    { "id": "gitlab", "how": "comments on merge requests in" },
+    { "id": "bitbucket", "how": "comments on pull requests in" }
+  ],
+  "snippet": {
+    "lang": "yaml",
+    "title": "codecov.yml: block a pull request whose new lines are under 80% covered",
+    "source": [
+      "coverage:",
+      "  status:",
+      "    project:",
+      "      default:",
+      "        target: auto        # compare with the base commit",
+      "        threshold: 1%       # allow a 1-point drop",
+      "        informational: true # report, never fail",
+      "    patch:",
+      "      default:",
+      "        target: 80%         # lines changed in this PR",
+      "flags:",
+      "  ui:",
+      "    paths: [web/]",
+      "    carryforward: true      # reuse last result if the UI suite didn't run"
+    ]
+  },
+  "history": {
+    "story": [
+      "Coverage tools have existed for decades, but each language writes its own report and few teams looked at them. Codecov turned the report into something that appears on every pull request: a CI job uploads it, and the service comments on the change and sets a commit status. Its Bash uploader, a script that CI jobs downloaded and ran, dates from April 2015, and the service offered free coverage to open-source projects from the start, which made its badge and comments a fixture of public repositories.",
+      "That convenience became a supply-chain attack. From January 31, 2021 an attacker who had extracted a Google Cloud Storage key from a flaw in Codecov’s Docker image process periodically altered the Bash Uploader, adding one `curl` line that sent the CI environment, with whatever credentials, tokens and keys it held, and the Git remote to a third-party server. A customer noticed a checksum mismatch on April 1; Codecov fixed the script that day and notified affected users on April 15. Uploads now go through the Codecov CLI, which the current GitHub Action fetches and verifies against a PGP key.",
+      "Sentry acquired Codecov on November 30, 2022. In August 2023, after a full rewrite of the codebase, Codecov published its API, worker and web front end under the Business Source License and ended its commercial self-hosted product; the backend now sits in one repository under the Functional Source License. On June 2, 2026 Harness bought Codecov from Sentry, saying it would keep the brand and free access for open-source projects and feed coverage data into its delivery platform."
+    ],
+    "choices": [
+      { "choice": "Collect reports instead of measuring coverage", "why": "Every language already has a coverage tool. Accepting their standard report formats let one service cover any language and any CI system, with uploads from many jobs merged per commit." },
+      { "choice": "Patch coverage as its own status", "why": "A project-wide percentage barely moves on one pull request. Measuring only the changed lines asks whether this change is tested, and the docs make it the default thing Codecov gates and reports on." },
+      { "choice": "A downloaded uploader instead of a compiled CLI", "why": "Downloading and running a hosted Bash script was easy to adopt in any CI, but every customer ran whatever that script contained at the time; the 2021 compromise showed the cost, and the CLI that replaced it is verified before it runs." },
+      { "choice": "Open the source but keep the hosting", "why": "After Sentry’s acquisition Codecov published its code under a licence that forbids selling it as a hosted service, then later the Functional Source License, which turns each release into Apache 2.0 after two years." }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "The Bash uploader repository is created (April 17)" },
+      { "year": "2021", "text": "Bash Uploader altered from January 31; discovered April 1, users notified April 15" },
+      { "year": "2022", "text": "Sentry acquires Codecov (November 30)" },
+      { "year": "2023", "text": "Backend published under the Business Source License; commercial self-hosted offering ended (August 2)" },
+      { "year": "2026", "text": "Harness acquires Codecov from Sentry (June 2); codecov-action 7.1.1 released (September 17)" }
+    ],
+    "sources": [
+      { "label": "GitHub API: codecov/codecov-bash (created Apr 17, 2015; archived)", "url": "https://api.github.com/repos/codecov/codecov-bash" },
+      { "label": "Codecov: Bash Uploader Security Update (dates, curl line, GCS key, remediation)", "url": "https://about.codecov.io/security-update/" },
+      { "label": "Sentry press release: Sentry Acquires Codecov (Nov 30, 2022)", "url": "https://sentry.io/about/press-releases/sentry-acquires-codecov/" },
+      { "label": "Codecov blog: Codecov is now open source (Aug 2, 2023; BUSL, self-hosted end-of-life)", "url": "https://about.codecov.io/blog/codecov-is-now-open-source/" },
+      { "label": "Harness press release: Harness acquires Codecov (Jun 2, 2026)", "url": "https://www.harness.io/press-and-news/harness-acquires-codecov" },
+      { "label": "codecov-action on GitHub: releases (v7.1.1, Sep 17, 2026)", "url": "https://github.com/codecov/codecov-action/releases" }
+    ]
+  },
+  "sources": [
+    { "label": "Codecov docs: Quick start (GitHub app, upload token, CLI, patch coverage by default)", "url": "https://docs.codecov.com/docs/quick-start" },
+    { "label": "Codecov docs: Supported coverage report formats", "url": "https://docs.codecov.com/docs/supported-report-formats" },
+    { "label": "Codecov docs: Merging reports (no overwrite, notifications wait for all uploads)", "url": "https://docs.codecov.com/docs/merging-reports" },
+    { "label": "Codecov docs: Status checks (project, patch, target, threshold, informational)", "url": "https://docs.codecov.com/docs/commit-status" },
+    { "label": "Codecov docs: Carryforward flags", "url": "https://docs.codecov.com/docs/carryforward-flags" },
+    { "label": "codecov-action README (CLI wrapper, tokens, OIDC, PGP verification)", "url": "https://github.com/codecov/codecov-action" },
+    { "label": "Codecov: Pricing (Developer, Team, Pro, Enterprise; © Harness Inc.)", "url": "https://about.codecov.io/pricing/" },
+    { "label": "codecov/umbrella: LICENSE.md (FSL-1.1-Apache-2.0, Harness, Inc.)", "url": "https://github.com/codecov/umbrella/blob/main/LICENSE.md" },
+    { "label": "codecov/self-hosted README (proof-of-concept Docker Compose, 50-seat licence)", "url": "https://github.com/codecov/self-hosted" },
+    { "label": "Harness press release: Harness acquires Codecov (brand and free open-source access kept)", "url": "https://www.harness.io/press-and-news/harness-acquires-codecov" }
+  ],
+  "checked": "2026-10-24"
+}

@@ -16,7 +16,7 @@ import { navTree, type NavNode, type Where } from '@/lib/navtree';
 import { pageState } from '@/lib/page';
 import { cn } from '@/lib/utils';
 
-export type Section = 'home' | 'concepts' | 'topics' | 'kinds' | 'technologies' | 'architectures' | 'compare' | 'resources' | 'benchmarks' | 'playground' | 'landscape' | 'timeline' | 'not-found';
+export type Section = 'home' | 'concepts' | 'topics' | 'kinds' | 'technologies' | 'architectures' | 'compare' | 'resources' | 'benchmarks' | 'workloads' | 'playground' | 'landscape' | 'timeline' | 'not-found';
 
 interface Props {
   /** The page's own path, e.g. "technologies/kafka/", so Md doesn't link a page to itself. */
@@ -63,7 +63,7 @@ export default function Shell({ path, section, active, outline, children }: Prop
   const repo = REPO_URL;
   // the page being shown, so its item in the sidebar is highlighted and its branch starts open
   const page = active
-    ? ({ topics: 'topic', concepts: 'concept', kinds: 'kind', technologies: 'tech', compare: 'compare', architectures: 'architecture', benchmarks: 'benchmark' } as const)[section as string] as Where['page']
+    ? ({ topics: 'topic', concepts: 'concept', kinds: 'kind', technologies: 'tech', compare: 'compare', architectures: 'architecture', benchmarks: 'benchmark', workloads: 'workload' } as const)[section as string] as Where['page']
     : undefined;
   const tree = navTree(catalog, { section, page, active });
   const iconButton = 'inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground';

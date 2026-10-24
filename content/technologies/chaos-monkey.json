@@ -1,0 +1,88 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Chaos Monkey",
+  "concepts": ["chaos-engineering"],
+  "provider": "oss",
+  "vendor": "Netflix",
+  "license": "Apache 2.0",
+  "website": "https://netflix.github.io/chaosmonkey/",
+  "repo": "https://github.com/Netflix/chaosmonkey",
+  "status": {
+    "stage": "dormant",
+    "note": "No code changes since October 2024 (last release v2.1.3, January 2025), though Netflix’s lifecycle file still marks it active."
+  },
+  "summary": "Netflix’s original chaos tool: on weekdays it picks instances at random from each app managed by Spinnaker and terminates them, so teams build services that survive losing a machine.",
+  "intro": [
+    "Chaos Monkey does one thing: it terminates virtual machine instances and containers in production at random. It isn’t a service but a Go binary run by cron. Once each weekday a schedule job decides which instances will die that day and writes the terminations into a cron file; a terminate job then kills each one at its time, starting at a configured hour in a configured time zone so that engineers are at work when it happens.",
+    "Version 2 is built on Spinnaker, Netflix’s continuous delivery platform, and only works for apps deployed with it. Spinnaker supplies the list of instances, and each app turns Chaos Monkey on in Spinnaker’s config tab. There the owner sets the mean time between terminations (default two days) and the minimum time between them (default one day), and whether a group is the whole app, a stack or a cluster. Accounts, regions or stacks can be excluded. Chaos Monkey keeps its schedule and termination history in MySQL. It can also be told to stand down during outages, but only through an outage checker you write yourself in Go against its `Outage` interface."
+  ],
+  "strengths": [
+    "Simple and blunt: random instance loss on a schedule is the most common failure in a cloud, and it forces every service to cope with it",
+    "Runs only in working hours on weekdays, with per-app frequency and opt-outs, so teams can start gently",
+    "Works on any cloud Spinnaker deploys to, and has been tested with AWS, Google Compute Engine and Kubernetes"
+  ],
+  "limits": [
+    "Requires Spinnaker and a MySQL database; without Spinnaker it can’t find or terminate anything",
+    "Only kills instances: no latency, network, resource or dependency faults, which Netflix split off from version 2.0",
+    "Little maintenance: the last code change was in October 2024, with open issues asking whether the project is retired",
+    "No steady-state check of its own: it terminates on schedule whether or not the service is healthy, unless you write and compile in an outage checker"
+  ],
+  "worksWith": [
+    { "id": "mysql", "how": "keeps its schedule and history in" },
+    { "id": "ec2", "how": "terminates instances on" },
+    { "id": "kubernetes", "how": "can terminate containers on" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Set up the database, then generate each weekday’s schedule from cron",
+    "source": [
+      "# once: create the database, then the schema (credentials in chaosmonkey.toml)",
+      "mysql -e 'CREATE DATABASE chaosmonkey;'",
+      "chaosmonkey migrate",
+      "",
+      "# /etc/cron.d/chaosmonkey-schedule: at 12:00 UTC, Monday to Friday,",
+      "# pick today's victims and write them to /etc/cron.d/chaosmonkey-daily-terminations",
+      "0 12 * * 1-5 root /apps/chaosmonkey/chaosmonkey-schedule.sh"
+    ]
+  },
+  "history": {
+    "story": [
+      "When Netflix moved its streaming service to AWS, it designed every system to keep working when the systems it depended on failed. In a December 2010 post on lessons from the move, John Ciancutti wrote that “the best way to avoid failure is to fail constantly”, and that one of the first systems Netflix engineers built on AWS was the Chaos Monkey, whose job was “to randomly kill instances and services within our architecture”.",
+      "In July 2011 Netflix described a Simian Army that grew from it: Latency Monkey, Conformity Monkey, Doctor Monkey, Janitor Monkey, Security Monkey, 10-18 Monkey and Chaos Gorilla, which simulated losing a whole Availability Zone. Chaos Monkey was open-sourced on July 30, 2012, as part of the Simian Army; it found AWS Auto Scaling Groups and killed one instance per group, by default on non-holiday weekdays between 9 a.m. and 3 p.m., and in the previous year it had terminated over 65,000 instances.",
+      "In October 2016 Netflix released Chaos Monkey 2.0, now written in Go, run as a cron job and driven through Spinnaker, so it could reach AWS, Google Cloud, Azure and Cloud Foundry. It dropped the SSH-based faults, such as burning CPU or disabling a disk, which Netflix considered too “insidious” to inject at random. The older Simian Army repository was later archived. The project has had few changes since; its last commits, in October 2024, updated it for MySQL 8.0."
+    ],
+    "choices": [
+      { "choice": "Random terminations in production", "why": "Netflix wanted to find out that an app couldn’t survive losing an instance when people were around to fix it, not when paged at 3 a.m., and wanted to keep checking as code changed week to week." },
+      { "choice": "Business hours only", "why": "Most apps were built to survive an instance going away, but for those that weren’t, Netflix wanted engineers alert and able to respond, so the schedule ran only on weekdays during the working day." },
+      { "choice": "Opt-out by default at Netflix", "why": "If an app owner did nothing, Chaos Monkey acted on the app, which made resilience the default. The open-source version also offered opt-in, for organisations testing the water." },
+      { "choice": "Built on Spinnaker in 2.0", "why": "Using Spinnaker’s view of deployments let one tool reach every cloud Spinnaker supports, instead of Chaos Monkey talking to AWS Auto Scaling Groups directly." }
+    ],
+    "timeline": [
+      { "year": "2010", "text": "Netflix describes Chaos Monkey as one of the first systems it built on AWS" },
+      { "year": "2011", "text": "The Simian Army is announced" },
+      { "year": "2012", "text": "Open-sourced on July 30, as part of the Simian Army" },
+      { "year": "2016", "text": "Chaos Monkey 2.0: written in Go, run through Spinnaker" },
+      { "year": "2024", "text": "Last code changes, updating it for MySQL 8.0" }
+    ],
+    "sources": [
+      { "label": "Netflix Tech Blog: 5 Lessons We’ve Learned Using AWS (John Ciancutti, Dec 2010)", "url": "http://techblog.netflix.com/2010/12/5-lessons-weve-learned-using-aws.html", "archive": "https://web.archive.org/web/20170317053413/http://techblog.netflix.com/2010/12/5-lessons-weve-learned-using-aws.html" },
+      { "label": "Netflix Tech Blog: The Netflix Simian Army (Jul 19, 2011)", "url": "http://techblog.netflix.com/2011/07/netflix-simian-army.html", "archive": "https://web.archive.org/web/20170320153733/http://techblog.netflix.com/2011/07/netflix-simian-army.html" },
+      { "label": "Netflix Tech Blog: Chaos Monkey Released Into The Wild (Cory Bennett and Ariel Tseitlin, Jul 30, 2012)", "url": "http://techblog.netflix.com/2012/07/chaos-monkey-released-into-wild.html", "archive": "https://web.archive.org/web/20170429202345/http://techblog.netflix.com:80/2012/07/chaos-monkey-released-into-wild.html?" },
+      { "label": "InfoQ: Netflix releases Chaos Monkey 2.0 (Abel Avram, Oct 24, 2016)", "url": "https://www.infoq.com/news/2016/10/chaos-monkey-2" },
+      { "label": "Netflix/SimianArmy on GitHub (archived)", "url": "https://github.com/Netflix/SimianArmy" },
+      { "label": "Netflix/chaosmonkey commit history on GitHub", "url": "https://github.com/Netflix/chaosmonkey/commits/master" }
+    ]
+  },
+  "sources": [
+    { "label": "Netflix/chaosmonkey README on GitHub (Spinnaker requirement, tested backends)", "url": "https://github.com/Netflix/chaosmonkey" },
+    { "label": "Chaos Monkey docs: Home", "url": "https://netflix.github.io/chaosmonkey/" },
+    { "label": "Chaos Monkey docs: How to deploy (MySQL, cron jobs, start hour and time zone)", "url": "https://netflix.github.io/chaosmonkey/How-to-deploy/" },
+    { "label": "Chaos Monkey docs: Outage checker (implemented by the user in Go)", "url": "https://netflix.github.io/chaosmonkey/Outage-checker/" },
+    { "label": "Chaos Monkey docs: Configuring behavior via Spinnaker (mean and minimum time between terminations, grouping, exceptions)", "url": "https://netflix.github.io/chaosmonkey/Configuring-behavior-via-Spinnaker/" },
+    { "label": "InfoQ: Netflix releases Chaos Monkey 2.0 (Go, cron job, SSH faults removed)", "url": "https://www.infoq.com/news/2016/10/chaos-monkey-2" },
+    { "label": "Netflix/chaosmonkey OSSMETADATA (osslifecycle=active)", "url": "https://github.com/Netflix/chaosmonkey/blob/master/OSSMETADATA" },
+    { "label": "Netflix/chaosmonkey issue #119: The project was retired? (Dec 2025)", "url": "https://github.com/Netflix/chaosmonkey/issues/119" },
+    { "label": "Netflix/chaosmonkey releases on GitHub (v2.1.3)", "url": "https://github.com/Netflix/chaosmonkey/releases" }
+  ],
+  "checked": "2026-10-24"
+}

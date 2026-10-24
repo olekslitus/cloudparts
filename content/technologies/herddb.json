@@ -1,0 +1,107 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "HerdDB",
+  "concepts": ["relational"],
+  "provider": "oss",
+  "vendor": "Diennea",
+  "license": "Apache 2.0",
+  "website": "https://herddb.org/",
+  "repo": "https://github.com/diennea/herddb",
+  "status": {
+    "stage": "dormant",
+    "note": "No release since 0.29.0 in March 2024; master has had one commit since (September 2025), and fixes opened in autumn 2026 are still unmerged pull requests.",
+    "since": "2024-03-18"
+  },
+  "summary": "A SQL database in Java that runs inside an application’s JVM or as a replicated cluster, with Apache BookKeeper as its write-ahead log and ZooKeeper for metadata.",
+  "intro": [
+    "HerdDB is, in its own words, a key-value database with an SQL layer on top. Each table is a map from primary key to row; Apache Calcite parses and plans the SQL, and applications use a JDBC driver or a lower-level API. Every change goes to a transaction log first. An update by primary key then changes only an in-memory buffer, and at checkpoints, on a timer or under memory pressure, dirty pages are written to disk as immutable page files. Secondary indexes adapt the block range index (BRIN) idea. Tables are grouped into tablespaces, and transactions and subqueries can only span tables in the same tablespace. The isolation level is always read committed.",
+    "The same database runs in three ways, picked by the JDBC URL: in memory or on local disk inside the application’s own JVM (`jdbc:herddb:local`), as a standalone server, or as a cluster found through ZooKeeper. In a cluster, the tablespace is the unit of replication. Each has one leader, which writes the log to Apache BookKeeper, and any number of followers, which tail the log and replay it into their own local copy. A write is acknowledged once a quorum of BookKeeper servers (bookies) has it, and when a new leader takes over, BookKeeper fences out the old one so it can’t write again. ZooKeeper holds node discovery, tablespace metadata and the list of active log ledgers. A `diskless-cluster` mode also keeps data pages on the bookies, so database nodes need no persistent volume. Diennea built HerdDB for its EmailSuccess mail transfer agent, which keeps the state of every message in it, and Apache Pulsar Manager, now discontinued, used it as its default database."
+  ],
+  "strengths": [
+    "Embeds in any JVM through a JDBC URL, and the same application can later point at a standalone server or a replicated cluster",
+    "Designed for fast writes and primary-key reads and updates across hundreds of tables",
+    "Shared-nothing replication with automatic leader failover, built on BookKeeper and ZooKeeper rather than its own consensus code"
+  ],
+  "limits": [
+    "Dormant: the last release was 0.29.0 in March 2024, and recent fixes sit in open pull requests",
+    "Read committed only, transactions and subqueries confined to one tablespace, joins the docs call “quite limited”, and forward-only JDBC result sets",
+    "Old log ledgers are dropped after a time-to-live, so a follower that is down longer than that can’t catch up from the log",
+    "A cluster also means running ZooKeeper and BookKeeper"
+  ],
+  "worksWith": [
+    { "id": "zookeeper", "how": "keeps cluster metadata in" },
+    { "id": "calcite", "how": "parses and plans SQL with" }
+  ],
+  "alternatives": ["sqlite", "cockroachdb", "foundationdb"],
+  "goodFor": [
+    { "id": "embedded", "why": "A `jdbc:herddb:local` URL runs the database in memory or on local disk inside the application’s own JVM." }
+  ],
+  "specs": {
+    "data-model": "Relational tables, each a map from primary key to row",
+    "query-language": "SQL, parsed and planned by Apache Calcite",
+    "wire-protocol": "JDBC driver, or a lower-level Java API",
+    "secondary-indexes": "Block range indexes (BRIN-style)",
+    "transactions": "Across tables in one tablespace",
+    "isolation": "Read committed only",
+    "replication": "One leader per tablespace logs to BookKeeper; followers replay the log",
+    "storage-engine": "Transaction log, in-memory pages checkpointed to immutable page files",
+    "written-in": "Java",
+    "deployment": "Embedded in a JVM, standalone server, or a cluster coordinated by ZooKeeper"
+  },
+  "snippet": {
+    "lang": "java",
+    "title": "One JDBC driver, three ways to run",
+    "source": [
+      "// jdbc:herddb:local                              in memory, inside this JVM",
+      "// jdbc:herddb:server:localhost:7000              a standalone server",
+      "// jdbc:herddb:zookeeper:localhost:2181/herd      a replicated cluster, found through ZooKeeper",
+      "",
+      "// start an embedded server in this JVM, keeping data in ./dbdata",
+      "String url = \"jdbc:herddb:server:localhost:7000?server.start=true&server.base.dir=dbdata\";",
+      "try (Connection c = DriverManager.getConnection(url, \"sa\", \"hdb\");",
+      "     Statement s = c.createStatement()) {",
+      "  s.execute(\"CREATE TABLE messages (id string primary key, state int, updated timestamp)\");",
+      "  s.executeUpdate(\"INSERT INTO messages VALUES ('m-1', 0, CURRENT_TIMESTAMP)\");",
+      "  s.executeUpdate(\"UPDATE messages SET state = 1 WHERE id = 'm-1'\");  // primary-key update: in memory plus a log write",
+      "}"
+    ]
+  },
+  "history": {
+    "story": [
+      "Diennea, the company behind the MagNews platform and the EmailSuccess mail transfer agent, needed a database for EmailSuccess that could take many fast writes across many tables, run transactions over several tables, and be used through SQL and JDBC, and it found that HBase and other big-data engines didn’t fit. It also wanted the database to run embedded inside the agent’s JVM yet span machines. The team had already used Apache BookKeeper and ZooKeeper in Majordodo, another Diennea open-source project, and built HerdDB on them. The repository opened in February 2016 and version 0.0.1 was tagged in July.",
+      "Enrico Olivelli presented HerdDB at Pulsar Summit 2020 and described its design in a series of posts on building a database with BookKeeper. Apache Pulsar Manager shipped it as its default embedded database. Releases continued until 0.29.0 in March 2024; since then the project has been mostly quiet."
+    ],
+    "choices": [
+      { "choice": "A key-value core with an SQL layer", "why": "Fast writes and primary-key access were the main need, while SQL and JDBC let users reuse what they knew and port existing applications." },
+      { "choice": "BookKeeper as a shared write-ahead log", "why": "Server nodes never talk to each other; every update passes through BookKeeper, whose quorum writes make it durable and whose fencing guarantees only one leader can write a tablespace’s log." },
+      { "choice": "Embeddable in the application’s JVM", "why": "EmailSuccess needed the database inside its own process, where each node reads its local data without going over the network." },
+      { "choice": "Replicate by tablespace", "why": "Making the tablespace the unit of leadership and replication spreads load across nodes, at the cost of transactions that can’t cross tablespaces." }
+    ],
+    "timeline": [
+      { "year": "2016", "text": "Repository opens; version 0.0.1 is tagged in July" },
+      { "year": "2020", "text": "Presented at Pulsar Summit; design posts on building a database with BookKeeper" },
+      { "year": "2024", "text": "Version 0.29.0, the latest release, in March" },
+      { "year": "2025", "text": "One commit to master, moving publishing to Maven Central" }
+    ],
+    "sources": [
+      { "label": "HerdDB website (why Diennea built it, EmailSuccess, Majordodo)", "url": "https://herddb.org/" },
+      { "label": "StreamNative blog: How to build a distributed database with Apache BookKeeper, part 3, by Enrico Olivelli (May 2020)", "url": "https://streamnative.io/blog/how-to-build-distributed-database-apache-bookkeeper-part-3" },
+      { "label": "YouTube: Introducing HerdDB, Pulsar Summit 2020 (Enrico Olivelli)", "url": "https://www.youtube.com/watch?v=K7xQZ9V9Ml0" },
+      { "label": "diennea/herddb: releases (v0.0.1 July 2016 to v0.29.0 March 2024)", "url": "https://github.com/diennea/herddb/releases" },
+      { "label": "diennea/herddb: commit history", "url": "https://github.com/diennea/herddb/commits/master/" }
+    ]
+  },
+  "sources": [
+    { "label": "diennea/herddb on GitHub: README", "url": "https://github.com/diennea/herddb" },
+    { "label": "HerdDB website (write path, checkpoints, BRIN indexes, BookKeeper fencing)", "url": "https://herddb.org/" },
+    { "label": "HerdDB wiki: SQL support (read committed, joins, JDBC result sets)", "url": "https://github.com/diennea/herddb/wiki/SQL-Support" },
+    { "label": "HerdDB wiki: Data storage (checkpoints, local and BookKeeper logs, diskless cluster)", "url": "https://github.com/diennea/herddb/wiki/Data-storage" },
+    { "label": "StreamNative blog: How to build a distributed database with Apache BookKeeper, part 3 (leaders, followers, ledger TTL)", "url": "https://streamnative.io/blog/how-to-build-distributed-database-apache-bookkeeper-part-3" },
+    { "label": "apache/pulsar-manager: application.properties (HerdDB JDBC URLs and default)", "url": "https://github.com/apache/pulsar-manager/blob/master/src/main/resources/application.properties" },
+    { "label": "Apache Pulsar docs: Pulsar Manager (discontinued)", "url": "https://pulsar.apache.org/docs/administration-pulsar-manager" },
+    { "label": "diennea/herddb: releases", "url": "https://github.com/diennea/herddb/releases" },
+    { "label": "diennea/herddb: commit history", "url": "https://github.com/diennea/herddb/commits/master/" },
+    { "label": "diennea/herddb: pull requests", "url": "https://github.com/diennea/herddb/pulls" }
+  ],
+  "checked": "2026-10-24"
+}

@@ -1,0 +1,101 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Amazon Keyspaces (for Apache Cassandra)",
+  "concepts": ["wide-column"],
+  "provider": "aws",
+  "vendor": "Amazon Web Services",
+  "license": "Proprietary",
+  "website": "https://aws.amazon.com/keyspaces/",
+  "summary": "A serverless AWS database that speaks Cassandra’s CQL and drivers, with no nodes to run: you pay per read, write and gigabyte, and every write is stored three times across Availability Zones.",
+  "intro": [
+    "Keyspaces accepts the Cassandra Query Language over the Cassandra wire protocol, so existing Apache 2.0 Cassandra drivers, `cqlsh` and CQL code work against it, but there is no Cassandra cluster underneath for you to see. There are no nodes, JVMs or `cassandra.yaml`: tables scale with traffic, and settings for compaction, compression, caching and Bloom filters are accepted and ignored. Sign-in uses IAM (SigV4) instead of Cassandra roles, connections must use TLS, and keyspace and table changes run asynchronously.",
+    "Every write is stored in three Availability Zones and acknowledged at `LOCAL_QUORUM`; other write levels are rejected. Reads can be `LOCAL_QUORUM`, which sees all earlier successful writes, or `ONE`/`LOCAL_ONE`, which cost half as much and may be stale. On-demand tables bill one write request unit per 1 KB written and one read request unit per 4 KB read at `LOCAL_QUORUM`; provisioned capacity with auto scaling is the alternative. Rows are capped at 1 MB, results are paged after 1 MB read, and one connection handles up to 3,000 queries a second, so drivers need more connections than they would against Cassandra.",
+    "On top of plain CQL it adds AWS features: point-in-time recovery, TTL, encryption with KMS keys, change data capture streams that keep row images for up to 24 hours, and multi-Region keyspaces that replicate tables active-active between Regions, usually within a second, resolving concurrent updates by last writer wins. Lightweight transactions (`IF NOT EXISTS`) are supported at no extra cost, unlike in Cassandra. AWS launched it in preview as Amazon Managed Apache Cassandra Service in December 2019 and made it generally available as Keyspaces in April 2020."
+  ],
+  "strengths": [
+    "Existing Cassandra drivers and CQL work, with no repair, compaction, upgrades or capacity planning to do",
+    "Pay per request on demand, or provisioned capacity with auto scaling, and a 99.99% availability SLA within a Region",
+    "Active-active multi-Region tables, point-in-time recovery and CDC streams without extra infrastructure",
+    "IAM, VPC endpoints and KMS encryption like other AWS services"
+  ],
+  "limits": [
+    "Not Cassandra underneath: only `LOCAL_QUORUM` for writes, no `QUORUM` or `EACH_QUORUM`, and cell timestamps (`USING TIMESTAMP`, `WRITETIME`) are opt-in per table",
+    "Rows up to 1 MB and partition keys up to 2,048 bytes, with per-table throughput quotas of 40,000 read and write units by default",
+    "Per-request pricing gets expensive for steady, very high write rates, and multi-Region tables pay for each write in every Region",
+    "AWS only: no on-premises or other-cloud deployment, and Cassandra tools such as `nodetool` don’t apply"
+  ],
+  "worksWith": [
+    { "id": "cassandra", "how": "speaks the CQL protocol and drivers of" }
+  ],
+  "alternatives": ["cassandra", "astra-db", "scylladb", "dynamodb"],
+  "goodFor": [
+    { "id": "scale-to-zero", "why": "On-demand tables bill per read and write request unit and per GB stored, with no nodes to pay for while idle." },
+    { "id": "multi-region-writes", "why": "Multi-Region keyspaces replicate tables active-active between Regions, usually within a second, with last writer wins." }
+  ],
+  "specs": {
+    "data-model": "Wide rows: partitions of rows sorted by clustering columns, as in Cassandra",
+    "query-language": "CQL",
+    "wire-protocol": "Cassandra CQL protocol, over TLS",
+    "transactions": "Lightweight transactions (`IF NOT EXISTS`), at no extra cost",
+    "consistency": "Writes at `LOCAL_QUORUM` only; reads at `LOCAL_QUORUM` or `ONE`/`LOCAL_ONE`",
+    "scaling": "Serverless: tables scale with traffic, on demand or provisioned with auto scaling",
+    "replication": "Three copies across Availability Zones",
+    "multi-region": "Multi-Region keyspaces, active-active; concurrent updates resolved by last writer wins",
+    "deployment": "Fully managed, AWS only",
+    "pricing": "Per read and write request unit on demand, or provisioned capacity; plus storage"
+  },
+  "snippet": {
+    "lang": "sql",
+    "title": "cqlsh against Keyspaces: an on-demand table with TTL and point-in-time recovery",
+    "source": [
+      "CREATE TABLE iot.readings (",
+      "  sensor_id text, day date, ts timestamp, temperature double,",
+      "  PRIMARY KEY ((sensor_id, day), ts))",
+      "WITH CUSTOM_PROPERTIES = {",
+      "    'capacity_mode': {'throughput_mode': 'PAY_PER_REQUEST'},",
+      "    'point_in_time_recovery': {'status': 'enabled'},",
+      "    'ttl': {'status': 'enabled'}}",
+      "  AND CLUSTERING ORDER BY (ts DESC)",
+      "  AND default_time_to_live = 2592000;   -- rows expire after 30 days",
+      "",
+      "CONSISTENCY LOCAL_QUORUM;   -- the only write level Keyspaces accepts",
+      "INSERT INTO iot.readings (sensor_id, day, ts, temperature)",
+      "VALUES ('s-17', '2026-10-24', '2026-10-24 09:30:00+0000', 21.4);",
+      "",
+      "-- copy the table as it was at an earlier moment",
+      "RESTORE TABLE iot.readings_restored FROM TABLE iot.readings",
+      "WITH restore_timestamp = '2026-10-23T09:00:00+0000';"
+    ]
+  },
+  "history": {
+    "story": [
+      "Teams running Cassandra on AWS had to manage clusters themselves: sizing nodes, running repairs, tuning compaction and the JVM, and upgrading carefully. At re:Invent in December 2019 AWS previewed Amazon Managed Apache Cassandra Service, a serverless service that implemented the Cassandra 3.11 CQL API, stored every table three times across Availability Zones and billed only for what was used.",
+      "It became generally available in April 2020 under the name Amazon Keyspaces (for Apache Cassandra), in 18 Regions, with provisioned capacity added beside on-demand. Today it also offers client-side timestamps, user-defined types, multi-Region replication and change data capture streams."
+    ],
+    "choices": [
+      { "choice": "Compatible API, not Cassandra itself", "why": "Implementing the CQL protocol on AWS’s own storage let existing drivers and code move over while AWS kept full control of replication, scaling and durability, at the cost of features that depend on Cassandra’s internals." },
+      { "choice": "Always write at LOCAL_QUORUM to three zones", "why": "A fixed replication scheme across three Availability Zones gives every table the same durability and lets the service price reads by consistency level instead of exposing replication settings." },
+      { "choice": "Request-based billing", "why": "Like DynamoDB, paying per read and write unit removes capacity planning for spiky or small workloads; provisioned mode is there for steady ones." }
+    ],
+    "timeline": [
+      { "year": "2019", "text": "Previewed in December as Amazon Managed Apache Cassandra Service" },
+      { "year": "2020", "text": "Generally available in April as Amazon Keyspaces, in 18 Regions" }
+    ],
+    "sources": [
+      { "label": "AWS News Blog: New – Amazon Managed Apache Cassandra Service (MCS) (Dec 2019)", "url": "https://aws.amazon.com/blogs/aws/new-amazon-managed-apache-cassandra-service-mcs/" },
+      { "label": "AWS What’s New: Amazon Keyspaces (for Apache Cassandra) is now generally available (Apr 2020)", "url": "https://aws.amazon.com/about-aws/whats-new/2020/04/amazon-keyspaces-for-apache-cassandra-is-now-generally-available/" },
+      { "label": "Amazon Keyspaces Developer Guide: Functional differences from Apache Cassandra", "url": "https://docs.aws.amazon.com/keyspaces/latest/devguide/functional-differences.html" }
+    ]
+  },
+  "sources": [
+    { "label": "Amazon Keyspaces Developer Guide: What is Amazon Keyspaces?", "url": "https://docs.aws.amazon.com/keyspaces/latest/devguide/what-is-keyspaces.html" },
+    { "label": "Amazon Keyspaces Developer Guide: Functional differences from Apache Cassandra", "url": "https://docs.aws.amazon.com/keyspaces/latest/devguide/functional-differences.html" },
+    { "label": "Amazon Keyspaces Developer Guide: Supported consistency levels and their costs", "url": "https://docs.aws.amazon.com/keyspaces/latest/devguide/consistency.html" },
+    { "label": "Amazon Keyspaces Developer Guide: Quotas", "url": "https://docs.aws.amazon.com/keyspaces/latest/devguide/quotas.html" },
+    { "label": "Amazon Keyspaces Developer Guide: CQL tables (CUSTOM_PROPERTIES, default_time_to_live, RESTORE TABLE)", "url": "https://docs.aws.amazon.com/keyspaces/latest/devguide/cql.ddl.table.html" },
+    { "label": "Amazon Keyspaces Developer Guide: Multi-Region replication", "url": "https://docs.aws.amazon.com/keyspaces/latest/devguide/multiRegion-replication.html" },
+    { "label": "Amazon Keyspaces Developer Guide: Change data capture (CDC) streams", "url": "https://docs.aws.amazon.com/keyspaces/latest/devguide/cdc.html" },
+    { "label": "Amazon Keyspaces pricing", "url": "https://aws.amazon.com/keyspaces/pricing/" }
+  ],
+  "checked": "2026-10-24"
+}

@@ -1,0 +1,139 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "MariaDB",
+  "concepts": ["relational"],
+  "parent": { "id": "mysql", "as": "fork" },
+  "provider": "oss",
+  "vendor": "MariaDB Foundation and MariaDB plc",
+  "license": "GPLv2 (MariaDB Server); MaxScale and Enterprise Server need a MariaDB licence key or subscription",
+  "website": "https://mariadb.org/",
+  "repo": "https://github.com/MariaDB/server",
+  "summary": "The open-source fork of MySQL started by MySQL’s original developers in 2009: the same protocol and most of the same SQL, with its own storage engines, built-in Galera clustering and features MySQL lacks.",
+  "intro": [
+    "MariaDB Server is a client-server SQL database that began as a copy of MySQL 5.1 and still speaks the MySQL protocol, so MySQL clients and most MySQL SQL work against it. Storage is chosen per table from pluggable engines. InnoDB is the default and the right choice for most transactional tables; Early versions used XtraDB, a drop-in replacement for InnoDB, and MariaDB has since gone back to InnoDB. Aria is a crash-safe successor to MyISAM, also used for internal temporary tables. MyRocks, a community contribution built on RocksDB, targets write-heavy workloads on flash and compresses better than InnoDB. ColumnStore is a massively parallel engine for analytics, Spider shards a table across several MariaDB or MySQL servers, and the S3 engine keeps read-only tables in Amazon S3. For high availability, Galera Cluster ships with the server: every node accepts writes, and at commit a node broadcasts the transaction’s write set to all the others, which certify it in the same global order (“virtually synchronous” replication). Ordinary asynchronous replication from the binary log is there too. On top of MySQL’s SQL it adds sequences, system-versioned tables that keep every past row version, application-time periods, `INSERT … RETURNING`, an Oracle compatibility mode, `INET6` and `INET4` types and, since 11.7 (generally available in 11.8), a `VECTOR` type with a modified HNSW index for similarity search.",
+    "The two databases have drifted apart since MySQL 5.5, so MariaDB is no longer a drop-in replacement for MySQL 8: its GTIDs are incompatible with MySQL’s, it stores `JSON` as text (an alias for `LONGTEXT`) instead of MySQL’s binary format, 11.4 lacks the `->` and `->>` JSON operators, and users created with MySQL’s SHA-256 password plugin can’t log in. Two organisations stand behind it. The non-profit MariaDB Foundation, set up in December 2012, coordinates the project and commits to keeping the server under GPLv2. MariaDB plc, formerly MariaDB Corporation, writes most of the code and sells MariaDB Enterprise Platform, the MaxScale proxy (which needs a licence key to start) and, since buying back SkySQL in August 2025, the managed MariaDB Cloud. Community releases come every quarter as rolling releases; about once a year a long-term support (LTS) series is maintained for three years. 12.3 (May 2026) is the current LTS, supported until 2029, and 10.6 reached end of life on 6 July 2026. Amazon RDS offers MariaDB as a managed engine; Azure retired its Azure Database for MariaDB on 19 September 2025."
+  ],
+  "strengths": [
+    "GPLv2 with a non-profit foundation committed to keeping it free, and familiar to anyone who knows MySQL: same protocol, clients and most SQL",
+    "Galera Cluster built in: multi-primary, virtually synchronous replication for high availability without a separate product",
+    "A storage engine per table: InnoDB for transactions, MyRocks for heavy writes on flash, ColumnStore for analytics, S3 for archived read-only tables, Spider for sharding",
+    "SQL that MySQL lacks: system-versioned and bitemporal tables, sequences, `RETURNING`, an Oracle mode, and vector search with an HNSW index in the same database"
+  ],
+  "limits": [
+    "No longer a drop-in for MySQL 8: different GTIDs and binary log details, JSON stored as text without the `->` operators, and no MySQL SHA-256 password users, so migrating and replicating between them needs care",
+    "Galera replicates only InnoDB tables, wants a primary key on every table, holds each transaction’s write set in memory, runs no faster than its slowest node, can lose an update when two nodes change the same row, and may serve stale reads on another node until it applies the write",
+    "Rolling releases get no patch releases after they go GA, so production either upgrades every quarter or stays on an LTS series for its three years",
+    "The company has changed course often: a stock listing in late 2022, a take-private by K1 in September 2024, then buying Galera’s maker, SkySQL and GridGain; Azure dropped its managed MariaDB in 2025, and MaxScale is not free"
+  ],
+  "worksWith": [
+    { "id": "rocksdb", "how": "stores MyRocks tables in" },
+    { "id": "s3", "how": "keeps read-only S3-engine tables in" },
+    { "id": "debezium", "how": "streams binlog changes through" }
+  ],
+  "alternatives": ["mysql", "postgresql", "tidb", "planetscale"],
+  "goodFor": [
+    { "id": "heavy-writes", "why": "MyRocks tables store data in RocksDB, an LSM tree, aimed at write-heavy workloads on flash and compressing better than InnoDB." },
+    { "id": "vector-search", "why": "A `VECTOR` type with a modified HNSW index, generally available since 11.8, keeps similarity search in the same database." }
+  ],
+  "specs": {
+    "data-model": "Relational tables, with the storage engine chosen per table",
+    "query-language": "SQL (MySQL dialect plus MariaDB additions and an Oracle mode)",
+    "wire-protocol": "MySQL protocol",
+    "secondary-indexes": "Indexes per storage engine; HNSW vector indexes since 11.7",
+    "transactions": "ACID on InnoDB tables, within one server",
+    "scaling": "One primary, or Galera multi-primary; Spider shards a table across servers",
+    "replication": "Asynchronous binary log replication, or Galera’s virtually synchronous multi-primary",
+    "storage-engine": "Pluggable: InnoDB (default), Aria, MyRocks, ColumnStore, Spider, S3",
+    "deployment": "Self-hosted, Amazon RDS for MariaDB, or MariaDB Cloud"
+  },
+  "snippet": {
+    "lang": "sql",
+    "title": "Features MySQL lacks: a system-versioned table, a sequence with RETURNING, a vector index",
+    "source": [
+      "-- keep every past version of each row, queryable by time",
+      "CREATE TABLE prices (",
+      "  sku   VARCHAR(20) PRIMARY KEY,",
+      "  price DECIMAL(10,2) NOT NULL",
+      ") WITH SYSTEM VERSIONING;",
+      "",
+      "UPDATE prices SET price = 11.50 WHERE sku = 'PUMP-ROD-7';",
+      "SELECT * FROM prices FOR SYSTEM_TIME AS OF TIMESTAMP '2026-10-01 00:00:00';",
+      "",
+      "-- a sequence, and the new row handed back by the INSERT",
+      "CREATE SEQUENCE order_ids START WITH 1000;",
+      "INSERT INTO orders (id, sku) VALUES (NEXT VALUE FOR order_ids, 'PUMP-ROD-7') RETURNING id;",
+      "",
+      "-- similarity search with an HNSW index (11.8 LTS and later)",
+      "CREATE TABLE docs (",
+      "  id  INT PRIMARY KEY,",
+      "  emb VECTOR(3) NOT NULL,",
+      "  VECTOR INDEX (emb) M=8 DISTANCE=cosine",
+      ");",
+      "SELECT id FROM docs",
+      "ORDER BY VEC_DISTANCE_COSINE(emb, VEC_FromText('[0.12,0.80,0.33]'))",
+      "LIMIT 5;"
+    ]
+  },
+  "history": {
+    "story": [
+      "Michael “Monty” Widenius was one of MySQL’s original developers, and MySQL is named after his elder daughter, My. Sun Microsystems bought MySQL AB in 2008, and in April 2009 Oracle agreed to buy Sun. Monty and the first MariaDB developers set out to build Maria, a crash-safe replacement for the MyISAM engine named after his younger daughter, and the plans soon grew into a full branch of MySQL called MariaDB. The first release, MariaDB 5.1.38, came out as a beta on 29 October 2009: a binary drop-in for MySQL 5.1 that merged MySQL’s fixes every month and added the XtraDB engine, thread pooling and optimizer changes. The engine was later renamed Aria after a community contest.",
+      "In December 2012 Monty, David Axmark and Allan Larsson announced the MariaDB Foundation to keep the project independent of any one company. The company side, which became MariaDB Corporation and later MariaDB plc, listed on the New York Stock Exchange through a SPAC in late 2022, saw its value fall below $12 million by early 2024, and was taken private by K1 Investment Management in September 2024 under a new CEO, Rohit de Souza. It then bought Codership, the maker of Galera Cluster, in May 2025, reacquired its former cloud spin-off SkySQL in August 2025, and completed the purchase of GridGain, the company behind Apache Ignite, in March 2026.",
+      "In 2025 MariaDB moved community releases to quarterly rolling releases with one LTS series a year, starting with 11.8 in May 2025, which also made its vector search generally available."
+    ],
+    "choices": [
+      { "choice": "Stay a drop-in replacement for MySQL at first", "why": "Users of MySQL 5.1 could switch without changing applications, and monthly merges from MySQL kept its bug fixes flowing in. As the two diverged, compatibility narrowed to the protocol, clients and most of the SQL." },
+      { "choice": "A foundation separate from the company", "why": "MariaDB was forked because MySQL’s owner changed. The Foundation commits to keeping the server under GPLv2 regardless of any commercial entity, and its board does not make technical decisions." },
+      { "choice": "Ship Galera clustering with the server", "why": "Mainstream open-source databases offered only asynchronous or semi-synchronous replication. Galera’s certification-based, virtually synchronous replication gives multi-primary high availability; it has been a standard part of MariaDB Server for over nine years, and over a third of Enterprise customers use it." },
+      { "choice": "Quarterly rolling releases plus a yearly LTS", "why": "Short-term releases each needed a year of maintenance. Rolling releases get features out every quarter, while one LTS a year, kept for three years, gives production a stable line." }
+    ],
+    "timeline": [
+      { "year": "2009", "text": "Monty Widenius forks MySQL; MariaDB 5.1.38 beta ships in October" },
+      { "year": "2012", "text": "The MariaDB Foundation is announced in December" },
+      { "year": "2022", "text": "MariaDB plc lists on the NYSE through a SPAC" },
+      { "year": "2024", "text": "K1 Investment Management takes MariaDB plc private" },
+      { "year": "2025", "text": "Buys Codership (Galera) and SkySQL; 11.8 LTS makes vector search generally available" },
+      { "year": "2026", "text": "Buys GridGain; 12.3 LTS ships in May; 10.6 reaches end of life" }
+    ],
+    "sources": [
+      { "label": "MariaDB docs: Why is the software called MariaDB?", "url": "https://mariadb.com/docs/general-resources/community/community/faq/general-questions/why-is-the-software-called-mariadb" },
+      { "label": "MariaDB docs: The Aria name (Maria engine, renaming contest)", "url": "https://mariadb.com/docs/server/server-usage/storage-engines/aria/the-aria-name" },
+      { "label": "Oracle press release: Oracle buys Sun (20 Apr 2009, SEC filing)", "url": "https://www.sec.gov/Archives/edgar/data/1341439/000119312509083551/dex991.htm" },
+      { "label": "Sun Microsystems press release: Sun to acquire MySQL for $1 billion (16 Jan 2008, mailing-list copy)", "url": "https://www.postgresql.org/message-id/51494DB187D98F4C88DBEBF1F5F6D42303C80E0B%40edb06.mail01.enterprisedb.com" },
+      { "label": "MariaDB docs: MariaDB 5.1 changes and improvements (5.1.38 beta, 29 Oct 2009)", "url": "https://mariadb.com/docs/release-notes/community-server/old-releases/5.1/changes-improvements-in-mariadb-5-1" },
+      { "label": "MariaDB Foundation: MariaDB Foundation to safeguard leading open source database (Dec 2012)", "url": "https://blog.mariadb.org/mariadb-foundation-to-safeguard-leading-open-source-database/" },
+      { "label": "MariaDB Foundation: About (GPLv2 commitment, governance)", "url": "https://mariadb.org/about/" },
+      { "label": "TechCrunch: MariaDB goes private with new CEO as K1 closes acquisition (Sep 2024)", "url": "https://techcrunch.com/2024/09/10/mariadb-goes-private-with-new-ceo-as-k1-closes-acquisition" },
+      { "label": "MariaDB press release: K1 acquires MariaDB and appoints new CEO (Sep 2024)", "url": "https://mariadb.com/newsroom/press-releases/k1-acquires-a-leading-database-software-company-mariadb-and-appoints-new-ceo/" },
+      { "label": "MariaDB press release: MariaDB acquires Galera Cluster (May 2025)", "url": "https://mariadb.com/newsroom/press-releases/mariadb-acquires-galera-cluster/" },
+      { "label": "MariaDB press release: Acquisition of SkySQL (Aug 2025)", "url": "https://mariadb.com/newsroom/press-releases/mariadb-accelerates-cloud-deployments-adds-agentic-ai-and-serverless-capability-with-acquisition-of-skysql/" },
+      { "label": "MariaDB press release: MariaDB completes GridGain acquisition (Mar 2026)", "url": "https://mariadb.com/newsroom/press-releases/mariadb-completes-gridgain-acquisition-to-power-the-next-generation-of-agentic-ai/" },
+      { "label": "MariaDB blog: Announcing yearly LTS releases for MariaDB Community Server (Feb 2025)", "url": "https://mariadb.com/resources/blog/announcing-yearly-lts-releases-for-mariadb-community-server/" },
+      { "label": "MariaDB docs: Release model (rolling releases, LTS maintained three years)", "url": "https://mariadb.com/docs/release-notes/community-server/about/release-model" }
+    ]
+  },
+  "sources": [
+    { "label": "MariaDB Foundation: About (GPLv2, Foundation and MariaDB plc roles)", "url": "https://mariadb.org/about/" },
+    { "label": "MariaDB/server on GitHub", "url": "https://github.com/MariaDB/server" },
+    { "label": "MariaDB docs: Storage engines", "url": "https://mariadb.com/docs/server/server-usage/storage-engines" },
+    { "label": "MariaDB docs: Choosing the right storage engine", "url": "https://mariadb.com/docs/server/server-usage/storage-engines/choosing-the-right-storage-engine" },
+    { "label": "MariaDB docs: MyRocks", "url": "https://mariadb.com/docs/server/server-usage/storage-engines/myrocks" },
+    { "label": "MariaDB docs: Using InnoDB instead of XtraDB", "url": "https://mariadb.com/docs/server/server-usage/storage-engines/innodb/mariadb-enterprise-server-innodb-operations/innodb-unmaintained/using-innodb-instead-of-xtradb" },
+    { "label": "MariaDB docs: What is Galera replication?", "url": "https://mariadb.com/docs/galera-cluster/readme/about-galera-replication" },
+    { "label": "MariaDB docs: What is MariaDB Galera Cluster? (InnoDB, quorum)", "url": "https://mariadb.com/docs/galera-cluster/readme/mariadb-galera-cluster-guide" },
+    { "label": "MariaDB docs: MariaDB Galera Cluster known limitations", "url": "https://mariadb.com/docs/galera-cluster/reference/mariadb-galera-cluster-known-limitations" },
+    { "label": "MariaDB docs: Incompatibilities and feature differences between MariaDB 11.4 and MySQL 8.0", "url": "https://mariadb.com/docs/release-notes/community-server/about/compatibility-and-differences/incompatibilities-and-feature-differences-between-mariadb-11-4-and-mysql-8" },
+    { "label": "MariaDB docs: Vector overview (11.7, GA in 11.8, modified HNSW)", "url": "https://mariadb.com/docs/server/reference/sql-structure/vectors/vector-overview" },
+    { "label": "MariaDB docs: System-versioned tables", "url": "https://mariadb.com/docs/server/reference/sql-structure/temporal-tables/system-versioned-tables" },
+    { "label": "MariaDB docs: Sequence overview", "url": "https://mariadb.com/docs/server/reference/sql-structure/sequences/sequence-overview" },
+    { "label": "MariaDB docs: INSERT…RETURNING", "url": "https://mariadb.com/docs/server/reference/sql-statements/data-manipulation/inserting-loading-data/insertreturning" },
+    { "label": "MariaDB docs: Install a MaxScale license key", "url": "https://mariadb.com/docs/maxscale/maxscale-management/deployment/installation-and-configuration/maxscale-license-key" },
+    { "label": "MariaDB docs: Release model", "url": "https://mariadb.com/docs/release-notes/community-server/about/release-model" },
+    { "label": "MariaDB Foundation: MariaDB Server 12.3, 11.8, 11.4 and 10.11 Q3 2026 maintenance releases, and goodbye 10.6 (Aug 2026)", "url": "https://mariadb.org/mariadb-server-12-3-11-8-11-4-and-10-11-q3-2026-maintenance-releases-and-goodbye-10-6/" },
+    { "label": "MariaDB blog: Announcing yearly LTS releases for MariaDB Community Server (release calendar)", "url": "https://mariadb.com/resources/blog/announcing-yearly-lts-releases-for-mariadb-community-server/" },
+    { "label": "MariaDB press release: Acquisition of SkySQL, MariaDB Cloud (Aug 2025)", "url": "https://mariadb.com/newsroom/press-releases/mariadb-accelerates-cloud-deployments-adds-agentic-ai-and-serverless-capability-with-acquisition-of-skysql/" },
+    { "label": "Debezium docs: MariaDB connector (reads the binlog)", "url": "https://debezium.io/documentation/reference/stable/connectors/mariadb.html" },
+    { "label": "AWS: Amazon RDS for MariaDB", "url": "https://aws.amazon.com/rds/mariadb/" },
+    { "label": "Redmond (RCP Magazine): Microsoft to retire Azure Database for MariaDB on 19 September 2025 (Sep 2023)", "url": "https://rcpmag.com/articles/2023/09/26/azure-database-for-mariadb-end.aspx" }
+  ],
+  "checked": "2026-10-24"
+}

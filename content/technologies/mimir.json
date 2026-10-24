@@ -1,0 +1,103 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Grafana Mimir",
+  "concepts": ["metrics", "tsdb"],
+  "uses": ["observability", "alerting"],
+  "provider": "oss",
+  "vendor": "Grafana Labs",
+  "license": "AGPLv3",
+  "website": "https://grafana.com/oss/mimir/",
+  "repo": "https://github.com/grafana/mimir",
+  "summary": "Long-term, multi-tenant storage for Prometheus metrics: it takes remote write and OTLP, keeps Prometheus TSDB blocks in object storage and answers PromQL across them.",
+  "intro": [
+    "A single Prometheus server keeps about two weeks of data on one disk and is not clustered. Mimir is where many Prometheus servers, Grafana Alloy or OpenTelemetry Collectors send their samples instead, through Prometheus remote write (Snappy-compressed protobuf over HTTP) or native OTLP at `/otlp`. Every request carries a tenant ID in a header, and each tenant’s series go into their own Prometheus TSDB. By default a block covers two hours; finished blocks are uploaded to Amazon S3, Google Cloud Storage, Azure Storage or Swift, where a compactor merges and deduplicates them and store-gateways serve them to queries.",
+    "Mimir 3.0, released in October 2025, made ingest storage the preferred architecture: distributors validate writes and shard series across partitions of a Kafka topic, and a write succeeds once Kafka has replicated it. Each ingester consumes one partition, keeps recent data queryable, usually within a second, and uploads blocks. Reads go through a query frontend, which splits and caches queries, to queriers that read from ingesters and store-gateways. 3.0 also made the Mimir Query Engine the default, which streams data and, by Grafana Labs’ measure, uses up to 92% less peak memory than the Prometheus engine. The classic architecture, with replicated ingesters and local write-ahead logs, is still supported."
+  ],
+  "strengths": [
+    "Speaks Prometheus: remote write in, PromQL, recording and alerting rules out, so Grafana dashboards and alerts work unchanged",
+    "Keeps months or years of metrics in object storage, which is far cheaper than local disks on each Prometheus server",
+    "Built for scale and many teams: Grafana Labs says it scales to 1 billion active series, with per-tenant isolation and limits",
+    "Accepts OpenTelemetry as well as Influx, Graphite and Datadog formats, so one store can replace several"
+  ],
+  "limits": [
+    "A distributed system with many components (distributor, ingester, querier, query frontend, store-gateway, compactor) plus caches, and now Kafka for the preferred architecture; for one small cluster a single Prometheus is far simpler",
+    "By default a query right after a write may not see it yet; a client must send `X-Read-Consistency: strong` and accept extra latency to read its own writes",
+    "No authentication of its own: an external reverse proxy has to check credentials and set the tenant header",
+    "Cardinality still costs memory in ingesters, so labels with unbounded values hurt here as they do in Prometheus"
+  ],
+  "worksWith": [
+    { "id": "prometheus", "how": "takes remote write and PromQL from" },
+    { "id": "grafana", "how": "is queried with PromQL from" },
+    { "id": "s3", "how": "keeps TSDB blocks in" },
+    { "id": "gcs", "how": "can keep TSDB blocks in" },
+    { "id": "azure-blob", "how": "can keep TSDB blocks in" },
+    { "id": "kafka", "how": "shards incoming samples across" },
+    { "id": "opentelemetry", "how": "accepts metrics over OTLP from" },
+    { "id": "tempo", "how": "receives span metrics from" }
+  ],
+  "alternatives": ["prometheus", "influxdb", "greptimedb"],
+  "goodFor": [
+    { "id": "time-series-ingest", "why": "Distributors shard series across Kafka partitions and ingesters with per-tenant limits; Grafana Labs cites 1 billion active series." }
+  ],
+  "specs": {
+    "data-model": "Prometheus time series: labelled samples, in a TSDB per tenant",
+    "query-language": "PromQL",
+    "wire-protocol": "Prometheus remote write and OTLP; Influx, Graphite and Datadog formats",
+    "consistency": "Reads may miss a fresh write unless they send `X-Read-Consistency: strong`",
+    "scaling": "Series sharded across Kafka partitions, one ingester per partition",
+    "replication": "Kafka replicates writes (ingest storage); replicated ingesters in the classic architecture",
+    "storage-format": "Prometheus TSDB blocks (two hours by default) in object storage",
+    "retention": "Months or years of blocks in object storage"
+  },
+  "snippet": {
+    "lang": "yaml",
+    "title": "prometheus.yml: send every sample to Mimir as tenant team-a",
+    "source": [
+      "remote_write:",
+      "  - url: http://mimir:8080/api/v1/push",
+      "    headers:",
+      "      X-Scope-OrgID: team-a      # the tenant; normally set by an auth proxy",
+      "",
+      "# Grafana then queries Mimir as a Prometheus data source at",
+      "# http://mimir:8080/prometheus with the same header."
+    ]
+  },
+  "history": {
+    "story": [
+      "Prometheus was designed as one server with local storage, so companies running hundreds of them needed somewhere to keep metrics longer and query them together. In 2016 Tom Wilkie and Julius Volz started Cortex at Weaveworks, a horizontally scalable, multi-tenant Prometheus that became a CNCF sandbox project in 2018. Cortex became the basis for other projects, including Loki, Tempo and Grafana Labs’ commercial Grafana Enterprise Metrics.",
+      "By 2022 Grafana Labs was putting more work into its proprietary version than into Cortex, while cloud providers sold Cortex-based services without contributing back, a pattern its announcement called “simply not sustainable”. On March 30, 2022, it released Grafana Mimir, a fork of Cortex under AGPLv3 that brought the enterprise scaling features into open source: a split-and-merge compactor for very large tenants and a sharded query engine. Grafana Labs said most Cortex setups could switch in under 10 minutes and that Mimir queried up to 40 times faster.",
+      "Mimir completed what Grafana Labs calls the LGTM stack: Loki, Grafana, Tempo and Mimir. Mimir 3.0, in October 2025, moved to a Kafka-based ingest path and a new streaming query engine; 3.2 followed in August 2026."
+    ],
+    "choices": [
+      { "choice": "Reuse the Prometheus TSDB format", "why": "Mimir’s storage format is based on Prometheus TSDB: each tenant gets its own TSDB that cuts two-hour blocks with an index and chunks of about 120 samples, so Prometheus’s storage model and PromQL carry over to months of data in a bucket." },
+      { "choice": "Fork Cortex rather than keep contributing", "why": "Grafana Labs wanted the scaling features it had built for its enterprise product and Grafana Cloud in an open-source project it controlled. It used AGPLv3, as for Grafana, Loki and Tempo since 2021, whose conditions ask anyone who modifies the software and offers it over a network to share the source." },
+      { "choice": "Multi-tenancy from the start", "why": "Cortex was built to run as a shared service for many customers, so every write and query carries a tenant ID and limits apply per tenant." },
+      { "choice": "Kafka between writes and reads (3.0)", "why": "In the classic design the same ingesters handled writes and served queries, so a heavy query could slow ingestion. Writing to Kafka first lets reads and writes scale separately." }
+    ],
+    "timeline": [
+      { "year": "2016", "text": "Tom Wilkie and Julius Volz start Cortex at Weaveworks" },
+      { "year": "2022", "text": "Grafana Mimir released in March as an AGPLv3 fork of Cortex" },
+      { "year": "2025", "text": "Mimir 3.0 in October: Kafka-based ingest storage and the Mimir Query Engine" },
+      { "year": "2026", "text": "Mimir 3.1 in June and 3.2 in August" }
+    ],
+    "sources": [
+      { "label": "Grafana Labs blog: Announcing Grafana Mimir (March 2022)", "url": "https://grafana.com/blog/2022/03/30/announcing-grafana-mimir/" },
+      { "label": "Grafana Labs blog: Open source at Grafana Labs in 2022 (the LGTM stack)", "url": "https://grafana.com/blog/2022/12/28/grafana-labs-open-source-projects-2022/" },
+      { "label": "Grafana Mimir docs: v3.0 release notes (ingest storage, Mimir Query Engine)", "url": "https://grafana.com/docs/mimir/latest/release-notes/v3.0/" },
+      { "label": "GitHub: grafana/mimir releases (2.0, 3.0, 3.1, 3.2 dates)", "url": "https://github.com/grafana/mimir/releases" }
+    ]
+  },
+  "sources": [
+    { "label": "Grafana Mimir docs: Architecture (remote write, tenant header, TSDB blocks, two-hour blocks, object storage)", "url": "https://grafana.com/docs/mimir/latest/get-started/about-grafana-mimir-architecture/" },
+    { "label": "Grafana Mimir docs: Ingest storage architecture (Kafka partitions, ingesters, compactor, read consistency)", "url": "https://grafana.com/docs/mimir/latest/get-started/about-grafana-mimir-architecture/about-ingest-storage-architecture/" },
+    { "label": "Grafana Mimir docs: HTTP API (POST /api/v1/push, /prometheus prefix, /otlp/v1/metrics)", "url": "https://grafana.com/docs/mimir/latest/references/http-api/" },
+    { "label": "Prometheus docs: Storage (local, not clustered, 15-day default retention)", "url": "https://prometheus.io/docs/prometheus/latest/storage/" },
+    { "label": "Grafana Mimir docs: Store-gateway", "url": "https://grafana.com/docs/mimir/latest/references/architecture/components/store-gateway/" },
+    { "label": "Grafana Mimir docs: Configure the OpenTelemetry Collector to write metrics into Mimir (native OTLP at /otlp)", "url": "https://grafana.com/docs/mimir/latest/configure/configure-otel-collector/" },
+    { "label": "Grafana Mimir docs: v3.0 release notes (MQE default, up to 92% less memory)", "url": "https://grafana.com/docs/mimir/latest/release-notes/v3.0/" },
+    { "label": "Grafana Labs: Grafana Mimir product page (1 billion active series, Prometheus compatible, ingestion formats)", "url": "https://grafana.com/oss/mimir/" },
+    { "label": "Grafana Labs blog: Announcing Grafana Mimir (March 2022)", "url": "https://grafana.com/blog/2022/03/30/announcing-grafana-mimir/" },
+    { "label": "GitHub: grafana/mimir (AGPL-3.0)", "url": "https://github.com/grafana/mimir" }
+  ],
+  "checked": "2026-10-24"
+}

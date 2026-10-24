@@ -1,6 +1,6 @@
 // Checks that span files: every id one file points at must exist in another.
 // Used by the build (src/lib/catalog.ts) and by `bun run validate`.
-import type { Architecture, Benchmark, Category, Part, Comparison, Concept, Diagram, Foundation, Resource, Technology } from './schema';
+import type { Architecture, Benchmark, Category, Part, Comparison, Concept, Diagram, Foundation, Resource, Spec, Technology, Workload } from './schema';
 
 type Entries<T> = { id: string; data: T }[];
 
@@ -14,10 +14,12 @@ export interface CatalogInput {
   foundations: Entries<Foundation>;
   resources: Entries<Resource>;
   benchmarks: Entries<Benchmark>;
+  workloads: Entries<Workload>;
+  specs: Spec[];
   systemMap: Diagram;
 }
 
-export function findProblems({ parts, categories, concepts, technologies, architectures, comparisons, foundations, resources, benchmarks, systemMap }: CatalogInput): string[] {
+export function findProblems({ parts, categories, concepts, technologies, architectures, comparisons, foundations, resources, benchmarks, workloads, specs, systemMap }: CatalogInput): string[] {
   const problems: string[] = [];
   const catIds = new Set(categories.map(c => c.id));
   const partIds = new Set(parts.map(p => p.id));
@@ -29,6 +31,12 @@ export function findProblems({ parts, categories, concepts, technologies, archit
   }
   const conceptIds = new Set(concepts.map(p => p.id));
   const techIds = new Set(technologies.map(t => t.id));
+  const workloadIds = new Set(workloads.map(w => w.id));
+  const specIds = new Set(specs.map(x => x.id));
+  specs.forEach((x, i) => { if (specs.findIndex(y => y.id === x.id) !== i) problems.push(`content/specs.json: "${x.id}" is defined twice`); });
+  for (const { id, data } of workloads) {
+    for (const c of data.concepts) if (!conceptIds.has(c)) problems.push(`content/workloads/${id}.json: "concepts" has unknown concept "${c}"`);
+  }
 
   const links = (where: string, d: Diagram) =>
     d.nodes.forEach(n => {
@@ -126,6 +134,23 @@ export function findProblems({ parts, categories, concepts, technologies, archit
       if (a === id) problems.push(`${where}: "archived.alternatives" lists the technology itself`);
       else if (!techIds.has(a)) problems.push(`${where}: "archived.alternatives" has unknown technology "${a}"`);
       else if (technologies.find(t => t.id === a)?.data.archived) problems.push(`${where}: "archived.alternatives" points at "${a}", which is archived too`);
+    }
+    const alts = new Set<string>();
+    for (const a of data.alternatives) {
+      if (a === id) problems.push(`${where}: "alternatives" lists the technology itself`);
+      else if (!techIds.has(a)) problems.push(`${where}: "alternatives" has unknown technology "${a}"`);
+      else if (technologies.find(t => t.id === a)?.data.archived) problems.push(`${where}: "alternatives" points at "${a}", which is archived`);
+      if (alts.has(a)) problems.push(`${where}: "alternatives" lists "${a}" twice`);
+      alts.add(a);
+    }
+    const good = new Set<string>();
+    for (const g of data.goodFor) {
+      if (!workloadIds.has(g.id)) problems.push(`${where}: "goodFor" has unknown workload "${g.id}" (known: ${[...workloadIds].join(', ')})`);
+      if (good.has(g.id)) problems.push(`${where}: "goodFor" lists "${g.id}" twice`);
+      good.add(g.id);
+    }
+    for (const key of Object.keys(data.specs)) {
+      if (!specIds.has(key)) problems.push(`${where}: "specs" has unknown spec "${key}"; add it to content/specs.json first`);
     }
     tables(where, data.sections);
 

@@ -1,0 +1,129 @@
+{
+  "$schema": "../../.schemas/concepts.schema.json",
+  "name": "JEPA (Joint-Embedding Predictive Architecture)",
+  "icon": "scan-eye",
+  "category": "ai",
+  "order": 50,
+  "summary": "A way to train models by predicting the hidden part of an input as an abstract representation, not as pixels or tokens; Yann LeCun’s proposal for world models that can plan, so far a research line rather than a product.",
+  "howItWorks": "A JEPA has two encoders and a predictor. One encoder turns the visible part of an input, x, into a representation; the other turns the hidden part, y, into a representation too; the predictor tries to guess y’s representation from x’s. The training signal is the prediction error measured between representations, never in pixels or tokens. Because the encoder of y can drop details nobody could predict, such as the texture of a carpet or leaves moving in the wind, the model is free to learn what matters: in LeCun’s example of a car approaching a fork in the road, its position and speed, with a latent variable standing for “turns left” or “turns right”. Training needs no labels. In I-JEPA, Meta’s first implementation, an image is cut into patches; a context encoder sees one large block, a target encoder sees the whole image, and the predictor must output the target encoder’s representations of four smaller blocks the context did not cover, with the average L2 distance as the loss. The obvious failure is collapse: if both encoders output the same constant, every prediction is perfect and nothing is learned. JEPAs prevent it without negative examples. I-JEPA updates the target encoder only as a slow moving average of the context encoder; other variants add regularizers that keep representations varied, such as VICReg or LeJEPA’s SIGReg. A JEPA cannot write an image or a sentence on its own. Its encoder is used frozen, with a small trained probe on top for classification or question answering, or, in V-JEPA 2-AC, as a world model: given the current camera view, a goal image and candidate robot actions, the predictor imagines the resulting representation, and a planner picks the actions whose prediction lands closest to the goal.",
+  "analogy": "Watching someone throw a ball, you predict where the ball will be, not the exact pattern of every leaf on the tree behind it. A generative model has to paint the whole next frame, leaves included; a JEPA only has to say where the ball goes, in its own shorthand, and is graded on that shorthand.",
+  "useWhen": [
+    "You have a lot of unlabelled images or video and want a strong frozen encoder, then train small probes with few labels: I-JEPA reached state-of-the-art low-shot ImageNet classification with 12 labelled examples per class",
+    "The task depends on motion and physical dynamics in video, where V-JEPA 2 reports 77.3% top-1 on Something-Something v2",
+    "You research robot planning toward goal images with little robot data: V-JEPA 2-AC was post-trained on under 62 hours of unlabelled robot video",
+    "You study world models and want open code: Meta publishes JEPA training code and checkpoints, and an Apache 2.0 library of examples, `eb_jepa`"
+  ],
+  "avoidWhen": [
+    "You need generated text, code or images: a JEPA predicts representations and needs a separate decoder to say anything, so for text an LLM is the tool",
+    "You want a product with an API, a price list and support: as of October 2026 JEPA models ship as papers, code and checkpoints from Meta FAIR and academic labs, not as hosted services",
+    "You need commercial rights to the original models: I-JEPA and V-JEPA weights and code are under CC BY-NC 4.0, non-commercial only; V-JEPA 2 is under MIT",
+    "You expect plug-and-play robot control: V-JEPA 2-AC’s reported success on pick-and-place ranged from 65% to 80% across lab tests, and each action takes about 16 seconds to plan on one GPU"
+  ],
+  "example": "A lab wants a Franka robot arm to move a cup to a spot shown in a photo, without collecting any data on that robot. It starts from V-JEPA 2, pretrained on more than a million hours of internet video, and the action-conditioned V-JEPA 2-AC, post-trained on Droid robot videos. At each step the planner encodes the current camera image and the goal photo, samples 800 candidate action sequences, lets the predictor imagine the representation each would lead to, keeps the best ones and resamples for 10 iterations, then executes only the first action and plans again. On a single RTX 4090 this takes about 16 seconds per action, against 4 minutes for a video-generating world model (Cosmos) in the same paper, and pick-and-place of a cup succeeded in 80% of trials. No pixels are ever generated.",
+  "snippet": {
+    "lang": "python",
+    "source": [
+      "# One I-JEPA-style training step (sketch, PyTorch)",
+      "ctx, targets = sample_blocks(patches)          # 1 large context block, 4 target blocks",
+      "with torch.no_grad():",
+      "    t = target_encoder(patches)[targets]         # target representations, not pixels",
+      "p = predictor(context_encoder(patches[ctx]), targets)",
+      "loss = ((p - t) ** 2).mean()                     # L2 distance in representation space",
+      "loss.backward(); optimizer.step(); optimizer.zero_grad()",
+      "",
+      "# No gradient reaches the target encoder: it trails the context encoder",
+      "# as an exponential moving average, which keeps it from collapsing.",
+      "for tp, cp in zip(target_encoder.parameters(), context_encoder.parameters()):",
+      "    tp.data.mul_(m).add_((1 - m) * cp.data)       # m close to 1"
+    ]
+  },
+  "related": ["llms", "ml-frameworks"],
+  "sections": [
+    {
+      "type": "cards",
+      "title": "The JEPA family so far",
+      "intro": "Each is a research paper with code; most have Yann LeCun among the authors.",
+      "items": [
+        { "name": "I-JEPA", "tag": "images · 2023", "text": "Predicts representations of four target blocks of an image from one context block, with no hand-crafted augmentations. A 632-million-parameter ViT-Huge/14 trained on ImageNet with 16 A100 GPUs in under 72 hours. Weights under CC BY-NC." },
+        { "name": "V-JEPA", "tag": "video · February 2024", "text": "Predicts masked space-time regions of video in representation space. Trained on 2 million public videos with no text, labels or pixel reconstruction; its ViT-H/16 scored 81.9% on Kinetics-400 and 72.2% on Something-Something v2 with a frozen backbone." },
+        { "name": "V-JEPA 2 and V-JEPA 2-AC", "tag": "video and robots · June 2025", "text": "A 1.2-billion-parameter model pretrained on over 1 million hours of video and 1 million images, then given an action-conditioned predictor trained on under 62 hours of robot video that plans robot arm motions zero-shot. Code and checkpoints under MIT." },
+        { "name": "LLM-JEPA", "tag": "language · September 2025", "text": "Adds a JEPA term to the usual LLM training objective, for fine-tuning and pretraining. Its authors report that it beats standard objectives by a significant margin and resists overfitting, on Llama 3, Gemma 2, OpenELM and OLMo models and datasets such as GSM8K and Spider." },
+        { "name": "LeJEPA", "tag": "theory · November 2025", "text": "Randall Balestriero and Yann LeCun replace the stop-gradient and teacher-student tricks with one regularizer, SIGReg, that pushes embeddings toward an isotropic Gaussian; the core is about 50 lines of code, and a ViT-H/14 reached 79% on ImageNet with linear evaluation." },
+        { "name": "VL-JEPA", "tag": "vision-language · December 2025", "text": "Predicts the embedding of the answer text instead of generating it token by token, and decodes text only when needed, with 2.85 times fewer decoding operations than decoding at every step. Against a token-generating model with the same vision encoder and data, it needed 50% fewer trainable parameters; the model has 1.6 billion." },
+        { "name": "V-JEPA 2.1", "tag": "video · March 2026", "text": "A new training recipe that applies the loss to visible as well as masked tokens and at several encoder layers, for sharper and temporally consistent dense features." }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Where it stands in October 2026",
+      "body": [
+        "JEPA is an active research line, not yet a technology you buy. Meta FAIR keeps publishing JEPA code: V-JEPA 2.1 in March 2026, `jepa-wms` on planning with JEPA world models, `jepa-intuitive-physics`, and `eb_jepa`, an Apache 2.0 library of examples. These releases are papers, code and checkpoints rather than hosted APIs, and commercial assistants, coding tools and agents are still built on LLMs.",
+        "Its main advocate has left Meta. Yann LeCun, who founded Meta’s FAIR lab in 2013, left in November 2025, after Meta reorganized its AI work around LLM products under a new Superintelligence team. In December 2025 he co-founded Advanced Machine Intelligence (AMI Labs) in Paris, with Alexandre LeBrun as CEO, to build world models on the ideas of his 2022 paper. In March 2026 AMI Labs raised a $1.03 billion seed round and said it would publish papers and open-source much of its code; it is meant to stay a research organization, not expected to sell a product for around five years."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "By 2022 large language models had shown how far self-supervised learning on text could go: hide a word, predict it, repeat over trillions of words. Yann LeCun, Meta’s chief AI scientist, argued that the recipe would not carry over to the physical world. In his position paper “A Path Towards Autonomous Machine Intelligence”, posted on June 27, 2022, he wrote “I do not believe that scaling is enough”: text is a short sequence of discrete tokens over which a model can spread probabilities, but video is continuous and high-dimensional, and most of each future frame cannot be predicted at all. He proposed the Joint-Embedding Predictive Architecture as “the centerpiece” of a different design, a world model that predicts in representation space, stacked into a hierarchy (H-JEPA) for planning at several time scales.",
+      "Meta’s FAIR lab turned the idea into models. I-JEPA, released in June 2023 as “the first AI model based on Yann LeCun’s vision”, learned image features from ImageNet without hand-made augmentations. V-JEPA, in February 2024, did the same for video, and V-JEPA 2, in June 2025, scaled to more than a million hours of video and added an action-conditioned version that planned robot arm movements in labs it had never seen. The same objective was then tried on language (LLM-JEPA) and on vision-language models (VL-JEPA).",
+      "The ideas outlived LeCun’s time at Meta. He left in November 2025 and in March 2026 announced Advanced Machine Intelligence (AMI Labs), a Paris-based lab that raised $1.03 billion to build world models, while Meta FAIR kept releasing JEPA code, including V-JEPA 2.1."
+    ],
+    "choices": [
+      {
+        "choice": "Predict representations instead of pixels or tokens",
+        "why": "LeCun argued it is “essentially impossible to predict every pixel value of every future frame”. Predicting in representation space lets the encoders throw away what cannot be predicted, so the model spends its capacity on what can."
+      },
+      {
+        "choice": "Non-contrastive training",
+        "why": "Contrastive methods learn by pushing apart negative examples and, the paper says, become very inefficient in high dimensions. JEPAs instead keep the information content of their representations high with regularizers such as VICReg, or with asymmetric tricks such as a moving-average target encoder."
+      },
+      {
+        "choice": "Give up generation",
+        "why": "A JEPA cannot produce y from x; in LeCun’s words, “we lose the ability to generate outputs, but we gain a powerful way to represent multi-modal dependencies.” Outputs come from probes, decoders or a planner working on top of the representations."
+      },
+      {
+        "choice": "Plan by searching in the world model",
+        "why": "LeCun’s paper treats reasoning as minimizing a cost over imagined futures. V-JEPA 2-AC does this literally: it scores candidate action sequences by how close their predicted representation lands to the goal and re-plans after every step."
+      }
+    ],
+    "timeline": [
+      { "year": "2022", "text": "Yann LeCun posts “A Path Towards Autonomous Machine Intelligence” proposing JEPA (June 27)" },
+      { "year": "2023", "text": "Meta releases I-JEPA for images (June)" },
+      { "year": "2024", "text": "V-JEPA for video (February 15)" },
+      { "year": "2025", "text": "V-JEPA 2 and robot planning (June 11); LLM-JEPA (September); LeCun leaves Meta (November); VL-JEPA (December)" },
+      { "year": "2026", "text": "AMI Labs raises $1.03 billion to build world models (March 9); Meta releases V-JEPA 2.1 (March 16)" }
+    ],
+    "sources": [
+      { "label": "Yann LeCun: A Path Towards Autonomous Machine Intelligence, version 0.9.2 (OpenReview, June 27, 2022)", "url": "https://openreview.net/forum?id=BZ5a1r-kVsf", "archive": "https://web.archive.org/web/20241231120746/https://openreview.net/pdf?id=BZ5a1r-kVsf" },
+      { "label": "Meta AI: I-JEPA, the first AI model based on Yann LeCun’s vision for more human-like AI (June 13, 2023)", "url": "https://ai.meta.com/blog/yann-lecun-ai-model-i-jepa/", "archive": "https://web.archive.org/web/20261006094739/https://ai.meta.com/blog/yann-lecun-ai-model-i-jepa/" },
+      { "label": "Meta AI: V-JEPA, the next step toward Yann LeCun’s vision of advanced machine intelligence (February 15, 2024)", "url": "https://ai.meta.com/blog/v-jepa-yann-lecun-ai-model-video-joint-embedding-predictive-architecture/", "archive": "https://web.archive.org/web/20261012033928/https://ai.meta.com/blog/v-jepa-yann-lecun-ai-model-video-joint-embedding-predictive-architecture/" },
+      { "label": "Meta AI: V-JEPA 2 world model and new benchmarks (June 2025)", "url": "https://ai.meta.com/blog/v-jepa-2-world-model-benchmarks/", "archive": "https://web.archive.org/web/20261011075920/https://ai.meta.com/blog/v-jepa-2-world-model-benchmarks/" },
+      { "label": "PureAI: Meta AI chief Yann LeCun to leave company (November 12, 2025)", "url": "https://pureai.com/articles/2025/11/12/meta-ai-chief-yann-lecun-to-leave-company.aspx" },
+      { "label": "TechCrunch: Yann LeCun’s AMI Labs raises $1.03 billion to build world models (March 9, 2026)", "url": "https://techcrunch.com/2026/03/09/yann-lecuns-ami-labs-raises-1-03-billion-to-build-world-models/" },
+      { "label": "GitHub: facebookresearch/vjepa2 README (V-JEPA 2.1 released March 16, 2026)", "url": "https://github.com/facebookresearch/vjepa2" }
+    ]
+  },
+  "sources": [
+    { "label": "Yann LeCun: A Path Towards Autonomous Machine Intelligence (JEPA, collapse, VICReg, LLMs and scaling)", "url": "https://openreview.net/forum?id=BZ5a1r-kVsf", "archive": "https://web.archive.org/web/20241231120746/https://openreview.net/pdf?id=BZ5a1r-kVsf" },
+    { "label": "arXiv: Assran et al., Self-Supervised Learning from Images with a Joint-Embedding Predictive Architecture (I-JEPA, 2023)", "url": "https://arxiv.org/abs/2301.08243" },
+    { "label": "arXiv: I-JEPA paper, HTML version (EMA target encoder, L2 loss, block masking)", "url": "https://arxiv.org/html/2301.08243" },
+    { "label": "Meta AI: I-JEPA announcement (632M parameters, 16 A100s, 12 labels per class)", "url": "https://ai.meta.com/blog/yann-lecun-ai-model-i-jepa/", "archive": "https://web.archive.org/web/20261006094739/https://ai.meta.com/blog/yann-lecun-ai-model-i-jepa/" },
+    { "label": "arXiv: Bardes et al., Revisiting Feature Prediction for Learning Visual Representations from Video (V-JEPA, 2024)", "url": "https://arxiv.org/abs/2404.08471" },
+    { "label": "Meta AI: V-JEPA announcement (frozen evaluation, CC BY-NC)", "url": "https://ai.meta.com/blog/v-jepa-yann-lecun-ai-model-video-joint-embedding-predictive-architecture/", "archive": "https://web.archive.org/web/20261012033928/https://ai.meta.com/blog/v-jepa-yann-lecun-ai-model-video-joint-embedding-predictive-architecture/" },
+    { "label": "arXiv: Assran et al., V-JEPA 2: Self-Supervised Video Models Enable Understanding, Prediction and Planning (2025)", "url": "https://arxiv.org/abs/2506.09985" },
+    { "label": "arXiv: V-JEPA 2 paper, HTML version (planning with CEM, 16 s vs 4 min per action, success rates)", "url": "https://arxiv.org/html/2506.09985" },
+    { "label": "Meta AI: V-JEPA 2 world model and new benchmarks (1.2B parameters, 62 hours of robot data, 65 to 80% success)", "url": "https://ai.meta.com/blog/v-jepa-2-world-model-benchmarks/", "archive": "https://web.archive.org/web/20261011075920/https://ai.meta.com/blog/v-jepa-2-world-model-benchmarks/" },
+    { "label": "GitHub: facebookresearch/vjepa2 (MIT license, V-JEPA 2.1)", "url": "https://github.com/facebookresearch/vjepa2" },
+    { "label": "GitHub: facebookresearch/ijepa (CC BY-NC 4.0)", "url": "https://github.com/facebookresearch/ijepa" },
+    { "label": "GitHub: facebookresearch/jepa, V-JEPA code (CC BY-NC 4.0)", "url": "https://github.com/facebookresearch/jepa" },
+    { "label": "GitHub: facebookresearch/eb_jepa (Apache 2.0 library of JEPA examples)", "url": "https://github.com/facebookresearch/eb_jepa" },
+    { "label": "GitHub: facebookresearch/jepa-wms (planning with JEPA world models)", "url": "https://github.com/facebookresearch/jepa-wms" },
+    { "label": "GitHub: facebookresearch/jepa-intuitive-physics (intuitive physics from self-supervised video pretraining)", "url": "https://github.com/facebookresearch/jepa-intuitive-physics" },
+    { "label": "arXiv: Huang, LeCun and Balestriero, LLM-JEPA: Large Language Models Meet Joint Embedding Predictive Architectures (2025)", "url": "https://arxiv.org/abs/2509.14252" },
+    { "label": "arXiv: Balestriero and LeCun, LeJEPA: Provable and Scalable Self-Supervised Learning Without the Heuristics (2025)", "url": "https://arxiv.org/abs/2511.08544" },
+    { "label": "arXiv: Chen et al., VL-JEPA: Joint Embedding Predictive Architecture for Vision-language (2025)", "url": "https://arxiv.org/abs/2512.10942" },
+    { "label": "PureAI: Meta AI chief Yann LeCun to leave company (November 2025)", "url": "https://pureai.com/articles/2025/11/12/meta-ai-chief-yann-lecun-to-leave-company.aspx" },
+    { "label": "TechCrunch: Yann LeCun’s AMI Labs raises $1.03 billion to build world models (March 2026)", "url": "https://techcrunch.com/2026/03/09/yann-lecuns-ami-labs-raises-1-03-billion-to-build-world-models/" },
+    { "label": "Wikipedia: Advanced Machine Intelligence Labs (founded December 2025, left Meta November 2025, research organization)", "url": "https://en.wikipedia.org/wiki/Advanced_Machine_Intelligence_Labs" }
+  ]
+}

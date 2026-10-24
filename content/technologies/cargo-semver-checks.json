@@ -1,0 +1,135 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "cargo-semver-checks",
+  "concepts": ["release-automation", "static-analysis"],
+  "kinds": ["linters"],
+  "provider": "oss",
+  "vendor": "Predrag Gruevski and contributors",
+  "license": "Apache 2.0 or MIT",
+  "website": "https://crates.io/crates/cargo-semver-checks",
+  "repo": "https://github.com/obi1kenobi/cargo-semver-checks",
+  "summary": "A Cargo subcommand that compares a Rust crate’s public API with its last published version and fails if the change needs a bigger version bump than the one you chose, such as removing a public item in a patch release.",
+  "intro": [
+    "Run `cargo semver-checks` before `cargo publish`. It builds rustdoc’s JSON description of the crate’s public API twice: once for the current code and once for a baseline, by default the newest version on crates.io (or a git revision, a local directory or a saved rustdoc file). Each lint compares the two and reports what changed, with the item’s name and file, the minimum version bump the change needs, and a link to the matching rule in the Cargo SemVer reference. Removing a public function, adding a field to a struct users can construct, or a type that stops being `Send` because of a private field change are all major changes; it reports them when the new version number is only a minor or patch bump.",
+    "The lints are not written as Rust code. Each one is a query for Trustfall, a query engine by the same author, run over a “crate diff” whose `baseline` and `current` sides are the two rustdoc files: find a public struct in the baseline whose import path matches nothing in the current version. A lint file also sets the bump it requires (`Major` or `Minor`) and its default level. In October 2026 there are more than 260 lints, including some on `Cargo.toml` itself, such as a removed feature; levels can be changed to `deny`, `warn` or `allow` under `[package.metadata.cargo-semver-checks.lints]` or the workspace equivalent. It exits with 0 when no deny-level lint fires, 100 when one does and 101 when it couldn’t finish.",
+    "It installs with `cargo install` or `cargo binstall`, runs in CI through `obi1kenobi/cargo-semver-checks-action`, and is run automatically by release-plz. Because rustdoc’s JSON format is unstable and changes with Rust releases, each version supports a range of format versions: 0.51.0 (October 2026) requires Rust 1.93 or newer both to build and to run, and new nightlies can be unsupported for days or weeks. The Rust project has an accepted goal to remove the blockers to merging it into Cargo, so that `cargo publish` checks SemVer by default."
+  ],
+  "strengths": [
+    "Catches accidental breaking changes before they reach crates.io, where a bad release can only be yanked; a 2023 scan found a violation in about 1 in 31 releases of the top 1,000 crates",
+    "False positives are treated as bugs, so a failure is usually a real problem and the tool can block CI",
+    "One command with no setup: it fetches the baseline from crates.io and handles workspaces and feature selection itself",
+    "Used widely, from release-plz’s release pull requests to the Rust standard library"
+  ],
+  "limits": [
+    "Doesn’t see every break yet: changes to types, generics or lifetimes of existing items, and breaks that appear only with some features, are not detected",
+    "Re-exports of items from other crates aren’t followed reliably, a known source of false positives until cross-crate linting lands",
+    "Tied to rustdoc JSON: each release needs a recent stable Rust, and nightly toolchains are supported only on a best-effort basis",
+    "Each run builds rustdoc JSON for both the baseline and the current code, per target if the API differs by target; registries other than crates.io aren’t supported as a baseline"
+  ],
+  "worksWith": [
+    { "id": "rust", "how": "lints the public API of crates in" },
+    { "id": "github-actions", "how": "runs as an action in" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Check a release before publishing",
+    "source": [
+      "cargo binstall cargo-semver-checks   # or: cargo install cargo-semver-checks --locked",
+      "",
+      "# compare with the newest version of this crate on crates.io",
+      "cargo semver-checks",
+      "",
+      "# compare with a git revision instead, listing every check that ran",
+      "cargo semver-checks --baseline-rev origin/main --verbose"
+    ]
+  },
+  "sections": [
+    {
+      "type": "code",
+      "title": "A lint is a query",
+      "intro": "The `struct_missing` lint, shortened: find a public struct in the baseline that can be imported by some path, where the current version has nothing public at that path. The `@tag` on the path passes it from one side of the diff to the other.",
+      "lang": "text",
+      "source": [
+        "SemverQuery(",
+        "    id: \"struct_missing\",",
+        "    human_readable_name: \"pub struct removed or renamed\",",
+        "    required_update: Major,",
+        "    lint_level: Deny,",
+        "    reference_link: Some(\"https://doc.rust-lang.org/cargo/reference/semver.html#item-remove\"),",
+        "    query: r#\"",
+        "    {",
+        "        CrateDiff {",
+        "            baseline {",
+        "                item {",
+        "                    ... on Struct {",
+        "                        visibility_limit @filter(op: \"=\", value: [\"$public\"]) @output",
+        "                        name @output",
+        "                        importable_path {",
+        "                            path @output @tag",
+        "                            public_api @filter(op: \"=\", value: [\"$true\"])",
+        "                        }",
+        "                    }",
+        "                }",
+        "            }",
+        "            current @fold @transform(op: \"count\") @filter(op: \"=\", value: [\"$zero\"]) {",
+        "                item {",
+        "                    ... on ImplOwner {",
+        "                        visibility_limit @filter(op: \"=\", value: [\"$public\"])",
+        "                        importable_path {",
+        "                            path @filter(op: \"=\", value: [\"%path\"])",
+        "                        }",
+        "                    }",
+        "                }",
+        "            }",
+        "        }",
+        "    }\"#,",
+        "    arguments: { \"public\": \"public\", \"zero\": 0, \"true\": true },",
+        ")"
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In Rust, `cargo update` pulls in any new minor or patch version of a dependency, so a release that breaks its API without a major bump breaks other people’s builds. In 2022 this happened to well-maintained crates such as `pyo3`, `clap` and `block-buffer`; for `clap`, undoing it would have meant yanking every 3.2 release. Predrag Gruevski, the author of the Trustfall query engine, built a checker that queries rustdoc’s JSON output with it, and published cargo-semver-checks to crates.io in July 2022, and by late August, at version 0.9.1, it had 18 lints.",
+      "The first versions were too slow for huge crates: checking `aws-sdk-ec2`, with about 240,000 items, took around five hours. In February 2023 indexes added to the Trustfall rustdoc adapter cut that to eight seconds without changing a single lint. A study published that September with Tomasz Nowak and others ran it over the top 1,000 crates and found that more than 1 in 6 had broken SemVer at least once. Gruevski, a solo maintainer funded by sponsors and the Rust Foundation Fellowship Program, has since grown the lint set roughly twofold each year, to 120 at the end of 2024 and 242 at the end of 2025.",
+      "From the second half of 2024 the work has been an official Rust project goal: first linting `Cargo.toml` manifests, merged that year, then the remaining blockers to merging the tool into Cargo, chiefly lints that need type checking, for which a 2025 Google Summer of Code project built “witness” programs that `cargo check` compiles to prove a break, and linting across crate boundaries, done together with the rustdoc team. In August 2026 Gruevski reported that the Rust standard library now runs cargo-semver-checks to prevent accidental breakage."
+    ],
+    "choices": [
+      { "choice": "Read rustdoc’s JSON instead of parsing source code", "why": "rustdoc already resolves the crate the way the compiler does, so the tool sees the real public API, including re-exports and auto traits, without writing its own Rust front end. The price is an unstable format that changes with Rust releases." },
+      { "choice": "Write lints as declarative queries", "why": "Each lint is a Trustfall query over the old and new API, so adding one means describing the breaking pattern, not writing traversal code, and speeding up the engine speeds up every lint at once." },
+      { "choice": "No false positives, even at the cost of misses", "why": "A tool that cries wolf gets switched off in CI. The README calls avoiding false positives a design goal and treats each one as a bug, while gaps in coverage are tracked as missing lints." },
+      { "choice": "Prove type-level breaks with witness programs", "why": "Deciding whether a type change breaks callers would mean reimplementing the trait solver and borrow checker. Instead the tool generates a small downstream program and lets the compiler decide." }
+    ],
+    "timeline": [
+      { "year": "2022", "text": "Repository created and first published to crates.io (July 13); 18 lints by 0.9.1 in August" },
+      { "year": "2023", "text": "Trustfall indexes make checks over 2,000 times faster (February); study of SemVer violations in the top 1,000 crates (September)" },
+      { "year": "2024", "text": "Becomes a Rust project goal; manifest linting merged; 120 lints by year end" },
+      { "year": "2025", "text": "Witness generation built in Google Summer of Code; 242 lints by year end" },
+      { "year": "2026", "text": "The Rust standard library uses it to guard against breakage (August); 0.51.0 released (October 3)" }
+    ],
+    "sources": [
+      { "label": "Predrag Gruevski: Toward fearless cargo update (Aug 25, 2022)", "url": "https://predr.ag/blog/toward-fearless-cargo-update/" },
+      { "label": "Predrag Gruevski: Speeding up Rust semver-checking by over 2000x (Feb 7, 2023)", "url": "https://predr.ag/blog/speeding-up-rust-semver-checking-by-over-2000x/" },
+      { "label": "Tomasz Nowak and Predrag Gruevski: Semver violations are common, better tooling is the answer (Sep 7, 2023)", "url": "https://predr.ag/blog/semver-violations-are-common-better-tooling-is-the-answer/" },
+      { "label": "Predrag Gruevski: Exponential growth continued, cargo-semver-checks 2025 Year in Review (Jan 11, 2026)", "url": "https://predr.ag/blog/cargo-semver-checks-2025-year-in-review/" },
+      { "label": "Rust Project Goals 2024h2: Begin resolving cargo-semver-checks blockers for merging into cargo (manifest linting)", "url": "https://goals.rust-lang.org/2024h2/cargo-semver-checks.html" },
+      { "label": "Rust Project Goals 2025h1: cargo-semver-checks (manifest linting merged)", "url": "https://goals.rust-lang.org/2025h1/cargo-semver-checks.html" },
+      { "label": "Rust Project Goals 2026: Continue resolving cargo-semver-checks blockers for merging into cargo", "url": "https://goals.rust-lang.org/2026/cargo-semver-checks.html" },
+      { "label": "Predrag Gruevski: Protecting the Rust standard library from accidental breakage (Aug 15, 2026)", "url": "https://predr.ag/blog/protecting-the-rust-stdlib-from-breakage/" },
+      { "label": "crates.io: cargo-semver-checks (created Jul 13, 2022; version dates)", "url": "https://crates.io/crates/cargo-semver-checks" }
+    ]
+  },
+  "sources": [
+    { "label": "cargo-semver-checks README: usage, baselines, lint configuration, exit codes, limitations, false positives, MSRV, license", "url": "https://github.com/obi1kenobi/cargo-semver-checks" },
+    { "label": "cargo-semver-checks on GitHub: lint definitions (src/lints)", "url": "https://github.com/obi1kenobi/cargo-semver-checks/tree/main/src/lints" },
+    { "label": "cargo-semver-checks on GitHub: struct_missing lint", "url": "https://github.com/obi1kenobi/cargo-semver-checks/blob/main/src/lints/struct_missing.ron" },
+    { "label": "cargo-semver-checks on GitHub: release v0.51.0 (requires Rust 1.93+)", "url": "https://github.com/obi1kenobi/cargo-semver-checks/releases/tag/v0.51.0" },
+    { "label": "Rust Project Goals 2026: cargo-semver-checks (lint count, type checking, cross-crate blockers, planned end state)", "url": "https://goals.rust-lang.org/2026/cargo-semver-checks.html" },
+    { "label": "Predrag Gruevski: cargo-semver-checks 2025 Year in Review (lints, witnesses, funding)", "url": "https://predr.ag/blog/cargo-semver-checks-2025-year-in-review/" },
+    { "label": "Predrag Gruevski: Semver violations are common (study of the top 1,000 crates)", "url": "https://predr.ag/blog/semver-violations-are-common-better-tooling-is-the-answer/" },
+    { "label": "Predrag Gruevski: Protecting the Rust standard library from accidental breakage", "url": "https://predr.ag/blog/protecting-the-rust-stdlib-from-breakage/" },
+    { "label": "release-plz docs: Semver check", "url": "https://release-plz.dev/docs/semver-check" },
+    { "label": "crates.io: cargo-semver-checks (latest version, license)", "url": "https://crates.io/crates/cargo-semver-checks" }
+  ],
+  "checked": "2026-10-24"
+}

@@ -1,0 +1,81 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Toxiproxy",
+  "concepts": ["chaos-engineering"],
+  "uses": ["testing"],
+  "provider": "oss",
+  "vendor": "Shopify",
+  "license": "MIT",
+  "website": "https://github.com/Shopify/toxiproxy",
+  "repo": "https://github.com/Shopify/toxiproxy",
+  "summary": "A small TCP proxy from Shopify that sits between your app and a dependency such as MySQL or Redis in tests, and adds latency, timeouts, cut connections or bandwidth limits on command through an HTTP API.",
+  "intro": [
+    "Toxiproxy is a Go server that you run in development, CI or a test environment. For each dependency you create a proxy with a name, an address to listen on and the upstream address, and point the app’s test configuration at the proxy instead of the real service. Everything then flows through Toxiproxy untouched until a test changes it through the HTTP API on port 8474, either directly, with `toxiproxy-cli`, or with a client library for Ruby, Go, Python, .NET, PHP, Node.js, Java, Rust, Elixir or Haskell.",
+    "Faults are called toxics: `latency` (with jitter), `down`, `bandwidth`, `slow_close`, `timeout`, `reset_peer`, `slicer` (cuts data into small, delayed pieces), `limit_data` and `packet_loss`. Each toxic applies to one direction, `downstream` (server to client, the default) or `upstream`, and a `toxicity` setting applies it to only a share of connections. A test wraps a block of code in a toxic, asserts that the app degrades the way it should (say, showing a post without tags when Redis is down) and removes the toxic afterwards."
+  ],
+  "strengths": [
+    "Turns “what happens when Redis is slow?” into an ordinary, repeatable unit or integration test that runs in CI",
+    "Needs no root or kernel tools such as `tc` and `iptables`, and runs on Linux, macOS and Windows",
+    "Works with any TCP protocol, so one proxy setup covers databases, caches, queues and HTTP services",
+    "Adds almost nothing when idle: under 100 µs of latency with no toxics enabled"
+  ],
+  "limits": [
+    "TCP only, and only between your app and dependencies you route through it: it can’t kill processes, stress CPU or break cloud resources",
+    "The app must be configured to connect through the proxy; MySQL clients that prefer the local Unix socket when the host is `localhost` bypass it",
+    "The HTTP API is unauthenticated unless you set `TOXIPROXY_AUTH_TOKEN`, and it can create proxies to any upstream, so it must never face an untrusted network",
+    "Made for test environments, not for running experiments against production traffic"
+  ],
+  "worksWith": [
+    { "id": "redis", "how": "sits in front of in tests" },
+    { "id": "mysql", "how": "sits in front of in tests" },
+    { "id": "docker", "how": "ships as a container image for" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Proxy Redis, then add a second of latency to every reply",
+    "source": [
+      "toxiproxy-server &",
+      "",
+      "# the app's tests connect to localhost:26379 instead of 6379",
+      "toxiproxy-cli create -l localhost:26379 -u localhost:6379 redis",
+      "",
+      "# every reply from Redis now takes 1 s (plus up to 500 ms of jitter)",
+      "toxiproxy-cli toxic add -t latency -a latency=1000 -a jitter=500 redis",
+      "",
+      "# ...run the tests, then put things back",
+      "toxiproxy-cli toxic remove -n latency_downstream redis"
+    ]
+  },
+  "history": {
+    "story": [
+      "Before Black Friday and Cyber Monday in 2014, Shopify’s infrastructure team made resiliency its top priority. They drew a matrix of which parts of the app broke when each external service was slow or down, and found that “minor dependencies” could become single points of failure. Simulating slow or dead services with `tc` and `iptables` needed `sudo` and didn’t fit automated tests, and no existing TCP proxy had an online API for changing proxies and deterministic latency.",
+      "So the team, writing up the work in a January 2015 post by Simon Eskildsen, built Toxiproxy and used it in all of Shopify’s development and test environments from October 2014, alongside Semian, its circuit breaker library. Version 1.0 came out in January 2015; 2.0 in April 2016 changed the API so that 1.x clients no longer worked. After a quiet spell between 2019 and 2021, releases resumed, and 2.13.0 came out in October 2026. Google Cloud’s chaos engineering recipes also use it, through a Chaos Toolkit extension, to cut the network between Cloud Run and Cloud SQL."
+    ],
+    "choices": [
+      { "choice": "A proxy with an HTTP API, not kernel tools", "why": "Tests need to switch faults on and off from code, quickly and without root, on developers’ laptops and in CI, which `tc` and `iptables` couldn’t offer." },
+      { "choice": "Deterministic by default", "why": "A test must fail the same way every run to be useful, so toxics apply exactly as configured; randomness is opt-in through jitter and `toxicity`." },
+      { "choice": "One shared proxy for many apps", "why": "Shopify recommends a single Toxiproxy with proxies named `<app>_<env>_<data store>_<shard>`, so several applications can use the same daemon without clashing." }
+    ],
+    "timeline": [
+      { "year": "2014", "text": "In use across Shopify’s development and test environments from October" },
+      { "year": "2015", "text": "Version 1.0 in January; Shopify describes it in “Building and Testing Resilient Ruby on Rails Applications”" },
+      { "year": "2016", "text": "Toxiproxy 2.0 changes the API" },
+      { "year": "2021", "text": "Releases resume with 2.1.5 after a gap since 2019" },
+      { "year": "2026", "text": "Toxiproxy 2.13.0 in October" }
+    ],
+    "sources": [
+      { "label": "Shopify Engineering: Building and Testing Resilient Ruby on Rails Applications (Simon Eskildsen, Jan 29, 2015)", "url": "https://shopify.engineering/building-and-testing-resilient-ruby-on-rails-applications" },
+      { "label": "Toxiproxy README on GitHub (in use at Shopify since October 2014)", "url": "https://github.com/Shopify/toxiproxy" },
+      { "label": "Toxiproxy CHANGELOG on GitHub (1.0.0 Jan 2015, 2.0.0 Apr 2016, 2.13.0 Oct 2026)", "url": "https://github.com/Shopify/toxiproxy/blob/main/CHANGELOG.md" },
+      { "label": "Google Cloud blog: Getting started with chaos engineering (recipes using the Toxiproxy extension)", "url": "https://cloud.google.com/blog/products/devops-sre/getting-started-with-chaos-engineering" }
+    ]
+  },
+  "sources": [
+    { "label": "Toxiproxy README on GitHub (usage, toxics, HTTP API, auth token, FAQ, clients)", "url": "https://github.com/Shopify/toxiproxy" },
+    { "label": "Toxiproxy CHANGELOG on GitHub", "url": "https://github.com/Shopify/toxiproxy/blob/main/CHANGELOG.md" },
+    { "label": "Toxiproxy releases on GitHub (v2.13.0)", "url": "https://github.com/Shopify/toxiproxy/releases" },
+    { "label": "Shopify Engineering: Building and Testing Resilient Ruby on Rails Applications", "url": "https://shopify.engineering/building-and-testing-resilient-ruby-on-rails-applications" },
+    { "label": "Shopify/toxiproxy on GitHub: LICENSE (MIT)", "url": "https://github.com/Shopify/toxiproxy/blob/main/LICENSE" }
+  ],
+  "checked": "2026-10-24"
+}

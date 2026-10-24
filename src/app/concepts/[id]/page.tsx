@@ -45,6 +45,7 @@ export default async function ConceptPage({ params }: Params) {
   const archs = c.archsWithConcept(p.id);
   const resources = c.resourcesAbout('concepts', p.id);
   const benchmarks = c.benchmarksAbout('concepts', p.id);
+  const workloads = c.workloadsFor(p.id);
   const repo = REPO_URL;
   const providers = p.providers && [
     ['AWS', p.providers.aws],
@@ -169,6 +170,17 @@ export default async function ConceptPage({ params }: Params) {
           <section id="technologies" className="mt-14 scroll-mt-20">
             <h2 className="text-2xl font-semibold tracking-tight">{p.kinds.length ? `Kinds of ${p.name.toLowerCase()}` : 'Technologies'}</h2>
             <p className="mt-1 mb-5 text-muted-foreground">Specific products, and what each does differently.</p>
+            {workloads.length > 0 && (
+              <div className="-mt-2 mb-5 flex flex-wrap items-center gap-1.5 text-sm">
+                <span className="mr-1 text-muted-foreground">Good for:</span>
+                {workloads.map(w => (
+                  <a key={w.id} href={href(`workloads/${w.id}/`)} className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 transition hover:bg-muted">
+                    <svg className="size-3.5 text-brand" aria-hidden="true"><use href={`#i-${w.icon}`} /></svg>{w.name}
+                  </a>
+                ))}
+                <a href={href('compare/technologies/')} className="ml-1 inline-flex items-center gap-1 text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"><ArrowLeftRightIcon className="size-3.5" />Compare side by side</a>
+              </div>
+            )}
             <TechListing catalog={c} concept={p.id} groups={groups} />
           </section>
         )}

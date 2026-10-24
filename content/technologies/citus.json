@@ -1,0 +1,143 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Citus",
+  "concepts": ["relational"],
+  "parent": { "id": "postgresql", "as": "extension" },
+  "provider": "oss",
+  "vendor": "Microsoft (Citus Data)",
+  "license": "AGPL-3.0",
+  "website": "https://www.citusdata.com/",
+  "repo": "https://github.com/citusdata/citus",
+  "summary": "A PostgreSQL extension that shards tables across a cluster of ordinary Postgres servers, sending each query to the one shard it needs or to all shards in parallel.",
+  "intro": [
+    "Citus is loaded into every server of a cluster with `shared_preload_libraries = 'citus'` and `CREATE EXTENSION citus`. One server is the coordinator, which applications connect to; the others are workers, added with `citus_add_node`. Calling `create_distributed_table('campaigns', 'company_id')` splits a table into shards, 32 by default (`citus.shard_count`), each covering a range of hash values of the distribution column. A shard is just a regular Postgres table on a worker, such as `campaigns_102027`, and metadata tables like `pg_dist_shard`, `pg_dist_placement` and `pg_dist_node` record where each one lives. A query that filters on the distribution column is routed whole to one worker; any other query is rewritten into one fragment per shard, run on the workers in parallel and combined on the coordinator. Tables distributed on the same column are colocated, so their matching rows sit on the same node and joins and foreign keys between them stay local. Small lookup tables become reference tables, with a full copy on every node. Since Citus 11.0 (2022) the metadata is synchronised to every node, so any node can run distributed queries, though DDL still goes through the coordinator. Since 12.0 (2023) there is a second model, schema-based sharding: every table in a distributed schema lives whole on one node, which suits apps that already keep one schema per tenant or per microservice. Shards move between nodes with logical replication, so adding a node and rebalancing doesn’t block writes; this needs a primary key on every table. A `columnar` table access method stores append-mostly data compressed by column.",
+    "Citus Data was founded in 2011 and bought by Microsoft in January 2019; the extension is AGPL-3.0, and since 11.0 every feature, including the non-blocking rebalancer, is in the open-source release. It supports the latest three Postgres major versions: 14.0 (February 2026) added PostgreSQL 18 and dropped 15, and 14.3 shipped on 23 October 2026. The managed versions are on Azure only. Azure Cosmos DB for PostgreSQL, which ran Citus, is on a retirement path: new deployments are blocked and Microsoft has set its retirement for 31 March 2029. Microsoft points users to elastic clusters in Azure Database for PostgreSQL flexible server, which run Citus 14 with PostgreSQL 18 since September 2026. Self-hosted, Citus has no failover of its own: each node is an ordinary Postgres server, and Patroni 3.0 and later can manage a whole Citus cluster."
+  ],
+  "strengths": [
+    "An extension, not a fork: the nodes run stock PostgreSQL, so Postgres drivers, tools and other extensions keep working, and new Postgres versions are supported soon after release",
+    "Fits multi-tenant SaaS well: distribute every table by tenant, and each tenant’s queries and transactions run on one node with full SQL, while a large tenant can be isolated on a node of its own",
+    "Spreads scans and aggregates over all shards in parallel, for dashboards on live data; Citus cites Heap with 1.4 PB on a 100-node cluster",
+    "Starts as a single node and grows: add workers and rebalance shards online, all in the open-source release"
+  ],
+  "limits": [
+    "The distribution column shapes the schema: primary keys and unique constraints must include it, foreign keys between distributed tables must include it, and reference tables can’t have foreign keys to distributed tables",
+    "Not every query spans shards: correlated subqueries and outer joins work across shards only on the distribution column, and recursive CTEs, grouping sets and `SELECT … FOR UPDATE` only within one shard",
+    "No built-in high availability when self-hosted: every coordinator and worker needs its own replicas and failover, usually through Patroni",
+    "AGPL-3.0, and managed only on Azure, where Cosmos DB for PostgreSQL users must move to elastic clusters before 31 March 2029"
+  ],
+  "worksWith": [
+    { "id": "patroni", "how": "can have its failover run by" }
+  ],
+  "alternatives": ["vitess", "yugabytedb", "cockroachdb", "postgresql"],
+  "goodFor": [
+    { "id": "scale-out-sql", "why": "Shards tables across ordinary Postgres workers by a distribution column, sends single-tenant queries to one node and fans the rest out." },
+    { "id": "real-time-analytics", "why": "Scans and aggregates run on all shards in parallel, for dashboards on live data; Citus cites 1.4 PB on a 100-node cluster." }
+  ],
+  "specs": {
+    "data-model": "Relational; tables sharded by a distribution column, plus reference tables copied to every node",
+    "query-language": "PostgreSQL SQL, with limits on some queries across shards",
+    "wire-protocol": "PostgreSQL wire protocol",
+    "scaling": "Hash shards (32 by default) by distribution column, or one schema per node; online rebalancing",
+    "replication": "None of its own: each node is a Postgres server with its own replicas, often run by Patroni",
+    "storage-engine": "Stock PostgreSQL tables; a `columnar` access method for append-mostly data",
+    "deployment": "Self-hosted extension, or elastic clusters in Azure Database for PostgreSQL"
+  },
+  "snippet": {
+    "lang": "sql",
+    "title": "Colocated tables sharded by company, a reference table, and an online rebalance",
+    "source": [
+      "-- on every node: shared_preload_libraries = 'citus' in postgresql.conf",
+      "CREATE EXTENSION citus;",
+      "",
+      "-- on the coordinator: register the cluster",
+      "SELECT citus_set_coordinator_host('coord', 5432);",
+      "SELECT citus_add_node('worker-1', 5432);",
+      "SELECT citus_add_node('worker-2', 5432);",
+      "",
+      "CREATE TABLE companies (id bigint PRIMARY KEY, name text);",
+      "CREATE TABLE campaigns (company_id bigint, id bigint, name text,",
+      "                        PRIMARY KEY (company_id, id));   -- must include the distribution column",
+      "CREATE TABLE countries (code char(2) PRIMARY KEY, name text);",
+      "",
+      "SELECT create_distributed_table('companies', 'id');",
+      "SELECT create_distributed_table('campaigns', 'company_id', colocate_with => 'companies');",
+      "SELECT create_reference_table('countries');           -- a full copy on every node",
+      "",
+      "-- routed to one worker: the filter names the distribution column",
+      "SELECT count(*) FROM campaigns WHERE company_id = 42;",
+      "",
+      "-- one fragment per shard, run in parallel, merged on the coordinator",
+      "SELECT company_id, count(*) FROM campaigns GROUP BY company_id ORDER BY 2 DESC LIMIT 10;",
+      "",
+      "-- after adding a worker: move shards with logical replication, writes keep flowing",
+      "SELECT citus_rebalance_start();"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Row-based or schema-based sharding?",
+      "intro": "Citus 12.0 added a second way to split data. Both can run in the same cluster.",
+      "corner": "",
+      "columns": ["Row-based", "Schema-based"],
+      "rows": [
+        { "label": "Set up with", "values": ["`create_distributed_table` on each table, naming its distribution column", "`citus.enable_schema_based_sharding`, then ordinary `CREATE SCHEMA`"] },
+        { "label": "Schema changes", "values": ["Every table needs the tenant column, and keys must include it", "None: each table in the schema becomes a single-shard table"] },
+        { "label": "Joins and foreign keys", "values": ["Between colocated tables on the distribution column, and to reference tables", "Within one schema, and to reference tables"] },
+        { "label": "Queries across tenants", "values": ["Run in parallel over all shards", "Not parallelised"] },
+        { "label": "Tenants it suits", "values": ["About 100 to over a million", "About 1 to 10 thousand"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "PostgreSQL runs on one machine, so applications that outgrew it either sharded by hand in application code or moved to a NoSQL store and gave up SQL. Umur Cubukcu, Ozgun Erdogan and Sumedh Pathak, who met at graduate school at Stanford, founded Citus Data in Istanbul in January 2011 and joined Y Combinator that summer. Erdogan’s idea was a way to scale out a database without giving up transactions, joins and foreign keys. Their first database was a fork of Postgres; along the way they released `cstore_fdw`, a columnar store, and the `pg_shard` extension in 2014.",
+      "By then Postgres had become much more extensible, and in March 2016 Citus 5.0 was rebuilt entirely on its extension APIs and released as open source, which the company called the first distributed database that doesn’t fork the underlying database. A managed Citus Cloud followed in July 2016. Microsoft bought Citus Data in January 2019 and ran Citus on Azure, in the service now called Azure Cosmos DB for PostgreSQL and later in elastic clusters for Azure Database for PostgreSQL.",
+      "Citus 11.0 in June 2022 open-sourced the remaining enterprise features and let any node run distributed queries. Citus 12.0 in July 2023 added schema-based sharding for apps built around a schema per tenant, and Citus 14.0 in February 2026 brought PostgreSQL 18 support."
+    ],
+    "choices": [
+      { "choice": "Extend Postgres instead of forking it", "why": "A fork has to be merged with every Postgres release. Moving to the extension APIs meant users get new Postgres features immediately and keep their existing drivers and tools." },
+      { "choice": "Shards are plain Postgres tables", "why": "Each shard is a regular table on a worker, so the workers’ own Postgres planner, indexes and storage do the local work, and Citus only has to plan across shards." },
+      { "choice": "Colocate related tables by a shared distribution column", "why": "Placing the shards that hold related rows of related tables on the same node lets joins, foreign keys and transactions for one tenant run on one machine without cross-node coordination." },
+      { "choice": "A second model with one schema per shard", "why": "Many multi-tenant apps already keep each tenant in its own schema and can’t add a tenant column to every table. Schema-based sharding scales them out with no query changes, at the cost of fewer tenants per node and no parallel cross-tenant queries." }
+    ],
+    "timeline": [
+      { "year": "2011", "text": "Citus Data is founded in Istanbul and joins Y Combinator" },
+      { "year": "2014", "text": "`cstore_fdw` columnar store and the `pg_shard` extension are released" },
+      { "year": "2016", "text": "Citus 5.0 becomes a Postgres extension and goes open source; Citus Cloud launches" },
+      { "year": "2019", "text": "Microsoft acquires Citus Data" },
+      { "year": "2022", "text": "Citus 11.0 goes fully open source and lets any node run distributed queries" },
+      { "year": "2023", "text": "Citus 12.0 adds schema-based sharding" },
+      { "year": "2026", "text": "Citus 14.0 supports PostgreSQL 18; Azure sets Cosmos DB for PostgreSQL to retire in 2029" }
+    ],
+    "sources": [
+      { "label": "Citus Data: Our story (founders, timeline)", "url": "https://www.citusdata.com/about/our-story/" },
+      { "label": "Citus blog: Citus unforks from PostgreSQL, goes open source (Mar 2016)", "url": "https://www.citusdata.com/blog/2016/03/24/citus-unforks-goes-open-source/" },
+      { "label": "Microsoft blog: Microsoft acquires Citus Data (Jan 2019)", "url": "https://blogs.microsoft.com/blog/2019/01/24/microsoft-acquires-citus-data-re-affirming-its-commitment-to-open-source-and-accelerating-azure-postgresql-performance-and-scale/" },
+      { "label": "Citus blog: Citus 11 for Postgres goes fully open source, with query from any node (Jun 2022)", "url": "https://www.citusdata.com/blog/2022/06/17/citus-11-goes-fully-open-source/" },
+      { "label": "Citus blog: Citus 12, schema-based sharding for PostgreSQL (Jul 2023)", "url": "https://www.citusdata.com/blog/2023/07/18/citus-12-schema-based-sharding-for-postgres/" },
+      { "label": "Citus blog: Distribute PostgreSQL 18 with Citus 14 (Feb 2026)", "url": "https://www.citusdata.com/blog/2026/02/17/distribute-postgresql-18-with-citus-14/" }
+    ]
+  },
+  "sources": [
+    { "label": "citusdata/citus on GitHub: README (AGPL-3.0, architecture, install, Patroni support)", "url": "https://github.com/citusdata/citus" },
+    { "label": "citusdata/citus: release v14.3.0 (23 Oct 2026)", "url": "https://github.com/citusdata/citus/releases/tag/v14.3.0" },
+    { "label": "Citus docs: Concepts (coordinator, workers, shards, colocation, reference tables)", "url": "https://docs.citusdata.com/en/stable/get_started/concepts.html" },
+    { "label": "Citus docs: What is Citus? (use cases, scale, when not to use it)", "url": "https://docs.citusdata.com/en/stable/get_started/what_is_citus.html" },
+    { "label": "Citus docs: Creating and modifying distributed objects (constraints, foreign keys)", "url": "https://docs.citusdata.com/en/stable/develop/reference_ddl.html" },
+    { "label": "Citus docs: SQL support and workarounds", "url": "https://docs.citusdata.com/en/stable/develop/reference_workarounds.html" },
+    { "label": "Citus docs: Configuration reference (citus.shard_count defaults to 32)", "url": "https://docs.citusdata.com/en/stable/develop/api_guc.html" },
+    { "label": "Citus docs: Citus utility functions", "url": "https://docs.citusdata.com/en/stable/develop/api_udf.html" },
+    { "label": "Citus docs: Table management (columnar storage)", "url": "https://docs.citusdata.com/en/stable/admin_guide/table_management.html" },
+    { "label": "Citus updates: v14.0 (PostgreSQL 18, PostgreSQL 15 dropped, latest three majors)", "url": "https://www.citusdata.com/updates/v14-0/" },
+    { "label": "Citus blog: Citus 11 for Postgres goes fully open source (non-blocking rebalancer)", "url": "https://www.citusdata.com/blog/2022/06/17/citus-11-goes-fully-open-source/" },
+    { "label": "Citus updates: v11.0 (tenant isolation, non-blocking rebalancer needs primary keys)", "url": "https://www.citusdata.com/updates/v11-0/" },
+    { "label": "Citus blog: Citus 12, schema-based sharding for PostgreSQL", "url": "https://www.citusdata.com/blog/2023/07/18/citus-12-schema-based-sharding-for-postgres/" },
+    { "label": "Microsoft Learn: Elastic clusters in Azure Database for PostgreSQL flexible server", "url": "https://learn.microsoft.com/en-us/azure/postgresql/elastic-clusters/concepts-elastic-clusters" },
+    { "label": "Microsoft Learn: Azure Cosmos DB for PostgreSQL overview (on a retirement path)", "url": "https://learn.microsoft.com/en-us/azure/cosmos-db/postgresql/introduction" },
+    { "label": "Microsoft Learn: Migrate Azure Cosmos DB for PostgreSQL to elastic clusters (new deployments blocked)", "url": "https://learn.microsoft.com/en-us/azure/cosmos-db/postgresql/how-to-migrate-database-postgresql" },
+    { "label": "Azure update AZ556085: Azure Cosmos DB for PostgreSQL will retire on 31 March 2029 (Mar 2026, message-center mirror)", "url": "https://mc.merill.net/message/AZ556085" },
+    { "label": "Azure update AZ571047: PG18 support for elastic clusters is generally available (Sep 2026, message-center mirror)", "url": "https://mc.merill.net/message/AZ571047" }
+  ],
+  "checked": "2026-10-24"
+}

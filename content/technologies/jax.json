@@ -1,0 +1,93 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "JAX",
+  "concepts": ["ml-frameworks"],
+  "provider": "oss",
+  "vendor": "Google",
+  "license": "Apache 2.0",
+  "website": "https://docs.jax.dev/",
+  "repo": "https://github.com/jax-ml/jax",
+  "summary": "NumPy with function transformations: `grad` differentiates, `jit` compiles with XLA, `vmap` vectorizes, and the same code runs on CPUs, GPUs and TPUs across thousands of devices.",
+  "intro": [
+    "JAX is a Python library for array computation whose API mirrors NumPy (`jax.numpy`), plus a set of transformations: functions that take a function and return a new one. `jax.grad(loss)` returns a function that computes the gradient of `loss`, in reverse mode (backpropagation) or forward mode, to any order. `jax.jit(f)` compiles `f` with XLA, Google’s compiler for linear algebra, fusing operations into fast kernels. `jax.vmap(f)` turns a function written for one example into one that works on a batch, by pushing the loop down into the operations. Transformations compose, so `jit(vmap(grad(loss)))` gives compiled per-example gradients in one line.",
+    "To do this, JAX traces your Python function: it calls it with abstract stand-ins for arrays and records the operations into a small functional program, a jaxpr, which XLA then compiles for CPU, NVIDIA or AMD GPU, or TPU. This only works on pure functions, so JAX arrays are immutable (`x.at[i].set(y)` returns a new array) and random numbers need explicit keys. For many devices, JAX shards arrays over a mesh and lets the compiler partition the work, or lets you program each device with `shard_map`. JAX itself has no layers or optimizers: Flax provides neural networks, Optax optimizers and Orbax checkpointing. Google trains Gemini with JAX and Pathways on TPUs; the project calls itself a research project rather than an official Google product, and is at version 0.12 as of October 2026."
+  ],
+  "strengths": [
+    "Differentiation, compilation, batching and parallelism are separate transformations you can combine freely, which makes things like per-example gradients, Jacobians or meta-learning short to write",
+    "The same code runs on CPU, GPU and TPU through XLA, and Google Cloud documents JAX as a way to run work on Cloud TPU VMs",
+    "Scales from one accelerator to thousands: the compiler can shard work automatically, shardings can be written into types, or each device can be programmed by hand",
+    "Familiar NumPy API, and in the functional style a model’s parameters are plain arrays passed into functions, easy to inspect and transform"
+  ],
+  "limits": [
+    "Functions must be pure: no in-place updates, no hidden state, explicit random keys, and printing or reading globals inside `jit` behaves differently from plain Python",
+    "Compiled code needs static shapes: a new input shape triggers a new trace and compile, and data-dependent shapes such as `x[mask]` fail under `jit`",
+    "Building a model means picking libraries (Flax, Optax, Orbax and others), where PyTorch ships layers, optimizers and serialization in one package",
+    "Platform support is uneven: NVIDIA GPUs are not supported on native Windows, Apple and Intel GPUs are experimental, and the 0.x versions follow effort-based versioning rather than strict semantic versioning"
+  ],
+  "worksWith": [
+    { "id": "python", "how": "is a library for" }
+  ],
+  "snippet": {
+    "lang": "python",
+    "title": "Compose grad, vmap and jit",
+    "source": [
+      "import jax",
+      "import jax.numpy as jnp",
+      "",
+      "def predict(params, inputs):",
+      "    for W, b in params:",
+      "        outputs = jnp.dot(inputs, W) + b",
+      "        inputs = jnp.tanh(outputs)",
+      "    return outputs",
+      "",
+      "def loss(params, inputs, targets):",
+      "    return jnp.sum((predict(params, inputs) - targets) ** 2)",
+      "",
+      "grad_loss = jax.jit(jax.grad(loss))   # compiled gradient of the loss",
+      "",
+      "# Gradient per example: map over axis 0 of inputs and targets, not params",
+      "per_example = jax.jit(jax.vmap(jax.grad(loss), in_axes=(None, 0, 0)))",
+      "",
+      "key = jax.random.key(0)               # randomness needs an explicit key",
+      "x = jax.random.normal(key, (100, 3))"
+    ]
+  },
+  "history": {
+    "story": [
+      "JAX grew out of Autograd, a Python library from Harvard by Dougal Maclaurin, David Duvenaud, Matt Johnson and Jamie Townsend that differentiated ordinary NumPy code, loops and branches included. At Google Brain, Roy Frostig, Matthew James Johnson and Chris Leary wanted to keep that programming style while generating fast code for GPUs and TPUs, two goals their paper calls “often in tension”. Their answer, described at SysML 2018, was a tracing just-in-time compiler: most machine-learning code consists of large pure functions orchestrated by dynamic Python, and those functions can be traced and handed to XLA.",
+      "The code was open-sourced on GitHub in late 2018. `vmap` and parallel primitives followed, and the system became a general set of composable transformations. In December 2020 DeepMind wrote that JAX “resonates well with our engineering philosophy” and published an ecosystem around it, including Haiku for networks and Optax for optimizers; Flax, Optax and Orbax are now the libraries the JAX docs point to.",
+      "Google’s largest models are trained with it: the December 2023 Gemini report credits the “single controller” programming model of JAX and Pathways for letting one Python process orchestrate training across TPU pods. The repository moved to the jax-ml GitHub organization, and releases continue on a 0.x line, 0.12 in October 2026."
+    ],
+    "choices": [
+      { "choice": "Trace Python into a static program instead of writing a new language", "why": "Researchers wanted to keep writing NumPy and Autograd code. Tracing pure functions with abstract values strips out Python’s dynamism and leaves a graph XLA can optimize, while ordinary Python still orchestrates around it." },
+      { "choice": "Pure functions and immutable arrays", "why": "Transformations such as `grad`, `vmap` and `jit` are only safe to compose when a function’s output depends only on its inputs, so JAX gives up in-place updates and global random state." },
+      { "choice": "Build on XLA", "why": "XLA already generated fused code for CPUs, GPUs and TPUs, so one compiler target gave JAX every backend and Google’s TPUs from the start." },
+      { "choice": "A small core with separate libraries", "why": "JAX provides arrays and transformations; neural-network layers, optimizers and checkpointing live in libraries such as Flax, Optax and Orbax, so research groups could build different styles on the same core." }
+    ],
+    "timeline": [
+      { "year": "2018", "text": "SysML paper by Frostig, Johnson and Leary at Google Brain; code open-sourced on GitHub" },
+      { "year": "2020", "text": "DeepMind describes its JAX ecosystem (Haiku, Optax, RLax, Chex, Jraph)" },
+      { "year": "2023", "text": "Gemini report credits JAX and Pathways for orchestrating training on TPUs" },
+      { "year": "2026", "text": "JAX 0.12 released in October" }
+    ],
+    "sources": [
+      { "label": "Frostig, Johnson and Leary: Compiling machine learning programs via high-level tracing (SysML 2018)", "url": "https://mlsys.org/Conferences/2019/doc/2018/146.pdf" },
+      { "label": "GitHub: HIPS/autograd (authors)", "url": "https://github.com/HIPS/autograd" },
+      { "label": "Google DeepMind blog: Using JAX to accelerate our research (December 2020)", "url": "https://deepmind.google/discover/blog/using-jax-to-accelerate-our-research/" },
+      { "label": "arXiv: Gemini Team, Gemini: A Family of Highly Capable Multimodal Models (December 2023, training infrastructure)", "url": "https://arxiv.org/abs/2312.11805" },
+      { "label": "GitHub: jax-ml/jax README (citation, 2018 open-source release)", "url": "https://github.com/jax-ml/jax" },
+      { "label": "JAX docs: Changelog (0.12.0, October 2026)", "url": "https://docs.jax.dev/en/latest/changelog.html" }
+    ]
+  },
+  "sources": [
+    { "label": "JAX docs: JAX, high-performance array computing (transformations, backends, ecosystem)", "url": "https://docs.jax.dev/en/latest/" },
+    { "label": "JAX docs: Key concepts (transformations, tracing, jaxprs, XLA)", "url": "https://docs.jax.dev/en/latest/key-concepts.html" },
+    { "label": "JAX docs: Common gotchas (pure functions, immutable arrays, static shapes)", "url": "https://docs.jax.dev/en/latest/notebooks/Common_Gotchas_in_JAX.html" },
+    { "label": "GitHub: jax-ml/jax README (grad, jit, vmap, scaling modes, supported platforms, not an official Google product)", "url": "https://github.com/jax-ml/jax" },
+    { "label": "JAX docs: Changelog (effort-based versioning, 0.12)", "url": "https://docs.jax.dev/en/latest/changelog.html" },
+    { "label": "Flax docs: Flax NNX", "url": "https://flax.readthedocs.io/en/latest/" },
+    { "label": "Google Cloud docs: Run a calculation on a Cloud TPU VM using JAX", "url": "https://docs.cloud.google.com/tpu/docs/run-calculation-jax" },
+    { "label": "arXiv: Gemini: A Family of Highly Capable Multimodal Models (JAX and Pathways)", "url": "https://arxiv.org/abs/2312.11805" }
+  ],
+  "checked": "2026-10-24"
+}

@@ -1,0 +1,104 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "AWS Fault Injection Service",
+  "concepts": ["chaos-engineering"],
+  "provider": "aws",
+  "vendor": "Amazon Web Services",
+  "license": "Proprietary",
+  "website": "https://aws.amazon.com/fis/",
+  "summary": "AWS’s managed chaos engineering service: you write an experiment template of actions, targets and stop conditions, and FIS stops instances, fails over databases, slows networks or throttles AWS APIs in your account, halting when a CloudWatch alarm fires.",
+  "intro": [
+    "AWS FIS runs experiments against real resources in your AWS account. An experiment template names the targets (resources picked by ARN, by tag or by filters, then all of them, a count or a percentage at random), the actions to run on them, in sequence or in parallel, and the stop conditions, which are CloudWatch alarms that halt the experiment if they go off. FIS assumes an IAM role you give it, so the role limits what an experiment can touch.",
+    "Actions cover much of AWS: stopping, rebooting or terminating EC2 instances and sending Spot interruptions; stopping ECS tasks and draining container instances; deleting EKS pods and terminating node group instances; failing over RDS and Aurora clusters; pausing EBS volume I/O; pausing DynamoDB global table, MemoryDB and S3 replication; cutting subnet or cross-Region connectivity; and returning throttling, internal or unavailable errors from AWS APIs for a chosen IAM role. Inside instances and containers, CPU, memory, I/O and network faults run through Systems Manager documents or ECS and EKS actions; Lambda faults use an FIS extension attached as a layer, which adds delay or errors to a percentage of invocations. For anything else, `aws:eks:inject-kubernetes-custom-resource` creates Chaos Mesh or Litmus resources in an EKS cluster.",
+    "A scenario library holds prebuilt templates, such as “AZ Availability: Power Interruption”, which takes down zonal compute, subnets, EBS volumes and ElastiCache and RDS primaries in one Availability Zone. Multi-account experiments run from an orchestrator account against target accounts. FIS charges $0.10 per action-minute for each target account."
+  ],
+  "strengths": [
+    "No agents or extra infrastructure for faults that go through AWS APIs, such as instance stops, database failovers and API throttling",
+    "Faults no outside tool can produce, such as a simulated power loss across an Availability Zone or paused DynamoDB global table replication",
+    "Guardrails built in: an IAM role scopes each experiment, CloudWatch alarms stop it, and experiments can be scheduled or run across accounts",
+    "Can drive Chaos Mesh or LitmusChaos inside EKS, so one template can mix AWS-level and pod-level faults"
+  ],
+  "limits": [
+    "AWS only: it can’t inject faults into other clouds or into on-premises systems",
+    "In-guest faults need the Systems Manager agent on instances, and Lambda faults need a layer, an S3 configuration bucket and environment variables on every function",
+    "The Lambda extension polls for work, so faults can take up to about 60 seconds to start, and it can’t be used with response streaming",
+    "Billed per action-minute per account, and experiment reports cost $5 each, so long or many-account experiments add up"
+  ],
+  "worksWith": [
+    { "id": "ec2", "how": "stops, reboots and interrupts instances on" },
+    { "id": "eks", "how": "deletes pods and node instances in" },
+    { "id": "lambda", "how": "delays or fails invocations of" },
+    { "id": "cloudwatch", "how": "stops experiments on alarms from" },
+    { "id": "chaos-mesh", "how": "can start experiments of" },
+    { "id": "litmus", "how": "can start experiments of" },
+    { "id": "dynamodb", "how": "pauses global table replication of" }
+  ],
+  "snippet": {
+    "lang": "json",
+    "title": "Stop three random prod instances for two minutes, unless an alarm fires first",
+    "source": [
+      "{",
+      "  \"description\": \"Stop and restart three instances with the specified tag\",",
+      "  \"targets\": {",
+      "    \"myInstances\": {",
+      "      \"resourceType\": \"aws:ec2:instance\",",
+      "      \"resourceTags\": { \"env\": \"prod\" },",
+      "      \"selectionMode\": \"COUNT(3)\"",
+      "    }",
+      "  },",
+      "  \"actions\": {",
+      "    \"StopInstances\": {",
+      "      \"actionId\": \"aws:ec2:stop-instances\",",
+      "      \"parameters\": { \"startInstancesAfterDuration\": \"PT2M\" },",
+      "      \"targets\": { \"Instances\": \"myInstances\" }",
+      "    }",
+      "  },",
+      "  \"stopConditions\": [{",
+      "    \"source\": \"aws:cloudwatch:alarm\",",
+      "    \"value\": \"arn:aws:cloudwatch:us-east-1:111122223333:alarm:checkout-errors\"",
+      "  }],",
+      "  \"roleArn\": \"arn:aws:iam::111122223333:role/fis-experiments\"",
+      "}"
+    ]
+  },
+  "history": {
+    "story": [
+      "AWS describes chaos engineering as building on work by “Master of Disaster” Jesse Robbins in the early days of Amazon.com, later taken “into high gear” by Netflix’s Chaos Monkey. At re:Invent in December 2020 Werner Vogels pre-announced AWS Fault Injection Simulator, saying “chaos engineering is for everyone, not just shops running at Amazon or Netflix scale”. It became generally available in March 2021 with actions for EC2, ECS, EKS and RDS.",
+      "The service grew outward from there: CloudWatch alarm checks, Systems Manager Automation runbooks and I/O and network actions for EC2 in November 2021, GovCloud regions in 2022, and in November 2023 scheduled experiments, a scenario library, multi-account experiments and the Availability Zone power interruption and cross-Region connectivity scenarios. By then AWS called it AWS Fault Injection Service. Later additions include Lambda faults, experiment reports and, in November 2025, scenarios for slowdowns within and between Availability Zones."
+    ],
+    "choices": [
+      { "choice": "Experiments as templates with stop conditions", "why": "Jeff Barr described stop conditions as a safety mechanism that keeps a local failure from cascading into a full outage, so every experiment declares what will end it before it starts." },
+      { "choice": "Act through AWS’s own control plane", "why": "Running inside AWS lets FIS produce failures customers can’t script themselves, such as API throttling for one IAM role or a zone-wide power loss, without installing anything for most actions." },
+      { "choice": "Plug in open-source Kubernetes tools", "why": "Rather than reimplement every pod-level fault, FIS can create Chaos Mesh and Litmus custom resources in EKS, letting those tools do in-cluster injection." }
+    ],
+    "timeline": [
+      { "year": "2020", "text": "Announced at re:Invent in December" },
+      { "year": "2021", "text": "Generally available in March with EC2, ECS, EKS and RDS actions" },
+      { "year": "2022", "text": "Available in AWS GovCloud (US)" },
+      { "year": "2023", "text": "Scenario library, scheduled and multi-account experiments, AZ power interruption scenario" },
+      { "year": "2025", "text": "Scenarios for application slowdown in one AZ and traffic slowdown between AZs" }
+    ],
+    "sources": [
+      { "label": "AWS News Blog: AWS Fault Injection Simulator, use controlled experiments to boost resilience (Jeff Barr, Mar 15, 2021)", "url": "https://aws.amazon.com/blogs/aws/aws-fault-injection-simulator-use-controlled-experiments-to-boost-resilience" },
+      { "label": "AWS What’s New: General availability of AWS Fault Injection Simulator (Mar 16, 2021)", "url": "https://aws.amazon.com/about-aws/whats-new/2021/03/aws-announces-service-aws-fault-injection-simulator/" },
+      { "label": "TechCrunch: AWS introduces new chaos engineering as a service offering (Dec 15, 2020)", "url": "https://techcrunch.com/2020/12/15/aws-introduces-new-chaos-engineering-as-a-service-offering" },
+      { "label": "AWS What’s New: AWS FIS adds CloudWatch alarms, Automation runbooks and new actions (Nov 2021)", "url": "https://aws.amazon.com/about-aws/whats-new/2021/11/aws-fault-injection-simulator-amazon-cloudwatch-alarms-automation-runbooks" },
+      { "label": "AWS What’s New: AWS FIS available in AWS GovCloud (US) (Jul 2022)", "url": "https://aws.amazon.com/about-aws/whats-new/2022/07/aws-fault-injection-simulator-available-aws-govcloud-us-regions" },
+      { "label": "AWS What’s New: AWS FIS announces scenarios and scheduled experiments (Nov 7, 2023)", "url": "https://aws.amazon.com/about-aws/whats-new/2023/11/aws-fault-injection-simulator-scenarios-scheduled-experiments" },
+      { "label": "AWS What’s New: Multi-account experiments for AWS FIS (Nov 27, 2023)", "url": "https://aws.amazon.com/about-aws/whats-new/2023/11/multi-account-experiments-aws-fault-injection-service" },
+      { "label": "AWS What’s New: AWS FIS launches two highly requested scenarios (Nov 30, 2023)", "url": "https://aws.amazon.com/about-aws/whats-new/2023/11/aws-fault-injection-service-two-requested-scenarios/" },
+      { "label": "AWS What’s New: AWS FIS launches new test scenarios for partial failures (Nov 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/11/aws-fis-test-scenarios-partial-failures" }
+    ]
+  },
+  "sources": [
+    { "label": "AWS FIS User Guide: What is AWS Fault Injection Service? (templates, actions, targets, stop conditions, pricing basis)", "url": "https://docs.aws.amazon.com/fis/latest/userguide/what-is.html" },
+    { "label": "AWS FIS User Guide: Actions reference", "url": "https://docs.aws.amazon.com/fis/latest/userguide/fis-actions-reference.html" },
+    { "label": "AWS FIS User Guide: Example experiment templates (EC2 by count, SSM CPU stress, API throttling, Chaos Mesh and Litmus on EKS)", "url": "https://docs.aws.amazon.com/fis/latest/userguide/experiment-template-example.html" },
+    { "label": "AWS FIS User Guide: Use the aws:lambda:function actions (extension layer, S3 configuration, polling, streaming limitation)", "url": "https://docs.aws.amazon.com/fis/latest/userguide/use-lambda-actions.html" },
+    { "label": "AWS What’s New: AWS FIS launches two highly requested scenarios (AZ power interruption, cross-Region connectivity)", "url": "https://aws.amazon.com/about-aws/whats-new/2023/11/aws-fault-injection-service-two-requested-scenarios/" },
+    { "label": "AWS What’s New: Multi-account experiments for AWS FIS", "url": "https://aws.amazon.com/about-aws/whats-new/2023/11/multi-account-experiments-aws-fault-injection-service" },
+    { "label": "AWS FIS pricing ($0.10 per action-minute per account; $5 per experiment report)", "url": "https://aws.amazon.com/fis/pricing/" },
+    { "label": "AWS Fault Injection Service product page", "url": "https://aws.amazon.com/fis/" }
+  ],
+  "checked": "2026-10-24"
+}
