@@ -469,10 +469,11 @@
       "name": "Block-range indexes (BRIN and zone maps)",
       "summary": "A minimum and maximum, or another summary, for each run of adjacent pages, so a scan skips runs that can’t match: tiny, but only as good as the table’s physical order.",
       "body": [
-        "PostgreSQL’s BRIN (block range index) divides the table into ranges of `pages_per_range` pages, 128 by default, and stores one summary per range, for sortable types the minimum and maximum. A query reads the small index, marks every range whose summary could match, then reads every row in those ranges and rechecks it: the index is lossy by design. New ranges at the end of the table stay unsummarized until vacuum runs, `brin_summarize_new_values()` is called, or the index has `autosummarize` on. Since PostgreSQL 14, `minmax-multi` classes keep several intervals per range and `bloom` classes keep a Bloom filter, for data that isn’t neatly ordered; `inclusion` classes store a containing value such as a bounding box.",
-        "It works when a column follows the physical order of the rows: timestamps in an append-only table, IDs that grow with each insert. On 10 million time-ordered rows a BRIN index took 32 kB against 214 MB for a B-tree, and an hour’s query read one 128-page range. After the rows were shuffled (correlation near 0) the same query matched every range and read all 63,744 pages. BRIN is also the only core PostgreSQL index that doesn’t rule out heap-only (HOT) updates.",
-        "Analytic systems use the same idea under other names. ClickHouse has no row-level secondary indexes; its data skipping indexes keep, for example, a `minmax` per block of granules and help only when the indexed column correlates with the table’s sort key. Parquet files carry min/max statistics per column chunk and, with the page index, per page. Oracle Exadata storage servers keep in-memory storage indexes of each region’s column minimums and maximums and skip the I/O for regions a predicate rules out."
+        "PostgreSQL’s BRIN (block range index) divides the table into ranges of `pages_per_range` adjacent pages, 128 by default, and stores one summary per range. For sortable types the summary is the minimum and maximum; `inclusion` classes instead store one value that contains every value in the range, such as a bounding box. A query reads the whole index, which is tiny, and marks every range whose summary could hold a match. It then reads every row in those ranges and rechecks each one against the condition. The index is lossy by design, so PostgreSQL uses it only for bitmap scans and never to return rows in order. Smaller ranges make the index bigger but cut the rows read and thrown away.",
+        "It works when a column follows the physical order of the rows: timestamps in an append-only table, IDs that grow with each insert. On 10 million time-ordered rows a BRIN index took 32 kB against 214 MB for a B-tree, and an hour’s query read one 128-page range. After the rows were shuffled (correlation near 0) the same query matched every range and read all 63,744 pages. Order can also decay. A row inserted into a summarized range widens its summary, and deleting rows never narrows it again. New ranges at the end of the table stay unsummarized, and every query reads them in full, until vacuum runs, `brin_summarize_new_values()` is called, or the index has `autosummarize` on (it is off by default). For data that isn’t neatly ordered, PostgreSQL 14 added `minmax-multi` classes, which keep several smaller intervals per range so a few outliers don’t stretch one interval across the table, and `bloom` classes for equality searches. Since PostgreSQL 16, updating a column that only BRIN indexes cover still allows a heap-only (HOT) update.",
+        "Analytic systems use the same idea under other names. Oracle calls it a zone map: a materialized view of each column’s minimum and maximum for every zone of contiguous blocks. ClickHouse has no row-level secondary indexes; its data skipping indexes keep, for example, a `minmax` per block of granules, which helps only when the indexed column correlates with the table’s sort key. Parquet files carry min/max statistics per column chunk and, with the page index, per page. Oracle Exadata storage servers keep in-memory storage indexes of each region’s column minimums and maximums and skip the I/O for regions a predicate rules out."
       ],
+      "figure": "brin",
       "sources": [
         {
           "label": "PostgreSQL docs: BRIN indexes (block ranges, summarization, minmax, minmax-multi, bloom and inclusion operator classes)",
@@ -489,6 +490,10 @@
         {
           "label": "PostgreSQL docs: Heap-only tuples (HOT); BRIN is the only summarizing index",
           "url": "https://www.postgresql.org/docs/current/storage-hot.html"
+        },
+        {
+          "label": "PostgreSQL 16 release notes: Allow HOT updates if only BRIN-indexed columns are updated (September 2023)",
+          "url": "https://www.postgresql.org/docs/release/16.0/"
         },
         {
           "label": "PostgreSQL 9.5 release notes: Block Range Indexes (BRIN) by Álvaro Herrera (January 2016)",
@@ -509,6 +514,10 @@
         {
           "label": "Oracle: Exadata storage indexes (in-memory min/max per storage region)",
           "url": "https://www.oracle.com/database/technologies/exadata/software/storageindexes/"
+        },
+        {
+          "label": "Oracle Database Data Warehousing Guide: Using zone maps (minimum and maximum per zone of contiguous blocks)",
+          "url": "https://docs.oracle.com/en/database/oracle/oracle-database/26/dwhsg/using-zone-maps.html"
         }
       ]
     },

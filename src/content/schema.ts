@@ -248,12 +248,16 @@ const section = z.discriminatedUnion('type', [
   }),
 ]);
 
+/** Interactive figures drawn by code in src/components/figures, named by id. */
+export const FIGURES = ['brin'] as const;
+
 /** A sub-type of a concept, such as columnar files within file formats. Each gets its own page. */
 export const kind = z.strictObject({
   id: id.describe('Unique across all concepts. The page lives at /concepts/<concept>/<kind>/.'),
   name: text.describe('e.g. "Columnar files".'),
   summary: text.describe('One line shown in lists and under the title.'),
   body: z.array(text).min(1).max(3).describe('What sets this kind apart from the others, and when to pick it, in one to three paragraphs.'),
+  figure: z.enum(FIGURES).optional().describe('An interactive figure shown after the body, e.g. "brin" for a model of block ranges and a query.'),
   sources,
 });
 
@@ -520,6 +524,7 @@ export type Diagram = z.output<typeof diagram>;
 export type DiagramNode = z.output<typeof diagramNode>;
 export type Concept = z.output<typeof concept>;
 export type Kind = z.output<typeof kind>;
+export type Figure = (typeof FIGURES)[number];
 export type Relation = (typeof RELATIONS)[number];
 export type Part = z.output<typeof part>;
 export type Category = z.output<typeof category>;

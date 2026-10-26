@@ -1,5 +1,6 @@
 import { ArrowLeftRightIcon, PencilIcon } from 'lucide-react';
 import Breadcrumbs from '@/components/Breadcrumbs';
+import { FIGURES } from '@/components/figures';
 import Md from '@/components/Md';
 import ResourceList from '@/components/ResourceList';
 import SectionLabel from '@/components/SectionLabel';
@@ -38,6 +39,7 @@ export default async function KindPage({ params }: Params) {
   const compares = c.comparisons.filter(m => m.technologies.some(id => ids.has(id)));
   const resources = c.resources.filter(r => r.technologies.some(id => ids.has(id)));
   const repo = REPO_URL;
+  const Figure = k.figure && FIGURES[k.figure];
 
   return (
     <Shell path={`concepts/${p.id}/${k.id}/`} section="kinds" active={k.id}>
@@ -53,6 +55,7 @@ export default async function KindPage({ params }: Params) {
           <div className="space-y-4 text-[17px] leading-relaxed">
             {k.body.map((t, i) => <p key={i}><Md text={t} /></p>)}
           </div>
+          {Figure && <div className="mt-8"><Figure /></div>}
         </section>
 
         {listed.length + also.length > 0 && (
