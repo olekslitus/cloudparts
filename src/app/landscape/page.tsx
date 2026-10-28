@@ -1,4 +1,5 @@
 // Every technology on one map, like the CNCF landscape: area › topic › concept, one logo tile per product.
+import { matureFirst, membershipLabel } from '@/components/FoundationBadge';
 import Glyph from '@/components/Glyph';
 import Shell from '@/components/Shell';
 import { getCatalog, type CatalogTech } from '@/lib/catalog';
@@ -35,6 +36,7 @@ const tip = (t: CatalogTech) => {
     t.parent ? relationLabel(t.parent.as, c.tech(t.parent.id).name) : t.kind ? c.kind(t.kind).name : c.concept(t.concepts[0]).name,
     PROVIDER_NAMES[t.provider],
     stage && STAGE_LABELS[stage],
+    c.membership(t) && membershipLabel(c.membership(t)!),
     `since ${since(t)}`,
   ].filter(Boolean).join(' · ') + `\n${plain(t.summary)}`;
 };
@@ -51,6 +53,21 @@ const text = (t: CatalogTech) =>
   [t.name, t.id, t.summary, t.vendor ?? '', t.license ?? '', ...t.concepts.map(id => c.concept(id).name), ...t.kinds.map(id => c.kind(id).name)].join(' ').toLowerCase();
 // the companies the picker offers, with how many of their products are on the map
 const makers = MAKERS.map(m => ({ ...m, count: c.technologies.filter(t => makerOf(t) === m).length })).filter(m => m.count);
+// the foundations the picker offers, each followed by the ones under it and its stages: "fdn" values match a tile's data-fdn words
+const fdnTokens = (t: CatalogTech) => {
+  const m = c.membership(t);
+  return m ? [m.foundation.id, ...m.parents.map(p => p.id), ...(m.stage ? [`${m.foundation.id}:${m.stage.id}`] : [])].join(' ') : undefined;
+};
+const fdnCount = (token: string) => c.technologies.filter(t => fdnTokens(t)?.split(' ').includes(token)).length;
+const fdnOptions = (id: string, depth: number): { value: string; label: string; count: number }[] => {
+  const f = c.foundations.find(x => x.id === id)!;
+  return [
+    { value: f.id, label: `${'\u2003'.repeat(depth)}${f.short ?? f.name}${f.children.length ? ', all' : ''}`, count: fdnCount(f.id) },
+    ...matureFirst(f.stages).map(st => ({ value: `${f.id}:${st.id}`, label: `${'\u2003'.repeat(depth + 1)}${st.name}`, count: fdnCount(`${f.id}:${st.id}`) })),
+    ...f.children.flatMap(ch => fdnOptions(ch, depth + 1)),
+  ].filter(o => o.count);
+};
+const fdnPicker = c.foundations.filter(f => f.type === 'foundation' && !f.parent).flatMap(f => fdnOptions(f.id, 0));
 const chip = 'rounded-full border px-3 py-1 text-sm text-muted-foreground transition hover:border-foreground/30 hover:text-foreground aria-pressed:border-brand/40 aria-pressed:bg-brand-soft aria-pressed:font-medium aria-pressed:text-foreground';
 
 export const metadata = meta('Landscape', `All ${c.technologies.length} technologies in the handbook on one map, grouped by area, topic and concept.`);
@@ -63,7 +80,7 @@ export default function Landscape() {
           <h1 className="text-4xl font-semibold tracking-tight text-balance sm:text-5xl">Landscape</h1>
           <p className="mt-3 text-lg leading-relaxed text-muted-foreground">
             All {c.technologies.length} technologies on one map, grouped by area, topic and the concept each one is an example of.
-            Pick a company, such as AWS or Cloudflare, to see only what it makes.
+            Pick a company, such as AWS or Cloudflare, to see only what it makes, or a foundation, such as the CNCF or Apache, to see only its projects.
             Open-source products have a border <span className="inline-block size-2.5 rounded-[3px] border border-foreground/40 bg-card align-middle" aria-hidden="true"></span>.
             Hover a logo for what it is, or click it for its page. Pick an architecture to see its stack, or drag through the years to watch the map fill in
             (the <a href={href('timeline/')} className="underline underline-offset-4 hover:text-foreground">timeline</a> says what happened each year).
@@ -98,6 +115,13 @@ export default function Landscape() {
                     {makers.filter(m => !!m.cloud === g.cloud).map(m => <option key={m.id} value={m.id}>{m.name} ({m.count})</option>)}
                   </optgroup>
                 ))}
+              </select>
+            </label>
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              Foundation:
+              <select data-fdn className="h-8 rounded-md border bg-background px-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-brand/40">
+                <option value="">Any</option>
+                {fdnPicker.map(o => <option key={o.value} value={o.value}>{o.label} ({o.count})</option>)}
               </select>
             </label>
             <label className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -146,7 +170,7 @@ export default function Landscape() {
                           </a>
                           <ul className="mt-1.5 flex flex-wrap gap-1">
                             {techs.map(t => (
-                              <li key={t.id} data-tile data-id={t.id} data-since={since(t)} data-type={kindOf(t.provider)} data-maker={makerOf(t)?.id} data-text={text(t)}>
+                              <li key={t.id} data-tile data-id={t.id} data-since={since(t)} data-type={kindOf(t.provider)} data-maker={makerOf(t)?.id} data-fdn={fdnTokens(t)} data-text={text(t)}>
                                 <a
                                   href={href(`technologies/${t.id}/`)}
                                   title={tip(t)}

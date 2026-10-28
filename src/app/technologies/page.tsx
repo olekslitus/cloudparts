@@ -1,8 +1,9 @@
+import { membershipLabel } from '@/components/FoundationBadge';
 import Glyph from '@/components/Glyph';
 import Shell from '@/components/Shell';
 import SortableTable from '@/components/SortableTable';
 import StatusBadge from '@/components/StatusBadge';
-import { getCatalog } from '@/lib/catalog';
+import { getCatalog, type CatalogTech } from '@/lib/catalog';
 import { meta } from '@/lib/meta';
 import { href, PROVIDER_TYPES, relationLabel, stageOf } from '@/lib/nav';
 import Filters from './Filters';
@@ -21,6 +22,11 @@ const sortBtn = 'inline-flex items-center gap-1 uppercase hover:text-foreground'
 
 export default function TechnologiesPage() {
   const c = getCatalog();
+// "cncf graduated linux foundation", so typing a foundation's name finds its projects
+const fdnText = (t: CatalogTech) => {
+  const m = c.membership(t);
+  return m ? [m.foundation.name, m.foundation.short ?? '', m.stage?.name ?? '', ...m.parents.map(p => p.name)].join(' ') : '';
+};
   const kindOf = (p: string) => (p === 'oss' ? 'oss' : p === 'vendor' ? 'vendor' : 'cloud');
   const rows = c.technologies.map(t => {
     const cat = c.category(t.category);
@@ -86,7 +92,7 @@ export default function TechnologiesPage() {
                 className="border-b align-top last:border-b-0"
                 data-part={part}
                 data-type={kind}
-                data-text={[t.name, t.id, t.summary, concept.name, context ?? '', t.vendor ?? '', t.license ?? ''].join(' ').toLowerCase()}
+                data-text={[t.name, t.id, t.summary, concept.name, context ?? '', t.vendor ?? '', t.license ?? '', fdnText(t)].join(' ').toLowerCase()}
               >
                 <td className="min-w-60 px-3 py-2.5" data-v={t.name.toLowerCase()}>
                   <a href={href(`technologies/${t.id}/`)} className="inline-flex items-center gap-2 font-medium underline-offset-4 hover:text-brand hover:underline"><Glyph tech={t} />{t.name}</a>
@@ -97,7 +103,10 @@ export default function TechnologiesPage() {
                   <a href={href(`concepts/${concept.id}/`)} className="underline-offset-4 hover:text-brand hover:underline">{concept.name}</a>
                   {context && <span className="block text-xs text-muted-foreground">{context}</span>}
                 </td>
-                <td className="min-w-28 px-3 py-2.5" data-v={PROVIDER_TYPES[t.provider]}>{PROVIDER_TYPES[t.provider]}</td>
+                <td className="min-w-28 px-3 py-2.5" data-v={PROVIDER_TYPES[t.provider]}>
+                  {PROVIDER_TYPES[t.provider]}
+                  {c.membership(t) && <a href={href(c.membership(t)!.foundation.path)} className="mt-0.5 block text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">{membershipLabel(c.membership(t)!)}</a>}
+                </td>
                 <td className="min-w-36 px-3 py-2.5" data-v={t.license ?? ''}><span className="line-clamp-3" title={t.license}>{t.license ?? '–'}</span></td>
                 <td className="px-3 py-2.5 font-mono text-xs whitespace-nowrap text-muted-foreground" data-v={t.checked}>{t.checked}</td>
               </tr>

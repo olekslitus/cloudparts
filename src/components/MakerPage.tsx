@@ -1,5 +1,7 @@
-import { ExternalLinkIcon, PencilIcon } from 'lucide-react';
+import { ExternalLinkIcon, LandmarkIcon, PencilIcon } from 'lucide-react';
 import Breadcrumbs from '@/components/Breadcrumbs';
+import { inSentence, matureFirst } from '@/components/FoundationBadge';
+import Glyph from '@/components/Glyph';
 import History from '@/components/History';
 import Md from '@/components/Md';
 import SectionLabel from '@/components/SectionLabel';
@@ -9,11 +11,11 @@ import TechCard from '@/components/TechCard';
 import TechSection from '@/components/TechSection';
 import { getCatalog, type CatalogFoundation } from '@/lib/catalog';
 import { meta } from '@/lib/meta';
-import { REPO_URL } from '@/lib/nav';
+import { href, REPO_URL } from '@/lib/nav';
 import { cn } from '@/lib/utils';
 
 // The page for a foundation (/foundations/<id>/) or a company (/companies/<id>/): its text, then
-// every technology whose "vendor" matches.
+// its projects (technologies whose "foundation" is it or one under it) or its products (whose "vendor" matches).
 const maker = (id: string) => getCatalog().foundations.find(x => x.id === id) as CatalogFoundation;
 
 /** The page's title and description, for its route's generateMetadata. */
@@ -26,10 +28,26 @@ export default function MakerPage({ id }: { id: string }) {
   const c = getCatalog();
   const f = maker(id);
   const company = f.type === 'company';
-  // Its technologies grouped by topic, in handbook order.
-  const groups = c.categories
-    .map(cat => ({ cat, techs: f.projects.filter(t => c.concept(t.concepts[0]).category === cat.id) }))
+  // A company's products by topic, in handbook order. A foundation's projects by stage, most mature first; one
+  // without stages (the Linux Foundation) by the foundation under it that hosts them, or by how they're hosted.
+  const byTopic = (techs: typeof f.projects) => c.categories
+    .map(cat => ({ cat, techs: techs.filter(t => c.concept(t.concepts[0]).category === cat.id) }))
     .filter(g => g.techs.length > 0);
+  type Group = { key: string; title?: string; summary?: string; path?: string; techs: typeof f.projects; compact?: boolean };
+  const children = f.children.map(id => c.foundations.find(x => x.id === id)!);
+  const direct = f.projects.filter(t => t.foundation?.id === f.id);
+  const groups: Group[] = company
+    ? byTopic(f.projects).map(g => ({ key: g.cat.id, title: g.cat.name, techs: g.techs }))
+    : f.stages.length
+      ? matureFirst(f.stages)
+        .map(st => ({ key: st.id, title: st.name, summary: st.summary, techs: f.projects.filter(t => t.foundation?.stage === st.id) }))
+        .filter(g => g.techs.length)
+      : [
+          // a foundation under this one has its own page, so its projects are just named here
+          ...children.map(x => ({ key: x.id, title: x.name, summary: x.summary, path: x.path, techs: x.projects, compact: true })),
+          { key: 'direct', title: children.length ? `Hosted by ${inSentence(f.name)} and its smaller foundations` : undefined, techs: direct },
+        ].filter(g => g.techs.length);
+  const parent = f.parent ? c.foundations.find(x => x.id === f.parent) : undefined;
   const anchors = f.sections.map(s => s.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''));
   const repo = REPO_URL;
   const pill = 'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs';
@@ -43,6 +61,12 @@ export default function MakerPage({ id }: { id: string }) {
           <p className="mt-3 text-lg leading-relaxed text-pretty text-muted-foreground"><Md text={f.summary} /></p>
           <div className="mt-5 flex flex-wrap items-center gap-2">
             <span className={pill}>{f.projects.length} {company ? 'products' : 'projects'} in this catalog</span>
+            {parent && <a href={href(parent.path)} className={cn(pill, 'transition hover:bg-muted')}><LandmarkIcon className="size-3" />Part of {inSentence(parent.name)}</a>}
+            {children.map(x => <a key={x.id} href={href(x.path)} className={cn(pill, 'transition hover:bg-muted')}><LandmarkIcon className="size-3" />Includes {x.short ?? x.name} ({x.projects.length})</a>)}
+            {matureFirst(f.stages).map(st => {
+              const n = f.projects.filter(t => t.foundation?.stage === st.id).length;
+              return n > 0 && <a key={st.id} href={`#stage-${st.id}`} title={st.summary} className={cn(pill, 'transition hover:bg-muted')}>{n} {st.name.toLowerCase()}</a>;
+            })}
             <a href={f.website} className={cn(pill, 'transition hover:bg-muted')} rel="noopener">Website <ExternalLinkIcon className="size-3" /></a>
           </div>
         </header>
@@ -57,11 +81,29 @@ export default function MakerPage({ id }: { id: string }) {
         <section className="mt-12">
           <SectionLabel>{company ? 'Its products' : 'Its projects'} in this catalog</SectionLabel>
           {groups.map(g => (
-            <div key={g.cat.id} className="mt-6 first-of-type:mt-0">
-              <h3 className="mb-2 font-mono text-[11px] font-medium tracking-wide text-muted-foreground uppercase">{g.cat.name}</h3>
-              <div className="grid gap-2">
-                {g.techs.map(t => <TechCard key={t.id} tech={t} />)}
-              </div>
+            <div key={g.key} id={f.stages.length ? `stage-${g.key}` : undefined} className="mt-8 scroll-mt-20 first-of-type:mt-0">
+              {g.title && (
+                <h3 className="mb-2 font-mono text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                  {g.path ? <a href={href(g.path)} className="underline-offset-4 hover:text-foreground hover:underline">{g.title} →</a> : g.title}
+                  <span className="ml-2 normal-case">{g.techs.length}</span>
+                </h3>
+              )}
+              {g.summary && !company && <p className="-mt-1 mb-3 max-w-3xl text-sm text-muted-foreground"><Md text={g.summary} /></p>}
+              {g.compact ? (
+                <ul className="flex flex-wrap gap-1.5">
+                  {g.techs.map(t => (
+                    <li key={t.id}>
+                      <a href={href(`technologies/${t.id}/`)} className="inline-flex items-center gap-1.5 rounded-full border bg-card px-2.5 py-1 text-sm transition hover:border-foreground/30">
+                        <Glyph tech={t} className="size-4" />{t.name}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="grid gap-2">
+                  {g.techs.map(t => <TechCard key={t.id} tech={t} note={company ? undefined : t.foundation?.via} />)}
+                </div>
+              )}
             </div>
           ))}
         </section>

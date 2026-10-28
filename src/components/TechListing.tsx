@@ -1,4 +1,5 @@
 // A concept's technologies, as grouped rows or as one sortable table to compare them side by side.
+import { membershipLabel } from '@/components/FoundationBadge';
 import Glyph from '@/components/Glyph';
 import SortableTable from '@/components/SortableTable';
 import StatusBadge from '@/components/StatusBadge';
@@ -71,7 +72,10 @@ export default function TechListing({ catalog: c, concept, groups }: Props) {
                   </td>
                   {named && <td className="min-w-32 px-3 py-2.5 text-muted-foreground" data-v={group ?? ''}>{group ?? 'Other'}</td>}
                   <td className="min-w-28 px-3 py-2.5" data-v={PROVIDER_TYPES[t.provider]}>{PROVIDER_TYPES[t.provider]}</td>
-                  <td className="min-w-28 px-3 py-2.5" data-v={t.vendor ?? ''}>{t.vendor ?? '–'}</td>
+                  <td className="min-w-28 px-3 py-2.5" data-v={t.vendor ?? ''}>
+                    {t.vendor ?? '–'}
+                    {c.membership(t) && <a href={href(c.membership(t)!.foundation.path)} className="mt-0.5 block text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">{membershipLabel(c.membership(t)!)}</a>}
+                  </td>
                   <td className="min-w-36 px-3 py-2.5" data-v={t.license ?? ''}><span className="line-clamp-3" title={t.license}>{t.license ?? '–'}</span></td>
                   <td className="px-3 py-2.5 font-mono text-xs whitespace-nowrap text-muted-foreground" data-v={t.checked}>{t.checked}</td>
                 </tr>

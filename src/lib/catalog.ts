@@ -44,8 +44,19 @@ export interface CatalogFoundation extends Foundation {
   id: string;
   /** Where its page lives: foundations/<id>/ or companies/<id>/. */
   path: string;
-  /** Technologies whose "vendor" is this foundation, by name. */
+  /** Its projects, by name: technologies whose "foundation" is it or a foundation under it, or, for a company, whose "vendor" matches. */
   projects: CatalogTech[];
+  /** Foundations that are part of this one, such as the CNCF in the Linux Foundation. */
+  children: string[];
+}
+
+/** Where a technology sits in a foundation: the foundation, its stage there, and the foundations above it. */
+export interface Membership {
+  foundation: CatalogFoundation;
+  stage?: Foundation['stages'][number];
+  joined?: string;
+  via?: string;
+  parents: CatalogFoundation[];
 }
 export interface CatalogResource extends Resource {
   id: string;
@@ -123,8 +134,10 @@ export interface Catalog {
   category: (id: string) => Category;
   part: (id: string) => CatalogPart;
   topic: (categoryId: string) => Topic;
-  /** The foundation that hosts this technology, if it has a page. */
+  /** The foundation or company page for its "vendor", if there is one. */
   foundationOf: (tech: CatalogTech) => CatalogFoundation | undefined;
+  /** The open-source foundation it belongs to, from its "foundation" field. */
+  membership: (tech: CatalogTech) => Membership | undefined;
   /** Resources that name this concept, technology or architecture. */
   resourcesAbout: (field: 'concepts' | 'technologies' | 'architectures', id: string) => CatalogResource[];
   /** Benchmarks that compare products of this concept, or include this technology. */
@@ -221,12 +234,28 @@ function load(): Catalog {
     }))
     .sort((a, b) => a.order - b.order);
 
-  const foundations: CatalogFoundation[] = fdnEntries.map(f => ({
-    ...f.data,
-    id: f.id,
-    path: `${f.data.type === 'company' ? 'companies' : 'foundations'}/${f.id}/`,
-    projects: technologies.filter(t => t.vendor === f.data.vendor).sort((a, b) => a.name.localeCompare(b.name)),
-  }));
+  // a foundation's projects include those of the foundations under it (the CNCF's are the Linux Foundation's too)
+  const under = (id: string): string[] => [id, ...fdnEntries.filter(f => f.data.parent === id).flatMap(f => under(f.id))];
+  const foundations: CatalogFoundation[] = fdnEntries.map(f => {
+    const ids = new Set(under(f.id));
+    return {
+      ...f.data,
+      id: f.id,
+      path: `${f.data.type === 'company' ? 'companies' : 'foundations'}/${f.id}/`,
+      projects: technologies
+        .filter(t => (t.foundation ? ids.has(t.foundation.id) : f.data.type === 'company' && t.vendor === f.data.vendor))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+      children: fdnEntries.filter(x => x.data.parent === f.id).map(x => x.id),
+    };
+  });
+  const fdnMap = new Map(foundations.map(f => [f.id, f]));
+  const membership = (t: CatalogTech): Membership | undefined => {
+    if (!t.foundation) return undefined;
+    const foundation = fdnMap.get(t.foundation.id)!;
+    const parents: CatalogFoundation[] = [];
+    for (let p = foundation.parent; p; p = fdnMap.get(p)?.parent) parents.push(fdnMap.get(p)!);
+    return { foundation, stage: foundation.stages.find(s => s.id === t.foundation!.stage), joined: t.foundation.joined, via: t.foundation.via, parents };
+  };
 
   const resources: CatalogResource[] = resEntries
     .map(r => ({ ...r.data, id: r.id }))
@@ -326,6 +355,7 @@ function load(): Catalog {
     part: id => partMap.get(id)!,
     topic,
     foundationOf: t => foundations.find(f => f.vendor === t.vendor),
+    membership,
     resourcesAbout: (field, id) => resources.filter(r => r[field].includes(id)),
     benchmarksAbout: (field, id) => benchmarks.filter(b => b[field].includes(id)),
     usedFor: id => technologies.filter(t => t.uses.includes(id)),

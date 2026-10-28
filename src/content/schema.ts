@@ -374,6 +374,15 @@ export const technology = z.strictObject({
     })
     .optional()
     .describe('A lifecycle badge for a maintained technology. Leave it out for stable, generally available products; use archived instead for unmaintained ones.'),
+  foundation: z
+    .strictObject({
+      id: id.describe('A foundation from content/foundations/, e.g. "apache", "cncf" or "linux-foundation".'),
+      stage: id.optional().describe('One of that foundation’s "stages", e.g. "graduated" or "incubating".'),
+      joined: date.optional().describe('When it was accepted into the foundation, or into its incubator.'),
+      via: text.optional().describe('A short sentence on how it sits in the foundation, e.g. "Part of Kubernetes (SIG Testing)" or "Hosted by the PyTorch Foundation".'),
+    })
+    .optional()
+    .describe('The open-source foundation that holds the project’s name and governance. Leave out for products a foundation project merely runs, such as managed services or forks.'),
   repo: z.url().optional().describe('Source code repository, e.g. "https://github.com/apache/kafka". Leave out for closed-source services.'),
   summary: text.describe('One line shown in lists and under the title.'),
   intro: z.array(text).min(1).describe('What it is and how it works, in one to three paragraphs.'),
@@ -438,7 +447,17 @@ export const foundation = z.strictObject({
     .default('foundation')
     .describe('foundation: a non-profit that hosts open-source projects, at /foundations/<id>/. company: a vendor whose products fit together, at /companies/<id>/.'),
   name: text.describe('e.g. "The Apache Software Foundation" or "Cloudflare, Inc.".'),
+  short: text.optional().describe('A short name for badges and filters, e.g. "CNCF" or "Apache".'),
   vendor: text.describe('The exact "vendor" value its projects use on their pages. They’re listed here automatically and link back.'),
+  parent: id.optional().describe('A foundation this one is part of, e.g. "linux-foundation" for the CNCF. Its projects count as the parent’s projects too.'),
+  stages: z
+    .array(z.strictObject({
+      id: id.describe('e.g. "graduated".'),
+      name: text.describe('e.g. "Graduated".'),
+      summary: text.describe('One line on what the stage means.'),
+    }))
+    .default([])
+    .describe('The maturity levels its projects move through, from newest to most mature, then any retired stage. Technologies name one in "foundation.stage".'),
   website: z.url(),
   summary: text.describe('One line shown under the title.'),
   intro: z.array(text).min(1).describe('What it is and how it works, in one to three paragraphs.'),

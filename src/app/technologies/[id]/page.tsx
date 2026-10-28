@@ -2,6 +2,7 @@ import { ArchiveIcon, ArrowLeftRightIcon, CheckIcon, CodeIcon, ExternalLinkIcon,
 import ArchCard from '@/components/ArchCard';
 import BenchmarkList from '@/components/BenchmarkList';
 import Breadcrumbs from '@/components/Breadcrumbs';
+import FoundationBadge, { inSentence } from '@/components/FoundationBadge';
 import Code from '@/components/Code';
 import CopyCode from '@/components/CopyCode';
 import Glyph from '@/components/Glyph';
@@ -64,6 +65,8 @@ export default async function TechnologyPage({ params }: Params) {
   const longDate = (d: string) => new Date(`${d}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
   const since = t.archived && longDate(t.archived.since);
   const foundation = c.foundationOf(t);
+  const member = c.membership(t);
+  const longMonth = (d: string) => new Date(`${d}T00:00:00Z`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
   const resources = c.resourcesAbout('technologies', t.id);
   const benchmarks = c.benchmarksAbout('technologies', t.id);
   const compares = c.comparisons.filter(m => m.technologies.includes(t.id));
@@ -106,6 +109,7 @@ export default async function TechnologyPage({ params }: Params) {
           <Glyph tech={t} className="mb-4 block size-12" />
           <h1 className="flex flex-wrap items-center gap-x-3 gap-y-2 text-4xl font-semibold tracking-tight text-balance sm:text-5xl">{t.name}<StatusBadge tech={t} large /></h1>
           <p className="mt-3 text-lg leading-relaxed text-pretty text-muted-foreground"><Md text={t.summary} /></p>
+          {member && <FoundationBadge membership={member} className="mt-4" />}
         </header>
 
         <dl className="mt-6 divide-y overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10" aria-label="Key facts">
@@ -139,6 +143,18 @@ export default async function TechnologyPage({ params }: Params) {
               <dd className="text-[15px]">{foundation
                 ? <a href={href(foundation.path)} className="underline decoration-dotted underline-offset-4 hover:text-brand" title={foundation.type === 'company' ? `How ${foundation.name}’s products fit together` : `What it means to be a project of ${foundation.name}`}>{t.vendor}</a>
                 : t.vendor}</dd>
+            </div>
+          )}
+          {member && (
+            <div className={factRow}>
+              <dt className={factLabel}>Foundation</dt>
+              <dd className="text-[15px] leading-snug">
+                <a href={href(member.foundation.path)} className="font-medium text-brand underline-offset-4 hover:underline">{member.foundation.name}</a>
+                {member.stage && <>, <span title={member.stage.summary}>{member.stage.name.toLowerCase()}</span></>}
+                {member.joined && <span className="text-muted-foreground">, joined {longMonth(member.joined)}</span>}
+                {member.via && <span className="text-muted-foreground">. {member.via}</span>}
+                {member.parents.map(p => <span key={p.id} className="text-muted-foreground">. Part of <a href={href(p.path)} className="underline-offset-4 hover:text-foreground hover:underline">{inSentence(p.name)}</a></span>)}
+              </dd>
             </div>
           )}
           {t.license && (

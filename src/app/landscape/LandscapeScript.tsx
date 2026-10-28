@@ -8,13 +8,14 @@ export default function LandscapeScript() {
   useEffect(() => {
     if (ran) return;
     ran = true;
-      // Filters the tiles by text, type and company, hides groups left empty, and keeps the filters in the URL.
+      // Filters the tiles by text, type, company and foundation, hides groups left empty, and keeps the filters in the URL.
       // On top of that: a picked architecture lights up its stack, and the year slider fades out what
       // didn't exist yet.
       const box = document.querySelector<HTMLElement>('[data-filters]')!;
       const map = document.querySelector<HTMLElement>('[data-map]')!;
       const input = box.querySelector<HTMLInputElement>('[data-q]')!;
       const makerSelect = box.querySelector<HTMLSelectElement>('[data-maker]')!;
+      const fdnSelect = box.querySelector<HTMLSelectElement>('[data-fdn]')!;
       const archSelect = box.querySelector<HTMLSelectElement>('[data-arch]')!;
       const slider = box.querySelector<HTMLInputElement>('[data-year]')!;
       const play = box.querySelector<HTMLButtonElement>('[data-play]')!;
@@ -27,7 +28,7 @@ export default function LandscapeScript() {
         archs: Record<string, { title: string; path: string; techs: string[] }>;
       } = JSON.parse(document.querySelector('[data-landscape]')!.textContent!);
       const last = Number(slider.max);
-      const state = { q: '', type: '', company: '', arch: '', year: last };
+      const state = { q: '', type: '', company: '', foundation: '', arch: '', year: last };
       let started = '';
 
       const esc = (s: string) => s.replace(/[&<>"]/g, ch => `&#${ch.charCodeAt(0)};`);
@@ -65,6 +66,7 @@ export default function LandscapeScript() {
         for (const t of tiles) {
           const show = (!state.type || t.dataset.type === state.type)
             && (!state.company || t.dataset.maker === state.company)
+            && (!state.foundation || (t.dataset.fdn ?? '').split(' ').includes(state.foundation))
             && words.every(w => t.dataset.text!.includes(w));
           const future = Number(t.dataset.since) > state.year;
           t.hidden = !show;
@@ -81,6 +83,7 @@ export default function LandscapeScript() {
           b.setAttribute('aria-pressed', String(b.dataset.type === state.type));
         }
         makerSelect.value = state.company;
+        fdnSelect.value = state.foundation;
         archSelect.value = state.arch;
         slider.value = String(state.year);
         box.querySelector('[data-year-label]')!.textContent = String(state.year);
@@ -88,7 +91,7 @@ export default function LandscapeScript() {
         box.querySelector('[data-year-count]')!.textContent = started && `· ${started}`;
         highlight();
         const url = new URL(location.href);
-        for (const k of ['q', 'type', 'company', 'arch'] as const) {
+        for (const k of ['q', 'type', 'company', 'foundation', 'arch'] as const) {
           if (state[k]) url.searchParams.set(k, state[k]); else url.searchParams.delete(k);
         }
         if (state.year < last) url.searchParams.set('year', String(state.year)); else url.searchParams.delete('year');
@@ -100,6 +103,8 @@ export default function LandscapeScript() {
       state.type = params.get('type') ?? '';
       const company = params.get('company') ?? '';
       state.company = [...makerSelect.options].some(o => o.value === company) ? company : '';
+      const foundation = params.get('foundation') ?? '';
+      state.foundation = [...fdnSelect.options].some(o => o.value === foundation) ? foundation : '';
       state.arch = data.archs[params.get('arch') ?? ''] ? params.get('arch')! : '';
       const year = Number(params.get('year'));
       if (year >= Number(slider.min) && year < last) state.year = year;
@@ -109,6 +114,7 @@ export default function LandscapeScript() {
         b.addEventListener('click', () => { state.type = b.dataset.type!; apply(); });
       }
       makerSelect.addEventListener('change', () => { state.company = makerSelect.value; apply(); });
+      fdnSelect.addEventListener('change', () => { state.foundation = fdnSelect.value; apply(); });
       archSelect.addEventListener('change', () => {
         state.arch = archSelect.value;
         apply();

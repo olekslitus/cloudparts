@@ -218,12 +218,27 @@ export function findProblems({ parts, categories, concepts, technologies, archit
     });
   }
 
+  const fdns = new Map(foundations.map(f => [f.id, f.data]));
   for (const { id, data } of foundations) {
     const where = `content/foundations/${id}.json`;
-    if (!technologies.some(t => t.data.vendor === data.vendor)) {
-      problems.push(`${where}: no technology has "vendor": "${data.vendor}", so the page would list no projects`);
+    if (!technologies.some(t => t.data.vendor === data.vendor || t.data.foundation?.id === id || (t.data.foundation && fdns.get(t.data.foundation.id)?.parent === id))) {
+      problems.push(`${where}: no technology has "vendor": "${data.vendor}" or "foundation": { "id": "${id}" }, so the page would list no projects`);
     }
+    if (data.parent && fdns.get(data.parent)?.type !== 'foundation') problems.push(`${where}: "parent" must be another foundation, not "${data.parent}"`);
+    if (data.type === 'company' && data.stages.length) problems.push(`${where}: only foundations have "stages"`);
     tables(where, data.sections);
+  }
+  for (const { id, data } of technologies) {
+    const f = data.foundation;
+    const byVendor = foundations.find(x => x.data.type === 'foundation' && x.data.vendor === data.vendor);
+    if (!f && byVendor && data.parent?.as !== 'managed') problems.push(`content/technologies/${id}.json: "vendor" is ${byVendor.data.name}, so add "foundation": { "id": "${byVendor.id}", ... }`);
+    if (!f) continue;
+    const where = `content/technologies/${id}.json`;
+    const fdn = fdns.get(f.id);
+    if (!fdn || fdn.type !== 'foundation') { problems.push(`${where}: "foundation.id" "${f.id}" is not a foundation in content/foundations/`); continue; }
+    if (f.stage && !fdn.stages.some(s => s.id === f.stage)) problems.push(`${where}: "foundation.stage" "${f.stage}" isn’t one of ${f.id}’s stages (${fdn.stages.map(s => s.id).join(', ') || 'it has none'})`);
+    if (!f.stage && fdn.stages.length) problems.push(`${where}: "foundation" needs a "stage" (${fdn.stages.map(s => s.id).join(', ')})`);
+    if (data.parent?.as === 'managed') problems.push(`${where}: a managed service isn’t itself a foundation project; leave out "foundation"`);
   }
 
   const archIds = new Set(architectures.map(a => a.id));
