@@ -1,0 +1,122 @@
+{
+  "$schema": "../../.schemas/concepts.schema.json",
+  "name": "Cloud cost and carbon",
+  "icon": "receipt",
+  "category": "observe",
+  "order": 100,
+  "summary": "Turn the bill and the carbon report your cloud publishes into numbers each team can see and act on: who spent what, on which service, for how much work, and with what emissions.",
+  "howItWorks": "Every cloud meters usage by the hour or second and publishes it as a large table: one row per resource, usage type and time period, with the quantity, list price, the discounts that applied and the final cost. AWS calls it the Cost and Usage Report and delivers it through Data Exports to an S3 bucket; Google Cloud exports billing to BigQuery; Azure Cost Management exports to a storage account. FinOps, the practice of managing this spending, starts by loading those tables somewhere you can query them and allocating each row to an owner: through tags or labels on resources, through account and project structure, and through rules that split shared costs such as a Kubernetes cluster or a support contract. Three costs need keeping apart. The billed cost is what lands on the invoice; the effective cost spreads up-front purchases such as reserved instances and savings plans across the hours they cover; and the list cost is what you would have paid without discounts. From there teams build showback or chargeback reports, budgets and anomaly alerts, and unit costs such as cost per order. Because every provider used different column names and rules, the FinOps Foundation’s FOCUS specification defines one schema that clouds and SaaS vendors now export natively. Carbon follows the same path a month later. Each cloud estimates the emissions of your usage from its own energy and hardware data, by account, region and service, and exports them; for finer or provider-independent numbers, methods such as the Green Software Foundation’s Software Carbon Intensity (SCI) multiply the energy a workload uses by the carbon intensity of the local grid, add a share of the hardware’s embodied emissions, and divide by a unit of work.",
+  "analogy": "A shared flat’s electricity bill. The supplier sends one total; to argue about it fairly you need a meter per room, an agreed rule for the fridge and the hallway light, and a way to say whether the bill went up because someone left the heater on or because twice as many people live there now.",
+  "useWhen": [
+    "The cloud bill is big enough that nobody can say which team, product or customer a large share of it belongs to",
+    "Several clouds or SaaS vendors bill you, and finance wants one report instead of one per provider",
+    "You buy commitments such as reserved instances or savings plans and need to see whether they are used",
+    "You have to report or reduce the emissions of your software, for a sustainability report, a customer or a regulator"
+  ],
+  "avoidWhen": [
+    "Tagging or labelling every resource before there is a report anyone reads: start with account or project structure and add tags where the report shows gaps",
+    "Treating provider carbon estimates as measurements: they are modelled from the provider’s own data, arrive weeks after the month ends and change when the methodology changes",
+    "Optimising a bill that is small next to the engineers’ time it would take; the cheapest saving is often switching off what nobody uses",
+    "Comparing carbon numbers from different methods: market-based figures that count renewable energy certificates and location-based figures from the grid mix can differ several times over"
+  ],
+  "example": "A software company spends about $180,000 a month across AWS and Google Cloud. It turns on the FOCUS exports in both, lands them as Parquet in one bucket and queries them with DuckDB. Grouping EffectiveCost by the `team` tag shows that 22% of spending has no tag at all, most of it in two old AWS accounts, and that one team’s staging environment costs more than its production because nobody shuts it down at night. The team schedules the shutdown, the platform team adds a tagging rule to the Terraform modules, and the monthly report now shows cost per thousand API calls for each service. A sustainability lead adds the AWS carbon export and the Google Cloud carbon footprint export to the same dashboard, and the team moves a nightly batch job to a region with a cleaner grid.",
+  "providers": {
+    "aws": "Cost Explorer and the Cost and Usage Report (CUR 2.0) through AWS Data Exports, which also exports FOCUS 1.2 (GA November 2025) and carbon emissions estimates to S3; cost allocation tags; Budgets and Cost Anomaly Detection. The Customer Carbon Footprint Tool was deprecated on June 30, 2026 in favour of the AWS Sustainability service",
+    "gcp": "Cloud Billing export to BigQuery (standard, detailed and pricing), with a FOCUS view and a native FOCUS export in preview since June 2026; Carbon Footprint, which exports emissions estimates to BigQuery",
+    "azure": "Microsoft Cost Management exports to a storage account, including a FOCUS cost and usage dataset; budgets and cost analysis; Azure carbon optimization, which publishes each month’s emissions by the 19th of the next month and exports them through a REST API",
+    "oss": "FOCUS (FinOps Foundation, CC BY 4.0) as the common billing schema; OpenCost (CNCF incubating, Apache 2.0) for Kubernetes cost allocation; Cloud Carbon Footprint (Apache 2.0) for estimates from billing data; the Green Software Foundation’s SCI and Impact Framework. Commercial: Kubecost (IBM), Vantage, CloudZero, Finout and others"
+  },
+  "snippet": {
+    "lang": "sql",
+    "source": [
+      "-- DuckDB over FOCUS 1.3+ exports from several providers, in one schema",
+      "-- (Tags is a JSON object of key-value pairs in FOCUS)",
+      "SELECT",
+      "  ServiceProviderName,",
+      "  ServiceCategory,",
+      "  coalesce(json_extract_string(Tags, '$.team'), '(untagged)') AS team,",
+      "  round(sum(EffectiveCost), 2) AS effective_cost,",
+      "  round(sum(BilledCost), 2)    AS billed_cost",
+      "FROM read_parquet('focus/*/*.parquet', union_by_name = true)",
+      "WHERE ChargePeriodStart >= TIMESTAMP '2026-09-01'",
+      "  AND ChargePeriodStart <  TIMESTAMP '2026-10-01'",
+      "GROUP BY ALL",
+      "ORDER BY effective_cost DESC",
+      "LIMIT 20;"
+    ]
+  },
+  "related": ["metrics", "observability", "platform-engineering", "autoscaling"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "Three numbers for the same usage",
+      "intro": "FOCUS keeps four cost columns on every row; these three are the ones most reports are built on. Mixing them up is the most common reason two cost reports disagree.",
+      "corner": "Cost",
+      "columns": ["What it is", "Use it for"],
+      "rows": [
+        { "label": "Billed cost", "values": ["What the provider invoices for the row in this billing period. An up-front purchase appears in full in the month it is bought, and the usage it covers shows as zero.", "Reconciling with the invoice and with accounts payable"] },
+        { "label": "Effective cost", "values": ["The cost after every discount, with up-front and commitment purchases spread over the usage they cover; the purchase row itself drops to zero so nothing is counted twice.", "Allocation, showback and unit costs: what a team’s usage really cost"] },
+        { "label": "List cost", "values": ["The same quantity at public list prices, before negotiated or commitment discounts.", "Measuring how much discounts and commitments save"] }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Where the carbon numbers come from",
+      "intro": "Cloud carbon reports and software-level methods answer different questions, and use different rules for renewable energy.",
+      "corner": "Source",
+      "columns": ["What you get", "Watch out for"],
+      "rows": [
+        { "label": "Cloud provider reports", "values": ["Monthly estimates per account, region and service from the provider’s own energy, hardware and supply-chain data; AWS adds Scope 1, 2 and 3 categories and both location- and market-based figures", "Published two to three weeks after the month; recalculated when methods change; not broken down below the service"] },
+        { "label": "Estimates from billing data", "values": ["Emissions derived from usage rows and published coefficients, for any provider, by Cloud Carbon Footprint and similar tools", "Coefficients age and are averages, so treat results as indicative"] },
+        { "label": "Software Carbon Intensity (SCI)", "values": ["A rate, grams of CO2e per unit of work such as an API call, from measured or modelled energy, location-based grid intensity and a share of embodied hardware emissions", "You choose the boundary and the unit, so scores are only comparable over time for the same software"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Cloud bills itemised usage from the start, but for years the detail went to engineers while finance saw one total. Companies such as Cloudability sold tools to make sense of AWS’s detailed billing files, and their customers began to describe the job as FinOps, after DevOps. In 2019 J.R. Storment and Mike Fuller wrote it up in O’Reilly’s Cloud FinOps, and the FinOps Foundation was founded the same year; it joined the Linux Foundation in June 2020.",
+      "The providers’ formats stayed different. AWS’s Cost and Usage Report, Google’s BigQuery export and Azure’s cost details all had their own columns, and every tool vendor wrote converters. In 2023 the FinOps Foundation started FOCUS, a shared schema, with the big clouds in the room; 1.0 came out in June 2024, and by 2026 AWS, Microsoft, Google Cloud, Oracle and many SaaS vendors exported it natively. Kubernetes got its own open allocation engine when Kubecost’s team donated OpenCost to the CNCF in 2022.",
+      "Carbon reporting followed. The clouds added customer carbon reports, AWS’s Customer Carbon Footprint Tool among them in March 2022, and the Green Software Foundation, founded in 2021, published its Software Carbon Intensity specification in 2022, which became ISO/IEC 21031:2024. In 2025 AWS added carbon estimates to Data Exports, next to the billing data, with location-based figures beside the market-based ones."
+    ],
+    "choices": [
+      { "choice": "Allocate by structure first, tags second", "why": "Account, subscription and project boundaries are enforced by the cloud, while tags are only as good as whoever applied them, so most practices use the hierarchy for the big split and tags for detail." },
+      { "choice": "Report effective cost, reconcile billed cost", "why": "A three-year commitment paid up front would make one month look enormous and the next 35 free; spreading it gives teams a stable cost to own, while finance still needs the billed figure to match the invoice." },
+      { "choice": "A shared billing schema instead of more converters", "why": "FOCUS asked the providers to export one format themselves, so practitioners and tools stop reverse-engineering each provider’s columns and their changes." },
+      { "choice": "Location-based carbon for engineering decisions", "why": "Market-based figures fall when a company buys certificates, whatever the software does. Location-based figures, which SCI requires, only fall when the workload uses less energy or runs on a cleaner grid." }
+    ],
+    "timeline": [
+      { "year": "2019", "text": "Cloud FinOps published; FinOps Foundation founded" },
+      { "year": "2021", "text": "Green Software Foundation launched in May" },
+      { "year": "2022", "text": "AWS Customer Carbon Footprint Tool launches in March; OpenCost joins the CNCF Sandbox; SCI 1.0 in November" },
+      { "year": "2024", "text": "FOCUS 1.0 in June; SCI becomes ISO/IEC 21031:2024; OpenCost moves to CNCF incubation" },
+      { "year": "2025", "text": "AWS adds carbon estimates to Data Exports in April and FOCUS 1.2 exports in November" },
+      { "year": "2026", "text": "FOCUS 1.4 in June; AWS deprecates the Customer Carbon Footprint Tool for AWS Sustainability" }
+    ],
+    "sources": [
+      { "label": "FinOps Foundation: About (Cloudability origins, founded 2019, LF in 2020)", "url": "https://www.finops.org/about/" },
+      { "label": "edX: J.R. Storment (co-founder of Cloudability)", "url": "https://www.edx.org/bio/jr-storment" },
+      { "label": "FOCUS_Spec changelog on GitHub (0.5 to 1.4)", "url": "https://github.com/FinOps-Open-Cost-and-Usage-Spec/FOCUS_Spec/blob/working_draft/CHANGELOG.md" },
+      { "label": "CNCF blog: OpenCost advances to the CNCF Incubator (October 31, 2024; Sandbox in June 2022)", "url": "https://www.cncf.io/blog/2024/10/31/opencost-advances-to-the-cncf-incubator/" },
+      { "label": "Microsoft blog: Green Software Foundation launch (May 25, 2021)", "url": "https://blogs.microsoft.com/blog/2021/05/25/accenture-github-microsoft-and-thoughtworks-launch-the-green-software-foundation-with-the-linux-foundation-to-put-sustainability-at-the-core-of-software-engineering/" },
+      { "label": "Linux Foundation: GSF releases SCI 1.0 during COP27 (December 13, 2022)", "url": "https://linuxfoundation.org/press/gsf-decarbonization-software" },
+      { "label": "AWS: Customer Carbon Footprint Tool release notes (launch March 2022, Data Exports April 2025, deprecation June 30, 2026)", "url": "https://docs.aws.amazon.com/ccft/latest/releasenotes/what-is-ccftrn.html" }
+    ]
+  },
+  "sources": [
+    { "label": "FinOps Foundation: FinOps Framework (definition, phases, capabilities such as allocation and anomaly management)", "url": "https://www.finops.org/framework/" },
+    { "label": "FOCUS specification: EffectiveCost column (v1.4)", "url": "https://github.com/FinOps-Open-Cost-and-Usage-Spec/FOCUS_Spec/blob/v1.4/specification/datasets/cost_and_usage/columns/effectivecost.md" },
+    { "label": "FOCUS: data generators and supported versions", "url": "https://focus.finops.org/" },
+    { "label": "AWS What’s New: AWS Data Exports for FOCUS 1.2 is now generally available (November 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/11/aws-data-exports-focus-1-2-available" },
+    { "label": "AWS: Customer Carbon Footprint Tool release notes (carbon in Data Exports, LBM and MBM, Scope 3, deprecation)", "url": "https://docs.aws.amazon.com/ccft/latest/releasenotes/what-is-ccftrn.html" },
+    { "label": "Google Cloud blog: New BigQuery Cloud Billing view based on FOCUS", "url": "https://cloud.google.com/blog/topics/cost-management/new-bigquery-cloud-billing-view-based-on-focus" },
+    { "label": "Google Cloud: Cloud Billing release notes (FOCUS export to BigQuery in preview)", "url": "https://docs.cloud.google.com/feeds/billing-release-notes.xml" },
+    { "label": "Google Cloud: Carbon Footprint export data schema", "url": "https://docs.cloud.google.com/carbon-footprint/docs/data-schema" },
+    { "label": "Microsoft Learn: Create and manage Cost Management exports (FOCUS dataset)", "url": "https://learn.microsoft.com/azure/cost-management-billing/costs/tutorial-export-acm-data" },
+    { "label": "Microsoft Learn: Azure carbon optimization, view emissions (published by the 19th)", "url": "https://learn.microsoft.com/en-us/azure/carbon-optimization/view-emissions" },
+    { "label": "Microsoft Learn: Export emissions data with the carbon optimization API", "url": "https://learn.microsoft.com/en-us/azure/carbon-optimization/api-export-data" },
+    { "label": "CNCF blog: OpenCost advances to the CNCF Incubator (October 31, 2024)", "url": "https://www.cncf.io/blog/2024/10/31/opencost-advances-to-the-cncf-incubator/" },
+    { "label": "IBM newsroom: IBM acquires Kubecost (September 17, 2024)", "url": "https://newsroom.ibm.com/blog-ibm-acquires-kubecost-to-broaden-hybrid-cloud-cost-management-capabilities" },
+    { "label": "Cloud Carbon Footprint on GitHub (Apache 2.0)", "url": "https://github.com/cloud-carbon-footprint/cloud-carbon-footprint" },
+    { "label": "Software Carbon Intensity specification v1.1.0 (formula, boundary, no market-based measures)", "url": "https://sci.greensoftware.foundation/" }
+  ]
+}

@@ -1,0 +1,105 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "SQLMesh",
+  "concepts": ["etl"],
+  "provider": "oss",
+  "vendor": "SQLMesh project (LF Projects, started at Tobiko Data, now part of Fivetran)",
+  "foundation": { "id": "linux-foundation", "joined": "2026-03-25", "via": "A series of LF Projects, LLC, contributed by Fivetran" },
+  "license": "Apache 2.0",
+  "website": "https://sqlmesh.readthedocs.io/en/stable/",
+  "repo": "https://github.com/SQLMesh/sqlmesh",
+  "summary": "A SQL and Python transformation framework with a Terraform-style plan and apply: it parses every model, shows what a change breaks, and promotes tested tables to production by swapping views instead of rebuilding them.",
+  "intro": [
+    "A SQLMesh project is a folder of models: SQL files that start with a `MODEL (...)` block naming the table, its kind (`FULL`, `INCREMENTAL_BY_TIME_RANGE`, `INCREMENTAL_BY_UNIQUE_KEY`, `SCD_TYPE_2` and others), its schedule and its audits, followed by one `SELECT`. Python models are also possible. Instead of rendering text templates, SQLMesh parses each query with SQLGlot, its own SQL parser and transpiler, so it knows every column’s lineage, catches errors before the warehouse sees the query, and can translate SQL written in one dialect into another engine’s. It runs on 16 engines, among them DuckDB, Postgres, Snowflake, BigQuery, Databricks, Redshift, Trino, Spark and ClickHouse.",
+    "The workflow is `sqlmesh plan`. It compares the project with an environment, classifies each changed model as breaking (it and everything downstream are rebuilt), non-breaking (only it is rebuilt) or forward-only (no rebuild), lists the backfills needed and runs them after you confirm. Every version of a model gets its own physical table in a `sqlmesh__<schema>` schema, and an environment is just a set of views pointing at those tables. A dev environment (`my_schema__dev`) costs nothing until a model changes, and promoting tested work to production swaps the views without recomputing anything. `sqlmesh run` then processes only the time intervals each model hasn’t yet built, and unit tests and audits run alongside.",
+    "SQLMesh can also load an existing dbt project: run `sqlmesh init -t dbt` in its folder and SQLMesh plans and runs the dbt models, reusing `profiles.yml`. Tobiko Data, founded by Tyson Mao, Toby Mao and Iaroslav Zeigerman, built it from 2022; Fivetran bought Tobiko in September 2025 and contributed SQLMesh to the Linux Foundation in March 2026."
+  ],
+  "strengths": [
+    "Plans show the blast radius of a change, with column-level lineage, before anything runs in the warehouse",
+    "Virtual data environments: dev copies cost nothing until models change, and deploying to production swaps views instead of rebuilding tables",
+    "Incremental models without hand-written `is_incremental()` logic: SQLMesh tracks which intervals each model has built and fills only the gaps",
+    "Understands SQL rather than templating it, so it catches errors early and transpiles between dialects; dbt projects run on it largely unchanged"
+  ],
+  "limits": [
+    "A much smaller community and adapter list than dbt, and most dbt packages, hosted tooling and hiring pools assume dbt",
+    "Keeps its own state (snapshots, intervals, environments) in a database; some engines, such as Trino, can’t hold it, so you configure a separate state connection",
+    "More concepts to learn up front: model kinds, change categories, forward-only plans and environments",
+    "Still a 0.x release (0.236.4 in October 2026), and its long-term direction now sits with a foundation project whose main corporate backer also owns dbt"
+  ],
+  "worksWith": [
+    { "id": "duckdb", "how": "builds models in" },
+    { "id": "snowflake", "how": "builds models in" },
+    { "id": "bigquery", "how": "builds models in" },
+    { "id": "databricks", "how": "builds models in" },
+    { "id": "postgresql", "how": "builds models in" },
+    { "id": "trino", "how": "builds models in" },
+    { "id": "dbt", "how": "can plan and run projects written for" }
+  ],
+  "alternatives": ["dbt", "bruin"],
+  "snippet": {
+    "lang": "sql",
+    "title": "An incremental model, then a plan into a dev environment",
+    "source": [
+      "-- models/daily_revenue.sql",
+      "MODEL (",
+      "  name analytics.daily_revenue,",
+      "  kind INCREMENTAL_BY_TIME_RANGE (time_column order_date),",
+      "  cron '@daily',",
+      "  grain order_date,",
+      "  audits (NOT_NULL(columns = (order_date)), UNIQUE_VALUES(columns = (order_date)))",
+      ");",
+      "",
+      "SELECT",
+      "  CAST(o.created_at AS DATE) AS order_date,",
+      "  COUNT(*)                   AS orders,",
+      "  SUM(p.amount)              AS revenue",
+      "FROM analytics.stg_orders AS o",
+      "JOIN analytics.stg_payments AS p ON p.order_id = o.order_id",
+      "WHERE p.status = 'succeeded'",
+      "  AND CAST(o.created_at AS DATE) BETWEEN @start_ds AND @end_ds  -- SQLMesh fills in each missing interval",
+      "GROUP BY 1;",
+      "",
+      "-- $ sqlmesh plan dev     # shows directly and indirectly changed models, asks before backfilling",
+      "-- $ sqlmesh plan         # promotes to prod: views now point at the tables built in dev",
+      "-- $ sqlmesh run          # later: builds only the days not yet processed"
+    ]
+  },
+  "history": {
+    "story": [
+      "Toby Mao wrote SQLGlot, a SQL parser and transpiler, and had led Minerva, Airbnb’s metrics platform. With his brother Tyson Mao and Iaroslav Zeigerman, who had worked on data and machine-learning infrastructure at Netflix and Apple, he founded Tobiko Data and started SQLMesh in 2022 on top of SQLGlot. Their argument was that tools which treat SQL as text can’t tell what a change affects, so teams either rebuild too much or ship breakages; a framework that parses the SQL can work out lineage, rebuild only what changed and reuse tables across environments.",
+      "Tobiko raised $21.8 million in 2024 and sold a hosted product, Tobiko Cloud. Fivetran bought the company in September 2025, a month before announcing its merger with dbt Labs. On 25 March 2026, at KubeCon + CloudNativeCon Europe, the Linux Foundation announced that Fivetran had contributed SQLMesh, to be developed under neutral governance by a technical steering committee; the repository moved from TobikoData to its own SQLMesh organisation."
+    ],
+    "choices": [
+      { "choice": "Parse SQL instead of templating it", "why": "With a full parse tree from SQLGlot, SQLMesh knows column lineage, can tell breaking from non-breaking changes and can transpile between dialects, which Jinja text templates can’t do." },
+      { "choice": "Plan and apply, like Terraform", "why": "Seeing the impact and the backfill cost of a change before it runs replaces “run it and see” in a shared warehouse." },
+      { "choice": "Environments as views over versioned tables", "why": "If a model’s fingerprint hasn’t changed, its table can be reused anywhere, so creating a dev environment or promoting it to production needs no recomputation." },
+      { "choice": "Run dbt projects too", "why": "Most teams already had dbt models; reading them directly lowered the cost of trying SQLMesh." }
+    ],
+    "timeline": [
+      { "year": "2022", "text": "SQLMesh repository starts at Tobiko Data (September)" },
+      { "year": "2024", "text": "Tobiko announces $21.8M in seed and Series A funding (June)" },
+      { "year": "2025", "text": "Fivetran acquires Tobiko Data (September)" },
+      { "year": "2026", "text": "Contributed to the Linux Foundation (March); v0.236.4 (October)" }
+    ],
+    "sources": [
+      { "label": "TechCrunch: With $21.8M in funding, Tobiko aims to build a modern data platform (June 2024)", "url": "https://techcrunch.com/2024/06/05/with-21-8m-in-funding-tobiko-aims-to-build-a-modern-data-platform" },
+      { "label": "Fivetran press release: Fivetran acquires Tobiko Data (3 September 2025)", "url": "https://www.fivetran.com/press/fivetran-acquires-tobiko-data-to-power-the-next-generation-of-advanced-ai-ready-data-transformation" },
+      { "label": "Linux Foundation press release: Linux Foundation welcomes SQLMesh project (25 March 2026)", "url": "https://www.linuxfoundation.org/press/linux-foundation-welcomes-sqlmesh-project" },
+      { "label": "SQLMesh GOVERNANCE.md (a Series of LF Projects, LLC; TSC)", "url": "https://github.com/SQLMesh/sqlmesh/blob/main/GOVERNANCE.md" },
+      { "label": "GitHub: SQLMesh/sqlmesh (repository created September 2022; releases)", "url": "https://github.com/SQLMesh/sqlmesh/releases" }
+    ]
+  },
+  "sources": [
+    { "label": "GitHub: SQLMesh/sqlmesh README (virtual data environments, plan/apply, dialects, a Linux Foundation project)", "url": "https://github.com/SQLMesh/sqlmesh" },
+    { "label": "SQLMesh docs: Plans (breaking, non-breaking and forward-only changes; virtual updates)", "url": "https://sqlmesh.readthedocs.io/en/stable/concepts/plans/" },
+    { "label": "SQLMesh docs: Environments (`__<env>` schema suffix, references to snapshots)", "url": "https://sqlmesh.readthedocs.io/en/stable/concepts/environments/" },
+    { "label": "SQLMesh docs: Snapshots (fingerprints)", "url": "https://sqlmesh.readthedocs.io/en/stable/concepts/architecture/snapshots/" },
+    { "label": "SQLMesh docs: Configuration guide (`sqlmesh__` physical schemas, views in the model schema)", "url": "https://sqlmesh.readthedocs.io/en/stable/guides/configuration/" },
+    { "label": "SQLMesh docs: Model kinds", "url": "https://sqlmesh.readthedocs.io/en/stable/concepts/models/model_kinds/" },
+    { "label": "SQLMesh docs: Integrations overview (16 execution engines)", "url": "https://sqlmesh.readthedocs.io/en/stable/integrations/overview/" },
+    { "label": "SQLMesh docs: dbt integration (`sqlmesh init -t dbt`, state connection)", "url": "https://sqlmesh.readthedocs.io/en/stable/integrations/dbt/" },
+    { "label": "GitHub: SQLMesh/sqlmesh release v0.236.4 (October 2026)", "url": "https://github.com/SQLMesh/sqlmesh/releases/tag/v0.236.4" },
+    { "label": "Linux Foundation press release: Linux Foundation welcomes SQLMesh project (25 March 2026)", "url": "https://www.linuxfoundation.org/press/linux-foundation-welcomes-sqlmesh-project" }
+  ],
+  "checked": "2026-10-28"
+}

@@ -1,0 +1,103 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "OVN (Open Virtual Network)",
+  "concepts": ["sdn"],
+  "provider": "oss",
+  "vendor": "OVN project (Linux Foundation), started by the Open vSwitch developers",
+  "foundation": { "id": "linux-foundation", "joined": "2019-11-04", "via": "A series of LF Projects, LLC, split out of the Open vSwitch repository in 2019" },
+  "license": "Apache 2.0",
+  "website": "https://www.ovn.org/",
+  "repo": "https://github.com/ovn-org/ovn",
+  "summary": "A control plane for virtual networks built on Open vSwitch: you describe logical switches, routers, ACLs, NAT and load balancers, and it programs the OVS on every host to implement them.",
+  "intro": [
+    "Open vSwitch forwards packets by OpenFlow rules, but a cloud wants to think in networks, subnets, routers and security groups. OVN fills that gap. It is a set of daemons that turn a description of logical networks into OpenFlow rules for the Open vSwitch on each host, and it supplies the pieces a cloud network needs: distributed logical switches and routers, ACLs for security groups, NAT, load balancers, DHCP, a DNS responder, and gateways that connect logical networks to physical ones. Logical networks run as overlays in tunnels between hosts, so their address spaces can overlap with each other and with the physical network, and a VM can move between hosts without changing its addresses.",
+    "OVN is layered around two OVSDB databases. A cloud management system, through its own plugin, writes the desired topology into the Northbound database, in terms such as logical switches, ports and ACLs. `ovn-northd` translates that into logical flows, a description of the pipeline every packet goes through, and writes them into the Southbound database, which also records the chassis (hypervisors and gateways) and which logical port lives where. An `ovn-controller` on every chassis reads the Southbound database and programs its local Open vSwitch, so routing and ACLs run on the host where a packet starts rather than on a central router. It is written in C and runs entirely in user space.",
+    "The big users are OpenStack, whose Neutron service ships an ML2/OVN driver that became DevStack’s default in May 2021, and Kubernetes through OVN-Kubernetes, a CNCF Sandbox project since October 2024 and the default network plugin in Red Hat OpenShift. OVN is versioned by year and month with releases in March and September: 26.09 is the latest and 26.03 the current long-term support series. Recent releases added dynamic routing over BGP and EVPN, so logical routers can announce their routes to the physical fabric. OVN has been a Linux Foundation project, a series of LF Projects, LLC, since November 2019."
+  ],
+  "strengths": [
+    "Turns Open vSwitch into a full virtual network: switches, routers, ACLs, NAT, load balancing and DHCP without separate appliances",
+    "Distributed by design: each host routes and filters its own VMs’ and pods’ traffic, so there is no central router to bottleneck",
+    "Shared by OpenStack and OpenShift, so fixes and scale work from both communities land in one code base",
+    "Clear interfaces: anything that can write the Northbound database can drive it, and the logical flows can be inspected and traced"
+  ],
+  "limits": [
+    "The central databases and `ovn-northd` must be run as a highly available cluster, and at large scale their size and recompute time need tuning",
+    "Needs Open vSwitch on every host, and a version pairing between OVN, OVS and the cloud’s plugin that has to be planned at upgrades",
+    "Debugging spans several layers: Northbound objects, logical flows, OpenFlow rules and datapath flows, each with its own tools",
+    "Standard-term releases get only a year of fixes, so production users usually stay on the long-term support series"
+  ],
+  "worksWith": [
+    { "id": "open-vswitch", "how": "programs" },
+    { "id": "openstack", "how": "is a Neutron networking backend for" },
+    { "id": "openshift", "how": "carries pod and service networks in" },
+    { "id": "kubernetes", "how": "networks pods in" }
+  ],
+  "alternatives": ["opendaylight"],
+  "snippet": {
+    "lang": "bash",
+    "title": "A logical switch, a router port and an ACL in the Northbound database, then binding a VM on a host",
+    "source": [
+      "ovn-nbctl ls-add web",
+      "ovn-nbctl lsp-add web web-vm1",
+      "ovn-nbctl lsp-set-addresses web-vm1 \"00:00:00:00:00:01 10.0.0.11\"",
+      "",
+      "# a logical router with an interface on the switch",
+      "ovn-nbctl lr-add r1",
+      "ovn-nbctl lrp-add r1 r1-web 00:00:00:00:ff:01 10.0.0.1/24",
+      "ovn-nbctl lsp-add web web-r1",
+      "ovn-nbctl lsp-set-type web-r1 router",
+      "ovn-nbctl lsp-set-addresses web-r1 router",
+      "ovn-nbctl lsp-set-options web-r1 router-port=r1-web",
+      "",
+      "# only HTTPS reaches the VM",
+      "ovn-nbctl acl-add web to-lport 1000 'outport == \"web-vm1\" && tcp.dst == 443' allow-related",
+      "ovn-nbctl acl-add web to-lport 900 'outport == \"web-vm1\"' drop",
+      "",
+      "# on the hypervisor: tie the VM's OVS interface to its logical port",
+      "ovs-vsctl set interface tap1 external_ids:iface-id=web-vm1"
+    ]
+  },
+  "history": {
+    "story": [
+      "By 2014 Open vSwitch was widely used as the switch in open-source clouds, but each cloud and controller built its own way of turning tenants’ networks into OVS rules. On 13 January 2015 Justin Pettit, Ben Pfaff, Chris Wright and Madhu Venugopal announced OVN, a native virtual networking layer for OVS developed in the OVS repository, aimed at layer 2 and layer 3 overlays and security groups, with OpenStack as its first user.",
+      "In 2019 OVN moved into its own repository and release cycle, and on 4 November 2019 it was established as a series of LF Projects, LLC, with a charter and a technical steering committee of its committers. From 20.03 in March 2020 it has been versioned by year and month. OpenStack made ML2/OVN DevStack’s default Neutron backend in May 2021, and Red Hat made OVN-Kubernetes the default network plugin in OpenShift, removing the older OpenShift SDN plugin in 4.17.",
+      "OVN-Kubernetes was accepted into the CNCF Sandbox in October 2024. OVN itself kept growing towards the physical network, adding dynamic routing with BGP and EVPN, and released 26.03 as a long-term support series in March 2026 and 26.09 in September 2026."
+    ],
+    "choices": [
+      { "choice": "Databases as the interfaces between layers", "why": "Each layer writes its state to an OVSDB database and the next one reads it, so components can restart or scale independently and anyone can inspect the intended state." },
+      { "choice": "Logical flows between the model and OpenFlow", "why": "Compiling the network once into logical flows, then letting each host translate them locally, keeps the central work independent of how many hosts there are and lets hosts apply only what concerns them." },
+      { "choice": "Distributed routing and filtering on every host", "why": "Applying logical routers and ACLs on the host where a packet starts means traffic between VMs doesn’t detour through a central router, and capacity grows with the number of hosts." }
+    ],
+    "timeline": [
+      { "year": "2015", "text": "OVN announced by Open vSwitch developers on 13 January" },
+      { "year": "2019", "text": "Own repository; becomes an LF Projects series on 4 November" },
+      { "year": "2020", "text": "20.03 in March, the first year-and-month version" },
+      { "year": "2021", "text": "ML2/OVN becomes DevStack’s default Neutron backend in May" },
+      { "year": "2024", "text": "OVN-Kubernetes accepted into the CNCF Sandbox in October" },
+      { "year": "2026", "text": "26.03 long-term support release in March; 26.09 in September" }
+    ],
+    "sources": [
+      { "label": "Wikipedia: Open vSwitch (OVN announcement and proposed architecture, 13 January 2015)", "url": "https://en.wikipedia.org/wiki/Open_vSwitch" },
+      { "label": "Network World: Open vSwitch to gain network virtualization (January 2015)", "url": "https://www.networkworld.com/article/934472/open-vswitch-to-gain-network-virtualization.html" },
+      { "label": "OVN: The Linux Foundation Open Virtual Network Charter (effective 4 November 2019)", "url": "https://github.com/ovn-org/ovn/blob/main/Documentation/internals/charter.rst" },
+      { "label": "OVN: home page (split from the Open vSwitch codebase in 2019)", "url": "https://www.ovn.org/en/" },
+      { "label": "GitHub: ovn-org/ovn tags (v20.03.0 to v26.09.0)", "url": "https://github.com/ovn-org/ovn/tags" },
+      { "label": "openstack-discuss: OVN is now default in DevStack (12 May 2021)", "url": "https://lists.openstack.org/pipermail/openstack-discuss/2021-May/022410.html" },
+      { "label": "Red Hat: About managed networking (OpenShift SDN removed in 4.17)", "url": "https://docs.redhat.com/en/documentation/openshift_dedicated/4/html/networking/about-managed-networking" },
+      { "label": "CNCF: OVN-Kubernetes (Sandbox, accepted 17 October 2024)", "url": "https://www.cncf.io/projects/ovn-kubernetes/" }
+    ]
+  },
+  "sources": [
+    { "label": "OVN: home page (features, user space only, Apache 2.0)", "url": "https://www.ovn.org/en/" },
+    { "label": "ovn-architecture(7): components, Northbound and Southbound databases, ovn-northd, ovn-controller, gateways", "url": "https://man7.org/linux/man-pages/man7/ovn-architecture.7.html" },
+    { "label": "OVN docs: Release process (year.month versions, March and September, LTS every two years)", "url": "https://docs.ovn.org/en/latest/internals/release-process.html" },
+    { "label": "OVN: Releases (26.09 latest, 26.03 latest LTS)", "url": "https://www.ovn.org/en/releases/" },
+    { "label": "OVN NEWS (dynamic routing, EVPN)", "url": "https://github.com/ovn-org/ovn/blob/main/NEWS" },
+    { "label": "OVN: The Linux Foundation Open Virtual Network Charter (series of LF Projects, LLC)", "url": "https://github.com/ovn-org/ovn/blob/main/Documentation/internals/charter.rst" },
+    { "label": "OpenStack Neutron: OVN driver administration guide", "url": "https://docs.openstack.org/neutron/latest/admin/ovn/index.html" },
+    { "label": "Red Hat: About the OVN-Kubernetes network plugin (OpenShift 4.22; default plugin, OVS on each node)", "url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/ovn-kubernetes_network_plugin/about-ovn-kubernetes" },
+    { "label": "CNCF: OVN-Kubernetes (Sandbox, accepted 17 October 2024)", "url": "https://www.cncf.io/projects/ovn-kubernetes/" },
+    { "label": "openstack-discuss: OVN is now default in DevStack (12 May 2021)", "url": "https://lists.openstack.org/pipermail/openstack-discuss/2021-May/022410.html" }
+  ],
+  "checked": "2026-10-28"
+}

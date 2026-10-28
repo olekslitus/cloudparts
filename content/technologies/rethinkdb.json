@@ -1,0 +1,111 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "RethinkDB",
+  "concepts": ["document"],
+  "provider": "oss",
+  "vendor": "RethinkDB community (copyright held by the Linux Foundation)",
+  "foundation": { "id": "linux-foundation", "joined": "2017-02-06", "via": "Bought from the defunct RethinkDB company by the CNCF and contributed to the Linux Foundation" },
+  "license": "Apache 2.0",
+  "website": "https://rethinkdb.com/",
+  "repo": "https://github.com/rethinkdb/rethinkdb",
+  "status": { "stage": "dormant", "note": "Volunteer-maintained: the last feature release, 2.4, was in December 2019, and 2.4.5 (November 2025) only fixed builds on newer platforms.", "since": "2019-12-19" },
+  "summary": "A clustered JSON document database whose queries can stay open as changefeeds, pushing every change to the client instead of the app polling for it.",
+  "intro": [
+    "RethinkDB stores JSON documents in tables and is queried with ReQL, a query language built from method chains in the host language: `r.table('game').orderBy({index: 'score'}).limit(3)` in JavaScript, the same chain in Python, Ruby or Java. Add `.changes()` to most queries and the server keeps them open as a changefeed, sending the old and new value of every document that enters, leaves or changes the result. That is the feature it was built around: a leaderboard, chat room or dashboard subscribes to a query and gets updates pushed over the driver connection.",
+    "A table is range-sharded on its primary key across servers, and each shard has one primary replica and any number of secondaries, configured with `reconfigure(shards=…, replicas=…)` or from the built-in web console. Cluster configuration is kept with Raft, and when enough voting replicas remain a failed primary is replaced automatically. Writes are atomic per document only; by default they are acknowledged once a majority of replicas have them on disk, while reads come from the primary’s memory unless you ask for `read_mode: 'majority'`, which makes single-document operations linearizable. Data lives in B-trees on a log-structured storage engine with its own cache, so tables can be much larger than RAM.",
+    "The company behind it shut down in October 2016. The CNCF bought the code and copyrights in February 2017, relicensed them from AGPLv3 to Apache 2.0 and gave the project to the Linux Foundation, where volunteers have kept it alive since. They shipped 2.4 in December 2019 with write hooks, then only fix and build releases; 2.4.5 in November 2025 changed nothing but packaging. Commits still land in 2026, mostly tests and CI, so it is maintained but not moving forward."
+  ],
+  "strengths": [
+    "Changefeeds on ordinary queries, including filtered and ordered ones, so realtime updates need no separate pub/sub system",
+    "ReQL composes in your own language, with joins, aggregation and map/reduce running in parallel across shards",
+    "Sharding, replication and automatic failover are built in and can be changed live from the web console or the API",
+    "Apache 2.0 with copyright held by the Linux Foundation, so no single company can relicense it"
+  ],
+  "limits": [
+    "Little development: no feature release since 2.4 in 2019, a small volunteer team, and official drivers for only JavaScript, Python, Ruby and Java",
+    "No multi-document transactions; a single query is not atomic across the documents it touches",
+    "The default `read_mode` of `single` can return writes a failover later loses; strong reads need `majority` and cost latency",
+    "Changefeeds are not a durable log: a client that disconnects misses changes and has to re-read, unlike a Kafka topic or a CDC stream"
+  ],
+  "alternatives": ["mongodb", "couchdb", "surrealdb", "supabase"],
+  "specs": {
+    "data-model": "JSON documents in tables, each with a primary key",
+    "query-language": "ReQL, chained methods in the client language, with `.changes()` for live queries",
+    "wire-protocol": "Its own JSON protocol over TCP, used by the drivers",
+    "secondary-indexes": "Secondary, compound, multi and geospatial indexes",
+    "transactions": "Atomic per document; none across documents",
+    "consistency": "Majority write acks by default; reads from the primary’s memory unless `read_mode: majority`",
+    "scaling": "Range sharding on the primary key across servers",
+    "replication": "One primary and many secondaries per shard; automatic failover, configuration kept with Raft",
+    "storage-engine": "Log-structured storage with B-trees and its own cache",
+    "written-in": "C++",
+    "deployment": "Self-hosted; no managed service since the company closed"
+  },
+  "snippet": {
+    "lang": "js",
+    "title": "A leaderboard that pushes changes to the client",
+    "source": [
+      "const r = require('rethinkdb');",
+      "const conn = await r.connect({ host: 'localhost', port: 28015 });",
+      "",
+      "await r.tableCreate('game').run(conn);",
+      "await r.table('game').indexCreate('score').run(conn);",
+      "await r.table('game').indexWait('score').run(conn);",
+      "",
+      "// the top three scores, kept open: every change that affects them is pushed",
+      "const feed = await r.table('game')",
+      "  .orderBy({ index: r.desc('score') }).limit(3)",
+      "  .changes({ includeInitial: true })",
+      "  .run(conn);",
+      "",
+      "feed.each((err, change) => {",
+      "  // { old_val: {...} | null, new_val: {...} | null }",
+      "  console.log(change.new_val);",
+      "});",
+      "",
+      "// elsewhere: r.table('game').get('ada').update({ score: 4200 }).run(conn)"
+    ]
+  },
+  "history": {
+    "story": [
+      "Slava Akhmechet and Michael Glukhovsky started RethinkDB in 2009 with seed money from Y Combinator. It began as a storage engine for MySQL tuned for solid-state drives, then became a distributed JSON database; the first public release, 1.2, came in November 2012. Changefeeds became its defining feature, and the repository still calls it “the open-source database for the realtime web”. Version 2.0, in April 2015, was the first release the company called production-ready.",
+      "The company never found a business. On 5 October 2016 Akhmechet announced that RethinkDB the company was shutting down and that much of the engineering team was joining Stripe, while the code stayed open source. In February 2017 the CNCF paid $25,000 for the source code, copyrights and assets, relicensed them from AGPLv3, which some companies had refused to use, to Apache 2.0, and contributed the project to the Linux Foundation. Community maintainers released 2.3.6, the first release under community governance, then 2.4 in December 2019 with write hooks, and since then fix releases up to 2.4.5 in November 2025."
+    ],
+    "choices": [
+      { "choice": "Push query results, don’t make apps poll", "why": "Realtime apps built on other databases had to poll or bolt on a message broker; changefeeds let the query itself be the subscription." },
+      { "choice": "A query language embedded in the host language", "why": "ReQL is built from ordinary method calls, so queries compose like code and can’t be broken by string concatenation." },
+      { "choice": "Relicense to Apache 2.0 after the shutdown", "why": "AGPLv3 had kept some companies from using or contributing; the CNCF called the purchase a chance “to salvage an enormous investment with a small incremental contribution”." }
+    ],
+    "timeline": [
+      { "year": "2009", "text": "Founded with Y Combinator seed funding, first as a MySQL storage engine for SSDs" },
+      { "year": "2012", "text": "First public release, 1.2 (November)" },
+      { "year": "2015", "text": "RethinkDB 2.0, called production-ready (April)" },
+      { "year": "2016", "text": "The company shuts down; engineers join Stripe (October)" },
+      { "year": "2017", "text": "CNCF buys the code for $25,000, relicenses it to Apache 2.0 and contributes it to the Linux Foundation (February)" },
+      { "year": "2019", "text": "RethinkDB 2.4 with write hooks (December), the last feature release" },
+      { "year": "2025", "text": "2.4.5, a build-fix release (November)" }
+    ],
+    "sources": [
+      { "label": "Wikipedia: RethinkDB (founding, Y Combinator, shutdown, relicensing)", "url": "https://en.wikipedia.org/wiki/RethinkDB" },
+      { "label": "TechCrunch: YC-funded RethinkDB, a MySQL storage engine built from the ground up for SSDs (July 2009)", "url": "https://techcrunch.com/2009/07/28/yc-funded-rethinkdb-a-mysql-storage-engine-built-from-the-ground-up-for-ssds/" },
+      { "label": "RethinkDB blog: RethinkDB is shutting down (Slava Akhmechet, 5 October 2016)", "url": "https://rethinkdb.com/blog/rethinkdb-shutdown/" },
+      { "label": "CNCF: CNCF purchases RethinkDB source code and contributes it to the Linux Foundation under the Apache license (6 February 2017)", "url": "https://www.cncf.io/blog/2017/02/06/cncf-purchases-rethinkdb-source-code-contributes-linux-foundation-apache-license" },
+      { "label": "RethinkDB blog: Announcing 2.3.6, the first release under community governance", "url": "https://rethinkdb.com/blog/2.3.6-release" },
+      { "label": "RethinkDB blog: Announcing RethinkDB 2.4.0 (19 December 2019)", "url": "https://rethinkdb.com/blog/2.4.0-release" },
+      { "label": "GitHub: rethinkdb/rethinkdb tags v1.2.4, v2.0.0, v2.4.0 and v2.4.5", "url": "https://github.com/rethinkdb/rethinkdb/tags" },
+      { "label": "GitHub: rethinkdb NOTES.md (2.4.5 release notes, November 2025)", "url": "https://github.com/rethinkdb/rethinkdb/blob/v2.4.x/NOTES.md" }
+    ]
+  },
+  "sources": [
+    { "label": "RethinkDB website (changefeeds, ReQL, sharding and replication)", "url": "https://rethinkdb.com/" },
+    { "label": "RethinkDB docs: Architecture FAQ (range sharding, Raft, per-document atomicity, storage engine)", "url": "https://rethinkdb.com/docs/architecture/" },
+    { "label": "RethinkDB docs: Consistency guarantees (write_acks, durability, read_mode)", "url": "https://rethinkdb.com/docs/consistency/" },
+    { "label": "RethinkDB docs: Changefeeds", "url": "https://rethinkdb.com/docs/changefeeds/" },
+    { "label": "RethinkDB docs: Secondary indexes (simple, compound, multi, geospatial)", "url": "https://rethinkdb.com/docs/secondary-indexes/" },
+    { "label": "RethinkDB docs: Install drivers (official JavaScript, Python, Ruby and Java drivers)", "url": "https://rethinkdb.com/docs/install-drivers/" },
+    { "label": "GitHub: rethinkdb/rethinkdb README (licensed by the Linux Foundation under Apache 2.0)", "url": "https://github.com/rethinkdb/rethinkdb" },
+    { "label": "GitHub: rethinkdb/rethinkdb commits (2025–2026 activity)", "url": "https://github.com/rethinkdb/rethinkdb/commits/main" },
+    { "label": "GitHub: rethinkdb NOTES.md (2.4.5: build fixes only)", "url": "https://github.com/rethinkdb/rethinkdb/blob/v2.4.x/NOTES.md" }
+  ],
+  "checked": "2026-10-28"
+}

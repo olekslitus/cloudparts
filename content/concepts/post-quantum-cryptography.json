@@ -1,0 +1,148 @@
+{
+  "$schema": "../../.schemas/concepts.schema.json",
+  "name": "Post-quantum cryptography",
+  "icon": "atom",
+  "category": "security",
+  "order": 45,
+  "summary": "New public-key algorithms for key exchange and signatures that a future quantum computer can’t break, rolled out now, mostly alongside the old ones, because traffic recorded today can be decrypted later.",
+  "howItWorks": "Almost all public-key cryptography in use rests on two hard problems: factoring large numbers (RSA) and discrete logarithms, including on elliptic curves (ECDH, ECDSA, Ed25519). Shor’s algorithm solves both in polynomial time on a large, error-corrected quantum computer, so once such a “cryptographically relevant” machine exists, it can work out private keys from public ones: forge signatures and certificates, and recover the session keys of any key exchange it has a recording of. Symmetric cryptography is far less exposed: NIST says AES and hashes with at least 128 bits of classical security already meet its lowest post-quantum security category. Post-quantum cryptography (PQC) replaces only the public-key parts, with algorithms that run on ordinary computers but rest on problems no known quantum algorithm solves efficiently. NIST published the first three standards on 13 August 2024: FIPS 203 ML-KEM (from CRYSTALS-Kyber), a key-encapsulation mechanism (KEM) built on module lattices; FIPS 204 ML-DSA (from CRYSTALS-Dilithium), a lattice-based signature; and FIPS 205 SLH-DSA (from SPHINCS+), a signature built only on hash functions, larger and slower but resting on the most conservative assumption. In March 2025 NIST picked HQC, a code-based KEM, as a backup to ML-KEM; its standard is still being written, as is FN-DSA, based on Falcon. A KEM isn’t a drop-in Diffie-Hellman: one side sends a public key, the other uses it to encapsulate a random secret and sends back a ciphertext that only the private key can decapsulate. Because the new algorithms have had far less scrutiny than RSA and elliptic curves, most deployments are hybrid. In TLS 1.3 the client’s key share carries an X25519 share and an ML-KEM-768 public key together (the group X25519MLKEM768, standardised as RFC 10024 in August 2026), and the session keys come from both secrets, so an attacker has to break both. Key exchange goes first because of “harvest now, decrypt later”: an adversary can record encrypted traffic today and decrypt it once the quantum computer arrives. A signature only has to resist forgery at the moment it is checked, so certificates can move later, apart from long-lived roots of trust and firmware signing keys that are hard to replace.",
+  "analogy": "Changing the locks before a master key exists. Nobody can copy your keys yet, but a thief can photograph every sealed letter you send today and open them all the day the master key is cut, so you start with the letters and fit the new locks next to the old ones until you trust them.",
+  "useWhen": [
+    "Data that must stay confidential for years, such as health, financial, legal or government records, crosses a network today: it is exposed to harvest-now-decrypt-later already",
+    "You run TLS endpoints, load balancers, VPNs or SSH: hybrid ML-KEM is a configuration or library upgrade away, and most current browsers already offer it",
+    "You issue long-lived roots of trust, firmware or code-signing keys that will still be trusted in the 2030s and can’t easily be rotated",
+    "You sell to US federal or national security customers, or to regulated sectors that follow NIST and NSA timelines"
+  ],
+  "avoidWhen": [
+    "Replacing classical algorithms outright in a protocol people rely on today: deploy hybrids, so a flaw in the new algorithm or its implementation doesn’t leave you weaker than before",
+    "Rolling your own: use a vetted library with constant-time code (AWS-LC, BoringSSL, OpenSSL 3.5+, SymCrypt, Go’s standard library) rather than a research prototype",
+    "Moving every certificate to ML-DSA now, on the web: signatures are dozens of times larger, the handshake carries several of them, and browsers don’t yet accept post-quantum certificates from public certificate authorities",
+    "Re-encrypting data at rest out of fear: AES-256 and the keys a KMS wraps symmetrically are not what Shor’s algorithm breaks; check the public-key steps around them instead"
+  ],
+  "example": "A health insurer’s member API sits behind an AWS Application Load Balancer and calls a partner over mutual TLS. Records leaked in 2026 would still be sensitive in 2040, so the team starts with key exchange. It switches the ALB listener to one of the post-quantum TLS security policies, upgrades the partner client to OpenSSL 3.5, which offers X25519MLKEM768 by default, and watches the ALB connection logs to see how many handshakes now use ML-KEM. The first week shows 70% hybrid, the rest from old mobile clients and one monitoring probe on an older runtime. Certificates stay ECDSA for now, but the internal code-signing root, which must be trusted for 15 years, is reissued in AWS Private CA with ML-DSA.",
+  "providers": {
+    "aws": "Hybrid ML-KEM on KMS, ACM and Secrets Manager endpoints since April 2025, and on CloudFront, IAM and S3; opt-in post-quantum TLS policies for ALB and NLB since November 2025; ML-DSA signing keys in KMS since June 2025 and ML-DSA roots in Private CA; s2n-tls and the FIPS-validated AWS-LC library underneath",
+    "gcp": "Cloud KMS: ML-DSA, SLH-DSA and ML-KEM generally available since July 2026; load balancers negotiate X25519MLKEM768, on by default from October 2026 (deferrable to October 2027); Chrome has offered hybrid ML-KEM since version 131 in late 2024",
+    "azure": "SymCrypt, the library under Windows, Azure and Microsoft 365, implements ML-KEM, ML-DSA, LMS and XMSS; ML-KEM and ML-DSA are generally available in Windows 11, Windows Server 2025 and .NET 10 since November 2025, and SymCrypt-OpenSSL does hybrid TLS key exchange on Linux. Microsoft targets early adoption by 2029 and a full transition by 2033",
+    "oss": "OpenSSL 3.5+ (ML-KEM, ML-DSA, SLH-DSA; X25519MLKEM768 in the default key shares), BoringSSL, AWS-LC, Go 1.24+ crypto/tls, OpenSSH 10 (mlkem768x25519-sha256 by default); the PQCA’s liboqs for prototyping and mlkem-native and mldsa-native for verified implementations. Cloudflare offers hybrid key agreement to every visitor and, by default, to origins"
+  },
+  "snippet": {
+    "lang": "bash",
+    "source": [
+      "# OpenSSL 3.5+: does this server do hybrid post-quantum key exchange?",
+      "openssl s_client -connect cloudflare.com:443 -groups X25519MLKEM768 -brief </dev/null",
+      "#   Protocol version: TLSv1.3",
+      "#   Signature type: ecdsa_secp256r1_sha256    <- the certificate is still classical",
+      "#   Negotiated TLS1.3 group: X25519MLKEM768",
+      "# (a server without ML-KEM fails here, because no other group was offered)",
+      "",
+      "# A post-quantum signature, and what it costs",
+      "openssl genpkey -algorithm ML-DSA-65 -out mldsa.pem",
+      "openssl pkeyutl -sign -inkey mldsa.pem -in msg.txt -out sig.bin",
+      "wc -c < sig.bin    # 3309 bytes; an ECDSA P-256 signature is about 72"
+    ]
+  },
+  "related": ["network-protocols", "secrets", "confidential-computing"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "The algorithms and what they weigh",
+      "intro": "Sizes in bytes for the parameter sets most deployments use, with the classical algorithms they replace for comparison.",
+      "corner": "Algorithm",
+      "columns": ["Job and basis", "Public key", "Ciphertext or signature", "Status"],
+      "rows": [
+        { "label": "ML-KEM-768", "values": ["Key encapsulation; module lattices (CRYSTALS-Kyber)", "1,184", "1,088", "FIPS 203, August 2024"] },
+        { "label": "ML-DSA-65", "values": ["Signature; module lattices (CRYSTALS-Dilithium)", "1,952", "3,309", "FIPS 204, August 2024"] },
+        { "label": "SLH-DSA-SHA2-128s", "values": ["Signature; hash functions only (SPHINCS+)", "32", "7,856 (17,088 for the faster 128f)", "FIPS 205, August 2024"] },
+        { "label": "HQC-1", "values": ["Key encapsulation; error-correcting codes, a backup to ML-KEM", "2,241", "4,433", "Selected March 2025; standard in development"] },
+        { "label": "Falcon-512 (FN-DSA)", "values": ["Signature; NTRU lattices, compact but hard to implement safely", "897", "666 (padded)", "Standard in development"] },
+        { "label": "X25519 / ECDSA P-256 / RSA-2048", "values": ["What they replace; broken by Shor’s algorithm", "32 / 64 / 256", "32 / about 72 / 256", "Deprecated after 2030, disallowed after 2035 (NIST)"] }
+      ],
+      "notes": [
+        "A TLS handshake carries several signatures: the server’s, its certificate’s, the intermediate’s and usually two certificate-transparency timestamps. Swapping all of them for ML-DSA adds kilobytes, which is why the web moved key exchange first and is looking at new certificate designs such as Merkle Tree Certificates."
+      ]
+    },
+    {
+      "type": "cards",
+      "title": "Deadlines that drive the migration",
+      "intro": "Binding only on US government systems, but vendors and regulated industries plan against them.",
+      "items": [
+        { "name": "NSA CNSA 2.0", "tag": "2025 to 2033", "text": "For US national security systems: web browsers, servers and cloud services should support and prefer the CNSA 2.0 algorithms (ML-KEM-1024, ML-DSA-87, LMS, XMSS) from 2025 and use them exclusively by 2033, with software and firmware signing exclusive by 2030." },
+        { "name": "EO 14412 and OMB M-26-15", "tag": "end of 2030 and 2031", "text": "A June 2026 executive order and OMB memo require US federal high value assets and high impact systems to use post-quantum key establishment by 31 December 2030 and post-quantum signatures by 31 December 2031, and federal systems to support TLS 1.3 by 2 January 2030." },
+        { "name": "NIST IR 8547", "tag": "2030 and 2035", "text": "Finalised in October 2026: RSA, ECDSA, EdDSA, ECDH and finite-field Diffie-Hellman are deprecated after 2030 and disallowed in NIST standards after 2035, matching the 2035 goal set by National Security Memorandum 10 in 2022." },
+        { "name": "Cloud providers’ own targets", "tag": "2029 to 2033", "text": "Cloudflare aims to be fully post-quantum secure, authentication included, by 2029; Microsoft aims for early adoption by 2029 and a complete transition of its products and services by 2033." }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "What it costs",
+      "body": [
+        "Key exchange is cheap. ML-KEM is fast on ordinary CPUs; the cost is size: an X25519MLKEM768 key share is about 1.2 KB from the client and 1.1 KB back, against 32 bytes each for X25519. The larger ClientHello no longer fits in a single packet, which exposed middleboxes and servers that assumed it would: Chrome shipped an enterprise policy to switch the hybrid off while vendors fixed them. Most current browsers now offer the hybrid, and Cloudflare reported in April 2026 that over 65% of human traffic to it was post-quantum encrypted.",
+        "Signatures are the hard part. ML-DSA-44 signatures are 2,420 bytes against 64 for Ed25519, and SLH-DSA, the conservative choice, starts at 7,856. That matters wherever many signatures travel together: TLS certificate chains, DNSSEC answers, certificate-transparency logs and constrained devices. Hybrid and composite certificates double the work again. Expect also to touch anything that hard-codes key or buffer sizes, HSMs that need firmware updates, and protocols with small packet limits.",
+        "The real work is finding the cryptography. Teams start with an inventory, or cryptographic bill of materials, of where public-key algorithms are used, including in third-party libraries and appliances, and prioritise data with a long confidentiality life. Making algorithms swappable through configuration, known as crypto-agility, pays off: HQC and FN-DSA are still coming, and Kyber’s and Dilithium’s pre-standard versions already had to be replaced once."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "In 1994 Peter Shor showed that a quantum computer could factor integers and compute discrete logarithms in polynomial time, the two problems RSA and Diffie-Hellman rest on. Cryptographers had alternatives, such as McEliece’s code-based system from 1978 and hash-based signatures, but they were too big or too slow to replace RSA while quantum computers stayed theoretical. In 2016 NIST opened a public competition for quantum-resistant public-key algorithms, and the same year Google tried a hybrid of X25519 and the lattice scheme New Hope in Chrome Canary.",
+      "The competition ran in rounds for six years. In July 2022 NIST selected CRYSTALS-Kyber for key establishment and CRYSTALS-Dilithium, Falcon and SPHINCS+ for signatures. Cloudflare turned on hybrid post-quantum key agreement for all its websites that October, and Chrome made hybrid Kyber the default on desktop in version 124, in April 2024. The final standards, renamed ML-KEM, ML-DSA and SLH-DSA, came out on 13 August 2024 with small changes that made them incompatible with the drafts, so Chrome, Cloudflare and others moved from Kyber’s codepoint to X25519MLKEM768 within months.",
+      "Deployment then ran ahead of the paperwork. OpenSSH 10.0 and OpenSSL 3.5 made the hybrid the default in April 2025, AWS, Google Cloud and Microsoft added it to their endpoints, load balancers and libraries, and NIST chose HQC as a backup KEM in March 2025. The IETF published the hybrid TLS groups as RFC 10024 in August 2026, and in October 2026 NIST finalised the timeline that retires RSA and elliptic curves by 2035, as a June 2026 executive order pulled federal deadlines for the most sensitive systems forward to 2030 and 2031."
+    ],
+    "choices": [
+      { "choice": "Hybrid, not replacement", "why": "The new algorithms are young: SIKE, one of four key-establishment candidates still in NIST’s fourth round, was broken in 2022 by an attack that ran on an ordinary computer. Combining ML-KEM with X25519 keeps the connection at least as strong as before if either half fails." },
+      { "choice": "Key exchange before signatures", "why": "Recorded traffic can be decrypted later, but a signature only has to hold when it is verified. Signatures are also much larger, so the web moved key agreement first." },
+      { "choice": "Several mathematical families", "why": "ML-KEM and ML-DSA are both lattice schemes. SLH-DSA (hashes) and HQC (codes) are there in case a breakthrough against lattices takes out the primary standards." },
+      { "choice": "A competition run in public", "why": "NIST let the world’s cryptographers attack every submission for six years, so the winners were chosen on years of open cryptanalysis rather than the say-so of one agency." }
+    ],
+    "timeline": [
+      { "year": "1994", "text": "Peter Shor publishes polynomial-time quantum algorithms for factoring and discrete logarithms" },
+      { "year": "2016", "text": "NIST opens its post-quantum standardisation process; Google tests hybrid New Hope in Chrome" },
+      { "year": "2022", "text": "NIST selects Kyber, Dilithium, Falcon and SPHINCS+ (July); Cloudflare enables hybrid key agreement for all sites (October)" },
+      { "year": "2024", "text": "Chrome 124 enables hybrid Kyber by default; FIPS 203, 204 and 205 published on 13 August" },
+      { "year": "2025", "text": "HQC selected as backup KEM (March); OpenSSL 3.5 and OpenSSH 10.0 default to hybrid ML-KEM (April)" },
+      { "year": "2026", "text": "Executive Order 14412 (June); RFC 10024 standardises X25519MLKEM768 (August); NIST IR 8547 final (October)" }
+    ],
+    "sources": [
+      { "label": "Peter Shor: Polynomial-Time Algorithms for Prime Factorization and Discrete Logarithms on a Quantum Computer (1994; arXiv version 1995)", "url": "https://arxiv.org/abs/quant-ph/9508027" },
+      { "label": "Google Security Blog: Experimenting with post-quantum cryptography (July 2016)", "url": "https://security.googleblog.com/2016/07/experimenting-with-post-quantum.html" },
+      { "label": "NIST CSRC: Post-Quantum Cryptography Standardization (process since 2016)", "url": "https://csrc.nist.gov/projects/post-quantum-cryptography/post-quantum-cryptography-standardization" },
+      { "label": "NIST: NIST announces first four quantum-resistant cryptographic algorithms (July 5, 2022)", "url": "https://www.nist.gov/news-events/news/2022/07/nist-announces-first-four-quantum-resistant-cryptographic-algorithms" },
+      { "label": "Cloudflare blog: Post-quantum for all (October 2022)", "url": "https://blog.cloudflare.com/post-quantum-for-all/" },
+      { "label": "Chromium Blog: Advancing our amazing bet on asymmetric cryptography (Chrome 124 enables hybrid Kyber, May 2024)", "url": "https://blog.chromium.org/2024/05/advancing-our-amazing-bet-on-asymmetric.html" },
+      { "label": "NIST: NIST releases first 3 finalized post-quantum encryption standards (August 13, 2024)", "url": "https://www.nist.gov/news-events/news/2024/08/nist-releases-first-3-finalized-post-quantum-encryption-standards" },
+      { "label": "Google Security Blog: A new path for Kyber on the web (Chrome 131 moves to ML-KEM, codepoint 0x11EC, September 2024)", "url": "https://security.googleblog.com/2024/09/a-new-path-for-kyber-on-web.html" },
+      { "label": "NIST: NIST selects HQC as fifth algorithm for post-quantum encryption (March 11, 2025)", "url": "https://www.nist.gov/news-events/news/2025/03/nist-selects-hqc-fifth-algorithm-post-quantum-encryption" },
+      { "label": "OpenSSH 10.0 release notes (mlkem768x25519-sha256 by default, April 2025)", "url": "https://www.openssh.com/txt/release-10.0" },
+      { "label": "NIST IR 8545: Status Report on the Fourth Round of the NIST Post-Quantum Cryptography Standardization Process (March 2025; SIKE, HQC)", "url": "https://csrc.nist.gov/pubs/ir/8545/final" },
+      { "label": "RFC 10024: Post-Quantum Traditional (PQ/T) Hybrid Key Agreement Mechanisms for TLS 1.3 (August 2026)", "url": "https://www.rfc-editor.org/rfc/rfc10024.html" },
+      { "label": "NIST IR 8547: Transition to Post-Quantum Cryptography Standards (final, October 2026)", "url": "https://csrc.nist.gov/pubs/ir/8547/final" }
+    ]
+  },
+  "sources": [
+    { "label": "NIST IR 8547: Transition to Post-Quantum Cryptography Standards (final, October 2026; harvest now decrypt later, 2030 and 2035 dates, EO 14412, OMB M-26-15, symmetric security)", "url": "https://csrc.nist.gov/pubs/ir/8547/final" },
+    { "label": "NIST: Report provides guidelines for transition to post-quantum cryptography (October 2026)", "url": "https://www.nist.gov/news-events/news/2026/10/nist-report-provides-guidelines-transition-post-quantum-cryptography" },
+    { "label": "FIPS 203: Module-Lattice-Based Key-Encapsulation Mechanism Standard", "url": "https://csrc.nist.gov/pubs/fips/203/final" },
+    { "label": "FIPS 204: Module-Lattice-Based Digital Signature Standard", "url": "https://csrc.nist.gov/pubs/fips/204/final" },
+    { "label": "FIPS 205: Stateless Hash-Based Digital Signature Standard", "url": "https://csrc.nist.gov/pubs/fips/205/final" },
+    { "label": "NIST: NIST releases first 3 finalized post-quantum encryption standards (August 13, 2024; FN-DSA to follow)", "url": "https://www.nist.gov/news-events/news/2024/08/nist-releases-first-3-finalized-post-quantum-encryption-standards" },
+    { "label": "NIST: NIST selects HQC as fifth algorithm for post-quantum encryption (March 11, 2025)", "url": "https://www.nist.gov/news-events/news/2025/03/nist-selects-hqc-fifth-algorithm-post-quantum-encryption" },
+    { "label": "RFC 10024: Post-Quantum Traditional (PQ/T) Hybrid Key Agreement Mechanisms for TLS 1.3 (X25519MLKEM768, August 2026)", "url": "https://www.rfc-editor.org/rfc/rfc10024.html" },
+    { "label": "liboqs algorithm documentation (key, ciphertext and signature sizes for ML-KEM, ML-DSA, SLH-DSA, HQC and Falcon)", "url": "https://github.com/open-quantum-safe/liboqs/tree/main/docs/algorithms" },
+    { "label": "NSA: Announcing the Commercial National Security Algorithm Suite 2.0 (CNSA 2.0 algorithms and transition timeline)", "url": "https://media.defense.gov/2022/Sep/07/2003071834/-1/-1/0/CSA_CNSA_2.0_ALGORITHMS_.PDF" },
+    { "label": "AWS: Post-quantum cryptography (services with hybrid ML-KEM, KMS ML-DSA, Private CA, AWS-LC, s2n-tls)", "url": "https://aws.amazon.com/security/post-quantum-cryptography/" },
+    { "label": "AWS What’s New: Application and Network Load Balancers support post-quantum key exchange for TLS (November 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/11/network-load-balancers-post-quantum-key-exchange-tls/" },
+    { "label": "AWS Security Blog: AWS post-quantum cryptography migration plan (December 2024)", "url": "https://aws.amazon.com/blogs/security/aws-post-quantum-cryptography-migration-plan/" },
+    { "label": "Google Cloud blog: Quantum-safe digital signatures and key encapsulation in Cloud KMS are generally available (July 28, 2026)", "url": "https://cloud.google.com/blog/products/identity-security/future-proofing-data-integrity-quantum-safe-digital-signatures-in-cloud-kms" },
+    { "label": "Google Cloud docs: Post-quantum TLS for load balancers (X25519MLKEM768, default from October 2026)", "url": "https://docs.cloud.google.com/load-balancing/docs/post-quantum-tls" },
+    { "label": "Microsoft Tech Community: Post-Quantum Cryptography APIs now generally available on Microsoft platforms (November 18, 2025)", "url": "https://techcommunity.microsoft.com/blog/microsoft-security-blog/post-quantum-cryptography-apis-now-generally-available-on-microsoft-platforms/4469093" },
+    { "label": "Microsoft Security Blog: Quantum-safe security, progress towards next-generation cryptography (August 2025; 2029 and 2033 targets, SymCrypt-OpenSSL hybrid TLS)", "url": "https://www.microsoft.com/en-us/security/blog/2025/08/20/quantum-safe-security-progress-towards-next-generation-cryptography/" },
+    { "label": "SymCrypt changelog (ML-KEM, ML-DSA, LMS, XMSS, composite ML-KEM and ML-DSA)", "url": "https://github.com/microsoft/SymCrypt/blob/main/CHANGELOG.md" },
+    { "label": "Cloudflare blog: Cloudflare targets 2029 for full post-quantum security (April 7, 2026; over 65% of human traffic)", "url": "https://blog.cloudflare.com/post-quantum-roadmap/" },
+    { "label": "Cloudflare blog: Automatic Key Exchange for origins (September 8, 2026; on by default, over 12% of origins support PQ)", "url": "https://blog.cloudflare.com/automatic-key-exchange-for-origins/" },
+    { "label": "Cloudflare blog: Why we cannot wait for better post-quantum signature algorithms (July 9, 2026; ML-DSA versus Ed25519 and RSA sizes)", "url": "https://blog.cloudflare.com/ml-dsa-will-have-to-do/" },
+    { "label": "Google Security Blog: A new path for Kyber on the web (enterprise policy, ClientHello size)", "url": "https://security.googleblog.com/2024/09/a-new-path-for-kyber-on-web.html" },
+    { "label": "OpenSSL 3.5 release notes (ML-KEM, ML-DSA, SLH-DSA; X25519MLKEM768 in default key shares)", "url": "https://openssl-library.org/news/openssl-3.5-notes/" },
+    { "label": "Go 1.24 release notes (crypto/tls enables X25519MLKEM768 by default)", "url": "https://go.dev/doc/go1.24" }
+  ]
+}

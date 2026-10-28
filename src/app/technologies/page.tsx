@@ -1,4 +1,4 @@
-import { membershipLabel } from '@/components/FoundationBadge';
+import { inSentence, membershipLabel } from '@/components/FoundationBadge';
 import Glyph from '@/components/Glyph';
 import Shell from '@/components/Shell';
 import SortableTable from '@/components/SortableTable';
@@ -44,11 +44,13 @@ const fdnText = (t: CatalogTech) => {
           Each one links to its page, and to the concept it’s an example of.
         </p>
         <a href={href('landscape/')} className="mt-3 flex w-fit items-center gap-1.5 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">See them all as logos on one map: the landscape →</a>
-        {c.foundations.map(f => (
+        {/* foundations under another one (the CNCF) are counted in, and linked from, the one above */}
+        {c.foundations.filter(f => !f.parent).map(f => (
           <a key={f.id} href={href(f.path)} className="mt-3 flex w-fit items-center gap-1.5 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">
             {f.type === 'company'
-              ? <>{f.projects.length} are made by {f.name}: how they fit together →</>
-              : <>{f.projects.length} are projects of {f.name}: what that means →</>}
+              ? <>{f.projects.length} are made by {f.name}</>
+              : <>{f.projects.length} are projects of {inSentence(f.name)}{f.children.length > 0 && ` and the ${f.children.length > 1 ? `${f.children.length} foundations` : 'foundation'} under it`}</>}
+            : {f.type === 'company' ? 'how they fit together' : 'what that means'} →
           </a>
         ))}
       </header>

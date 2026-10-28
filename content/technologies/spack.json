@@ -1,0 +1,92 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Spack",
+  "concepts": ["package-managers"],
+  "provider": "oss",
+  "vendor": "High Performance Software Foundation (Linux Foundation), started at Lawrence Livermore National Laboratory",
+  "foundation": { "id": "hpsf", "stage": "core", "joined": "2024-11-14" },
+  "license": "Apache 2.0 or MIT",
+  "website": "https://spack.io/",
+  "repo": "https://github.com/spack/spack",
+  "summary": "The package manager of supercomputing: it builds any of 8,600 packages from source in whatever combination of version, compiler, build options, MPI library and CPU target you ask for, installs many of them side by side and shares builds through signed binary caches.",
+  "intro": [
+    "Scientific codes need specific versions of compilers, MPI libraries and math libraries, built for a particular CPU or GPU, so one standard stack per machine doesn’t work. Spack describes each build with a spec: `mpileaks@1.2:1.4 +debug ~qt target=x86_64_v3 %gcc@15 ^libelf@1.1` asks for a version range, a variant switched on and another off, a CPU microarchitecture, GCC 15 as the compiler and a particular `libelf` anywhere below it. Spack’s concretizer fills in everything you didn’t say, using the clingo answer-set solver to pick one consistent set of versions, variants, compilers and targets for the whole dependency graph, preferring builds that are already installed or in a binary cache. Every concrete spec is hashed and installed into its own prefix, so dozens of builds of the same library can live side by side. Package recipes are Python classes in a separate `spack-packages` repository, versioned on its own and holding 8,611 packages in its June 2026 release.",
+    "Environments work like a project manifest and lockfile: `spack.yaml` lists the root specs and settings, `spack concretize` writes every resolved build into `spack.lock`, and a view links the installed packages into one `bin`, `lib` and `include` tree. Build caches let one machine build and others download: Spack signs packages with GPG by default and rewrites the paths compiled into binaries when it installs them elsewhere. A build cache can be a plain mirror or an OCI registry such as GHCR or Amazon ECR, where pushing with `--base-image` also produces runnable container images, and the project runs a public cache at `cache.spack.io`. Since v1.0 (July 2025) compilers are ordinary dependencies, and v1.2 (June 2026) brought a parallel installer that schedules many builds at once behind a shared jobserver, plus experimental build sandboxing and SBOM generation."
+  ],
+  "strengths": [
+    "One spec syntax pins versions, variants, compilers, MPI and CPU or GPU targets for a whole dependency graph, and different builds of the same package install side by side",
+    "A logic-solver concretizer that reuses installed and cached builds where it can, and writes the result to a lockfile for reproducible environments",
+    "Signed, relocatable binary caches, including OCI registries, so a site or CI system builds once and every machine downloads",
+    "A large shared recipe collection with hundreds of contributors per release, governed by a 14-member steering committee and a core project of the HPSF"
+  ],
+  "limits": [
+    "Building from source is the default path: anything that isn’t in a binary cache is compiled locally, compiler toolchains included if you ask for them",
+    "v1.0 brought breaking changes: `%` now means a direct dependency, compilers are configured as packages, and recipes moved to a separate repository, so older configurations and packages need migrating",
+    "A cached binary can only be relocated if the new install path fits in the space compiled into it; otherwise Spack builds from source, which is why the docs suggest padding the install root",
+    "Recipes are Python code that runs at build time, and build sandboxing is still experimental in v1.2"
+  ],
+  "worksWith": [
+    { "id": "python", "how": "defines package recipes as classes in" },
+    { "id": "gitlab", "how": "runs its package CI pipelines on" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Create an environment, lock it, build it and share the binaries through an OCI registry",
+    "source": [
+      "spack env create -d . && spack env activate .",
+      "spack add hdf5 +mpi ^openmpi        # root spec, written to spack.yaml",
+      "spack concretize                    # solve the whole graph, write spack.lock",
+      "spack install",
+      "",
+      "spack mirror add --oci-username-variable REGISTRY_USER \\",
+      "                 --oci-password-variable REGISTRY_TOKEN \\",
+      "                 my_registry oci://ghcr.io/acme/spack-cache",
+      "spack buildcache push my_registry hdf5   # signed binaries others can install"
+    ]
+  },
+  "history": {
+    "story": [
+      "Todd Gamblin created Spack at Lawrence Livermore National Laboratory, where the same scientific codes had to be built with many compilers, MPI libraries and options; its public repository dates from January 2014. The SC15 paper “The Spack Package Manager: Bringing Order to HPC Software Chaos” argued that one standard software stack was infeasible for HPC and introduced a recursive spec syntax for parametric builds of a package and its dependencies.",
+      "The original concretizer was not exhaustive and was not guaranteed to find a solution when one existed. Spack 0.16 (November 2020) added an experimental replacement built on clingo, an answer-set programming system, and 0.17 made it the default. In 0.18 the solver learned to reuse installed packages and binaries by default, which made public build caches practical.",
+      "In November 2024 the High Performance Software Foundation’s TAC accepted Spack as a core project, the foundation’s highest stage; Gamblin said joining would let the project “establish sustainable governance”. Spack v1.0 followed on July 20, 2025, with compiler dependencies, a change that had been in development for almost seven years, a stable package API and a separate package repository. v1.2 in June 2026 replaced the installer, and in July 2026 the TAC renewed Spack at core."
+    ],
+    "choices": [
+      { "choice": "A spec language instead of fixed package names", "why": "HPC codes need many builds of the same library, so Spack treats version, compiler, variants and target as parameters of one spec and hashes each combination into its own install prefix." },
+      { "choice": "A logic solver for dependencies", "why": "The original concretizer could miss solutions that existed; a backtracking solver built on clingo’s answer-set programming searches the whole space, and in later releases also weighs reusing existing builds." },
+      { "choice": "Compilers as dependencies", "why": "Before v1.0 a compiler was just a name and version attached to each node of the spec graph; as packages, compilers can have variants, targets and other attributes like any other node." },
+      { "choice": "Recipes versioned apart from the tool", "why": "Separating `spack-packages` and adding a versioned package API lets users update or pin recipes without changing their Spack version." }
+    ],
+    "timeline": [
+      { "year": "2014", "text": "Spack’s public repository created at Lawrence Livermore National Laboratory in January" },
+      { "year": "2015", "text": "SC15 paper introduces Spack’s spec syntax" },
+      { "year": "2020", "text": "0.16 adds an experimental clingo-based concretizer in November" },
+      { "year": "2021", "text": "0.17 makes the clingo concretizer the default" },
+      { "year": "2024", "text": "Accepted as a core project of the High Performance Software Foundation on November 14" },
+      { "year": "2025", "text": "v1.0 on July 20: compiler dependencies, stable package API, separate package repository" },
+      { "year": "2026", "text": "v1.2 in June with a parallel installer; renewed at core in July" }
+    ],
+    "sources": [
+      { "label": "SC15: The Spack Package Manager, Bringing Order to HPC Software Chaos (Gamblin et al., authors’ copy)", "url": "https://tgamblin.github.io/pubs/spack-sc15.pdf" },
+      { "label": "spack/spack on GitHub (repository created January 2014; README: created by Todd Gamblin)", "url": "https://github.com/spack/spack" },
+      { "label": "Spack v0.16.0 release notes (experimental clingo concretizer)", "url": "https://github.com/spack/spack/releases/tag/v0.16.0" },
+      { "label": "Spack v0.17.0 release notes (clingo concretizer by default)", "url": "https://github.com/spack/spack/releases/tag/v0.17.0" },
+      { "label": "Spack v0.18.0 release notes (reuse by default)", "url": "https://github.com/spack/spack/releases/tag/v0.18.0" },
+      { "label": "HPSF TAC: Spack project proposal, accepted as core (November 14, 2024)", "url": "https://github.com/hpsfoundation/tac/issues/14" },
+      { "label": "Linux Foundation: Launch of the High Performance Software Foundation (May 13, 2024; Gamblin quote)", "url": "https://www.linuxfoundation.org/press/linux-foundation-announces-the-launch-of-the-high-performance-software-foundation" },
+      { "label": "Spack v1.0.0 release notes (July 20, 2025)", "url": "https://github.com/spack/spack/releases/tag/v1.0.0" },
+      { "label": "Spack v1.2.0 release notes (June 21, 2026)", "url": "https://github.com/spack/spack/releases/tag/v1.2.0" },
+      { "label": "HPSF TAC: Spack project review, core stage (closed July 7, 2026)", "url": "https://github.com/hpsfoundation/tac/issues/72" }
+    ]
+  },
+  "sources": [
+    { "label": "Spack documentation: Spec syntax", "url": "https://spack.readthedocs.io/en/latest/spec_syntax.html" },
+    { "label": "Spack documentation: Environments (spack.yaml, spack.lock, unify, views)", "url": "https://spack.readthedocs.io/en/latest/environments.html" },
+    { "label": "Spack documentation: Build caches (signing, relocation, padded_length, OCI registries, cache.spack.io)", "url": "https://spack.readthedocs.io/en/latest/binary_caches.html" },
+    { "label": "Spack v1.0.0 release notes (compiler dependencies, package API, spack-packages, breaking changes)", "url": "https://github.com/spack/spack/releases/tag/v1.0.0" },
+    { "label": "Spack v1.2.0 release notes (new installer, concretization groups, build sandboxing, SBOMs, community stats)", "url": "https://github.com/spack/spack/releases/tag/v1.2.0" },
+    { "label": "spack/spack-packages on GitHub", "url": "https://github.com/spack/spack-packages" },
+    { "label": "HPSF TAC: Spack project proposal (licence, release cadence, TSC members, CI on GitLab)", "url": "https://github.com/hpsfoundation/tac/issues/14" },
+    { "label": "Spack governance (Technical Steering Committee)", "url": "https://github.com/spack/governance/blob/main/GOVERNANCE.md" }
+  ],
+  "checked": "2026-10-28"
+}

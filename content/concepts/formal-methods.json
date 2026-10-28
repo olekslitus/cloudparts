@@ -1,0 +1,142 @@
+{
+  "$schema": "../../.schemas/concepts.schema.json",
+  "name": "Formal methods",
+  "icon": "sigma",
+  "category": "tools",
+  "order": 55,
+  "summary": "Describe a system’s design, or its code, in a precise mathematical language, then let a tool check every possible behaviour, or prove a property for all of them, instead of trying a few by hand.",
+  "howItWorks": "You write a specification: the system’s state (a counter, the log on each replica, the messages in flight), its initial states, and the steps that can change it, such as a client sending a write, a node crashing or a message arriving late. Alongside it you state the properties the design must keep. Safety properties say something bad never happens (“never two leaders in one term”, “no acknowledged write is lost”); liveness properties say something good eventually happens (“every request is eventually answered”). Then a tool checks the specification against the properties, in one of a few ways. An explicit-state model checker such as TLC enumerates every reachable state of a small, finite instance (three nodes, two values, at most four messages) and either reports that the property holds for that instance or prints a counterexample: the exact sequence of steps that breaks it. Symbolic and bounded checkers such as Apalache and the Alloy Analyzer hand the problem to an SMT or SAT solver, which copes with large data domains but looks only up to a given depth or scope. A proof system such as TLAPS or Lean proves a property for every size and every execution, but a person has to write the proof, usually around an inductive invariant. Verification-aware languages such as Dafny go one step further and check the program itself, then compile it to C#, Java, Go, Python or JavaScript. Most cloud and database teams use the lightweight end of this range: they model only the tricky part, the replication or reconfiguration protocol rather than the whole service, at the level of the design, and model-check small instances. AWS engineers described it as “exhaustively testable pseudo-code”. The catch is that the tool checks the model, not your code: a design proven correct can still be implemented wrongly, and the model is only as right as its assumptions about the network, clocks and storage. Teams narrow that gap with trace validation, replaying logs from tests or production against the specification (PObserve does this for P), and with ordinary testing, simulation and fault injection.",
+  "analogy": "A chess engine analysing an endgame. Instead of playing a few games from the position and hoping, it looks at every legal sequence of moves and either shows that you can’t lose or gives you the exact line that loses. But it only knows the board you set up: put a piece on the wrong square and its verdict is about a different game.",
+  "useWhen": [
+    "Concurrent and distributed protocols whose bugs need a rare interleaving of messages, crashes and retries: replication, leader election, reconfiguration, distributed transactions, cache invalidation, lock-free data structures",
+    "Before building a protocol, or before an optimisation to one already in production, when you need to know the faster version is still safe",
+    "Pinning down guarantees other people build on, the way Azure Cosmos DB publishes TLA+ specifications of its five consistency levels",
+    "Small, critical cores worth proving outright, such as an authorisation engine: AWS models Cedar in Lean, proves its security properties and tests the Rust code against the model"
+  ],
+  "avoidWhen": [
+    "Code whose risk lies in business rules, user interfaces or integrations rather than concurrency and failure; tests and types catch those bugs for far less effort",
+    "Treating a passing model check as proof the service works: it covers the model, not the code, and only the instance sizes you configured",
+    "Specifications nobody will keep in step with the system; Datadog notes that keeping its models current is tedious, so routine changes rely on unit, integration and chaos tests",
+    "Modelling every field and message at once: the number of states grows exponentially until the checker never finishes, so abstract away everything the property doesn’t depend on"
+  ],
+  "example": "Two workers each add 1 to a shared counter by reading it and then writing back the value plus one. Code review passes, and the unit tests pass because they run one worker at a time. A short TLA+ specification models each worker as two steps, read and write, and states one invariant: once both workers are done, the counter is 2. TLC explores every interleaving and reports that the invariant is violated, with a four-step trace: worker 1 reads 0, worker 2 reads 0, and both write 1. The team switches the design to a compare-and-set that retries when the value has changed, models that version, and TLC finds no violation for two workers or for three. The specification says nothing about whether the Go code really retries; a test for that still has to be written.",
+  "providers": {
+    "aws": "No service checks your designs, but AWS teams have used TLA+ since 2011 and P (open source, MIT) on S3, EBS, DynamoDB, Aurora, EC2 and others. Customers meet automated reasoning inside products: IAM Access Analyzer uses logic-based reasoning on resource policies, and Amazon Bedrock Guardrails has Automated Reasoning checks (generally available since August 2025) that test model answers against a formalised policy",
+    "gcp": "No formal methods service; Google engineers used TLA+ and the TLAPS prover to verify a concurrent union-find data structure deployed for clustering tens of billions of data points",
+    "azure": "No formal methods service; TLA+, its proof system and Dafny grew up at Microsoft Research, and Azure Cosmos DB publishes its TLA+ consistency specifications on GitHub under MIT",
+    "oss": "TLA+ (MIT) with the TLC and Apalache model checkers and the TLAPS prover; P (MIT) for systems of communicating state machines; Alloy 6 for relational models; Lean 4 (Apache 2.0) for proofs; Dafny (MIT) for verified code. Jepsen, by contrast, is testing: it runs the real database under injected faults and checks the recorded history"
+  },
+  "snippet": {
+    "lang": "text",
+    "source": [
+      "---------------------------- MODULE Counter ----------------------------",
+      "\\* Two workers each add 1 to x by reading it, then writing back x + 1.",
+      "EXTENDS Naturals",
+      "VARIABLES x, pc, tmp",
+      "Workers == {1, 2}",
+      "",
+      "Init == /\\ x = 0",
+      "        /\\ pc = [w \\in Workers |-> \"read\"]",
+      "        /\\ tmp = [w \\in Workers |-> 0]",
+      "",
+      "Read(w) == /\\ pc[w] = \"read\"",
+      "           /\\ tmp' = [tmp EXCEPT ![w] = x]",
+      "           /\\ pc' = [pc EXCEPT ![w] = \"write\"]",
+      "           /\\ UNCHANGED x",
+      "",
+      "Write(w) == /\\ pc[w] = \"write\"",
+      "            /\\ x' = tmp[w] + 1",
+      "            /\\ pc' = [pc EXCEPT ![w] = \"done\"]",
+      "            /\\ UNCHANGED tmp",
+      "",
+      "Next == \\E w \\in Workers : Read(w) \\/ Write(w)",
+      "Spec == Init /\\ [][Next]_<<x, pc, tmp>>",
+      "",
+      "\\* The property: once both workers are done, x is 2",
+      "BothCounted == (\\A w \\in Workers : pc[w] = \"done\") => x = 2",
+      "=========================================================================",
+      "\\* Counter.cfg holds two lines:  SPECIFICATION Spec  and  INVARIANT BothCounted",
+      "\\* TLC reports that BothCounted is violated, with the trace",
+      "\\* 1 reads 0, 2 reads 0, 1 writes 1, 2 writes 1"
+    ]
+  },
+  "related": ["testing", "chaos-engineering", "static-analysis"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "Four ways to check",
+      "intro": "They trade coverage against effort. Most teams start with the first and add the others only where the risk justifies them.",
+      "corner": "Approach",
+      "columns": ["What you get", "What it costs", "Examples"],
+      "rows": [
+        { "label": "Explicit-state model checking", "values": ["Every reachable state of a small, finite instance, and a step-by-step counterexample when a property fails", "Says nothing about larger instances; the state count explodes as you add nodes, values and messages", "TLC for TLA+, the P checker"] },
+        { "label": "Symbolic or bounded checking", "values": ["All behaviours up to a depth or scope, solved by SAT or SMT, including large data domains such as integers", "Bounded runs say nothing beyond the bound unless you also check an inductive invariant", "Apalache for TLA+, the Alloy Analyzer"] },
+        { "label": "Machine-checked proof", "values": ["A property proved for every size and every execution", "A person writes the proof, which takes far longer than a model check and needs a strong invariant", "TLAPS, Lean, Isabelle (a TLAPS back end)"] },
+        { "label": "Verified code and trace checking", "values": ["The program, not just a model, meets its specification, or real runs are checked against the model", "Code written in a verifying language, or logging that maps code events onto specification steps", "Dafny, Cedar’s Lean model with differential tests of its Rust code, PObserve for P"] }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Formal methods, testing and chaos engineering",
+      "body": [
+        "Testing and fault injection run the real code, so they catch implementation bugs, but only along the paths they happen to exercise. Jepsen, for example, sets up a real cluster, sends operations from several clients while a “nemesis” injects faults, records when each operation started and ended, and checks that history against the consistency the system claims. Model checking is the reverse: it explores every interleaving, but of a model someone wrote.",
+        "Teams that rely on formal methods use both. Datadog designed Courier, its multi-tenant message queue on FoundationDB, by checking a TLA+ model with TLC (5,515,710 distinct states), then running a SimPy simulation for throughput and a chaos test in staging for node loss; its engineers note that models and simulations “do not validate its implementation”. AWS’s 2025 account of its practice lists TLA+ and P beside property-based testing, fault injection and deterministic simulation."
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "For decades formal methods had a reputation in industry, as the AWS engineers later put it, for “requiring a huge amount of training and effort to verify a tiny piece of relatively straightforward code”. Leslie Lamport took a different route for concurrent systems: his Temporal Logic of Actions (1994) describes a system as a set of allowed steps, and TLA+, with Yuan Yu’s TLC model checker (1999) and the book Specifying Systems (2002), made such specifications checkable by machine. Hardware teams came first: DEC/Compaq engineers verified cache-coherence protocols for Alpha processors in TLA+, and an Intel team found “hundreds of bugs before RTL” in a cache-coherence design.",
+      "Cloud services brought it into software. In 2011 Chris Newcombe at AWS, unhappy with bugs that survived reviews and tests, read Pamela Zave’s analysis of the Chord protocol in Alloy, tried Alloy, then chose the more expressive TLA+. By September 2014 AWS had used it on 10 large systems, including S3, DynamoDB and EBS; in DynamoDB the model checker found a data-loss bug whose shortest trace had 35 steps. Engineers learned it in two to three weeks, and the 2015 paper “How Amazon Web Services Uses Formal Methods” in Communications of the ACM argued that the reputation for poor return on investment was “quite wrong”.",
+      "Others followed and published: Azure Cosmos DB put TLA+ specifications of its consistency levels on GitHub in 2018, MongoDB has modelled its replication, reconfiguration and transactions since about 2015, Oracle Cloud Infrastructure since 2015, and Datadog described its Courier queue in 2024. AWS widened its toolkit to P, Dafny and Lean, as Marc Brooker and Ankush Desai described in Communications of the ACM in 2025, and the Linux Foundation launched the TLA+ Foundation in 2023 to fund the language’s tools."
+    ],
+    "choices": [
+      { "choice": "Check the design, not the code", "why": "AWS wanted to verify that code implements its high-level specification but knew of no tools “that can handle distributed systems as large and complex as those we are building”, so it model-checked designs, where the subtle bugs were." },
+      { "choice": "Exhaustive checks of small instances", "why": "A model checker can’t enumerate an unbounded system, but it can cover every interleaving of a few nodes and messages, which is where AWS found bugs that had passed design reviews, code reviews and testing." },
+      { "choice": "Plain mathematics instead of a programming language", "why": "Lamport’s view is that “the best way to describe things precisely is with simple mathematics”, which lets a specification leave out everything but the idea being checked." },
+      { "choice": "Pseudocode front ends for engineers", "why": "AWS avoided the words “formal”, “verification” and “proof” at first, and found engineers often more productive starting in PlusCal, TLA+’s pseudocode-like language; P models systems as the communicating state machines engineers already draw." }
+    ],
+    "timeline": [
+      { "year": "1994", "text": "Lamport publishes “The Temporal Logic of Actions” in ACM TOPLAS" },
+      { "year": "1999", "text": "TLC, the TLA+ model checker by Yuan Yu, Panagiotis Manolios and Lamport" },
+      { "year": "2002", "text": "Specifying Systems, the TLA+ book, is published" },
+      { "year": "2011", "text": "AWS engineers start using TLA+" },
+      { "year": "2015", "text": "“How Amazon Web Services Uses Formal Methods” appears in Communications of the ACM" },
+      { "year": "2018", "text": "Azure Cosmos DB publishes TLA+ specifications of its consistency levels" },
+      { "year": "2023", "text": "The Linux Foundation launches the TLA+ Foundation on April 21" },
+      { "year": "2025", "text": "“Systems Correctness Practices at Amazon Web Services” describes TLA+, P and simulation at AWS" }
+    ],
+    "sources": [
+      { "label": "Lamport: The Temporal Logic of Actions, ACM TOPLAS 16(3), May 1994", "url": "https://doi.org/10.1145/177492.177726" },
+      { "label": "Yu, Manolios and Lamport: Model Checking TLA+ Specifications, CHARME 1999", "url": "https://doi.org/10.1007/3-540-48153-2_6" },
+      { "label": "Lamport: Specifying Systems (2002)", "url": "https://lamport.azurewebsites.net/tla/book.html" },
+      { "label": "Newcombe et al.: Use of Formal Methods at Amazon Web Services (September 29, 2014; Alloy and Chord, 10 systems, 35-step trace, 2–3 weeks to learn)", "url": "https://lamport.azurewebsites.net/tla/formal-methods-amazon.pdf" },
+      { "label": "Newcombe et al.: How Amazon Web Services Uses Formal Methods, Communications of the ACM 58(4), 2015", "url": "https://doi.org/10.1145/2699417" },
+      { "label": "TLA+ Foundation: Industrial Use of TLA+ (Intel, Microsoft, Azure Cosmos DB, MongoDB, Oracle, Google)", "url": "https://foundation.tlapl.us/industry/index.html" },
+      { "label": "Azure/azure-cosmos-tla on GitHub (created September 2018, MIT)", "url": "https://github.com/Azure/azure-cosmos-tla" },
+      { "label": "Datadog Engineering: How we use formal modeling, lightweight simulations, and chaos testing to design reliable distributed systems (November 20, 2024)", "url": "https://www.datadoghq.com/blog/engineering/formal-modeling-and-simulation/" },
+      { "label": "Brooker and Desai: Systems Correctness Practices at Amazon Web Services, Communications of the ACM, 2025", "url": "https://cacm.acm.org/practice/systems-correctness-practices-at-amazon-web-services/" },
+      { "label": "Linux Foundation: Linux Foundation Announces Launch of TLA+ Foundation (April 21, 2023)", "url": "https://www.linuxfoundation.org/press/linux-foundation-launches-tlafoundation" }
+    ]
+  },
+  "sources": [
+    { "label": "Leslie Lamport: The TLA+ Home Page (“simple mathematics”, design errors)", "url": "https://lamport.azurewebsites.net/tla/tla.html" },
+    { "label": "Newcombe et al.: Use of Formal Methods at Amazon Web Services (2014; exhaustively testable pseudo-code, limits of verifying code)", "url": "https://lamport.azurewebsites.net/tla/formal-methods-amazon.pdf" },
+    { "label": "Apalache README (SMT-based symbolic model checking, bounded model checking, inductive invariants)", "url": "https://github.com/apalache-mc/apalache" },
+    { "label": "TLA+ Proof System (TLAPS) README (Z3, Zenon, Isabelle/TLA+ back ends)", "url": "https://github.com/tlaplus/tlapm" },
+    { "label": "Dafny README (verifier; compiles to C#, Go, Python, Java and JavaScript; MIT)", "url": "https://github.com/dafny-lang/dafny" },
+    { "label": "P README (used across AWS on S3, EBS, DynamoDB, MemoryDB, Aurora, EC2; PObserve; MIT)", "url": "https://github.com/p-org/P" },
+    { "label": "Alloy README (Alloy 6, Kodkod model finder and SAT solvers)", "url": "https://github.com/AlloyTools/org.alloytools.alloy" },
+    { "label": "Alloy Tools home page (Alloy 6.2.0, mutable state and temporal logic)", "url": "https://alloytools.org/" },
+    { "label": "Lean 4 on GitHub (Apache 2.0)", "url": "https://github.com/leanprover/lean4" },
+    { "label": "AWS Open Source Blog: Lean Into Verified Software Development (Cedar, April 8, 2024)", "url": "https://aws.amazon.com/blogs/opensource/lean-into-verified-software-development/" },
+    { "label": "Jepsen README (clients, nemesis, history checking)", "url": "https://github.com/jepsen-io/jepsen" },
+    { "label": "Azure/azure-cosmos-tla: TLA+ specifications for the five consistency levels of Azure Cosmos DB", "url": "https://github.com/Azure/azure-cosmos-tla" },
+    { "label": "TLA+ Foundation: Industrial Use of TLA+ (Google’s union-find, MongoDB, Oracle)", "url": "https://foundation.tlapl.us/industry/index.html" },
+    { "label": "Datadog Engineering: formal modeling, lightweight simulations and chaos testing for Courier (November 20, 2024)", "url": "https://www.datadoghq.com/blog/engineering/formal-modeling-and-simulation/" },
+    { "label": "Brooker and Desai: Systems Correctness Practices at Amazon Web Services, Communications of the ACM, 2025", "url": "https://cacm.acm.org/practice/systems-correctness-practices-at-amazon-web-services/" },
+    { "label": "IAM User Guide: Using IAM Access Analyzer (logic-based reasoning on resource-based policies)", "url": "https://docs.aws.amazon.com/IAM/latest/UserGuide/what-is-access-analyzer.html" },
+    { "label": "AWS What’s New: Automated Reasoning checks is now available in Amazon Bedrock Guardrails (August 2025)", "url": "https://aws.amazon.com/about-aws/whats-new/2025/08/automated-reasoning-checks-amazon-bedrock-guardrails" },
+    { "label": "TLA+ tools README (tla2tools.jar: SANY, TLC, PlusCal translator; Java 11+)", "url": "https://github.com/tlaplus/tlaplus" }
+  ]
+}

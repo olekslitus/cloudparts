@@ -34,7 +34,7 @@ export default function MakerPage({ id }: { id: string }) {
     .map(cat => ({ cat, techs: techs.filter(t => c.concept(t.concepts[0]).category === cat.id) }))
     .filter(g => g.techs.length > 0);
   type Group = { key: string; title?: string; summary?: string; path?: string; techs: typeof f.projects; compact?: boolean };
-  const children = f.children.map(id => c.foundations.find(x => x.id === id)!);
+  const children = f.children.map(id => c.foundations.find(x => x.id === id)!).sort((a, b) => b.projects.length - a.projects.length);
   const direct = f.projects.filter(t => t.foundation?.id === f.id);
   const groups: Group[] = company
     ? byTopic(f.projects).map(g => ({ key: g.cat.id, title: g.cat.name, techs: g.techs }))
@@ -45,7 +45,7 @@ export default function MakerPage({ id }: { id: string }) {
       : [
           // a foundation under this one has its own page, so its projects are just named here
           ...children.map(x => ({ key: x.id, title: x.name, summary: x.summary, path: x.path, techs: x.projects, compact: true })),
-          { key: 'direct', title: children.length ? `Hosted by ${inSentence(f.name)} and its smaller foundations` : undefined, techs: direct },
+          { key: 'direct', title: children.length ? `Hosted by ${inSentence(f.name)} itself` : undefined, techs: direct },
         ].filter(g => g.techs.length);
   const parent = f.parent ? c.foundations.find(x => x.id === f.parent) : undefined;
   const anchors = f.sections.map(s => s.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''));
@@ -62,7 +62,9 @@ export default function MakerPage({ id }: { id: string }) {
           <div className="mt-5 flex flex-wrap items-center gap-2">
             <span className={pill}>{f.projects.length} {company ? 'products' : 'projects'} in this catalog</span>
             {parent && <a href={href(parent.path)} className={cn(pill, 'transition hover:bg-muted')}><LandmarkIcon className="size-3" />Part of {inSentence(parent.name)}</a>}
-            {children.map(x => <a key={x.id} href={href(x.path)} className={cn(pill, 'transition hover:bg-muted')}><LandmarkIcon className="size-3" />Includes {x.short ?? x.name} ({x.projects.length})</a>)}
+            {children.length > 2
+              ? <a href={`#fdn-${children[0].id}`} className={cn(pill, 'transition hover:bg-muted')}><LandmarkIcon className="size-3" />Includes {children.length} foundations</a>
+              : children.map(x => <a key={x.id} href={href(x.path)} className={cn(pill, 'transition hover:bg-muted')}><LandmarkIcon className="size-3" />Includes {x.short ?? x.name} ({x.projects.length})</a>)}
             {matureFirst(f.stages).map(st => {
               const n = f.projects.filter(t => t.foundation?.stage === st.id).length;
               return n > 0 && <a key={st.id} href={`#stage-${st.id}`} title={st.summary} className={cn(pill, 'transition hover:bg-muted')}>{n} {st.name.toLowerCase()}</a>;
@@ -81,7 +83,7 @@ export default function MakerPage({ id }: { id: string }) {
         <section className="mt-12">
           <SectionLabel>{company ? 'Its products' : 'Its projects'} in this catalog</SectionLabel>
           {groups.map(g => (
-            <div key={g.key} id={f.stages.length ? `stage-${g.key}` : undefined} className="mt-8 scroll-mt-20 first-of-type:mt-0">
+            <div key={g.key} id={f.stages.length ? `stage-${g.key}` : g.path ? `fdn-${g.key}` : undefined} className="mt-8 scroll-mt-20 first-of-type:mt-0">
               {g.title && (
                 <h3 className="mb-2 font-mono text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
                   {g.path ? <a href={href(g.path)} className="underline-offset-4 hover:text-foreground hover:underline">{g.title} →</a> : g.title}

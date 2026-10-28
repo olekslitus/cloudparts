@@ -1,0 +1,109 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "P4",
+  "concepts": ["sdn"],
+  "provider": "oss",
+  "vendor": "P4 project (Linux Foundation)",
+  "foundation": { "id": "linux-foundation", "joined": "2024-01-31", "via": "Moved from the Open Networking Foundation in 2024; supported by a directed fund with its own governing board" },
+  "license": "Apache 2.0 (specifications, compiler and reference tools)",
+  "website": "https://p4.org/",
+  "repo": "https://github.com/p4lang/p4c",
+  "summary": "A programming language for the data plane: it describes which headers a switch, NIC or software switch parses and which match-action tables it applies, so packet processing can be changed by recompiling instead of waiting for new chips.",
+  "intro": [
+    "OpenFlow let a controller fill a switch’s tables, but the tables themselves, and the headers they could match, were fixed by the chip. P4 goes one level lower: it is a domain-specific language for describing how a data plane device processes packets. A P4 program declares the headers it knows about, a parser written as a state machine that extracts them, control blocks made of match-action tables (match these fields exactly, by longest prefix or by range, then run one of these actions) and a deparser that writes the headers back out. The language has no built-in idea of Ethernet or IPv4; a program defines whatever protocols it needs. The tables start empty, and the control plane adds and removes entries at run time.",
+    "Each target exposes an architecture, a description of its programmable blocks and fixed functions that a program fills in: v1model for the reference software switch, the Portable Switch Architecture (PSA) and the Portable NIC Architecture (PNA), or a vendor’s own. The reference compiler, p4c, has backends for BMv2 (`simple_switch`, the behavioural model used for learning and testing), for DPDK’s software switch pipeline, and for eBPF and XDP in the Linux kernel. It also emits a P4Info file describing the program’s tables and actions, which P4Runtime, a gRPC API, uses to let a remote controller manage them. The current specifications are P4₁₆ 1.2.5 (October 2024), P4Runtime 1.5.0 (February 2026), PSA 1.2 and PNA 0.7.",
+    "The best-known hardware target was Barefoot Networks’ Tofino switch chip, which Intel bought in 2019 and stopped developing in 2023; Intel open-sourced its Tofino P4 software in January 2025, and the community has turned towards SmartNICs, IPUs and software targets. P4 was run by P4.org, then by the Open Networking Foundation from 2019, and became an independent Linux Foundation project in early 2024. The project is active in 2026: p4c ships monthly releases, and the EuroP4 workshop meets in Utrecht in December."
+  ],
+  "strengths": [
+    "Defines new headers and forwarding behaviour in software, without waiting for a new chip or a new standard",
+    "One language and one compiler front end for switches, NICs, software switches and the Linux kernel",
+    "A standard control-plane API, P4Runtime, generated from the program itself",
+    "Open specifications and Apache 2.0 tools, with a reference software switch for testing programs before hardware"
+  ],
+  "limits": [
+    "Hardware choice has narrowed: Tofino, the flagship programmable switch chip, is no longer being developed",
+    "Programs are tied to an architecture, so moving between targets often means rewriting and recompiling, and each target has its own limits on tables and stages",
+    "Only describes the data plane: you still need a control plane to fill the tables, through P4Runtime or a vendor API",
+    "A specialist skill: writing P4 well requires knowing both networking protocols and the target pipeline’s resources"
+  ],
+  "worksWith": [
+    { "id": "dpdk", "how": "compiles to the software switch pipeline of" },
+    { "id": "ebpf", "how": "can compile programs to" }
+  ],
+  "snippet": {
+    "lang": "text",
+    "title": "Parser and a match-action table from a P4₁₆ program for the v1model architecture (excerpt: checksum, egress and deparser blocks left out)",
+    "source": [
+      "#include <core.p4>",
+      "#include <v1model.p4>",
+      "",
+      "header ethernet_t { bit<48> dstAddr; bit<48> srcAddr; bit<16> etherType; }",
+      "struct headers_t { ethernet_t ethernet; }",
+      "struct metadata_t { }",
+      "",
+      "parser MyParser(packet_in pkt, out headers_t hdr,",
+      "                inout metadata_t meta, inout standard_metadata_t std) {",
+      "    state start { pkt.extract(hdr.ethernet); transition accept; }",
+      "}",
+      "",
+      "control MyIngress(inout headers_t hdr, inout metadata_t meta,",
+      "                  inout standard_metadata_t std) {",
+      "    action forward(bit<9> port) { std.egress_spec = port; }",
+      "    action drop() { mark_to_drop(std); }",
+      "",
+      "    table mac_table {",
+      "        key = { hdr.ethernet.dstAddr: exact; }",
+      "        actions = { forward; drop; }",
+      "        size = 1024;",
+      "        default_action = drop();",
+      "    }",
+      "",
+      "    apply { mac_table.apply(); }",
+      "}"
+    ]
+  },
+  "history": {
+    "story": [
+      "In July 2014 Pat Bosshart, Nick McKeown, Jennifer Rexford, Amin Vahdat, George Varghese and others published “P4: Programming protocol-independent packet processors”. Their argument was that OpenFlow kept adding header fields to a fixed list, and that switches should instead be reconfigurable: the controller should say how packets are parsed and processed. Barefoot Networks, which McKeown and Bosshart had co-founded in 2013, launched Tofino in 2016, a switch chip programmed in P4, and the language was revised into P4₁₆. P4.org, the language consortium, ran the specifications and the p4lang tools on GitHub.",
+      "In March 2018 P4.org agreed to join the Open Networking Foundation, completing the move on 9 April 2019. Barefoot had released Tofino 2 in 2018; Intel announced it would buy Barefoot in June 2019, but in January 2023 it stopped developing Tofino, including its third generation, leaving P4 without a new flagship switch chip. In January 2025 Intel open-sourced its Tofino P4 software as open-p4studio.",
+      "When the ONF merged its projects into the Linux Foundation, P4 became an independent LF project. ONF announced the move on 4 January 2024: a directed fund seeded by ONF, and a governing board in place of the old advisory board, with technical direction left to the elected Technical Steering Team. In 2026 the project published P4Runtime 1.5.0 and kept monthly p4c releases."
+    ],
+    "choices": [
+      { "choice": "Protocol-independent", "why": "Instead of a language that knows Ethernet, IP and so on, P4 makes programs declare their own headers and parsers, so new protocols need a new program, not a new chip or a new version of the language." },
+      { "choice": "Target-independent through architectures", "why": "Separating the language from each target’s architecture lets one compiler front end and one language serve ASICs, NICs and software switches, while each vendor describes what its pipeline can do." },
+      { "choice": "Generate the control-plane API from the program", "why": "Because the tables are defined in the program, the compiler can describe them for P4Runtime, so a controller can manage any P4 device through the same API." }
+    ],
+    "timeline": [
+      { "year": "2014", "text": "P4 paper published in July" },
+      { "year": "2016", "text": "Barefoot launches Tofino, a P4-programmable switch chip" },
+      { "year": "2019", "text": "P4.org joins the Open Networking Foundation on 9 April; Intel agrees to buy Barefoot in June" },
+      { "year": "2023", "text": "Intel stops Tofino development in January" },
+      { "year": "2024", "text": "Becomes an independent Linux Foundation project; P4₁₆ 1.2.5 in October" },
+      { "year": "2025", "text": "Intel open-sources its Tofino P4 software in January" },
+      { "year": "2026", "text": "P4Runtime 1.5.0 in February" }
+    ],
+    "sources": [
+      { "label": "Bosshart et al.: P4, programming protocol-independent packet processors (ACM SIGCOMM CCR, July 2014)", "url": "https://dl.acm.org/doi/10.1145/2656877.2656890" },
+      { "label": "Light Reading: P4 joins ONF, Linux Foundation (March 2018)", "url": "https://www.lightreading.com/business-management/p4-joins-onf-linux-foundation" },
+      { "label": "ONF: The ONF and P4.org complete combination (9 April 2019)", "url": "https://opennetworking.org/news-and-events/press-releases/the-onf-and-p4-org-complete-combination-to-accelerate-innovation-in-operator-led-open-source/" },
+      { "label": "Phoronix: Intel Tofino P4 software open-sourced years later (18 January 2025; Tofino 2016, Tofino 2 2018, development stopped 2023)", "url": "https://www.phoronix.com/news/Intel-Tofino-P4-Open-Source" },
+      { "label": "Systems Approach: The future of P4, revisited (Tofino 3 cancelled; SmartNICs and IPUs)", "url": "https://systemsapproach.substack.com/p/the-future-of-p4-one-perspective" },
+      { "label": "Wikipedia: Barefoot Networks (founded 2013 by McKeown and Bosshart; Intel acquisition June 2019; halt announced January 2023)", "url": "https://en.wikipedia.org/wiki/Barefoot_Networks" },
+      { "label": "ONF: P4 becomes an independent project hosted by the Linux Foundation (4 January 2024)", "url": "https://opennetworking.org/news-and-events/blog/p4-becomes-an-independent-project-hosted-by-the-linux-foundation/" },
+      { "label": "P4.org: Specifications (P4₁₆ 1.2.5 October 2024, P4Runtime 1.5.0 February 2026)", "url": "https://p4.org/specifications/" }
+    ]
+  },
+  "sources": [
+    { "label": "P4.org: home page (a domain-specific language for network devices; EuroP4’26)", "url": "https://p4.org/" },
+    { "label": "P4.org: Specifications (P4₁₆, P4Runtime, PSA, PNA, INT; latest versions)", "url": "https://p4.org/specifications/" },
+    { "label": "GitHub: p4c README (reference compiler; BMv2, DPDK, eBPF and other backends; P4Info)", "url": "https://github.com/p4lang/p4c/blob/main/README.md" },
+    { "label": "GitHub: p4lang/behavioral-model (BMv2)", "url": "https://github.com/p4lang/behavioral-model" },
+    { "label": "GitHub: p4lang/p4runtime", "url": "https://github.com/p4lang/p4runtime" },
+    { "label": "GitHub: p4lang/p4c releases (monthly, v1.2.5.18 on 2 October 2026)", "url": "https://github.com/p4lang/p4c/releases" },
+    { "label": "GitHub: p4lang/p4-spec (Apache 2.0)", "url": "https://github.com/p4lang/p4-spec" },
+    { "label": "GitHub: p4lang/open-p4studio (Intel’s Tofino P4 software)", "url": "https://github.com/p4lang/open-p4studio" },
+    { "label": "ONF: P4 becomes an independent project hosted by the Linux Foundation (4 January 2024; directed fund, governing board, TST)", "url": "https://opennetworking.org/news-and-events/blog/p4-becomes-an-independent-project-hosted-by-the-linux-foundation/" },
+    { "label": "Phoronix: Intel Tofino P4 software open-sourced years later (18 January 2025)", "url": "https://www.phoronix.com/news/Intel-Tofino-P4-Open-Source" }
+  ],
+  "checked": "2026-10-28"
+}

@@ -1,0 +1,96 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Open vSwitch",
+  "concepts": ["sdn"],
+  "provider": "oss",
+  "vendor": "Open vSwitch project (Linux Foundation), created at Nicira",
+  "foundation": { "id": "linux-foundation", "joined": "2016-08-09" },
+  "license": "Apache 2.0 (the Linux kernel module upstream is GPLv2)",
+  "website": "https://www.openvswitch.org/",
+  "repo": "https://github.com/openvswitch/ovs",
+  "summary": "A programmable software switch for hypervisors and container hosts: it connects VMs and containers to each other and to tunnels across the physical network, and forwards packets by OpenFlow rules that a controller can change.",
+  "intro": [
+    "Open vSwitch (OVS) is a multilayer software switch. On a server running VMs or containers, it sits where a physical switch would: each virtual interface plugs into an OVS bridge, and the bridge connects them to each other, to the physical NICs and to tunnels that reach other hosts. It does what a managed switch does, such as 802.1Q VLANs, NIC bonding with or without LACP, QoS policing, NetFlow, sFlow and port mirroring, and it encapsulates traffic in Geneve, VXLAN, GRE, ERSPAN and other tunnels so that tenants’ networks can span many hosts over a shared fabric. Two daemons run it: `ovsdb-server` keeps the configuration (bridges, ports, interfaces, controllers) in a small transactional database, and `ovs-vswitchd` implements the switch. Its forwarding is described as OpenFlow tables, which an SDN controller or a tool such as `ovs-ofctl` fills in.",
+    "Forwarding is split in two. Packets arrive at a datapath, which keeps a cache of flows mapping header fields to actions. When a packet matches a cached flow, the datapath applies the actions straight away; when it doesn’t, the packet goes up to `ovs-vswitchd`, which runs it through the full OpenFlow pipeline and installs a cached flow so that later packets of the same kind stay in the fast path. The usual datapath is a module in the Linux kernel, part of mainline Linux since 3.3 in 2012. OVS can also run entirely in user space, taking packets from DPDK or AF_XDP sockets for higher throughput, and it can push flows down to NICs that support Linux TC flower hardware offload.",
+    "OVS is the switch underneath a lot of software-defined networking. OVN builds virtual networks on top of it, and so do OpenStack Neutron’s ML2/OVS and ML2/OVN drivers and OpenShift’s default network plugin, OVN-Kubernetes, which runs OVS on every node. It has been a Linux Foundation project since August 2016. Releases come every six months, in February and August, with a long-term support release picked every two years; 4.0.0, released on 17 August 2026, dropped Windows support, the old out-of-tree tunnel ports and several obsolete tools."
+  ],
+  "strengths": [
+    "The de facto virtual switch for open-source clouds: OpenStack, OVN and OVN-Kubernetes all build on it, so skills and tooling carry over",
+    "Programmable through OpenFlow and OVSDB, so a controller can change forwarding on thousands of hosts without touching the kernel",
+    "Several datapaths for one configuration: the Linux kernel, user space with DPDK or AF_XDP, and hardware offload to capable NICs",
+    "Long-lived and vendor-neutral: developed since 2009, Apache 2.0 licensed, and governed by its committers at the Linux Foundation"
+  ],
+  "limits": [
+    "Low-level on its own: you write OpenFlow rules and manage tunnels yourself unless a control plane such as OVN or OpenStack Neutron does it",
+    "Performance depends on the datapath: the kernel path can fall short at high packet rates, and DPDK means dedicating CPU cores and hugepages to the switch",
+    "The cached-flow design makes troubleshooting a two-level job: OpenFlow tables in `ovs-vswitchd` and the datapath’s flows can differ, and tools such as `ofproto/trace` are needed to follow a packet",
+    "Windows support was removed in 4.0, and the kernel datapath, the usual one, exists only in Linux"
+  ],
+  "worksWith": [
+    { "id": "dpdk", "how": "can forward packets in user space with" },
+    { "id": "kvm", "how": "connects the VMs of" },
+    { "id": "xen", "how": "switches traffic for VMs on" },
+    { "id": "openstack", "how": "is a Neutron networking backend for" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "A bridge with a VM’s port and a VXLAN tunnel to another host, then two OpenFlow rules",
+    "source": [
+      "ovs-vsctl add-br br0",
+      "ovs-vsctl add-port br0 tap0",
+      "ovs-vsctl add-port br0 vx1 -- set interface vx1 type=vxlan \\",
+      "    options:remote_ip=192.0.2.20 options:key=5001",
+      "",
+      "# drop SSH coming from the VM, switch everything else like a normal L2 switch",
+      "ovs-ofctl add-flow br0 \"priority=100,in_port=tap0,tcp,tp_dst=22,actions=drop\"",
+      "ovs-ofctl add-flow br0 \"priority=0,actions=normal\"",
+      "ovs-ofctl dump-flows br0",
+      "",
+      "# the flows the datapath has actually cached",
+      "ovs-appctl dpctl/dump-flows"
+    ]
+  },
+  "history": {
+    "story": [
+      "Open vSwitch came out of Nicira, a Palo Alto start-up founded in 2007 by pioneers of OpenFlow. Its first release came in 2009. Nicira used it as the switch in every hypervisor for its network virtualisation platform, controlled centrally over OpenFlow. The kernel datapath was merged into mainline Linux in version 3.3 in March 2012, and XenServer 6.0 made OVS its default switch the same year. In July 2012 VMware agreed to buy Nicira for about $1.26 billion, and the OVS team carried on there.",
+      "In January 2015 Justin Pettit, Ben Pfaff, Chris Wright and Madhu Venugopal announced OVN, a control plane for building virtual networks on OVS, and the team described OVS’s flow caching design at NSDI that year. On 9 August 2016 Open vSwitch became a Linux Foundation project, with governance by its top committers; more than 300 people from companies including Cisco, Ericsson, Huawei, IBM, Intel, Red Hat and VMware had contributed. OVN moved to its own repository in 2019.",
+      "Since then the project has added user-space datapaths on DPDK and AF_XDP and hardware offload, and trimmed what it no longer needs. Version 4.0.0 in August 2026 removed Windows support, the legacy tunnel ports from the old out-of-tree kernel module, AVX512-specific code paths and several obsolete utilities."
+    ],
+    "choices": [
+      { "choice": "A fast datapath plus a smart user-space daemon", "why": "Keeping only a flow cache in the kernel kept the kernel module small and stable, while the complex OpenFlow pipeline, which changes often, lives in user space where it is easier to develop and upgrade." },
+      { "choice": "OpenFlow and a configuration database as the interfaces", "why": "Exposing forwarding as OpenFlow tables and configuration as OVSDB let external controllers program every host’s switch the same way, which is what network virtualisation needs." },
+      { "choice": "Several datapaths behind one switch", "why": "Users wanted different trade-offs: the kernel for simplicity, DPDK or AF_XDP for packet rate, NIC offload for CPU savings, so OVS keeps the same OpenFlow behaviour on all of them." }
+    ],
+    "timeline": [
+      { "year": "2009", "text": "First release, developed at Nicira" },
+      { "year": "2012", "text": "Kernel datapath merged into Linux 3.3 in March; VMware agrees to buy Nicira in July" },
+      { "year": "2015", "text": "OVN announced in January; design paper at NSDI" },
+      { "year": "2016", "text": "Becomes a Linux Foundation project on 9 August" },
+      { "year": "2019", "text": "OVN split into its own repository" },
+      { "year": "2026", "text": "Version 4.0.0 on 17 August drops Windows and legacy tunnel support" }
+    ],
+    "sources": [
+      { "label": "Wikipedia: Open vSwitch (first release 2009, Linux 3.3 merge, XenServer 6.0 default)", "url": "https://en.wikipedia.org/wiki/Open_vSwitch" },
+      { "label": "PCWorld: VMware to acquire OpenFlow pioneer Nicira for $1.26 billion (July 2012; founded 2007, core technology Open vSwitch)", "url": "https://www.pcworld.com/article/460100/vmware_to_acquire_openflow_pioneer_nicira_for_126_billion.html" },
+      { "label": "Pfaff et al.: The design and implementation of Open vSwitch (NSDI 2015)", "url": "https://www.usenix.org/conference/nsdi15/technical-sessions/presentation/pfaff" },
+      { "label": "Network World: Open vSwitch to gain network virtualization (OVN announcement, January 2015)", "url": "https://www.networkworld.com/article/934472/open-vswitch-to-gain-network-virtualization.html" },
+      { "label": "Linux Foundation: Open vSwitch joins Linux Foundation open networking ecosystem (9 August 2016)", "url": "https://www.linuxfoundation.org/press/press-release/open-vswitch-joins-linux-foundation-open-networking-ecosystem" },
+      { "label": "OVN: home page (split from the Open vSwitch codebase in 2019)", "url": "https://www.ovn.org/en/" },
+      { "label": "Open vSwitch NEWS (v4.0.0, 17 August 2026)", "url": "https://github.com/openvswitch/ovs/blob/main/NEWS" }
+    ]
+  },
+  "sources": [
+    { "label": "Open vSwitch docs: What is Open vSwitch? (features, components, tunnels, Apache 2.0)", "url": "https://docs.openvswitch.org/en/latest/intro/what-is-ovs/" },
+    { "label": "Open vSwitch docs: Datapath development guide (flow table, misses queued to user space)", "url": "https://docs.openvswitch.org/en/latest/topics/datapath/" },
+    { "label": "Open vSwitch docs: Open vSwitch with DPDK", "url": "https://docs.openvswitch.org/en/latest/intro/install/dpdk/" },
+    { "label": "Open vSwitch docs: Open vSwitch with AF_XDP", "url": "https://docs.openvswitch.org/en/latest/intro/install/afxdp/" },
+    { "label": "Open vSwitch docs: Flow hardware offload with Linux TC flower", "url": "https://docs.openvswitch.org/en/latest/howto/tc-offload/" },
+    { "label": "Open vSwitch docs: Release process (six-month cadence, LTS every two years)", "url": "https://docs.openvswitch.org/en/latest/internals/release-process/" },
+    { "label": "Open vSwitch NEWS (v3.7.0 February 2026, v4.0.0 17 August 2026)", "url": "https://github.com/openvswitch/ovs/blob/main/NEWS" },
+    { "label": "Red Hat: About the OVN-Kubernetes network plugin (default in OpenShift; OVS on each node)", "url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/ovn-kubernetes_network_plugin/about-ovn-kubernetes" },
+    { "label": "OpenStack Neutron: OVN driver administration guide", "url": "https://docs.openstack.org/neutron/latest/admin/ovn/index.html" },
+    { "label": "Linux Foundation: Open vSwitch joins Linux Foundation open networking ecosystem (9 August 2016; governance, contributors)", "url": "https://www.linuxfoundation.org/press/press-release/open-vswitch-joins-linux-foundation-open-networking-ecosystem" },
+    { "label": "GitHub: openvswitch/ovs (Apache 2.0)", "url": "https://github.com/openvswitch/ovs" }
+  ],
+  "checked": "2026-10-28"
+}

@@ -1,0 +1,83 @@
+{
+  "$schema": "../../.schemas/concepts.schema.json",
+  "name": "Confidential computing",
+  "icon": "shield-check",
+  "category": "security",
+  "order": 35,
+  "summary": "Run code inside a hardware-isolated, encrypted environment that the host’s operating system, hypervisor and cloud operator cannot read, and prove what is running there before you hand it secrets.",
+  "howItWorks": "Encryption at rest and in transit leaves a gap: to work on data, a program has to decrypt it in memory, where the kernel, the hypervisor and anyone who controls them can read it. Confidential computing closes the gap with a trusted execution environment (TEE), a region the CPU or a trusted hypervisor walls off from everything else on the machine. There are three common shapes. A process enclave, such as Intel SGX, protects part of one application’s memory; the rest of the program and the operating system stay outside, so applications must be written for enclaves or wrapped in a library OS such as Gramine. A confidential VM, built on AMD SEV-SNP or Intel TDX, protects a whole virtual machine: the CPU encrypts its memory with a key generated inside the processor that the hypervisor never sees, so an ordinary guest OS and unmodified software run inside. A hypervisor-isolated enclave, such as AWS Nitro Enclaves, carves vCPUs and memory off a parent instance into a separate VM with no storage, networking or login, reachable only over a local socket. Isolation alone proves nothing to the outside world, so every TEE supports attestation: the hardware signs a report containing a measurement, a hash of the code and initial state that was loaded, and a verifier checks the signature back to the vendor’s root key and the measurement against the value it expects. Only then does a key service release the secrets, such as a database key or a model’s weights, and it can bind them to that exact measurement, so a changed binary gets nothing.",
+  "analogy": "A sealed exam room with a window. The building’s caretaker has keys to every other room but not this one, and before the examiners hand over the paper they check, through the window, that the right candidate is sitting inside.",
+  "useWhen": [
+    "Processing data you must not expose to the cloud operator or your own administrators, such as payment card numbers, health records or private keys, on shared infrastructure",
+    "Several parties pooling sensitive data for a joint computation that none of them should see in full, such as fraud models across banks",
+    "Releasing secrets only to a specific, measured build: a key service checks attestation before handing over a key, so a tampered or debug build gets nothing",
+    "Regulations or contracts that ask for protection of data in use, not just at rest and in transit"
+  ],
+  "avoidWhen": [
+    "Your threat is a bug in your own application: a TEE protects code from the host, not from itself, and an injection flaw inside the enclave still leaks data",
+    "You need to trust nobody at all: the CPU vendor’s hardware and firmware, or with Nitro Enclaves the cloud provider’s hypervisor, stay in the trusted base",
+    "The workload can’t tolerate the restrictions: enclaves add overhead (up to 2x in Graphene-SGX’s measurements), Nitro Enclaves have no network or disk, and only some instance types and regions offer each TEE",
+    "Nothing checks attestation: without a verifier and a key policy tied to the measurement, a TEE is only memory encryption"
+  ],
+  "example": "A payments company tokenises card numbers on EC2. The service that decrypts them runs in a Nitro Enclave beside the web tier, with no network access of its own. When it starts, it asks the Nitro hypervisor for a signed attestation document and sends it with its request to AWS KMS. The KMS key policy allows decryption only when the enclave’s image measurement matches the release build, so the parent instance, its administrators and a debug build of the same code can pass ciphertext in and get tokens out, but never see the key or the card numbers.",
+  "providers": {
+    "aws": "Nitro Enclaves: isolated VMs carved from an EC2 instance, reachable only over a local socket, with attestation built into KMS key policies, at no extra charge. AMD SEV-SNP on M6a, C6a and R6a instances, at 10% of the On-Demand rate extra on shared tenancy",
+    "gcp": "Confidential VM on AMD SEV, AMD SEV-SNP or Intel TDX; Confidential GKE Nodes; Confidential Space for sharing data with an agreed workload; NVIDIA confidential GPUs on AMD SEV or Intel TDX",
+    "azure": "Confidential VMs on AMD SEV-SNP (DCasv5, ECasv5) and Intel TDX (DCesv6, ECesv6), confidential H100 GPU VMs, confidential AKS nodes, confidential containers on Container Instances and Azure Attestation. The Intel SGX enclave VMs (DCsv3) retire on October 31, 2029",
+    "oss": "Confidential Computing Consortium projects such as Gramine (LGPL 3.0), Open Enclave SDK, Veraison and COCONUT-SVSM; Confidential Containers, a CNCF incubating project"
+  },
+  "related": ["secrets", "vm", "microvm"],
+  "sections": [
+    {
+      "type": "table",
+      "title": "Three shapes of TEE",
+      "intro": "They differ in how much sits inside the protected boundary and whom you still have to trust.",
+      "corner": "Shape",
+      "columns": ["What is protected", "Who you still trust", "Examples"],
+      "rows": [
+        { "label": "Process enclave", "values": ["Part of one process’s memory; the OS stays outside, so applications are ported or run in a library OS", "The CPU vendor", "Intel SGX, with Gramine or Open Enclave SDK; Azure DCsv3"] },
+        { "label": "Confidential VM", "values": ["A whole VM, guest OS included, with memory encrypted by a key held in the CPU", "The CPU vendor and the VM’s own firmware and OS", "AMD SEV-SNP and Intel TDX on Google Cloud, Azure and EC2"] },
+        { "label": "Hypervisor-isolated enclave", "values": ["A separate VM carved from an instance, with no storage, network or interactive access", "The cloud provider’s hypervisor and hardware", "AWS Nitro Enclaves"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "Intel’s Software Guard Extensions (SGX) added enclaves to its CPUs, and in September 2017 Microsoft announced Azure confidential computing, an early-access programme on SGX hardware, promising to protect data from malicious insiders, hackers exploiting bugs in the OS or hypervisor, and third parties without consent. Getting software into an enclave was the hard part. Researchers at Stony Brook University and Intel showed the same year with Graphene-SGX, later renamed Gramine, that a library OS could run unmodified applications such as Apache and the R interpreter inside an enclave, at under twice the native cost in most single-process cases.",
+      "In October 2019 hardware makers and clouds formed the Confidential Computing Consortium at the Linux Foundation to work on common software and standards for protecting data in use. The clouds then moved the boundary out to the whole machine: Google launched Confidential VMs on AMD SEV in July 2020, and in October 2020 AWS made Nitro Enclaves, built on its own Nitro hypervisor, generally available.",
+      "By 2026 confidential VMs on AMD SEV-SNP and Intel TDX were the mainstream offering on Google Cloud, Azure and EC2, extended to NVIDIA GPUs for AI workloads. Process enclaves became a niche: Azure retired its DCsv2 SGX VMs in June 2026 and announced that the DCsv3 series retires on October 31, 2029."
+    ],
+    "choices": [
+      { "choice": "Keys that never leave the CPU", "why": "If the memory encryption key were held by the hypervisor, the operator could read memory. Generating it inside the processor, per VM or enclave, takes the host software out of the trust chain." },
+      { "choice": "Attest before releasing secrets", "why": "A remote user cannot see inside a TEE, so the hardware signs a measurement of what was loaded, and key services such as AWS KMS check it before handing over keys." },
+      { "choice": "Protect whole VMs, not just enclaves", "why": "Porting applications into SGX enclaves was hard and needed library OSes or SDKs; encrypting a whole VM lets an ordinary OS and existing software run unchanged, at the cost of a larger trusted base." }
+    ],
+    "timeline": [
+      { "year": "2017", "text": "Azure confidential computing announced on Intel SGX; Graphene-SGX runs unmodified applications in enclaves" },
+      { "year": "2019", "text": "Confidential Computing Consortium formalised at the Linux Foundation in October" },
+      { "year": "2020", "text": "Google Confidential VMs on AMD SEV in July; AWS Nitro Enclaves generally available in October" },
+      { "year": "2026", "text": "Azure retires DCsv2 SGX VMs in June and sets October 31, 2029 for DCsv3" }
+    ],
+    "sources": [
+      { "label": "Azure blog: Introducing Azure confidential computing (September 14, 2017)", "url": "https://azure.microsoft.com/blog/introducing-azure-confidential-computing/" },
+      { "label": "USENIX ATC ’17: Graphene-SGX, a practical library OS for unmodified applications on SGX (Tsai, Porter, Vij)", "url": "https://www.usenix.org/conference/atc17/technical-sessions/presentation/tsai" },
+      { "label": "Linux Foundation: Confidential Computing Consortium establishes formation with founding members and open governance structure (October 17, 2019)", "url": "https://www.linuxfoundation.org/press/press-release/confidential-computing-consortium-establishes-formation-with-founding-members-and-open-governance-structure-2" },
+      { "label": "Google Cloud blog: Introducing Google Cloud Confidential Computing with Confidential VMs (July 14, 2020)", "url": "https://cloud.google.com/blog/products/identity-security/introducing-google-cloud-confidential-computing-with-confidential-vms/" },
+      { "label": "AWS What’s New: Announcing general availability of AWS Nitro Enclaves (October 28, 2020)", "url": "https://aws.amazon.com/about-aws/whats-new/2020/10/announcing-general-availability-of-aws-nitro-enclaves/" },
+      { "label": "Azure retirement notice AZ496104: DCsv2-series VMs retire on June 30, 2026 (mirror)", "url": "https://mc.merill.net/message/AZ496104" },
+      { "label": "Azure Updates: DCsv3 and DCdsv3-series VMs retire on October 31, 2029 (October 1, 2026)", "url": "https://azure.microsoft.com/updates?id=569592" }
+    ]
+  },
+  "sources": [
+    { "label": "Confidential Computing Consortium: home page", "url": "https://confidentialcomputing.io/" },
+    { "label": "AWS: What is Nitro Enclaves?", "url": "https://docs.aws.amazon.com/enclaves/latest/user/nitro-enclave.html" },
+    { "label": "AWS: AMD SEV-SNP for Amazon EC2 instances (instance types, attestation, pricing)", "url": "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/sev-snp.html" },
+    { "label": "Google Cloud: Confidential VM overview", "url": "https://docs.cloud.google.com/confidential-computing/confidential-vm/docs/confidential-vm-overview" },
+    { "label": "Google Cloud blog: Introducing Confidential VMs (per-VM keys generated in the CPU)", "url": "https://cloud.google.com/blog/products/identity-security/introducing-google-cloud-confidential-computing-with-confidential-vms/" },
+    { "label": "Microsoft Learn: Azure confidential computing products (updated June 2026)", "url": "https://learn.microsoft.com/en-us/azure/confidential-computing/overview-azure-products" },
+    { "label": "Azure Updates: DCsv3 and DCdsv3-series VMs retire on October 31, 2029", "url": "https://azure.microsoft.com/updates?id=569592" },
+    { "label": "Gramine documentation: Remote attestation", "url": "https://gramine.readthedocs.io/en/latest/attestation.html" },
+    { "label": "USENIX ATC ’17: Graphene-SGX (overhead measurements)", "url": "https://www.usenix.org/conference/atc17/technical-sessions/presentation/tsai" },
+    { "label": "CNCF: Confidential Containers (incubating since July 8, 2026)", "url": "https://www.cncf.io/projects/confidential-containers/" }
+  ]
+}

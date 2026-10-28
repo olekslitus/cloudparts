@@ -1,0 +1,103 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "oneTBB",
+  "concepts": ["multithreading"],
+  "provider": "oss",
+  "vendor": "UXL Foundation (Linux Foundation), started at Intel",
+  "foundation": { "id": "uxl-foundation" },
+  "license": "Apache 2.0",
+  "website": "https://uxlfoundation.github.io/oneTBB/",
+  "repo": "https://github.com/uxlfoundation/oneTBB",
+  "summary": "oneAPI Threading Building Blocks, formerly Intel TBB: a C++ library that splits work into tasks and runs them on a shared pool of worker threads with a work-stealing scheduler, plus parallel algorithms, concurrent containers and a scalable memory allocator.",
+  "intro": [
+    "Writing parallel C++ with raw threads means deciding how many threads to start, splitting the work evenly between them and keeping every core busy when some pieces take longer than others. oneTBB lets you describe the parallelism instead: you call `parallel_for` over a range, `parallel_reduce` to combine results, `parallel_pipeline` for stages, or a `task_group` for anything else, and the library maps that onto threads. Each worker thread has its own deque of ready tasks. It pushes new tasks onto the bottom and takes its next task from the bottom too, so it works depth-first on fresh, cache-warm data; a thread that runs out of work steals the oldest task from the top of a randomly chosen other thread’s deque, which hands over a large piece of work at once. By default the scheduler uses every available core, and a `task_arena` can limit a piece of work to fewer threads, one NUMA node or one core type on hybrid processors.",
+    "Around the scheduler sit thread-safe containers such as `concurrent_hash_map`, `concurrent_vector` and concurrent queues, a flow graph for dependency and data-flow networks, thread-local storage, mutexes, and `tbbmalloc`, a scalable allocator that can replace `malloc` for a whole program. GCC’s libstdc++ uses TBB to run the C++17 parallel algorithms (`std::execution::par`), and Numba picks TBB first as its threading layer when it is installed. Intel released TBB in 2006, open-sourced it in 2007 and renamed it oneTBB in 2020 as part of oneAPI; it is now one of the libraries governed by the UXL Foundation, and 2023.2.0 came out on October 28, 2026."
+  ],
+  "strengths": [
+    "Describes work as tasks, not threads, so the same code uses 4 or 128 cores without changes; the docs say starting and ending a task on Linux is about 18 times faster than a thread",
+    "Work stealing balances uneven pieces of work automatically, without the programmer sizing chunks for each core",
+    "One shared thread pool per process, so libraries that all use oneTBB don’t each start a full set of threads and oversubscribe the machine",
+    "Mature: developed since 2006, Apache 2.0, and the backend GCC’s libstdc++ uses for the C++17 parallel algorithms"
+  ],
+  "limits": [
+    "CPU only: GPUs and other accelerators need oneDPL, SYCL or another library",
+    "Doesn’t prevent mistakes: oneTBB makes no promise of determinism or freedom from data races, so shared state still needs care",
+    "No `fork()` support, and static linking loses the shared thread pool that makes it compose well",
+    "C++ templates throughout, so it is a C++ library first; other languages reach it only through bindings such as its Python module"
+  ],
+  "worksWith": [
+    { "id": "cpp", "how": "is a parallelism library for" }
+  ],
+  "snippet": {
+    "lang": "cpp",
+    "title": "Square-root a vector in parallel, then sum it",
+    "source": [
+      "#include <oneapi/tbb/blocked_range.h>",
+      "#include <oneapi/tbb/parallel_for.h>",
+      "#include <oneapi/tbb/parallel_reduce.h>",
+      "#include <cmath>",
+      "#include <functional>",
+      "#include <vector>",
+      "",
+      "int main() {",
+      "    std::vector<double> v(10'000'000, 2.0);",
+      "    tbb::blocked_range<size_t> all(0, v.size());",
+      "",
+      "    // the range is split into chunks; idle threads steal chunks from busy ones",
+      "    tbb::parallel_for(all, [&](const tbb::blocked_range<size_t>& r) {",
+      "        for (size_t i = r.begin(); i != r.end(); ++i) v[i] = std::sqrt(v[i]);",
+      "    });",
+      "",
+      "    double sum = tbb::parallel_reduce(all, 0.0,",
+      "        [&](const tbb::blocked_range<size_t>& r, double acc) {",
+      "            for (size_t i = r.begin(); i != r.end(); ++i) acc += v[i];",
+      "            return acc;",
+      "        },",
+      "        std::plus<double>());   // combines the partial sums",
+      "    return sum > 0 ? 0 : 1;",
+      "}"
+    ]
+  },
+  "history": {
+    "story": [
+      "By the mid-2000s desktop processors were gaining more cores, and most C++ code could only use one. Intel released Threading Building Blocks in 2006 as a commercial library that let C++ programmers express parallel loops and tasks with templates, in the style of the STL, instead of managing threads by hand. In July 2007 it published the code under the GPLv2 with a runtime exception, keeping a $299 commercial edition alongside, and with TBB 2017, released in September 2016 on GitHub, it moved to the Apache 2.0 licence.",
+      "In December 2020 TBB became oneTBB 2021.1, part of Intel’s oneAPI toolkits. The release cleaned up the API and removed long-deprecated interfaces such as the low-level task API and `task_scheduler_init`, with a migration guide for older code. When Intel turned oneAPI into the vendor-neutral UXL Foundation in 2023, oneTBB was among the projects it brought along, and its repository moved from Intel’s `oneapi-src` GitHub organisation to `uxlfoundation`."
+    ],
+    "choices": [
+      { "choice": "Tasks instead of threads", "why": "Programmers describe what can run in parallel and the library decides how many threads to use, avoiding both idle cores and more threads than cores." },
+      { "choice": "Work stealing with per-thread deques", "why": "Each thread runs its newest task for cache locality, and idle threads steal the oldest, largest pieces from others, so load balances without a central queue." },
+      { "choice": "Templates in the style of the STL", "why": "Algorithms such as `parallel_for` take ranges and function objects, so the compiler can inline the loop body and the code stays generic." }
+    ],
+    "timeline": [
+      { "year": "2006", "text": "Intel releases Threading Building Blocks as a commercial library" },
+      { "year": "2007", "text": "Open-sourced under GPLv2 with a runtime exception (July)" },
+      { "year": "2016", "text": "TBB 2017 moves to the Apache 2.0 licence and to GitHub" },
+      { "year": "2020", "text": "Renamed oneTBB with version 2021.1 (December), part of oneAPI" },
+      { "year": "2023", "text": "UXL Foundation launched; oneTBB becomes one of its projects" },
+      { "year": "2026", "text": "Version 2023.2.0 released on October 28" }
+    ],
+    "sources": [
+      { "label": "Computerworld: Intel open-source project hopes to boost multicore apps (August 2, 2007)", "url": "https://www.computerworld.com/article/1584526/intel-open-source-project-hopes-to-boost-multicore-apps.html" },
+      { "label": "Slashdot: Intel releases threading library under GPL 2 (July 25, 2007)", "url": "https://developers.slashdot.org/story/07/07/25/1324221/intel-releases-threading-library-under-gpl-2" },
+      { "label": "GitHub: oneTBB LICENSE at tag 2017_U1 (Apache 2.0)", "url": "https://github.com/uxlfoundation/oneTBB/blob/2017_U1/LICENSE" },
+      { "label": "GitHub: oneTBB 2021.1.1 release (December 8, 2020)", "url": "https://github.com/uxlfoundation/oneTBB/releases/tag/v2021.1.1" },
+      { "label": "oneTBB docs: Migrating from TBB", "url": "https://uxlfoundation.github.io/oneTBB/main/tbb_userguide/Migration_Guide.html" },
+      { "label": "FreeBSD: devel/onetbb update to 2022.1.0 (repository moved from oneapi-src to uxlfoundation)", "url": "https://reviews-dev.freebsd.org/R11:1642c60d3cbab8ce5e2ee27ace925f91bccba6ff" },
+      { "label": "The Next Platform: The new UXL Foundation has a bold blueprint for open acceleration (September 19, 2023)", "url": "https://www.nextplatform.com/2023/09/19/the-new-uxl-foundations-has-bold-blueprint-for-open-acceleration" }
+    ]
+  },
+  "sources": [
+    { "label": "GitHub: uxlfoundation/oneTBB (README; governed by the UXL Foundation)", "url": "https://github.com/uxlfoundation/oneTBB" },
+    { "label": "oneTBB release 2023.2.0 (October 28, 2026)", "url": "https://github.com/uxlfoundation/oneTBB/releases/tag/v2023.2.0" },
+    { "label": "oneTBB docs: How the task scheduler works", "url": "https://uxlfoundation.github.io/oneTBB/main/tbb_userguide/How_Task_Scheduler_Works.html" },
+    { "label": "oneTBB docs: Task-based programming (tasks vs threads)", "url": "https://uxlfoundation.github.io/oneTBB/main/tbb_userguide/Task-Based_Programming.html" },
+    { "label": "oneTBB docs: Guiding task scheduler execution (task_arena constraints)", "url": "https://uxlfoundation.github.io/oneTBB/main/tbb_userguide/Guiding_Task_Scheduler_Execution.html" },
+    { "label": "oneTBB docs: Known limitations", "url": "https://uxlfoundation.github.io/oneTBB/main/intro/limitations.html" },
+    { "label": "oneTBB documentation (components)", "url": "https://uxlfoundation.github.io/oneTBB/" },
+    { "label": "Wikipedia: Threading Building Blocks (no determinism or data-race guarantees)", "url": "https://en.wikipedia.org/wiki/Threading_Building_Blocks" },
+    { "label": "GCC 9 release notes (parallel algorithms require TBB 2018 or newer)", "url": "https://gcc.gnu.org/gcc-9/changes.html" },
+    { "label": "Numba docs: The threading layers", "url": "https://numba.readthedocs.io/en/stable/user/threading-layer.html" },
+    { "label": "UXL Foundation: projects", "url": "https://github.com/uxlfoundation/foundation/blob/main/PROJECTS.md" }
+  ],
+  "checked": "2026-10-28"
+}

@@ -1,0 +1,149 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "eBPF",
+  "concepts": ["runtime-vms"],
+  "uses": ["observability"],
+  "provider": "oss",
+  "vendor": "Linux kernel BPF maintainers, backed by the eBPF Foundation (Linux Foundation)",
+  "foundation": { "id": "ebpf-foundation", "via": "The foundation funds and promotes eBPF; the code is developed upstream in the Linux kernel" },
+  "license": "GPLv2 (kernel runtime, verifier and JIT); the instruction set is BSD-licensed; programs that call “GPL only” helpers must be GPL-compatible",
+  "website": "https://ebpf.io/",
+  "repo": "https://git.kernel.org/pub/scm/linux/kernel/git/bpf/bpf-next.git",
+  "summary": "A small virtual machine inside the Linux kernel: programs are checked by a verifier, compiled to machine code and attached to kernel or app events, so tracing, networking and security tools run in the kernel without kernel modules.",
+  "intro": [
+    "eBPF lets you run sandboxed programs inside the kernel without changing kernel source or loading a module. You write a small program, usually in restricted C or Rust, and compile it with Clang or GCC to eBPF bytecode, a 64-bit instruction set with ten general-purpose registers, standardised by the IETF as RFC 9669 in October 2024. A loader such as libbpf hands it to the kernel with the `bpf()` system call. Before it runs, the verifier walks every path through the program, tracking each register’s type and possible values, and rejects anything that could crash or hang the kernel: unchecked pointers, out-of-bounds reads, loops it can’t prove will end. A JIT then compiles the accepted bytecode to native code for the CPU.",
+    "The program runs when its hook fires: a kernel function or tracepoint, a function in a user-space binary (uprobes), a system call, a packet arriving at the network driver (XDP) or the traffic-control layer, a cgroup event or a security check. Programs can’t call arbitrary kernel functions, only a stable set of helpers and kfuncs, and they keep state in maps, such as hash tables, arrays, ring buffers and LPM tries for IP prefixes, which user space reads too. Many cloud tools are built on it: Cilium for Kubernetes networking, Falco and Tetragon for runtime security, bpftrace and bcc for ad-hoc tracing, Meta’s Katran load balancer, and the eBPF agents of observability products. Since Linux 6.12 even the CPU scheduler can be written in eBPF, through `sched_ext`."
+  ],
+  "strengths": [
+    "Changes kernel behaviour at runtime without rebuilding the kernel or loading a module, and the verifier makes a crash far less likely than with a module",
+    "Low overhead: programs are JIT-compiled and run where the event happens, so tools can aggregate in the kernel and copy out only summaries",
+    "Sees everything on the host, including apps you can’t change: system calls, network packets and functions in uninstrumented binaries",
+    "Fast packet paths: XDP programs act on packets in the driver, before the kernel allocates its usual socket buffers, which suits load balancers and DDoS filters",
+    "Portable binaries: with BTF type information and libbpf’s CO-RE relocations, one compiled program runs on kernels whose internal structs differ"
+  ],
+  "limits": [
+    "The verifier is strict and its errors are hard to read: correct-looking code is rejected over a missing null or bounds check, and complex programs hit the 1-million-instruction verification limit",
+    "Features depend on the kernel version: bounded loops need 5.3, CO-RE needs a kernel built with BTF, and `sched_ext` needs 6.12, so older distributions get less",
+    "Loading programs needs root or `CAP_BPF` unless unprivileged eBPF is enabled, so eBPF tools usually run as privileged agents on each node",
+    "Linux-first: Microsoft still calls eBPF for Windows a work in progress, and it checks programs with a different verifier (PREVAIL) and usually compiles them into Windows drivers",
+    "Programs that call “GPL only” helpers, and all LSM and `struct_ops` programs, must carry a GPL-compatible licence"
+  ],
+  "worksWith": [
+    { "id": "kubernetes", "how": "runs networking and security agents on" },
+    { "id": "opentelemetry", "how": "feeds zero-code traces and metrics into" },
+    { "id": "datadog", "how": "powers network and security monitoring in" },
+    { "id": "better-stack", "how": "collects data through a sensor in" }
+  ],
+  "snippet": {
+    "lang": "c",
+    "title": "Count execve() calls per command name in a map that user space reads",
+    "source": [
+      "// count.bpf.c, built with: clang -O2 -g -target bpf -c count.bpf.c",
+      "#include \"vmlinux.h\"          // kernel types, generated from BTF",
+      "#include <bpf/bpf_helpers.h>",
+      "",
+      "struct {",
+      "    __uint(type, BPF_MAP_TYPE_HASH);",
+      "    __uint(max_entries, 10240);",
+      "    __type(key, char[16]);      // command name",
+      "    __type(value, u64);         // number of calls",
+      "} counts SEC(\".maps\");",
+      "",
+      "SEC(\"tracepoint/syscalls/sys_enter_execve\")",
+      "int count_execve(void *ctx)",
+      "{",
+      "    char comm[16];",
+      "    u64 one = 1, *n;",
+      "",
+      "    bpf_get_current_comm(&comm, sizeof(comm));",
+      "    n = bpf_map_lookup_elem(&counts, &comm);",
+      "    if (n)                      // without this check the verifier rejects the program",
+      "        __sync_fetch_and_add(n, 1);",
+      "    else",
+      "        bpf_map_update_elem(&counts, &comm, &one, BPF_ANY);",
+      "    return 0;",
+      "}",
+      "",
+      "char LICENSE[] SEC(\"license\") = \"GPL\";"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Where a program can attach",
+      "intro": "The hook decides what a program sees and what it may change. These are the families cloud tools use most.",
+      "columns": ["Runs when", "Typical use"],
+      "rows": [
+        { "label": "kprobes, fentry, tracepoints", "values": ["A kernel function is entered or returns, or a stable tracepoint fires", "Tracing and profiling: latency histograms, syscall auditing (bpftrace, bcc)"] },
+        { "label": "uprobes, USDT", "values": ["A function in a user-space binary or library runs", "Tracing functions in apps and libraries without changing or restarting them"] },
+        { "label": "XDP", "values": ["A packet reaches the network driver, before the kernel’s networking stack", "Load balancing and DDoS filtering at line rate (Katran, Cloudflare)"] },
+        { "label": "tc", "values": ["A packet enters or leaves an interface in the traffic-control layer", "Container networking and policy (Cilium)"] },
+        { "label": "cgroup, LSM", "values": ["A process in a cgroup opens a socket, or a security hook runs", "Per-container firewalls and runtime security (Tetragon, Falco)"] },
+        { "label": "struct_ops", "values": ["The kernel calls an operation that the program implements", "Custom TCP congestion control, and CPU schedulers through `sched_ext`"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "BPF, the Berkeley Packet Filter, was described by Steven McCanne and Van Jacobson of Lawrence Berkeley Laboratory at USENIX in 1993: a tiny register machine in the kernel that ran a capture filter on each packet, so tools such as tcpdump copied only the packets they wanted. Linux adopted it for socket filtering, and later for `seccomp` system-call filters.",
+      "In 2014 Alexei Starovoitov reworked the kernel’s BPF into a more general machine: ten 64-bit registers, instructions close to real hardware and calls to a restricted set of kernel functions. LWN called it “the universal in-kernel virtual machine”. Linux 3.18, released in December 2014, added the `bpf()` system call, maps and the verifier, which “statically determines that the program terminates and is safe to execute”. Tracing hooks followed, then XDP in Linux 4.8 in 2016, BTF type information and, in 2020, libbpf’s “compile once, run everywhere” relocations.",
+      "Meta, Google, Isovalent, Microsoft and Netflix set up the eBPF Foundation at the Linux Foundation in August 2021, the year Microsoft started eBPF for Windows. The IETF published the instruction set as RFC 9669 in October 2024, and Linux 6.12 that November let schedulers be written in eBPF."
+    ],
+    "choices": [
+      {
+        "choice": "A verifier instead of trust",
+        "why": "Code in the kernel can crash the whole machine. Checking every path before loading, and refusing anything that might loop forever or touch memory it shouldn’t, lets far more people run their own code in the kernel than kernel modules ever could."
+      },
+      {
+        "choice": "A small, hardware-like instruction set",
+        "why": "Registers and instructions that map almost one-to-one onto x86-64 and Arm64 make the JIT simple and the compiled code fast, and the same bytecode can be checked once and run on any CPU the kernel supports."
+      },
+      {
+        "choice": "Helpers and maps instead of free access to the kernel",
+        "why": "A fixed API of helper functions, and shared maps for state, keep programs away from arbitrary kernel internals while still letting them talk to user space and to each other."
+      }
+    ],
+    "timeline": [
+      { "year": "1993", "text": "McCanne and Jacobson publish the BSD Packet Filter at USENIX" },
+      { "year": "2014", "text": "Extended BPF; Linux 3.18 adds the bpf() syscall, maps and the verifier in December" },
+      { "year": "2016", "text": "XDP in Linux 4.8" },
+      { "year": "2019", "text": "Linux 5.2 raises the verifier limit to 1 million instructions; 5.3 allows bounded loops" },
+      { "year": "2020", "text": "BPF CO-RE: compile once, run on many kernels" },
+      { "year": "2021", "text": "eBPF Foundation founded in August; eBPF for Windows started" },
+      { "year": "2024", "text": "RFC 9669 standardises the instruction set in October; sched_ext in Linux 6.12 in November" }
+    ],
+    "sources": [
+      { "label": "Steven McCanne and Van Jacobson: The BSD Packet Filter, a new architecture for user-level packet capture (USENIX, 1993)", "url": "https://www.tcpdump.org/papers/bpf-usenix93.pdf" },
+      { "label": "LWN: BPF, the universal in-kernel virtual machine (May 21, 2014)", "url": "https://lwn.net/Articles/599755/" },
+      { "label": "Kernelnewbies: Linux 3.18 (bpf() syscall, released December 7, 2014)", "url": "https://kernelnewbies.org/Linux_3.18" },
+      { "label": "Kernelnewbies: Linux 4.8 (XDP, released October 2, 2016)", "url": "https://kernelnewbies.org/Linux_4.8" },
+      { "label": "Andrii Nakryiko: BPF portability and CO-RE (February 19, 2020)", "url": "https://nakryiko.com/posts/bpf-portability-and-co-re/" },
+      { "label": "eBPF Docs: Verifier (limits raised in v5.2, bounded loops in v5.3)", "url": "https://docs.ebpf.io/linux/concepts/verifier/" },
+      { "label": "Linux Foundation: Meta, Google, Isovalent, Microsoft and Netflix launch eBPF Foundation (August 12, 2021)", "url": "https://www.linuxfoundation.org/press/press-release/facebook-google-isovalent-microsoft-and-netflix-launch-ebpf-foundation-as-part-of-the-linux-foundation" },
+      { "label": "GitHub: microsoft/ebpf-for-windows (created April 2021)", "url": "https://github.com/microsoft/ebpf-for-windows" },
+      { "label": "IETF datatracker: RFC 9669, BPF Instruction Set Architecture (October 2024)", "url": "https://datatracker.ietf.org/doc/rfc9669/" },
+      { "label": "Kernelnewbies: Linux 6.12 (sched_ext, released November 17, 2024)", "url": "https://kernelnewbies.org/Linux_6.12" }
+    ]
+  },
+  "sources": [
+    { "label": "ebpf.io: What is eBPF? (hooks, verifier, JIT, maps, helpers, privileges)", "url": "https://ebpf.io/what-is-ebpf/" },
+    { "label": "Linux kernel docs: eBPF verifier", "url": "https://docs.kernel.org/bpf/verifier.html" },
+    { "label": "eBPF Docs: Verifier (1-million-instruction limit, bounded loops)", "url": "https://docs.ebpf.io/linux/concepts/verifier/" },
+    { "label": "RFC 9669: BPF Instruction Set Architecture (ISA)", "url": "https://www.rfc-editor.org/rfc/rfc9669" },
+    { "label": "Linux kernel docs: BPF licensing (GPLv2 runtime, BSD instruction set, GPL-only helpers, LSM and struct_ops)", "url": "https://docs.kernel.org/bpf/bpf_licensing.html" },
+    { "label": "Andrii Nakryiko: BPF portability and CO-RE (BTF, libbpf relocations)", "url": "https://nakryiko.com/posts/bpf-portability-and-co-re/" },
+    { "label": "Kernelnewbies: Linux 4.8 (XDP)", "url": "https://kernelnewbies.org/Linux_4.8" },
+    { "label": "Kernelnewbies: Linux 6.12 (sched_ext)", "url": "https://kernelnewbies.org/Linux_6.12" },
+    { "label": "eBPF Foundation: eBPF projects (applications such as bcc, bpftrace, Cilium, Falco, Katran and Tetragon)", "url": "https://ebpf.foundation/projects/" },
+    { "label": "eBPF Foundation charter (amended October 8, 2025; supports the eBPF ecosystem)", "url": "https://github.com/ebpffoundation/foundation/blob/main/charter.md" },
+    { "label": "GitHub: microsoft/ebpf-for-windows (eBPF implementation that runs on top of Windows)", "url": "https://github.com/microsoft/ebpf-for-windows" },
+    { "label": "GitHub: libbpf/libbpf", "url": "https://github.com/libbpf/libbpf" },
+    { "label": "GitHub: aya-rs/aya (eBPF in Rust)", "url": "https://github.com/aya-rs/aya" },
+    { "label": "eBPF Foundation: Case study, how Cloudflare uses eBPF for security, networking and observability (July 15, 2026)", "url": "https://ebpf.foundation/case-study-how-cloudflare-uses-ebpf-to-power-security-networking-and-observability-at-global-scale/" },
+    { "label": "eBPF Foundation: How Google uses eBPF to tailor CPU scheduling (September 16, 2026)", "url": "https://ebpf.foundation/how-google-uses-ebpf-to-tailor-cpu-scheduling-and-optimize-workload-performance-2/" },
+    { "label": "OpenTelemetry: eBPF instrumentation (OBI, formerly Grafana Beyla)", "url": "https://opentelemetry.io/docs/zero-code/obi/" },
+    { "label": "Datadog docs: Cloud Network Monitoring setup (eBPF-based system probe)", "url": "https://docs.datadoghq.com/network_monitoring/cloud_network_monitoring/setup/" },
+    { "label": "Better Stack docs: eBPF collector", "url": "https://betterstack.com/docs/logs/collector/" }
+  ],
+  "checked": "2026-10-28"
+}

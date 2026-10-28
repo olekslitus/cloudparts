@@ -1,0 +1,111 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "SPDK (Storage Performance Development Kit)",
+  "concepts": ["block"],
+  "provider": "oss",
+  "vendor": "SPDK project (Linux Foundation), started at Intel",
+  "foundation": { "id": "linux-foundation", "joined": "2025-04-17", "via": "A series of LF Projects, LLC, since Intel handed it over in 2025" },
+  "license": "BSD-3-Clause",
+  "website": "https://spdk.io/",
+  "repo": "https://github.com/spdk/spdk",
+  "summary": "C libraries and ready-made targets for building storage software that drives NVMe SSDs from user space, polling for completions instead of waiting on kernel interrupts.",
+  "intro": [
+    "SPDK moves the storage stack out of the kernel. Its foundation is a user-space NVMe driver: the SSD is unbound from the kernel’s `nvme` driver (the `scripts/setup.sh` script does this and reserves hugepages), the application maps the device’s queues into its own memory, and one thread per core submits commands and polls for completions without system calls, interrupts, locks or copies. Threads pass messages instead of sharing data. On top sit a block device layer (bdev) that gives NVMe drives, Ceph RBD images, AIO files, RAID, logical volumes and RAM disks one asynchronous interface, Blobstore, a power-fail-safe block allocator for databases and storage services that don’t need a POSIX file system, and an acceleration framework that hands copies, CRC32C and other operations to engines such as Intel DSA, or to software.",
+    "Most users run one of its targets rather than write their own application. `nvmf_tgt` serves bdevs over NVMe over Fabrics (TCP or RDMA), `vhost` serves them to QEMU virtual machines as virtio-blk or virtio-scsi disks over vhost-user, `iscsi_tgt` speaks iSCSI, and the ublk target exposes them back to the local kernel as block devices. All are configured over a JSON-RPC socket with `scripts/rpc.py`. Ceph’s NVMe-oF gateway and Longhorn’s V2 data engine are built on SPDK. Intel started it in 2013 and open-sourced it in 2015; in 2019 the community’s NVMe driver passed 10 million IOPS on a single CPU core, and in 2023 a two-socket Xeon server reached 120 million IOPS. In December 2024 Intel announced it was divesting from SPDK, and the project moved to the Linux Foundation in 2025 under a Technical Steering Committee whose participating organisations include Arm, Dell, HPE, Nutanix, NVIDIA, Samsung, Solidigm, StarWind and Tencent. Releases are named by year and month, three a year: 26.09 came out on September 25, 2026."
+  ],
+  "strengths": [
+    "Very high IOPS per core: no interrupts, system calls, locks or copies on the I/O path, so one core can drive millions of operations per second",
+    "Ready-made NVMe-oF, vhost, iSCSI and ublk targets, so you get a fast storage server or VM disk backend without writing C",
+    "Building blocks for your own storage engine: the bdev layer, logical volumes, RAID, Blobstore and hardware acceleration modules",
+    "Permissive BSD-3-Clause licence and vendor-neutral governance since the move to the Linux Foundation"
+  ],
+  "limits": [
+    "Polling keeps its cores busy even when idle; interrupt modes for NVMe over PCIe (25.05) and other modules are newer and narrower",
+    "Takes devices away from the kernel: once an SSD is bound to SPDK, kernel file systems and ordinary tools can’t use it unless SPDK exports it back, for example as a ublk device",
+    "Needs hugepages, root to set up, and real tuning (CPU masks, queue depths, NUMA placement); it is a development kit, not a finished storage product",
+    "Its main sponsor left: Intel divested in December 2024, and per-patch CI and merges were paused until the Linux Foundation project set up new CI in 2025"
+  ],
+  "worksWith": [
+    { "id": "ceph", "how": "powers the NVMe-oF gateway of" },
+    { "id": "qemu", "how": "serves vhost-user disks to VMs in" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Export a RAM disk over NVMe/TCP with nvmf_tgt, from the SPDK docs (run from the SPDK directory as root)",
+    "source": [
+      "scripts/setup.sh                       # reserve hugepages, unbind NVMe devices from the kernel",
+      "build/bin/nvmf_tgt &",
+      "",
+      "scripts/rpc.py nvmf_create_transport -t TCP -m 8 -c 8192",
+      "scripts/rpc.py bdev_malloc_create -b Malloc0 512 512   # 512 MiB, 512-byte blocks",
+      "scripts/rpc.py nvmf_create_subsystem nqn.2016-06.io.spdk:cnode1 -a -s SPDK00000000000001 -d SPDK_Controller1",
+      "scripts/rpc.py nvmf_subsystem_add_ns nqn.2016-06.io.spdk:cnode1 Malloc0",
+      "scripts/rpc.py nvmf_subsystem_add_listener nqn.2016-06.io.spdk:cnode1 -t tcp -a 192.168.100.8 -s 4420",
+      "",
+      "# on a Linux host: nvme connect -t tcp -n \"nqn.2016-06.io.spdk:cnode1\" -a 192.168.100.8 -s 4420"
+    ]
+  },
+  "sections": [
+    {
+      "type": "table",
+      "title": "Ways to serve SPDK storage",
+      "corner": "Target",
+      "columns": ["Who connects", "Typical use"],
+      "rows": [
+        { "label": "NVMe-oF (`nvmf_tgt`)", "values": ["Remote hosts with the kernel’s `nvme-tcp` or `nvme-rdma` drivers", "Disaggregated flash, storage gateways such as Ceph’s"] },
+        { "label": "vhost (`vhost`)", "values": ["QEMU VMs on the same host, through `vhost-user-blk-pci` or `vhost-user-scsi-pci`", "Fast VM disks without the guest’s I/O going through the host kernel"] },
+        { "label": "iSCSI (`iscsi_tgt`)", "values": ["Any iSCSI initiator", "Older SANs and hosts without NVMe-oF"] },
+        { "label": "ublk", "values": ["The local Linux kernel, as a `/dev/ublkb*` block device, over io_uring", "Using SPDK volumes with ordinary file systems and tools"] }
+      ]
+    }
+  ],
+  "history": {
+    "story": [
+      "NVMe SSDs made storage fast enough that the kernel became the bottleneck: an interrupt, a context switch and a trip through the block layer for every I/O cost more than the drive’s own latency on media such as Intel’s Optane. Intel started SPDK in 2013 to rebuild the storage stack for that hardware, borrowing the approach of its packet-processing kit DPDK, on which SPDK’s environment layer still builds: drivers in user space, polling instead of interrupts. It opened the project to the community in 2015 under a BSD licence.",
+      "The project measured itself in IOPS per core. A redesigned NVMe driver passed 10 million IOPS on one core in 2019, a system scaled to 80 million IOPS in 2021, and a 2U server with two Sapphire Rapids Xeons and Optane SSDs reached 120 million 512-byte random reads per second in 2023. Over the same years SPDK grew targets for NVMe-oF, vhost and iSCSI, and storage vendors such as Nutanix built products on it.",
+      "On December 5, 2024 Intel announced that it was divesting from SPDK and that the project would move to the Linux Foundation in 2025. Eleven days later it switched off its CI, which ran most per-patch and nightly testing, and merges to the main branch stopped. The new LF project set up open-source CI infrastructure, formed a Technical Steering Committee, and shipped v25.05 on May 29, 2025, the first release after the transition."
+    ],
+    "choices": [
+      { "choice": "Drivers in user space", "why": "Mapping the device’s queues into the application avoids a system call and a copy for every I/O, and lets the application, not the kernel, decide how requests are queued." },
+      { "choice": "Poll instead of waiting for interrupts", "why": "At millions of I/Os per second, an interrupt and context switch per completion cost more than the device’s latency. Checking completion queues in a loop lowers both latency and its variance, at the price of a busy core." },
+      { "choice": "No locks on the I/O path; pass messages between threads", "why": "Each thread owns its queues and data, and work for another thread is sent to it as a message, so throughput scales with cores instead of stalling on shared locks." }
+    ],
+    "timeline": [
+      { "year": "2013", "text": "Intel starts SPDK" },
+      { "year": "2015", "text": "Opened to the community under a BSD licence" },
+      { "year": "2019", "text": "New NVMe driver passes 10 million IOPS on one CPU core" },
+      { "year": "2023", "text": "120 million IOPS from one 2U Xeon server" },
+      { "year": "2024", "text": "Intel announces it will divest and hand SPDK to the Linux Foundation (December 5)" },
+      { "year": "2025", "text": "v25.05, the first release under the Linux Foundation (May 29)" },
+      { "year": "2026", "text": "v26.09 released (September 25)" }
+    ],
+    "sources": [
+      { "label": "SPDK: 120 million I/O per second with a standard 2U Intel Xeon system (February 2023; started 2013, community 2015, 10M IOPS per core in 2019, 80M in 2021)", "url": "https://spdk.io/news/2023/02/01/nvme-120m-iops/" },
+      { "label": "SPDK: Intel’s SPDK transition to the Linux Foundation (December 5, 2024)", "url": "https://spdk.io/news/2024/12/05/LF/" },
+      { "label": "SPDK: Updates on SPDK Linux Foundation transition (December 16, 2024)", "url": "https://spdk.io/news/2024/12/16/transition/" },
+      { "label": "SPDK: v25.05 release (first release after the Linux Foundation transition)", "url": "https://spdk.io/release/2025/05/29/v25.05_release/" },
+      { "label": "DPDK Summit 2018: Accelerate storage service via SPDK (started 2013, open-sourced 2015, BSD)", "url": "https://dpdk.org/wp-content/uploads/sites/23/2018/06/Accelerate-storage-service-via-SPDK.pdf" },
+      { "label": "SPDK news (Nutanix .Next 2019: BlockStore and SPDK)", "url": "https://spdk.io/news/" },
+      { "label": "Intel: Introduction to the Storage Performance Development Kit", "url": "https://www.intel.com/content/www/us/en/developer/articles/tool/introduction-to-the-storage-performance-development-kit-spdk.html" }
+    ]
+  },
+  "sources": [
+    { "label": "SPDK docs: What is SPDK (user-space drivers, polling, lockless message passing, bdev, targets)", "url": "https://spdk.io/doc/about.html" },
+    { "label": "GitHub: spdk/spdk README (components, hugepages and device binding, polled mode, Linux and FreeBSD)", "url": "https://github.com/spdk/spdk" },
+    { "label": "GitHub: spdk/spdk LICENSE (BSD-3-Clause)", "url": "https://github.com/spdk/spdk/blob/master/LICENSE" },
+    { "label": "GitHub: spdk/spdk GOVERNANCE.md (core maintainers, TSC, participating organisations)", "url": "https://github.com/spdk/spdk/blob/master/GOVERNANCE.md" },
+    { "label": "SPDK docs: NVMe over Fabrics target (RPC example, TCP and RDMA)", "url": "https://spdk.io/doc/nvmf.html" },
+    { "label": "SPDK docs: vhost target (vhost-user-blk and vhost-user-scsi with QEMU)", "url": "https://spdk.io/doc/vhost.html" },
+    { "label": "SPDK docs: ublk target", "url": "https://spdk.io/doc/ublk.html" },
+    { "label": "SPDK docs: Blobstore programmer’s guide", "url": "https://spdk.io/doc/blob.html" },
+    { "label": "SPDK docs: Block device user guide", "url": "https://spdk.io/doc/bdev.html" },
+    { "label": "SPDK docs: Acceleration framework (IOAT, DSA, software module, CRC32C)", "url": "https://spdk.io/doc/accel_fw.html" },
+    { "label": "GitHub: spdk/spdk releases (v26.01, v26.05, v26.09 on September 25, 2026)", "url": "https://github.com/spdk/spdk/releases" },
+    { "label": "SPDK: v25.05 release (Linux Foundation transition, TSC, NVMe PCIe interrupt mode, LTS)", "url": "https://spdk.io/release/2025/05/29/v25.05_release/" },
+    { "label": "SPDK: Intel’s SPDK transition to the Linux Foundation (December 5, 2024)", "url": "https://spdk.io/news/2024/12/05/LF/" },
+    { "label": "SPDK: Updates on SPDK Linux Foundation transition (CI turned off, merges paused)", "url": "https://spdk.io/news/2024/12/16/transition/" },
+    { "label": "GitHub: ceph/ceph-nvmeof (Ceph NVMe-oF gateway, SPDK submodule)", "url": "https://github.com/ceph/ceph-nvmeof" },
+    { "label": "GitHub: longhorn/longhorn (V2 data engine built on SPDK)", "url": "https://github.com/longhorn/longhorn" }
+  ],
+  "checked": "2026-10-28"
+}

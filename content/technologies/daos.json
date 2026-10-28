@@ -1,0 +1,99 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "DAOS",
+  "concepts": ["file"],
+  "provider": "oss",
+  "vendor": "DAOS Foundation (Linux Foundation), started at Intel",
+  "foundation": { "id": "daos-foundation", "joined": "2023-11-09" },
+  "license": "BSD-2-Clause Plus Patent",
+  "website": "https://daos.io/",
+  "repo": "https://github.com/daos-stack/daos",
+  "summary": "Distributed Asynchronous Object Storage: an all-flash storage system for supercomputers and AI clusters that runs entirely in user space and serves a parallel file system on top of its own key-value object store.",
+  "intro": [
+    "DAOS was built for the storage of supercomputers, where thousands of nodes write checkpoints and read training data at once and the locks and metadata servers of a POSIX file system become the bottleneck. Its engines run end to end in user space: they reach NVMe SSDs through SPDK and the network through libfabric (TCP or InfiniBand verbs, with UCX as an alternative), bypassing the kernel. Storage is carved into pools, a reservation of capacity across many servers, and each pool holds containers, separate object address spaces that are snapshotted and managed as a unit. Inside a container, objects are addressed by a distribution key, which decides the server, and an attribute key, under which sits a single value or an array. Each object’s class sets its protection: replication such as 1×4, or erasure coding such as 4+2. Pool metadata is replicated across a few nodes in separate fault domains and kept consistent by consensus, and lost redundancy is rebuilt automatically.",
+    "Applications rarely use the object API directly. A container created with `--type=POSIX` holds a file system, which programs reach through `libdfs`, through a FUSE mount (`dfuse`) that lets unmodified programs see ordinary files, or through interception libraries loaded with `LD_PRELOAD` that skip the kernel for reads, writes and, with `libpil4dfs`, metadata. MPI-IO, HDF5, a Hadoop and Spark connector, TensorFlow-IO and Python dictionaries sit on the same objects. DAOS was designed around Intel Optane persistent memory for metadata; after Intel cancelled Optane in 2022 it gained a Metadata-on-SSD mode for ordinary servers, which DAOS 2.8 (August 2026, the first release managed by the DAOS Foundation) declares production ready. It runs on x86-64 servers with EL 9 or SLES 15, and Argonne’s Aurora supercomputer uses it as its main storage."
+  ],
+  "strengths": [
+    "Very high parallel throughput: Argonne’s Aurora system topped the IO500 production list in 2023 and again at SC24, where it scored 32,165 against 2,509 for the next system, also running DAOS",
+    "No distributed locks and no kernel in the storage servers’ data path: clients talk to user-space engines over RDMA, and interception libraries keep the client’s kernel out of reads and writes too",
+    "One store, several interfaces: POSIX files, MPI-IO, HDF5, Spark and key-value or array objects all live in the same pools",
+    "Replication or erasure coding chosen per object class, with automatic rebuild after a server or drive fails",
+    "BSD-licensed and governed by a neutral foundation whose members include Argonne, Google, HPE and Intel"
+  ],
+  "limits": [
+    "Not fully POSIX: no `flock`, hard links or quotas, `O_APPEND` from several mounts can corrupt a file, and dfuse caches metadata and data by default, which can surprise parallel jobs",
+    "Narrow platform support: x86-64 only, EL 9 or SLES 15, and best with an RDMA network; ARM clients work but are not tested in CI",
+    "Missing features many enterprise file systems have: no encryption at rest or in flight, no compression or deduplication, and no rolling upgrades",
+    "Small community after Intel’s exit: Intel’s last release was 2.6 in July 2024, and development now rests mainly on HPE, Google and Enakta Labs"
+  ],
+  "worksWith": [
+    { "id": "spark", "how": "serves data to, via a Hadoop connector," }
+  ],
+  "alternatives": ["ceph", "efs", "hadoop"],
+  "snippet": {
+    "lang": "bash",
+    "title": "Create a pool and a POSIX container, mount it on a compute node and use it",
+    "source": [
+      "# on an admin node: reserve 50 GB across the storage servers",
+      "dmg pool create --size 50GB tank",
+      "",
+      "# a container holding a POSIX file system",
+      "daos cont create tank scratch --type=POSIX",
+      "",
+      "# on every compute node: mount it with FUSE",
+      "dfuse -m /mnt/scratch tank scratch",
+      "ls /mnt/scratch",
+      "",
+      "# bypass the kernel for reads, writes and metadata calls",
+      "LD_PRELOAD=/usr/lib64/libpil4dfs.so cp -r ./inputs /mnt/scratch/",
+      "",
+      "fusermount3 -u /mnt/scratch"
+    ]
+  },
+  "history": {
+    "story": [
+      "DAOS started in 2012 as research inside Intel’s high-performance storage group, which had come with the purchase of Whamcloud, the company behind the Lustre file system, and was funded in part by the US Department of Energy’s FastForward programme for future exascale machines. The idea was to stop forcing every workload through POSIX: build a lock-free, versioned object store on persistent memory and flash, and put file systems and scientific I/O libraries on top of it as layers.",
+      "The code was published on GitHub in 2016, and DAOS became the storage system of Aurora, the exascale supercomputer that Intel and HPE built for Argonne National Laboratory. Its design leaned on Intel Optane persistent memory for metadata, so when Intel cancelled Optane in 2022 the project re-architected the metadata path to log to NVMe SSDs instead.",
+      "In November 2023 Argonne, Enakta Labs, Google Cloud, HPE and Intel launched the DAOS Foundation at the Linux Foundation, and Intel donated the code. Intel’s last release was 2.6 in July 2024. Since then HPE, whose Johann Lombardi chairs the technical steering committee, has led development; Google runs its Parallelstore service on DAOS, and the foundation released 2.8 in August 2026."
+    ],
+    "choices": [
+      { "choice": "Objects first, POSIX as a layer", "why": "POSIX’s locking and shared metadata limit parallel I/O at supercomputer scale, so DAOS offers a key-value object model and builds the file system, MPI-IO and HDF5 on top of it." },
+      { "choice": "Everything in user space", "why": "Flash and RDMA networks answer in microseconds, so DAOS reaches NVMe through SPDK and the network through libfabric and keeps the operating system out of every I/O." },
+      { "choice": "Versioned writes instead of locks", "why": "Every update is tagged with an epoch and kept as a new version, so DAOS needs no distributed locks and a snapshot is just a reference to an epoch." },
+      { "choice": "Metadata on SSD after Optane", "why": "With Optane discontinued, DAOS keeps metadata in DRAM and persists a write-ahead log to NVMe, so it runs on ordinary servers." }
+    ],
+    "timeline": [
+      { "year": "2012", "text": "Research starts at Intel under the DOE FastForward programme" },
+      { "year": "2016", "text": "Code published on GitHub" },
+      { "year": "2022", "text": "Intel cancels Optane; work starts on Metadata-on-SSD" },
+      { "year": "2023", "text": "DAOS Foundation launched on November 9; Aurora tops the IO500 production list" },
+      { "year": "2024", "text": "Version 2.6 in July, Intel’s last release" },
+      { "year": "2026", "text": "Version 2.8 in August, the first foundation release, with production-ready Metadata-on-SSD" }
+    ],
+    "sources": [
+      { "label": "Glenn K. Lockwood: DAOS (history notes, Whamcloud and FastForward)", "url": "https://glennklockwood.com/garden/daos" },
+      { "label": "Linux Foundation: DAOS Foundation launches (November 9, 2023)", "url": "https://linuxfoundation.org/press/daos-foundation-launches-to-broaden-governance-of-distributed-asynchronous-object-storage" },
+      { "label": "Blocks & Files: DAOS file system lives on after Optane (April 15, 2025)", "url": "https://blocksandfiles.com/2025/04/15/daos-post-optane-resurrection/" },
+      { "label": "Google Cloud blog: Google Cloud supports the DAOS Foundation (November 9, 2023)", "url": "https://cloud.google.com/blog/products/storage-data-transfer/google-cloud-supports-daos-foundation/" },
+      { "label": "DAOS Foundation: Technical Steering Committee", "url": "https://daos.io/?page_id=30" },
+      { "label": "DAOS 2.8 release notes", "url": "https://docs.daos.io/v2.8/release/release_notes/" },
+      { "label": "GitHub: daos-stack/daos releases", "url": "https://github.com/daos-stack/daos/releases" }
+    ]
+  },
+  "sources": [
+    { "label": "GitHub: daos-stack/daos (README, licence)", "url": "https://github.com/daos-stack/daos" },
+    { "label": "DAOS docs: Architecture overview", "url": "https://docs.daos.io/v2.6/overview/architecture/" },
+    { "label": "DAOS docs: Storage model (pools, containers, objects, redundancy)", "url": "https://docs.daos.io/v2.6/overview/storage/" },
+    { "label": "DAOS docs: File system (libdfs, dfuse, interception libraries, POSIX limits)", "url": "https://docs.daos.io/v2.6/user/filesystem/" },
+    { "label": "DAOS docs: Pool operations", "url": "https://docs.daos.io/v2.6/admin/pool_operations/" },
+    { "label": "DAOS docs: Hardware requirements (fabrics, processors)", "url": "https://docs.daos.io/v2.6/admin/hardware/" },
+    { "label": "DAOS 2.8 release notes (Metadata-on-SSD default, supported distributions)", "url": "https://docs.daos.io/v2.8/release/release_notes/" },
+    { "label": "DAOS release 2.8.1 (October 27, 2026)", "url": "https://github.com/daos-stack/daos/releases/tag/v2.8.1" },
+    { "label": "Linux Foundation: DAOS Foundation launches (November 9, 2023)", "url": "https://linuxfoundation.org/press/daos-foundation-launches-to-broaden-governance-of-distributed-asynchronous-object-storage" },
+    { "label": "DAOS Foundation: Members", "url": "https://daos.io/members" },
+    { "label": "Blocks & Files: DAOS file system lives on after Optane (April 15, 2025; IO500 results)", "url": "https://blocksandfiles.com/2025/04/15/daos-post-optane-resurrection/" },
+    { "label": "Glenn K. Lockwood: DAOS (missing features on the 2026 roadmap)", "url": "https://glennklockwood.com/garden/daos" },
+    { "label": "Google Cloud: Parallelstore documentation", "url": "https://docs.cloud.google.com/parallelstore" }
+  ],
+  "checked": "2026-10-28"
+}

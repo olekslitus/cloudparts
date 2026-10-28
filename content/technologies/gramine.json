@@ -1,0 +1,93 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Gramine",
+  "concepts": ["confidential-computing"],
+  "provider": "oss",
+  "vendor": "Confidential Computing Consortium (Linux Foundation), started as Graphene at Stony Brook University and Intel Labs",
+  "foundation": { "id": "confidential-computing-consortium", "stage": "graduation", "joined": "2021-09-15" },
+  "license": "LGPL 3.0 (GSC: BSD 3-Clause)",
+  "website": "https://gramineproject.io/",
+  "repo": "https://github.com/gramineproject/gramine",
+  "summary": "A library OS that runs unmodified Linux applications, including multi-process ones, inside Intel SGX enclaves, with a manifest that pins every trusted file and built-in remote attestation.",
+  "intro": [
+    "An Intel SGX enclave protects part of a process’s memory from the operating system, but code inside it can’t make system calls, so ordinary programs don’t run there. Gramine fills the gap with a library OS: a small guest kernel loaded into the enclave with the application, which implements the Linux system calls itself and passes to the untrusted host only what it must, such as reading files or sending packets. Each application gets a manifest, a TOML file with Jinja2 placeholders that names the entrypoint, the host files to mount, the enclave size (256 MB by default), the number of threads and the trusted files. `gramine-sgx-sign` hashes every trusted file into the signed manifest, and at run time Gramine refuses any file whose hash doesn’t match, so a swapped library is caught. Mounts of type `encrypted` transparently encrypt files the application writes to the host. `gramine-direct` runs the same setup as a plain Linux process for debugging, and `gramine-sgx` runs it in an enclave.",
+    "Gramine builds remote attestation in at three levels: `/dev/attestation` pseudo-files that expose raw SGX reports and quotes; RA-TLS, which puts the SGX quote into a self-signed TLS certificate so a client can check the enclave during the handshake; and secret provisioning libraries that deliver keys to an enclave only after its quote checks out. Since v1.9 (June 2025) only DCAP, Intel’s data-centre attestation, is supported. Gramine Shielded Containers (GSC) turn an existing Docker image into `gsc-<image>`, a signed image that runs the same application inside an enclave. Intel TDX support is experimental, in a separate `gramine-tdx` repository. Gramine is a graduated project of the Confidential Computing Consortium; companies listed as users include Tencent Cloud, IBM, enclaive.io and Super Protocol."
+  ],
+  "strengths": [
+    "Lift and shift: unmodified Linux binaries, including interpreters such as Python and programs that fork, run in an enclave without rewriting them against an enclave SDK",
+    "The signed manifest pins every trusted file by hash, and encrypted mounts protect what the application writes to the host",
+    "Attestation is built in, from raw quotes to RA-TLS and secret provisioning, so keys can be released only to the measured enclave",
+    "GSC wraps existing Docker images, and the project is a graduated CCC project with a technical charter under the Linux Foundation’s LF Projects"
+  ],
+  "limits": [
+    "Production support is Intel SGX only, and SGX capacity in clouds is shrinking: Azure restricts new capacity for its DCsv3 SGX VMs from November 1, 2026 and retires them on October 31, 2029",
+    "Enclaves cost performance: the Graphene-SGX paper measured up to about twice native run time in most single-process cases, and the enclave size must be declared up front unless EDMM is enabled",
+    "Everything the application touches must be in the manifest: with GSC, Docker volumes and secrets aren’t trusted automatically and runtime arguments are ignored unless you opt into the insecure `--insecure-args`",
+    "Releases have slowed: v1.8 came in October 2024 and v1.9 in June 2025, and there had been no release since by October 2026"
+  ],
+  "worksWith": [
+    { "id": "docker", "how": "wraps existing images built with" }
+  ],
+  "snippet": {
+    "lang": "bash",
+    "title": "Sign a manifest and run the same binary natively and inside an SGX enclave",
+    "source": [
+      "# helloworld.manifest.template",
+      "#   libos.entrypoint = \"/helloworld\"",
+      "#   fs.mounts = [",
+      "#     { path = \"/lib\", uri = \"file:{{ gramine.runtimedir() }}\" },",
+      "#     { path = \"/helloworld\", uri = \"file:helloworld\" },",
+      "#   ]",
+      "#   sgx.trusted_files = [ \"file:helloworld\", \"file:{{ gramine.runtimedir() }}/\" ]",
+      "",
+      "gramine-sgx-gen-private-key     # once: writes an RSA 3072 signing key",
+      "gramine-manifest helloworld.manifest.template helloworld.manifest",
+      "gramine-sgx-sign --manifest helloworld.manifest --output helloworld.manifest.sgx",
+      "",
+      "gramine-direct helloworld       # plain Linux process, for debugging",
+      "gramine-sgx helloworld          # inside an SGX enclave"
+    ]
+  },
+  "history": {
+    "story": [
+      "Gramine began as Graphene, a research library OS for running multi-process Linux applications, developed by Chia-Che Tsai, Donald Porter and colleagues at Stony Brook University. When Intel shipped SGX, the common belief was that a full library OS would be too slow and too large to put inside an enclave. In a 2017 USENIX ATC paper, Tsai, Porter and Intel’s Mona Vij argued otherwise with Graphene-SGX, which ran unmodified Apache, GCC and the R interpreter in enclaves, with overheads in most single-process cases between none and less than twice native.",
+      "The Confidential Computing Consortium’s technical council accepted Graphene in April 2020, and its Governing Board in September 2021. The project chose a new name on the way: “Graphene” was too common, might be impossible to trademark and collided with other software. Gramine v1.0, the first version meant for production use, came out on October 8, 2021, with the code moved to the `gramineproject` GitHub organisation and Gramine Shielded Containers split into their own repository.",
+      "The CCC listed Gramine at graduation, its higher stage, in December 2023. Later releases followed SGX itself into the data centre: v1.9 in June 2025 dropped EPID attestation, the out-of-tree SGX driver and CPUs without Flexible Launch Control, while experimental Intel TDX support was developed in a separate repository."
+    ],
+    "choices": [
+      { "choice": "A library OS instead of an enclave SDK", "why": "Porting applications to an SDK means splitting them into trusted and untrusted parts. Putting a Linux-compatible kernel inside the enclave lets existing binaries run as they are." },
+      { "choice": "A manifest of trusted files, hashed at signing", "why": "The host supplies every file the enclave reads, so Gramine needs to know in advance which files to trust and what they should contain; the hashes become part of the enclave’s signed measurement." },
+      { "choice": "Rename Graphene to Gramine", "why": "Joining the CCC meant handing the name to the Linux Foundation, and “Graphene” was too common to trademark and clashed with other software projects." }
+    ],
+    "timeline": [
+      { "year": "2017", "text": "Graphene-SGX paper at USENIX ATC runs unmodified applications in SGX enclaves" },
+      { "year": "2020", "text": "CCC technical council accepts Graphene in April" },
+      { "year": "2021", "text": "Renamed Gramine; CCC Governing Board accepts it in September; v1.0 on October 8" },
+      { "year": "2023", "text": "Listed at graduation in the CCC in December" },
+      { "year": "2024", "text": "v1.8 released in October" },
+      { "year": "2025", "text": "v1.9 in June drops EPID attestation and non-FLC hardware" }
+    ],
+    "sources": [
+      { "label": "USENIX ATC ’17: Graphene-SGX, a practical library OS for unmodified applications on SGX (Tsai, Porter, Vij)", "url": "https://www.usenix.org/conference/atc17/technical-sessions/presentation/tsai" },
+      { "label": "Gramine v1.0 release notes: new name and new home (October 8, 2021)", "url": "https://github.com/gramineproject/gramine/releases/tag/v1.0" },
+      { "label": "CCC governance: Gramine’s acceptance dates and stage", "url": "https://github.com/confidential-computing/governance/blob/main/Projects/README.md" },
+      { "label": "CCC governance: history of the project list (Gramine at graduation, December 7, 2023)", "url": "https://github.com/confidential-computing/governance/commits/main/Projects/README.md" },
+      { "label": "Gramine v1.9 release notes (June 20, 2025)", "url": "https://github.com/gramineproject/gramine/releases/tag/v1.9" }
+    ]
+  },
+  "sources": [
+    { "label": "gramineproject/gramine README (library OS, Graphene rename)", "url": "https://github.com/gramineproject/gramine" },
+    { "label": "Gramine documentation", "url": "https://gramine.readthedocs.io/en/latest/" },
+    { "label": "Gramine documentation: Manifest syntax (trusted files, encrypted mounts, enclave size, threads)", "url": "https://gramine.readthedocs.io/en/latest/manifest-syntax.html" },
+    { "label": "Gramine documentation: Remote attestation (RA-TLS, secret provisioning, DCAP)", "url": "https://gramine.readthedocs.io/en/latest/attestation.html" },
+    { "label": "Gramine documentation: Run a sample application", "url": "https://gramine.readthedocs.io/en/latest/run-sample-application.html" },
+    { "label": "Gramine helloworld example: Makefile and manifest template", "url": "https://github.com/gramineproject/gramine/tree/master/CI-Examples/helloworld" },
+    { "label": "Gramine documentation: Gramine Shielded Containers (GSC)", "url": "https://gramine.readthedocs.io/projects/gsc/en/latest/" },
+    { "label": "Gramine documentation: Users of Gramine", "url": "https://gramine.readthedocs.io/en/latest/gramine-users.html" },
+    { "label": "gramineproject/gramine-tdx (Intel TDX support, experimental)", "url": "https://github.com/gramineproject/gramine-tdx" },
+    { "label": "Gramine releases (v1.8 October 2024, v1.9 June 2025)", "url": "https://github.com/gramineproject/gramine/releases" },
+    { "label": "CCC governance: projects and stages (Gramine at graduation)", "url": "https://github.com/confidential-computing/governance/blob/main/Projects/README.md" },
+    { "label": "Azure Updates: DCsv3 and DCdsv3-series VMs retire on October 31, 2029", "url": "https://azure.microsoft.com/updates?id=569592" }
+  ],
+  "checked": "2026-10-28"
+}

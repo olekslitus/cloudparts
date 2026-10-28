@@ -1,0 +1,121 @@
+{
+  "$schema": "../../.schemas/technologies.schema.json",
+  "name": "Hyperledger Fabric",
+  "concepts": ["distributed-ledgers"],
+  "provider": "oss",
+  "vendor": "LF Decentralized Trust",
+  "foundation": { "id": "lf-decentralized-trust", "stage": "graduated" },
+  "license": "Apache 2.0",
+  "website": "https://www.lfdecentralizedtrust.org/projects/fabric",
+  "repo": "https://github.com/hyperledger/fabric",
+  "summary": "A permissioned ledger for a group of known organisations: each runs its own peers, smart contracts are written in Go, Java or JavaScript, and an ordering service puts transactions in one agreed order, with no cryptocurrency.",
+  "intro": [
+    "Fabric is built for a consortium, a few or a few dozen organisations that know each other but don’t want any one of them to own the shared records. Every participant has an X.509 identity issued by its organisation’s certificate authority, and each organisation runs its own peers. Smart contracts, called chaincode, are ordinary programs in Go, Java or Node.js. A transaction goes through three steps, which the project calls execute-order-validate. The client sends a proposal through the Fabric Gateway to the peers whose signatures the contract’s endorsement policy requires (say, one peer from each of two banks); each runs the chaincode against its copy of the state and signs the keys it read and the values it would write, without changing anything yet. The ordering service then puts endorsed transactions in a strict order and cuts blocks, without looking inside them. Finally every peer checks each transaction in a block against the endorsement policy and checks that the versions of the keys it read haven’t changed since; valid ones update the world state, and invalid ones stay in the block, marked invalid.",
+    "Data is split by channel: each channel is a separate ledger shared only by its members, and private data collections let a subset of a channel’s organisations keep values to themselves while the ledger stores only a hash. The current state lives in LevelDB inside the peer, or in CouchDB when values are JSON documents to be queried; the choice is fixed before a peer goes into production. Ordering used Raft, which survives crashed nodes, from 1.4.1; Fabric 3.0, released in September 2024, added a Byzantine fault-tolerant orderer based on the SmartBFT library and removed the old Kafka and Solo orderers. The current release is 3.1.5 (June 18, 2026), while the 2.5 line remains the long-term support release. Beside it, IBM Research contributed Fabric-X in 2025: a re-architected implementation for digital assets with a sharded BFT orderer called Arma, which reached 1.0 in May 2026 and which its maintainers say sustained more than 100,000 transactions per second in their own tests."
+  ],
+  "strengths": [
+    "Every participant is known and every transaction is signed, so access control, audit and legal agreements can sit on top of real identities, and there is no token, gas or mining",
+    "Channels and private data collections keep data away from organisations that shouldn’t see it, with a hash on the shared ledger as evidence",
+    "Smart contracts in general-purpose languages, and endorsement policies that say exactly which organisations must agree to each kind of change",
+    "Pluggable ordering: Raft when the ordering nodes are trusted not to lie, and BFT since 3.0 when up to a third of them might be malicious"
+  ],
+  "limits": [
+    "Heavy to run: every organisation operates certificate authorities, peers and its share of the orderers, and chaincode upgrades need approvals from enough organisations on each channel",
+    "Transactions that touch the same keys at the same time conflict, and the later one is marked invalid at commit and has to be resubmitted, so hot keys such as a single counter need redesigning",
+    "Far slower than a single database, and CouchDB rich queries are not guaranteed stable between execution and commit, so the docs say not to query and update in one transaction",
+    "Managed hosting is shrinking: Amazon Managed Blockchain stops taking new customers on October 29, 2026 and shuts down on September 29, 2027"
+  ],
+  "worksWith": [
+    { "id": "couchdb", "how": "can keep its world state in" }
+  ],
+  "alternatives": ["besu", "postgresql"],
+  "snippet": {
+    "lang": "go",
+    "title": "Chaincode: endorsing peers run this, then every peer checks what it read at commit",
+    "source": [
+      "package main",
+      "",
+      "import (",
+      "\t\"fmt\"",
+      "",
+      "\t\"github.com/hyperledger/fabric-contract-api-go/v2/contractapi\"",
+      ")",
+      "",
+      "type Shipments struct{ contractapi.Contract }",
+      "",
+      "// Transfer reads one key and writes it. The read version and the new value",
+      "// go into the signed endorsement; nothing changes until the block commits.",
+      "func (s *Shipments) Transfer(ctx contractapi.TransactionContextInterface, id, newOwner string) error {",
+      "\towner, err := ctx.GetStub().GetState(id)",
+      "\tif err != nil {",
+      "\t\treturn err",
+      "\t}",
+      "\tif owner == nil {",
+      "\t\treturn fmt.Errorf(\"shipment %s does not exist\", id)",
+      "\t}",
+      "\treturn ctx.GetStub().PutState(id, []byte(newOwner))",
+      "}",
+      "",
+      "func main() {",
+      "\tcc, err := contractapi.NewChaincode(&Shipments{})",
+      "\tif err != nil {",
+      "\t\tpanic(err)",
+      "\t}",
+      "\tif err := cc.Start(); err != nil {",
+      "\t\tpanic(err)",
+      "\t}",
+      "}"
+    ]
+  },
+  "history": {
+    "story": [
+      "Fabric began as a merger of code proposed to the Linux Foundation’s new Hyperledger Project in early 2016: IBM’s OpenBlockchain, together with work from Digital Asset and Blockstream’s libconsensus. IBM and Digital Asset contributed it. After a year in incubation it became the first Hyperledger project to reach “Active” status, in March 2017, and version 1.0 followed on July 11, 2017, with contributions from 159 engineers at 27 organisations.",
+      "Version 1.0 introduced the design that sets Fabric apart. Earlier blockchains, including Ethereum and Fabric’s own 0.6 preview, ordered transactions first and then had every node execute them in sequence, so contracts had to be deterministic and every node saw every transaction. The 1.0 architecture, described by Elli Androulaki and colleagues at EuroSys 2018, executes first on a few endorsing peers, then orders, then validates, and reported more than 3,500 transactions per second in some configurations. Version 1.4 in January 2019 was the first long-term support release, and 1.4.1 brought Raft ordering. Fabric 2.0 (January 2020) made chaincode deployment itself a decision that several organisations approve, and 2.5 (March 2023) added purging of private data history.",
+      "Fabric was the platform behind many of the consortium projects of the late 2010s, including TradeLens, which IBM and Maersk launched in 2018 for container shipping and shut down in early 2023 after failing to bring in enough of the industry. Development carried on: Fabric 3.0 in September 2024 added a BFT orderer and dropped Kafka, Solo and the system channel, and in 2025 IBM Research contributed Fabric-X for high-volume digital assets."
+    ],
+    "choices": [
+      { "choice": "Execute, then order, then validate", "why": "Running contracts on a few endorsing peers before ordering lets them be written in ordinary languages, run in parallel, and stay hidden from organisations that don’t need to run them; conflicts are caught later by checking read versions." },
+      { "choice": "Permissioned identities instead of mining", "why": "Members of a consortium are known legal entities, so the network can use certificates and signatures to decide who may act, and needs no proof of work or token to deter fake participants." },
+      { "choice": "Pluggable ordering", "why": "Ordering is separate from execution, so the project could go from Kafka to Raft to SmartBFT without changing how contracts are written." },
+      { "choice": "Channels for privacy", "why": "Businesses on one network often can’t share everything with each other, so each channel is its own ledger, and private data collections share only a hash where even a channel is too wide." }
+    ],
+    "timeline": [
+      { "year": "2016", "text": "IBM and Digital Asset contribute the code to the new Hyperledger Project" },
+      { "year": "2017", "text": "First Hyperledger project to reach Active status, in March; 1.0 on July 11" },
+      { "year": "2018", "text": "EuroSys paper describes the execute-order-validate design; IBM and Maersk launch TradeLens on Fabric" },
+      { "year": "2019", "text": "1.4, the first long-term support release, in January; Raft ordering in 1.4.1" },
+      { "year": "2020", "text": "2.0 adds decentralised chaincode governance in January" },
+      { "year": "2023", "text": "2.5 LTS in March; TradeLens goes offline" },
+      { "year": "2024", "text": "3.0 adds a SmartBFT ordering service in September" },
+      { "year": "2026", "text": "Fabric-X 1.0 on May 20; Fabric 3.1.5 on June 18" }
+    ],
+    "sources": [
+      { "label": "Wikipedia: Hyperledger (Fabric’s origins, 1.4 as first LTS)", "url": "https://en.wikipedia.org/wiki/Hyperledger" },
+      { "label": "Linux Foundation: Hyperledger announces production-ready Hyperledger Fabric 1.0 (July 11, 2017; Active status in March)", "url": "https://www.linuxfoundation.org/press/press-release/hyperledger-announces-production-ready-hyperledger-fabric-1-0" },
+      { "label": "LFDT: Hyperledger Fabric 1.0 (159 developers, 27 organisations)", "url": "https://lfdecentralizedtrust.org/hyperledger-fabric-1-0" },
+      { "label": "Androulaki et al.: Hyperledger Fabric, a distributed operating system for permissioned blockchains (EuroSys 2018, arXiv:1801.10228)", "url": "https://arxiv.org/abs/1801.10228" },
+      { "label": "GitHub: Fabric v2.0.0 release notes (January 29, 2020)", "url": "https://github.com/hyperledger/fabric/releases/tag/v2.0.0" },
+      { "label": "GitHub: Fabric v2.5.0 release notes (March 31, 2023)", "url": "https://github.com/hyperledger/fabric/releases/tag/v2.5.0" },
+      { "label": "GitHub: Fabric v3.0.0 release notes (September 17, 2024; Raft since 1.4.1)", "url": "https://github.com/hyperledger/fabric/releases/tag/v3.0.0" },
+      { "label": "Maersk: TradeLens solution brief (powered by Hyperledger Fabric)", "url": "https://www.maersk.com/~/media_sc9/maersk/local-information/files/west-central-asia/india/tradelens-solution-brief.pdf" },
+      { "label": "Global Trade Review: Maersk and IBM pull the plug on TradeLens (November 2022)", "url": "https://www.gtreview.com/news/fintech/maersk-and-ibm-pull-the-plug-on-tradelens/" },
+      { "label": "LFDT blog: The Hyperledger Fabric-X roadmap (April 6, 2026; contributed in 2025)", "url": "https://www.lfdecentralizedtrust.org/blog/the-hyperledger-fabric-x-roadmap" },
+      { "label": "GitHub: Fabric-X v1.0.0 release (May 20, 2026)", "url": "https://github.com/hyperledger/fabric-x/releases/tag/v1.0.0" }
+    ]
+  },
+  "sources": [
+    { "label": "Fabric docs: Introduction (permissioned, execute-order-validate, chaincode languages, channels, private data)", "url": "https://hyperledger-fabric.readthedocs.io/en/latest/whatis.html" },
+    { "label": "Fabric docs: The ordering service (transaction flow, Raft and BFT, Kafka removed)", "url": "https://hyperledger-fabric.readthedocs.io/en/latest/orderer/ordering_service.html" },
+    { "label": "Fabric docs: Ledger (one ledger per channel, LevelDB and CouchDB, version checks)", "url": "https://hyperledger-fabric.readthedocs.io/en/latest/ledger/ledger.html" },
+    { "label": "Fabric docs: CouchDB as the state database (choice fixed before production, unstable JSON query results)", "url": "https://hyperledger-fabric.readthedocs.io/en/latest/couchdb_as_state_database.html" },
+    { "label": "Fabric docs: What’s new (v3.0 SmartBFT and Ed25519, v3.1, v2.5 remains LTS)", "url": "https://hyperledger-fabric.readthedocs.io/en/latest/whatsnew.html" },
+    { "label": "GitHub: Fabric v3.0.0 release notes (removals: system channel, Solo, Kafka, legacy lifecycle)", "url": "https://github.com/hyperledger/fabric/releases/tag/v3.0.0" },
+    { "label": "GitHub: Fabric v3.1.5 release notes (June 18, 2026)", "url": "https://github.com/hyperledger/fabric/releases/tag/v3.1.5" },
+    { "label": "GitHub: fabric-contract-api-go (Go contract API, module v2)", "url": "https://github.com/hyperledger/fabric-contract-api-go" },
+    { "label": "LF Decentralized Trust: Hyperledger Fabric project page (Graduated; Fabric and Fabric-X)", "url": "https://www.lfdecentralizedtrust.org/projects/fabric" },
+    { "label": "LFDT blog: The Hyperledger Fabric-X roadmap (Arma, 100K+ tps in the maintainers’ evaluations)", "url": "https://www.lfdecentralizedtrust.org/blog/the-hyperledger-fabric-x-roadmap" },
+    { "label": "AWS: Amazon Managed Blockchain (AMB) end of support", "url": "https://docs.aws.amazon.com/managed-blockchain/latest/hyperledger-fabric-dev/managed-blockchain-end-of-support.html" },
+    { "label": "Fabric LICENSE (Apache 2.0)", "url": "https://github.com/hyperledger/fabric/blob/main/LICENSE" }
+  ],
+  "checked": "2026-10-28"
+}
